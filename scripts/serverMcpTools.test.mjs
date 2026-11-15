@@ -13,9 +13,11 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
+import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { BY_USER, recordHistory } from '../server/src/history/record.ts'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { UiSelections } from '../server/src/ui/selections.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
@@ -121,7 +123,14 @@ async function toolSetup(t, opts = {}) {
     warn: () => {}
   })
   const history = new HistoryStore(join(dir, 'history'))
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
+  // The automations scheduler over the real session manager, never started: runs happen only when a tool asks.
+  // `automations: false` in opts leaves it out, as a server without one.
+  // `automationsNow` is the scheduler's clock, for tests that move it.
+  const { automations: withAutomations = true, automationsNow, ...callerOpts } = opts
+  const automations = withAutomations ? new AutomationScheduler({ projects, sessions, now: automationsNow }) : undefined
+  // What the clients show (ui.report); `selections: undefined` in opts leaves it out, as a server without it.
+  const selections = new UiSelections(hub)
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, automations, selections, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...callerOpts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
@@ -129,15 +138,15 @@ async function toolSetup(t, opts = {}) {
     job.fired = true
     job.fn()
   }
-  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub, history }
+  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub, history, selections }
 }
 
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
-    'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
-    'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
+    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'focus_session', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_selected_worktree', 'get_stack', 'get_worktree_history',
+    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
+    'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
   ])
@@ -188,7 +197,7 @@ test("get_review_comments: the worktree's draft, each comment outdated or not ag
   const res = await s.call('get_review_comments', { worktree: 'main' })
   assert.equal(res.revision, 9)
   assert.deepEqual(res.comments.map((c) => [c.id, c.outdated]), [['fresh', false], ['changed', true], ['nofile', true], ['nocommit', null]])
-  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
+  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', by: 'the user', agent: false, source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
   // Read-only: the draft is as it was.
   assert.equal(s.projects.require(s.projectId).repositories[0].worktrees[0].review.comments.length, 4)
   await assert.rejects(s.call('get_review_comments', { worktree: 'nope' }), (e) => e.code === 'NOT_FOUND')
@@ -635,6 +644,9 @@ test('Global sessions: only get_current_session and request_decision reach them'
     ['send_keys', { terminalId: sessionId, keys: ['y'] }],
     ['read_terminal', { terminalId: sessionId }],
     ['close_session', { terminalId: sessionId }],
+    ['rename_session', { terminalId: sessionId, title: 'x' }],
+    ['mark_session_complete', { terminalId: sessionId }],
+    ['restart_session', { terminalId: sessionId }],
     ['wait_for_sessions', { terminalIds: [sessionId], timeoutSeconds: 0.01 }]
   ]
   for (const [name, args] of calls) {
@@ -834,4 +846,323 @@ test('history: a bad reason on set_worktree_ticket with a URL writes no settings
   await s.call('set_worktree_note', { worktree: 'main', note: 'n', terminalId: 'foreign' })
   const repoId = s.projects.require(s.projectId).repositories[0].id
   assert.deepEqual(s.history.list(s.projectId, repoId, 'main').events[0].actor, { kind: 'mcp' })
+})
+
+const MORNING = { name: 'Morning', prompt: 'Check the PRs', cron: '0 9 * * *', timezone: 'America/New_York' }
+
+test('save_automation creates with defaults and list_automations lists it', async (t) => {
+  const s = await toolSetup(t)
+  assert.deepEqual(await s.call('list_automations', {}), [])
+  const created = await s.call('save_automation', { name: 'Morning', prompt: 'Check the PRs', cron: '0 9 * * *' })
+  assert.equal(created.name, 'Morning')
+  assert.equal(created.cron, '0 9 * * *')
+  assert.equal(created.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone)
+  assert.equal(created.enabled, true)
+  assert.ok(!Number.isNaN(Date.parse(created.nextRun)), 'nextRun is a time')
+  assert.deepEqual(created.history, [])
+  assert.equal('llm' in created, false)
+  assert.equal('runSession' in created, false)
+  assert.deepEqual((await s.call('list_automations', {})).map((a) => a.id), [created.id])
+  for (const missing of ['name', 'prompt', 'cron']) {
+    const args = { ...MORNING }
+    delete args[missing]
+    await assert.rejects(s.call('save_automation', args), (e) => e.code === 'BAD_REQUEST' && e.message.includes(`${missing} is required to create an automation`), missing)
+  }
+})
+
+test('save_automation updates by name or id, changing only what is passed', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', { ...MORNING, llm: { provider: 'claude' } })
+  const off = await s.call('save_automation', { automation: 'morning', enabled: false })
+  assert.equal(off.id, created.id)
+  assert.deepEqual([off.name, off.prompt, off.cron, off.timezone, off.enabled, off.llm], ['Morning', 'Check the PRs', '0 9 * * *', 'America/New_York', false, { provider: 'claude' }])
+  assert.equal('nextRun' in off, false)
+  const moved = await s.call('save_automation', { automation: created.id, cron: '30 8 * * *', llm: null, enabled: true })
+  assert.deepEqual([moved.cron, moved.enabled, 'llm' in moved], ['30 8 * * *', true, false])
+  assert.equal((await s.call('list_automations', {})).length, 1)
+})
+
+test('save_automation refusals: unknown and ambiguous references, a cron under 5 minutes, the 51st', async (t) => {
+  const s = await toolSetup(t)
+  const one = await s.call('save_automation', MORNING)
+  const two = await s.call('save_automation', MORNING)
+  assert.notEqual(one.id, two.id, 'without `automation` a save always creates')
+  await assert.rejects(s.call('save_automation', { automation: 'Morning', enabled: false }), (e) => e.code === 'BAD_REQUEST' && e.message.includes(one.id) && e.message.includes(two.id))
+  await assert.rejects(s.call('save_automation', { automation: 'nope', enabled: false }), (e) => e.code === 'NOT_FOUND' && /Morning/.test(e.message))
+  await assert.rejects(s.call('save_automation', { ...MORNING, cron: '* * * * *' }), (e) => e.code === 'BAD_REQUEST' && /every 5 minutes/.test(e.message))
+  await assert.rejects(s.call('save_automation', { ...MORNING, timezone: 'Mars/Olympus' }), (e) => e.code === 'BAD_REQUEST' && /IANA timezone/.test(e.message))
+  s.projects.apply(s.projectId, (d) => {
+    d.automations = Array.from({ length: 50 }, (_, i) => ({ id: `a${i}`, name: `A${i}`, prompt: 'p', schedule: { cron: '0 9 * * *', tz: 'UTC' }, enabled: false, createdAt: 0, lastSlot: 0, history: [] }))
+  })
+  await assert.rejects(s.call('save_automation', MORNING), (e) => e.code === 'CAPACITY')
+})
+
+test('delete_automation removes one, by name', async (t) => {
+  const s = await toolSetup(t)
+  await s.call('save_automation', MORNING)
+  assert.deepEqual(await s.call('delete_automation', { automation: 'Morning' }), { deleted: 'Morning' })
+  assert.deepEqual(await s.call('list_automations', {}), [])
+  await assert.rejects(s.call('delete_automation', { automation: 'Morning' }), (e) => e.code === 'NOT_FOUND')
+})
+
+test('run_automation runs it in its run tab and records the run; a busy tab is CONFLICT', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  const tab = s.projects.require(s.projectId).globalSessions.find((g) => g.id === terminalId)
+  assert.deepEqual(tab.context, { kind: 'automation', automationId: created.id })
+  let [listed] = await s.call('list_automations', {})
+  assert.equal(listed.runSession.terminalId, terminalId)
+  assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome]), [['manual', 'ran']])
+  // The tab's run started a moment ago, so it is still busy.
+  await assert.rejects(s.call('run_automation', { automation: created.id }), (e) => e.code === 'CONFLICT')
+  ;[listed] = await s.call('list_automations', {})
+  assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome]), [['manual', 'skipped'], ['manual', 'ran']])
+  assert.ok(listed.history[0].error, 'the skip says why')
+})
+
+test('the automation tools say so on a server without automations', async (t) => {
+  const s = await toolSetup(t, { automations: false })
+  for (const [name, args] of [['list_automations', {}], ['save_automation', MORNING], ['delete_automation', { automation: 'x' }], ['run_automation', { automation: 'x' }]]) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'TOOL_ERROR' && /this server runs no automations/.test(e.message), name)
+  }
+})
+
+test("read_terminal and wait_for_sessions take an automation's run tab; tools that act on a session still refuse it", async (t) => {
+  const s = await toolSetup(t)
+  await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  const read = await s.call('read_terminal', { terminalId })
+  assert.equal(typeof read.output, 'string')
+  const waited = await s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 0.05 })
+  assert.equal(waited.sessions[0].terminalId, terminalId)
+  const refused = [
+    ['send_prompt', { terminalId, text: 'x' }],
+    ['enqueue_prompt', { terminalId, text: 'x' }],
+    ['remove_queued_prompt', { terminalId, index: 0 }],
+    ['send_keys', { terminalId, keys: ['y'] }],
+    ['close_session', { terminalId }]
+  ]
+  for (const [name, args] of refused) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message), name)
+  }
+})
+
+test('run_automation: CONFLICT while the run tab is working (as when a run calls it on itself); it runs again in the same tab once done', async (t) => {
+  let clock = Date.now()
+  const s = await toolSetup(t, { automationsNow: () => clock })
+  await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  // Past the window in which a tab counts as busy just for having started.
+  clock += 60_000
+  const setStatus = (status) => s.projects.apply(s.projectId, (d) => { d.globalSessions.find((g) => g.id === terminalId).status = status })
+  setStatus('working')
+  await assert.rejects(s.call('run_automation', { automation: 'Morning' }), (e) => e.code === 'CONFLICT')
+  setStatus('done')
+  assert.deepEqual(await s.call('run_automation', { automation: 'Morning' }), { terminalId })
+})
+
+test("add_review_comment writes a labelled comment on a line the diff shows; remove_review_comment takes only an agent's", async (t) => {
+  const s = await toolSetup(t)
+  writeFileSync(join(s.a, 'a.txt'), 'one\ntwo\n')
+  const main = () => s.projects.require(s.projectId).repositories[0].worktrees[0]
+  const source = { kind: 'uncommitted' }
+  const added = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 2, comment: 'Why two?', source })
+  assert.deepEqual(added, {
+    worktree: main().id,
+    revision: main().review.revision,
+    comment: { id: added.comment.id, file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'Why two?', by: 'an agent', agent: true, source, sourceLabel: 'Uncommitted changes', outdated: false }
+  })
+  assert.deepEqual(main().review.comments[0].by, { kind: 'mcp' })
+
+  // A call that names its session is labelled with the session's title.
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].sessions.push({ id: 's1', title: 'Review 2', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  const named = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 1, comment: 'And one?', source, terminalId: 's1' })
+  assert.equal(named.comment.by, 'Review 2')
+  assert.equal(named.comment.lineText, 'one')
+  assert.deepEqual((await s.call('get_review_comments', { worktree: 'main' })).comments.map((c) => c.by), ['an agent', 'Review 2'])
+
+  const refused = [
+    [{ file: 'a.txt', line: 9, comment: 'x', source }, /line 9 of a\.txt is not in Uncommitted changes/],
+    [{ file: 'a.txt', line: 1, side: 'old', comment: 'x', source }, /removed line 1 of a\.txt is not in Uncommitted changes/],
+    [{ file: 'nope.txt', line: 1, comment: 'x', source }, /nope\.txt has no changes in Uncommitted changes/],
+    [{ file: 'a.txt', line: 1, side: 'left', comment: 'x', source }, /side must be "old" or "new"/],
+    [{ file: 'a.txt', line: 0, comment: 'x', source }, /line must be a whole number/],
+    [{ file: 'a.txt', line: 1, comment: '  ', source }, /comment must not be empty/],
+    [{ file: 'a.txt', line: 1, source }, /comment is required/],
+    [{ line: 1, comment: 'x', source }, /file is required/],
+    [{ file: 'a.txt', line: 1, comment: 'x', source: { kind: 'staged' } }, /source\.kind/]
+  ]
+  for (const [args, message] of refused) {
+    await assert.rejects(s.call('add_review_comment', { worktree: 'main', ...args }), (e) => e.code === 'BAD_REQUEST' && message.test(e.message), JSON.stringify(args))
+  }
+  assert.equal(main().review.comments.length, 2, 'a refused comment is not added')
+
+  // The user's own comment stays out of an agent's reach.
+  s.projects.apply(s.projectId, (d) => {
+    const w = d.repositories[0].worktrees[0]
+    w.review = { ...w.review, comments: [...w.review.comments, { id: 'mine', source, path: 'a.txt', side: 'new', line: 2, lineText: 'two', body: 'mine', at: 1 }] }
+  })
+  await assert.rejects(s.call('remove_review_comment', { worktree: 'main', id: 'mine' }), (e) => e.code === 'BAD_REQUEST' && /the user's/.test(e.message))
+  assert.deepEqual(await s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), { worktree: main().id, removed: added.comment.id })
+  await assert.rejects(s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), (e) => e.code === 'NOT_FOUND')
+  assert.deepEqual(main().review.comments.map((c) => c.id), [named.comment.id, 'mine'])
+})
+
+test('add_review_comment: a removed line (side old), an unknown terminalId and a stray reason', async (t) => {
+  const s = await toolSetup(t)
+  writeFileSync(join(s.a, 'a.txt'), 'one\ntwo\n')
+  execFileSync('git', ['-C', s.a, 'add', '.'], { env: gitEnv })
+  execFileSync('git', ['-C', s.a, 'commit', '-q', '-m', 'a'], { env: gitEnv })
+  writeFileSync(join(s.a, 'a.txt'), 'one\n')
+  const source = { kind: 'uncommitted' }
+  const old = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 2, side: 'old', comment: 'Why drop it?', source, terminalId: 'no-such-session', reason: 7 })
+  assert.deepEqual([old.comment.side, old.comment.line, old.comment.lineText, old.comment.by, old.comment.agent], ['old', 2, 'two', 'an agent', true])
+})
+
+test('rename_session, mark_session_complete and restart_session', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const session = () => s.projects.require(s.projectId).repositories[0].worktrees[0].sessions.find((x) => x.id === terminalId)
+
+  assert.deepEqual(await s.call('rename_session', { terminalId, title: '  Fix the login  ' }), { terminalId, title: 'Fix the login' })
+  assert.equal(session().title, 'Fix the login')
+  for (const title of [undefined, '', '   ', 7, 'a\x1bb', 'x'.repeat(5000)]) {
+    await assert.rejects(s.call('rename_session', { terminalId, title }), (e) => e.code === 'BAD_REQUEST', JSON.stringify(title))
+  }
+  assert.equal(session().title, 'Fix the login')
+  await assert.rejects(s.call('rename_session', { terminalId: 'nope', title: 'x' }), (e) => e.code === 'NOT_FOUND')
+
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId }), { terminalId, status: 'complete' })
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId, complete: false }), { terminalId, status: 'idle' })
+  // Clearing a session that is not complete leaves its status alone.
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId, complete: false }), { terminalId, status: 'idle' })
+  await assert.rejects(s.call('mark_session_complete', { terminalId, complete: 'yes' }), (e) => e.code === 'BAD_REQUEST' && /complete must be a boolean/.test(e.message))
+
+  await assert.rejects(s.call('restart_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /the session is running/.test(e.message))
+  s.spawned.at(-1).exit(0)
+  assert.equal(session().status, 'exited')
+  const before = s.spawned.length
+  const restarted = await s.call('restart_session', { terminalId })
+  assert.equal(restarted.terminalId, terminalId)
+  assert.equal(typeof restarted.status, 'string')
+  assert.equal(s.spawned.length, before + 1, 'the agent was launched again')
+  assert.deepEqual([s.spawned.at(-1).opts.cols, s.spawned.at(-1).opts.rows], [120, 32])
+  await assert.rejects(s.call('restart_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /the session is running/.test(e.message))
+})
+
+test('get_pull_request: the linked pull request now, and its refusals', async (t) => {
+  const url = 'https://github.com/o/r/pull/9'
+  let available = true
+  let answer = { number: 9, state: 'OPEN', mergeable: 'CONFLICTING', headSha: 'abc', checks: 'failing', failed: ['build', 'lint'], commentTimes: ['2026-01-01T00:00:00Z', '2026-01-02T03:04:05Z'] }
+  const reads = []
+  const prWatch = {
+    available: () => available, pollSoon() {}, forget() {}, dismiss() {},
+    read: async (pr) => {
+      reads.push(pr)
+      if (answer instanceof Error) throw answer
+      return answer
+    }
+  }
+  const s = await toolSetup(t, { prWatch })
+  const refusal = (p) => p.then(() => ['ok', ''], (e) => [e.code, e.message])
+
+  assert.match((await refusal(s.call('get_pull_request', { worktree: 'main' })))[1], /main has no linked pull request/)
+  await s.call('set_worktree_pull_request', { worktree: 'main', pullRequest: url })
+  assert.deepEqual(await s.call('get_pull_request', { worktree: 'main' }), {
+    branch: 'main', pullRequest: url, number: 9, state: 'open', mergeable: 'conflicting', checks: 'failing', failedChecks: ['build', 'lint'],
+    headSha: 'abc', comments: 2, lastCommentAt: '2026-01-02T03:04:05Z', watching: false
+  })
+  assert.deepEqual(reads, [{ url, number: 9, owner: 'o', repo: 'r' }])
+
+  // Watched, with a notice showing, and no comments from others.
+  await s.call('watch_pull_request', { worktree: 'main' })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].prNotice = { title: 'PR #9', text: 'Checks failed', url, at: Date.UTC(2026, 0, 3) }
+  })
+  answer = { number: 9, state: 'MERGED', mergeable: 'UNKNOWN', headSha: 'def', checks: 'passing', failed: [], commentTimes: [] }
+  assert.deepEqual(await s.call('get_pull_request', { worktree: 'main' }), {
+    branch: 'main', pullRequest: url, number: 9, state: 'merged', mergeable: 'unknown', checks: 'passing', failedChecks: [],
+    headSha: 'def', comments: 0, watching: true, lastNotice: { text: 'Checks failed', at: '2026-01-03T00:00:00.000Z' }
+  })
+
+  answer = new Error('HTTP 502: bad gateway')
+  assert.deepEqual(await refusal(s.call('get_pull_request', { worktree: 'main' })), ['TOOL_ERROR', `Could not read ${url}: HTTP 502: bad gateway`])
+  available = false
+  const signedOut = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(signedOut[0], 'TOOL_ERROR')
+  assert.match(signedOut[1], /gh is not installed or not signed in/)
+
+  // A link that is not a GitHub pull request (as an older client's branch.setPr could store).
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].branchData.main = { pr: 'https://example.com/x' } })
+  available = true
+  const notGitHub = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(notGitHub[0], 'BAD_REQUEST')
+  assert.match(notGitHub[1], /is not a GitHub pull request URL/)
+
+  // A server with no watcher at all.
+  const bare = await toolSetup(t)
+  await bare.call('set_worktree_pull_request', { worktree: 'main', pullRequest: url })
+  assert.match((await refusal(bare.call('get_pull_request', { worktree: 'main' })))[1], /gh is not installed or not signed in/)
+})
+
+test('get_selected_worktree and focus_session act on the most recently used client', async (t) => {
+  const s = await toolSetup(t)
+  const topic = `project:${s.projectId}`
+  const client = () => {
+    const events = []
+    const w = { events, send() {}, event: (event, payload) => (events.push([event, payload]), true) }
+    s.hub.subscribe(topic, w)
+    return w
+  }
+  const noClient = (e) => e.code === 'BAD_REQUEST' && /No Trek client has this project open/.test(e.message)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const main = s.projects.require(s.projectId).repositories[0].worktrees[0]
+
+  await assert.rejects(s.call('get_selected_worktree', {}), noClient)
+  await assert.rejects(s.call('focus_session', { terminalId }), noClient)
+
+  const desktop = client()
+  s.selections.report(s.projectId, desktop, { worktreeId: main.id, sessionId: terminalId, client: 'desktop' }, true)
+  const shown = await s.call('get_selected_worktree', {})
+  assert.equal(shown.worktree.worktree, main.id)
+  assert.deepEqual([shown.terminalId, shown.client], [terminalId, 'desktop'])
+  assert.ok(!Number.isNaN(Date.parse(shown.at)))
+
+  // A phone used after it is the one that counts; ids it reports that no longer exist read as null.
+  await new Promise((resolve) => setTimeout(resolve, 2))
+  const phone = client()
+  s.selections.report(s.projectId, phone, { worktreeId: 'gone', sessionId: 'gone', client: 'phone' }, true)
+  assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: null, client: 'phone', at: 0 })
+
+  assert.deepEqual(await s.call('focus_session', { terminalId }), { focused: true, client: 'phone' })
+  assert.deepEqual(phone.events, [['ui.focus', { projectId: s.projectId, worktreeId: main.id, sessionId: terminalId }]])
+  assert.deepEqual(desktop.events, [])
+  await assert.rejects(s.call('focus_session', { terminalId: 'nope' }), (e) => e.code === 'NOT_FOUND')
+
+  // The session moved since the report (a promote, before the client reports again): the worktree is the session's own.
+  s.selections.report(s.projectId, phone, { worktreeId: 'elsewhere', sessionId: terminalId, client: 'phone' }, true)
+  const moved = await s.call('get_selected_worktree', {})
+  assert.deepEqual([moved.worktree.worktree, moved.terminalId], [main.id, terminalId])
+  // A session gone since: the reported worktree, if it still exists.
+  s.selections.report(s.projectId, phone, { worktreeId: main.id, sessionId: 'gone', client: 'phone' }, true)
+  const stale = await s.call('get_selected_worktree', {})
+  assert.deepEqual([stale.worktree.worktree, stale.terminalId], [main.id, null])
+
+  // A client that cannot take the event now is not "no client": the refusal says so, and noClient's words are not used.
+  phone.event = () => false
+  await assert.rejects(s.call('focus_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /phone/.test(e.message) && /could not be asked/.test(e.message) && !noClient(e))
+  phone.event = (event, payload) => (phone.events.push([event, payload]), true)
+
+  // A Global session can be what a client shows, but cannot be focused by a tool.
+  const { sessionId: globalId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })
+  s.selections.report(s.projectId, phone, { worktreeId: null, sessionId: globalId, client: 'phone' }, true)
+  assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: globalId, client: 'phone', at: 0 })
+  await assert.rejects(s.call('focus_session', { terminalId: globalId }), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message))
+
+  // A server without selection tracking.
+  const bare = await toolSetup(t, { selections: undefined })
+  await assert.rejects(bare.call('get_selected_worktree', {}), (e) => e.code === 'TOOL_ERROR')
 })

@@ -89,16 +89,20 @@ export default function RootLayout(): React.JSX.Element {
       <NotificationRouting />
       <Stack
         screenOptions={{
-          headerStyle: { backgroundColor: colors.panel },
+          headerStyle: { backgroundColor: colors.bg },
+          headerShadowVisible: false,
+          // Only the chevron: a long branch name as the back label pushes the title aside.
+          headerBackButtonDisplayMode: 'minimal',
           headerTintColor: colors.text,
           contentStyle: { backgroundColor: colors.bg }
         }}
       >
-        <Stack.Screen name="index" options={{ title: 'Attention' }} />
-        <Stack.Screen name="servers" options={{ title: 'Servers' }} />
+        <Stack.Screen name="index" options={{ title: 'Needs you' }} />
+        {/* The tab bar's other two screens: they change without a slide, and the bar is their way back. */}
+        <Stack.Screen name="servers" options={{ title: 'Servers', animation: 'none', headerBackVisible: false }} />
         <Stack.Screen name="add-server" options={{ title: 'Add server', presentation: 'modal' }} />
         <Stack.Screen name="pair" options={{ title: 'Add server' }} />
-        <Stack.Screen name="projects" options={{ title: 'Projects' }} />
+        <Stack.Screen name="projects" options={{ title: 'Projects', animation: 'none', headerBackVisible: false }} />
         <Stack.Screen name="push/[serverId]" options={{ title: 'Push notifications' }} />
       </Stack>
       </PushProvider>

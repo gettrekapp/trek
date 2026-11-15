@@ -13,6 +13,7 @@ export type FeatureName =
   | 'reveal'
   | 'openInEditor'
   | 'promote'
+  | 'ui'
   | 'automations'
   | 'history'
   | 'settingsEdit'
@@ -32,6 +33,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'reveal',
   'openInEditor',
   'promote',
+  'ui',
   'automations',
   'history',
   'settingsEdit',
@@ -48,6 +50,8 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Moving a worktree to another server (5d) needs `move` on this server (the target's is
  *   checked when it is picked).
  * - Promote to primary and "Promote branch to worktree" (5e) need `promote`.
+ * - Telling the server what the window shows, and showing a session it asks for (`ui.report`,
+ *   `ui.focus`), need `ui`: nothing is sent to an older server.
  * - Automations need `automations`: an older server has no `automation.*`.
  * - The History tab needs `history`: an older server records nothing.
  * - Settings are edited on the server (every v2 server has
@@ -78,6 +82,7 @@ export const V2_FEATURES: BackendFeatures = {
   reveal: true,
   openInEditor: true,
   promote: true,
+  ui: true,
   automations: true,
   history: true,
   settingsEdit: true,
@@ -101,6 +106,7 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   review: 'review',
   moveWorktree: 'move',
   promote: 'promote',
+  ui: 'ui',
   automations: 'automations',
   history: 'history'
 }

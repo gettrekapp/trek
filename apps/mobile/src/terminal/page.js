@@ -15,7 +15,7 @@
     // no network and the WebView refuses any navigation anyway). No web-links addon is loaded,
     // so plain URLs aren't links at all.
     linkHandler: { activate: function () {}, allowNonHttpProtocols: false },
-    theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc' }
+    theme: { background: '#111113', foreground: '#ededf0', cursor: '#ededf0' }
   })
   term.open(document.getElementById('t'))
   term.onData(function (data) {

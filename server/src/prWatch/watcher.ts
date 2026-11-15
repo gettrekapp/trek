@@ -14,6 +14,7 @@ import {
   watchableUrl,
   type PrEvent,
   type PrView,
+  type WatchablePr,
   type PromptOutcome
 } from '../../../src/shared/prWatch.ts'
 import type { HistoryStore } from '../history/store.ts'
@@ -127,6 +128,8 @@ export class PrWatcher {
   private readonly failures = new Map<string, number>()
   /** The "can't be read" notice raised per key (its `at`), withdrawn by the next good poll */
   private readonly unreadable = new Map<string, number>()
+  /** PR URL → a read (get_pull_request) running now: callers meanwhile share it */
+  private readonly reads = new Map<string, Promise<PrView>>()
   /** Settles once the first `gh auth status` has answered, or after GH_READY_MS; never rejects */
   readonly ready: Promise<void>
   private readonly firstCheck: Promise<boolean>
@@ -201,6 +204,29 @@ export class PrWatcher {
       { persist: false }
     )
     this.deps.sessions.refreshAttention()
+  }
+
+  /**
+   * Reads a pull request now, for the MCP tool get_pull_request: one gh call with the watch's query,
+   * shared by callers while it runs. It changes nothing a watch remembers (`seen`, failures,
+   * notices). Rejects with the first line of what gh said; a failure that looks like gh's sign-in
+   * re-checks it, as a failed poll does.
+   */
+  read(pr: WatchablePr): Promise<PrView> {
+    let running = this.reads.get(pr.url)
+    if (!running) {
+      running = this.deps
+        .gh(prQueryArgs(pr), this.abort.signal)
+        .then((stdout) => parsePrView(JSON.parse(stdout)))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          if (isAuthFailure(message)) void this.checkSignIn()
+          throw new Error(shortReason(message))
+        })
+        .finally(() => this.reads.delete(pr.url))
+      this.reads.set(pr.url, running)
+    }
+    return running
   }
 
   /**

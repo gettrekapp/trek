@@ -3,9 +3,9 @@
 // Every tool acts on the calling session's project only, and changes state through
 // the v2 commands, run in process.
 import { randomUUID } from 'node:crypto'
-import type { BranchData, Project, Repository, Session } from '../../../src/shared/model/types'
+import type { BranchData, Project, Repository, ReviewComment, Session } from '../../../src/shared/model/types'
 import { keySequence } from '../../../src/shared/keys.ts'
-import { isProviderId } from '../../../src/shared/providers/registry.ts'
+import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
 import { parseTicketWith, ticketView } from '../../../src/shared/tickets.ts'
@@ -14,13 +14,16 @@ import type { ConfigStore } from '../configStore'
 import { codedError } from '../errors.ts'
 import type { GitPoller } from '../git/poller.ts'
 import type { ProjectState } from '../projects/state.ts'
-import { checkTitle, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
+import { checkTitle, MAX_PTY_WRITE, MAX_TITLE_LENGTH, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { findSession, type FoundSession } from '../sessions/locate.ts'
 import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
+import { automationInput, describeAutomation, resolveAutomation } from './automations.ts'
+import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
+import type { UiSelections } from '../ui/selections.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
 import type { PluginRegistry } from '../plugins/registry.ts'
@@ -34,7 +37,11 @@ import { actorLabel, describeEvent } from '../../../src/shared/historyText.ts'
 import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
-import { isOutdated, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+import { watchableUrl } from '../../../src/shared/prWatch.ts'
+import { NOT_SIGNED_IN } from '../prWatch/prWatchHandlers.ts'
+import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
+import { checkSource } from '../review/draft.ts'
 import type { ChangesSource } from '../../../src/shared/types'
 
 /** The most distinct sources get_review_comments diffs to say which comments are outdated. */
@@ -57,6 +64,10 @@ const ATTRIBUTION_PARAMS = {
 const SESSION_TYPE_PARAM = {
   type: 'string',
   description: 'Session type id or name (case-insensitive), as returned by list_session_types'
+}
+const AUTOMATION_PARAM = {
+  type: 'string',
+  description: 'Automation id or name (case-insensitive), as returned by list_automations. A name several automations share is an error: pass the id.'
 }
 
 const STACK_DESCRIPTION =
@@ -88,6 +99,18 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
       required: ['terminalId']
     }
+  },
+  {
+    name: 'get_selected_worktree',
+    description:
+      "What the user is looking at: the worktree selected in the Trek client they used most recently (a desktop window, the web client or the phone), in the same shape as a list_worktrees entry, and terminalId, the session tab shown there. worktree is null when none is selected or the Global panel is shown; terminalId is null when no session is shown. client says which kind of client it is and at when it last said so. Fails when no Trek client has this project open.",
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'focus_session',
+    description:
+      "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It selects the tab only: it does not raise the client's window, take the keyboard focus or mark the session seen. Success means the client was asked, not that the user saw it. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open, or when that client cannot be asked right now.",
+    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
     name: 'request_decision',
@@ -249,7 +272,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'read_terminal',
-    description: "Read the last lines of a session's terminal screen and scrollback.",
+    description: "Read the last lines of a session's terminal screen and scrollback. Also takes an automation's run session (runSession in list_automations).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -262,7 +285,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'wait_for_sessions',
     description:
-      'Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status.',
+      "Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status. Also takes an automation's run session (runSession in list_automations).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -280,6 +303,34 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'close_session',
     description: 'Close a session for good, killing its agent process.',
+    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+  },
+  {
+    name: 'rename_session',
+    description: "Rename a session: its tab title in Trek. Use it to label a session you started with what it is working on.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: TERMINAL_PARAM,
+        title: { type: 'string', description: `The new title: one line, at most ${MAX_TITLE_LENGTH} characters` }
+      },
+      required: ['terminalId', 'title']
+    }
+  },
+  {
+    name: 'mark_session_complete',
+    description:
+      "Mark a session complete: its work is finished and needs nothing more from the user (status complete in list_worktrees), until it next works. A session can mark itself, passing its $TREK_TERMINAL_ID. Pass complete false to clear the mark (back to idle). Returns the session's status.",
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: TERMINAL_PARAM, complete: { type: 'boolean', description: 'true (default) to mark it, false to clear the mark' } },
+      required: ['terminalId']
+    }
+  },
+  {
+    name: 'restart_session',
+    description:
+      "Restart a session whose agent has exited (status exited), resuming its conversation where the agent supports that. Refused while the session is running, and while its worktree is unloaded (load_worktree first). Returns at once with the session's status: follow with wait_for_sessions, or send_prompt, which waits until the agent is ready.",
     inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
@@ -377,8 +428,39 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'get_review_comments',
     description:
-      "Read the user's draft review of a worktree: the line comments they wrote in Trek's Changes tab, not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
+      "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent; agent: true when an agent did), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'add_review_comment',
+    description:
+      "Add a line comment to a worktree's draft review, shown in Trek's Changes tab under that line and labelled as yours. Use it to leave review findings where the user reads the diff. The line must be one the chosen diff shows (an added, removed or context line): Trek reads the line's text itself. The user can edit, delete or send the draft; nothing is sent to a session by this tool. Pass your $TREK_TERMINAL_ID as terminalId so the comment names your session. Returns the comment in the same shape as a get_review_comments entry.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        file: { type: 'string', description: "The file's path as the diff names it, relative to the worktree (its new name for a rename)" },
+        line: { type: 'integer', minimum: 1, description: '1-based line number: in the new file for side new, in the old file for side old' },
+        side: { type: 'string', enum: ['new', 'old'], description: 'new (default): an added or unchanged line. old: a removed line.' },
+        comment: { type: 'string', description: 'The comment, at most 4000 characters; line breaks are kept' },
+        source: {
+          type: 'object',
+          description: 'The diff to comment on: { kind: "branch" } (default: the branch against its base), { kind: "uncommitted" }, or { kind: "commit", sha } with a full commit id',
+          properties: { kind: { type: 'string', enum: ['branch', 'uncommitted', 'commit'] }, sha: { type: 'string' } }
+        },
+        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID, so the comment names your session (optional)' }
+      },
+      required: ['worktree', 'file', 'line', 'comment']
+    }
+  },
+  {
+    name: 'remove_review_comment',
+    description: "Remove a comment an agent wrote from a worktree's draft review, by its id from get_review_comments. The user's own comments are refused.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, id: { type: 'string', description: 'The comment id' } },
+      required: ['worktree', 'id']
+    }
   },
   {
     name: 'watch_pull_request',
@@ -393,6 +475,12 @@ export const MCP_TOOLS: ToolDefinition[] = [
       },
       required: ['worktree']
     }
+  },
+  {
+    name: 'get_pull_request',
+    description:
+      "Read the state of a worktree branch's linked GitHub pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while GitHub works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
     name: 'get_worktree_history',
@@ -413,11 +501,56 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: { worktree: WORKTREE_PARAM, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
+  },
+  {
+    name: 'list_automations',
+    description:
+      "List the project's automations: scheduled prompts that each run unattended in their own Global session (the run tab), started anew on every run. Each has id, name, prompt, cron, timezone, enabled, llm (absent: the project's Global agent), nextRun (absent when disabled), missed (slots that passed while the server could not run them, waiting for the user's answer), runSession (its run tab's terminalId and status, once it has run) and history (its runs, newest first, at most 20: at, trigger, outcome, error).",
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'save_automation',
+    description:
+      'Create an automation, or update the one `automation` names. An update changes only the arguments you pass. Without `automation` it always creates (names are not unique) and needs name, prompt and cron. To turn one on or off, pass automation and enabled. A schedule change or a re-enable restarts its clock: nothing counts as missed. Returns the saved automation in the same shape as a list_automations entry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        automation: { ...AUTOMATION_PARAM, description: `The automation to update; omit to create one. ${AUTOMATION_PARAM.description}` },
+        name: { type: 'string', description: 'Name, at most 80 characters; also the title of its run tab' },
+        prompt: { type: 'string', description: 'The first message of each run, at most 20000 characters' },
+        cron: {
+          type: 'string',
+          description: 'Five-field cron expression (minute hour day-of-month month day-of-week), e.g. "0 9 * * *" for every day at 09:00. It must not run more often than every 5 minutes.'
+        },
+        timezone: { type: 'string', description: "IANA timezone the cron is read in, e.g. America/New_York. Defaults to the server machine's timezone when creating." },
+        enabled: { type: 'boolean', description: 'Whether it runs on schedule. Defaults to true when creating.' },
+        llm: {
+          type: ['object', 'null'],
+          description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
+          properties: {
+            ...LLM_PARAMS,
+            // Only the agents automation.save takes: those that can use Trek's tools.
+            provider: { type: 'string', enum: PROVIDER_IDS.filter((id) => getProvider(id).capabilities.mcp), description: "Agent CLI to run; one that can use Trek's tools (MCP)" }
+          }
+        }
+      }
+    }
+  },
+  {
+    name: 'delete_automation',
+    description: 'Delete an automation. Its run tab stays open as a normal Global session.',
+    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
+  },
+  {
+    name: 'run_automation',
+    description:
+      "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history.",
+    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
   }
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID; get_selected_worktree says which worktree and session the user is looking at, and focus_session shows them one. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -435,6 +568,10 @@ export interface ToolDeps {
   prWatch?: PrWatcher
   /** promote_to_primary's confirmations (5e); without it the tool says no window can confirm */
   promoteRequests?: PromoteRequests
+  /** The automations scheduler, for the automation tools; without it they say the server runs no automations */
+  automations?: AutomationScheduler
+  /** What each client shows (`ui.report`), for get_selected_worktree and focus_session; without it they say the server does not track it */
+  selections?: UiSelections
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -523,6 +660,24 @@ const tagMatches = (t: { id?: unknown; name?: unknown }, name: string): boolean 
 const tagNames = (tags: { name?: unknown }[]): string =>
   tags.flatMap((t) => (typeof t?.name === 'string' ? [t.name] : [])).join(', ') || 'none configured'
 
+/** A review comment as the tools return it. `outdated`: null when it could not be checked. */
+function describeComment(c: ReviewComment, outdated: boolean | null) {
+  return {
+    id: c.id,
+    file: c.path,
+    side: c.side,
+    line: c.line,
+    lineText: c.lineText,
+    comment: c.body,
+    by: c.by ? (c.by.sessionTitle ?? 'an agent') : 'the user',
+    // A session can be titled anything, "the user" included: this says it plainly.
+    agent: c.by !== undefined,
+    source: c.source,
+    sourceLabel: sourceLabel(c.source),
+    outdated
+  }
+}
+
 /** The repository a create_worktree call targets: by id, then name (case-insensitive). Required once a project has several. */
 function targetRepository(project: Project, ref: unknown): Repository {
   const repositories = project.repositories
@@ -593,6 +748,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     prWatch: deps.prWatch,
     plugins: deps.plugins,
     history: deps.history,
+    automations: deps.automations,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
@@ -630,6 +786,28 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
     const saveSessionTypes = (types: SessionType[]) => v2('project.updateSettings', { settings: { sessionTypes: types } })
 
+    /** The server's automations scheduler; every automation tool needs one. */
+    const scheduler = (): AutomationScheduler => {
+      if (!deps.automations) throw codedError('TOOL_ERROR', 'this server runs no automations')
+      return deps.automations
+    }
+
+    const NO_CLIENT = 'No Trek client has this project open, or none is new enough to say what it shows'
+    /** A report's id that may be gone since: null for NOT_FOUND, any other error as it is. */
+    const orGone = <T>(resolve: () => T): T | null => {
+      try {
+        return resolve()
+      } catch (err) {
+        if ((err as { code?: unknown } | null)?.code === 'NOT_FOUND') return null
+        throw err
+      }
+    }
+    /** The server's record of what its clients show; both UI tools need it. */
+    const selections = (): UiSelections => {
+      if (!deps.selections) throw codedError('TOOL_ERROR', 'this server does not track what its clients show')
+      return deps.selections
+    }
+
     const pollMs = deps.pollMs ?? 250
     const graceMs = deps.graceMs ?? 1500
     const firstOutputMs = deps.readyTimeouts?.firstOutputMs ?? 60_000
@@ -647,6 +825,13 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     const targetIn = (terminalId: unknown, project?: Project): FoundSession => {
       const found = sessionIn(terminalId, project)
       if (!found.worktree) throw bad("the Global session can't be targeted by tools")
+      return found
+    }
+
+    /** As targetIn, for tools that only read: an automation's run tab (a Global session) is allowed too, so a run can be followed. */
+    const readableIn = (terminalId: unknown, project?: Project): FoundSession => {
+      const found = sessionIn(terminalId, project)
+      if (!found.worktree && found.session.context?.kind !== 'automation') throw bad("the Global session can't be targeted by tools")
       return found
     }
 
@@ -914,19 +1099,52 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           revision: draft.revision,
           comments: draft.comments.map((c) => {
             const diff = diffs.get(sourceKey(c.source))
-            return {
-              id: c.id,
-              file: c.path,
-              side: c.side,
-              line: c.line,
-              lineText: c.lineText,
-              comment: c.body,
-              source: c.source,
-              sourceLabel: sourceLabel(c.source),
-              outdated: diff ? isOutdated(c, Object.hasOwn(diff, c.path) ? diff[c.path] : undefined) : null
-            }
+            return describeComment(c, diff ? isOutdated(c, Object.hasOwn(diff, c.path) ? diff[c.path] : undefined) : null)
           })
         }
+      },
+
+      add_review_comment: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        const path = rawArg(args.file, 'file')
+        if (!path) throw bad('file is required')
+        const side = args.side ?? 'new'
+        if (side !== 'old' && side !== 'new') throw bad('side must be "old" or "new"')
+        const line = args.line
+        if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) throw bad('line must be a whole number from 1')
+        const body = rawArg(args.comment, 'comment')
+        if (body === undefined) throw bad('comment is required')
+        if (body.trim() === '') throw bad('comment must not be empty')
+        const source = checkSource(args.source ?? undefined)
+        const label = sourceLabel(source)
+        // The line's text is read here, not taken from the agent: a comment sits on a line the diff shows.
+        const diff = (await v2('worktree.diff', { worktreeId: worktree.id, source, paths: [path] })) as Record<string, string>
+        if (!Object.hasOwn(diff, path)) throw bad(`${path} has no changes in ${label}: comment on a file that diff shows`)
+        const shown = numberedLines(patchBody(diff[path])).find((l) => l.side === side && l.line === line)
+        if (!shown) {
+          throw bad(`${side === 'old' ? 'removed line' : 'line'} ${line} of ${path} is not in ${label}: comment on a line that diff shows (side "old" for a removed line)`)
+        }
+        const { commentId } = (await v2(
+          'review.add',
+          { worktreeId: worktree.id, source, path, side, line, lineText: reviewLineText(shown.text), body },
+          // Only who: this tool takes no reason.
+          attributionOf({ terminalId: args.terminalId }, project)
+        )) as { commentId: string }
+        const draft = resolveWorktree(deps.projects.require(projectId), worktree.id).worktree.review
+        const added = draft?.comments.find((c) => c.id === commentId)
+        if (!draft || !added) throw notFound(`No review comment with id "${commentId}"`)
+        return { worktree: worktree.id, revision: draft.revision, comment: describeComment(added, false) }
+      },
+
+      remove_review_comment: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        const id = strArg(args.id, 'id')
+        if (!id) throw bad('id is required')
+        const comment = worktree.review?.comments.find((c) => c.id === id)
+        if (!comment) throw notFound(`No review comment with id "${id}"`)
+        if (!comment.by) throw bad("That comment is the user's: only a comment an agent wrote can be removed")
+        await v2('review.remove', { worktreeId: worktree.id, commentId: id })
+        return { worktree: worktree.id, removed: id }
       },
 
       watch_pull_request: async (args, project) => {
@@ -936,6 +1154,35 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const watch = args.watch !== false
         await v2('branch.setPrWatch', { repoId: repo.id, branch, watch }, by)
         return { branch, pullRequest: branchData(repo, branch).pr ?? null, watching: watch }
+      },
+
+      get_pull_request: async (args, project) => {
+        const { repo, worktree } = resolveWorktree(project, args.worktree)
+        const { branch } = branchOf(project, args.worktree)
+        const data = branchData(repo, branch)
+        if (!data.pr) throw bad(`${branch} has no linked pull request (set_worktree_pull_request links one)`)
+        const pr = watchableUrl(data.pr)
+        if (!pr) throw bad(`${data.pr} is not a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<number>)`)
+        const watcher = deps.prWatch
+        if (!watcher?.available()) throw codedError('TOOL_ERROR', NOT_SIGNED_IN)
+        const view = await watcher.read(pr).catch((err: unknown) => {
+          throw codedError('TOOL_ERROR', `Could not read ${pr.url}: ${messageOf(err)}`)
+        })
+        const notice = worktree.prNotice
+        return {
+          branch,
+          pullRequest: pr.url,
+          number: pr.number,
+          state: view.state.toLowerCase(),
+          mergeable: view.mergeable.toLowerCase(),
+          checks: view.checks,
+          failedChecks: view.failed,
+          headSha: view.headSha,
+          comments: view.commentTimes.length,
+          ...(view.commentTimes.length > 0 ? { lastCommentAt: view.commentTimes[view.commentTimes.length - 1] } : {}),
+          watching: data.prWatch !== undefined,
+          ...(notice ? { lastNotice: { text: notice.text, at: new Date(notice.at).toISOString() } } : {})
+        }
       },
 
       get_worktree_history: async (args, project) => {
@@ -1013,6 +1260,36 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       list_session_types: (_args, project) => (project.settings.sessionTypes ?? []).map(withoutIcon),
 
+      list_automations: (_args, project) => {
+        const at = scheduler().now()
+        return (project.automations ?? []).map((a) => describeAutomation(project, a, at))
+      },
+
+      save_automation: async (args, project) => {
+        const at = scheduler().now()
+        const existing = args.automation === undefined || args.automation === null ? undefined : resolveAutomation(project, args.automation)
+        const input = automationInput(existing, args, Intl.DateTimeFormat().resolvedOptions().timeZone)
+        const { id } = (await v2('automation.save', { automation: input })) as { id: string }
+        const fresh = deps.projects.require(projectId)
+        const saved = fresh.automations?.find((a) => a.id === id)
+        if (!saved) throw notFound(`No automation with id "${id}"`)
+        return describeAutomation(fresh, saved, at)
+      },
+
+      delete_automation: async (args, project) => {
+        scheduler()
+        const automation = resolveAutomation(project, args.automation)
+        await v2('automation.delete', { automationId: automation.id })
+        return { deleted: automation.name }
+      },
+
+      run_automation: async (args, project) => {
+        scheduler()
+        const automation = resolveAutomation(project, args.automation)
+        const { sessionId } = (await v2('automation.runNow', { automationId: automation.id })) as { sessionId: string }
+        return { terminalId: sessionId }
+      },
+
       save_session_type: async (args, project) => {
         const types = project.settings.sessionTypes ?? []
         const name = rawArg(args.name, 'name')?.trim()
@@ -1078,6 +1355,26 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       get_current_session: (args) => describeSession(sessionIn(args.terminalId)),
+
+      get_selected_worktree: (_args, project) => {
+        const latest = selections().latest(projectId)
+        if (!latest) throw bad(NO_CLIENT)
+        // A report names what the client showed then: a worktree or session gone since reads as none.
+        const { sessionId } = latest
+        const found = sessionId ? orGone(() => findSession(project, sessionId)) : null
+        // The session's own worktree while it has one: a promote can move it before the client reports again.
+        const worktreeId = found?.worktree ? found.worktree.id : latest.worktreeId
+        const worktree = worktreeId ? orGone(() => describeById(worktreeId)) : null
+        return { worktree, terminalId: found ? found.session.id : null, client: latest.client, at: new Date(latest.at).toISOString() }
+      },
+
+      focus_session: (args) => {
+        const found = targetIn(args.terminalId)
+        const asked = selections().focus(projectId, { worktreeId: found.worktree!.id, sessionId: found.session.id })
+        if (!asked) throw bad(NO_CLIENT)
+        if (!asked.sent) throw bad(`The Trek client last used with this project (${asked.client}) could not be asked: it is busy or disconnecting. Try again in a moment`)
+        return { focused: true, client: asked.client }
+      },
 
       start_session: async (args, project, signal) => {
         const { worktree } = resolveWorktree(project, args.worktree)
@@ -1152,6 +1449,28 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         return { closed: true }
       },
 
+      rename_session: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        const title = strArg(args.title, 'title')
+        if (!title) throw bad('title is required')
+        await v2('session.rename', { sessionId: session.id, title })
+        return { terminalId: session.id, title }
+      },
+
+      mark_session_complete: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        if (args.complete !== undefined && args.complete !== null && typeof args.complete !== 'boolean') throw bad('complete must be a boolean')
+        await v2('session.markComplete', { sessionId: session.id, complete: args.complete !== false })
+        return { terminalId: session.id, status: current(session.id)?.status ?? 'closed' }
+      },
+
+      restart_session: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        // The size start_session opens a pty with.
+        await v2('session.restart', { sessionId: session.id, cols: 120, rows: 32 })
+        return { terminalId: session.id, status: current(session.id)?.status ?? 'closed' }
+      },
+
       send_prompt: async (args, _project, signal) => {
         const { session } = targetIn(args.terminalId)
         if (typeof args.text !== 'string' || !args.text.trim()) throw bad('text is required')
@@ -1202,7 +1521,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       read_terminal: async (args) => {
-        const { session } = targetIn(args.terminalId)
+        const { session } = readableIn(args.terminalId)
         const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 80, 1), 2000)
         const ptyId = runningPty(session)
         await deps.sessions.terminals.settled(ptyId)
@@ -1218,7 +1537,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (!ids.every((id) => typeof id === 'string')) throw bad('terminalIds must be strings')
         const terminalIds = [...new Set(ids as string[])]
         if (terminalIds.length > MAX_WAIT_IDS) throw bad(`terminalIds holds at most ${MAX_WAIT_IDS} sessions`)
-        for (const id of terminalIds) targetIn(id, project)
+        for (const id of terminalIds) readableIn(id, project)
         const any = args.until === 'any'
         const seconds = Math.min(Number(args.timeoutSeconds) || 300, 600)
         /** Each session's record in one project snapshot; undefined once it (or the project) is gone. */

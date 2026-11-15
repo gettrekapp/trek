@@ -3,6 +3,7 @@ import { initiallyExpanded, missingPatchNote, numberedLines, patchBody, type Num
 import {
   BRANCH_SOURCE,
   MAX_REVIEW_BODY,
+  commentAuthorLabel,
   placeComments,
   reviewLineText,
   sameSource,
@@ -328,9 +329,11 @@ function CommentEditor({ label, actions }: { label: string; actions: ReviewActio
 function CommentView({ comment, actions, where }: { comment: ReviewComment; actions: ReviewActions; where?: string }): React.JSX.Element {
   const { editor, busy } = useContext(ReviewStateContext)
   const editing = editor?.kind === 'edit' && editor.commentId === comment.id
+  const author = commentAuthorLabel(comment)
   return (
     <div className="review-comment" data-comment-id={comment.id}>
       {where && <div className="review-comment-where">{where}</div>}
+      {author && <div className="review-comment-author">{author}</div>}
       {editing ? (
         <CommentEditor label="Save" actions={actions} />
       ) : (

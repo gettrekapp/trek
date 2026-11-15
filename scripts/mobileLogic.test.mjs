@@ -12,11 +12,12 @@
 // commit's row) and the pull request watch (the switch, its label, a notice's line and dismissal),
 // and automations (a card's lines, next runs in the schedule's timezone, the missed-runs answer, the
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
-// tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries).
+// tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
+// and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
-import { ago, attentionKey, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
+import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
 import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
@@ -26,7 +27,8 @@ import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTempl
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
-import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
+import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
+import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
@@ -71,6 +73,7 @@ import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
 import { RefCounts } from '../apps/mobile/src/logic/refCount.ts'
+import { focusEventOf, focusNavigation, focusRoute, reportParams, shouldFollow, worktreeOfSession } from '../apps/mobile/src/logic/uiSelection.ts'
 
 test('wss:// is always allowed; ws:// only to a private address, with a warning', () => {
   assert.deepEqual(checkServerUrl(' wss://dev.example.com '), { ok: true, url: 'wss://dev.example.com' })
@@ -2604,4 +2607,121 @@ test("history: a branch's name survives the route as a parameter, whatever it ho
   assert.equal(branchFromParam(undefined), '')
   assert.equal(branchFromParam(['feature~002fx', 'other']), 'feature/x')
   assert.equal(branchFromParam('plain~zz'), 'plain~zz')
+})
+
+test('ui selection: the worktree holding a session; none for a Global session, an unknown one or a project not loaded', () => {
+  const project = qbProject()
+  assert.equal(worktreeOfSession(project, 's1'), 'w1')
+  assert.equal(worktreeOfSession(project, 's3'), 'w2')
+  assert.equal(worktreeOfSession(project, 'g'), null)
+  assert.equal(worktreeOfSession(project, 'nope'), null)
+  assert.equal(worktreeOfSession(null, 's1'), null)
+})
+
+test('ui selection: a report goes only to a server with the ui capability, and only once the screen knows what it shows', () => {
+  const selection = { worktreeId: 'w1', sessionId: 's1' }
+  assert.deepEqual(reportParams(['promote', 'ui'], 'p', selection, true), { projectId: 'p', worktreeId: 'w1', sessionId: 's1' })
+  assert.deepEqual(reportParams(['ui'], 'p', { worktreeId: null, sessionId: null }, true), { projectId: 'p', worktreeId: null, sessionId: null })
+  // An older server, or no welcome yet: nothing is sent.
+  assert.equal(reportParams(['promote'], 'p', selection, true), null)
+  assert.equal(reportParams(undefined, 'p', selection, true), null)
+  // The session screen before the project's snapshot: its worktree is not known, so it does not say "a Global session".
+  assert.equal(reportParams(['ui'], 'p', { worktreeId: null, sessionId: 's1' }, false), null)
+  // Only the selection's two ids go: nothing else a caller's object carries.
+  assert.deepEqual(reportParams(['ui'], 'p', { worktreeId: 'w1', sessionId: null, extra: 1 }, true), { projectId: 'p', worktreeId: 'w1', sessionId: null })
+})
+
+test('ui.focus: the session screen to open, as the worktree screen pushes it', () => {
+  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), {
+    pathname: '/session/[serverId]/[projectId]/[sessionId]',
+    params: { serverId: 'srv', projectId: 'p', sessionId: 's1' }
+  })
+})
+
+test('ui.focus: followed for this project, unless its session is already the one shown', () => {
+  const focus = { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }
+  // Another project's: not this screen's to open.
+  assert.equal(shouldFollow(focus, 'other', { worktreeId: null, sessionId: null }), false)
+  // Already on that session's screen.
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: 's1' }), false)
+  // From the project screen, the worktree's screen, and another session's screen.
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: null, sessionId: null }), true)
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: null }), true)
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: 's2' }), true)
+})
+
+test('ui.focus: a session screen is replaced, any other screen is pushed onto', () => {
+  // From the project's or a worktree's screen: Back returns to it.
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: null }), 'push')
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: null }), 'push')
+  // From a session's screen (a Global session's too): repeated requests do not grow the stack.
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: 's2' }), 'replace')
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: 'g1' }), 'replace')
+})
+
+test('ui.focus: read from a server event; any other event, or one without a session to show, is not one', () => {
+  const payload = { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }
+  assert.deepEqual(focusEventOf({ event: 'ui.focus', payload }), payload)
+  assert.equal(focusEventOf({ event: 'promote.request', payload }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1' } }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1', sessionId: '' } }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: null }), null)
+})
+
+// ---- The project screen's worktree rows (logic/worktreeRow.ts) -----------------------------------
+
+test('rowMark: the most pressing session state; nothing for an unloaded or empty worktree', () => {
+  const wt = (loaded, ...sessions) => ({ loaded, sessions: sessions.map((s) => (typeof s === 'string' ? { status: s } : s)) })
+  assert.equal(rowMark(wt(true)), 'none')
+  assert.equal(rowMark(wt(false, 'working', 'attention')), 'none')
+  assert.equal(rowMark(wt(true, 'idle', 'exited', 'complete')), 'idle')
+  assert.equal(rowMark(wt(true, 'idle', 'working')), 'working')
+  assert.equal(rowMark(wt(true, 'working', 'done')), 'done')
+  assert.equal(rowMark(wt(true, 'done', 'attention')), 'attention')
+  // A decision waits on the user whatever the session's status says.
+  assert.equal(rowMark(wt(true, { status: 'working', decision: { question: 'Q?', at: 1 } })), 'attention')
+  assert.equal(sessionMark({ status: 'done' }), 'done')
+})
+
+test('rowGit and rowSaved: the marks at the right of a row', () => {
+  assert.equal(rowGit({}), null)
+  assert.equal(rowGit({ ahead: 0, behind: 0, dirty: false }), null)
+  assert.deepEqual(rowGit({ ahead: 2, behind: 1, dirty: true }), { counts: '↑2 ↓1', dirty: true })
+  assert.deepEqual(rowGit({ behind: 58 }), { counts: '↓58', dirty: false })
+  assert.equal(rowSaved({ loaded: false, sessions: [{}, {}] }), 2)
+  assert.equal(rowSaved({ loaded: true, sessions: [{}, {}] }), 0)
+})
+
+test('rowReason: missing, then a decision, then the pull request notice', () => {
+  const notice = { title: 'PR #12', text: 'Checks failed', url: 'u', at: 1 }
+  assert.equal(rowReason({ sessions: [] }), null)
+  assert.deepEqual(rowReason({ sessions: [], prNotice: notice }), { kind: 'notice', text: 'PR #12: Checks failed' })
+  const asked = [{ decision: { question: 'First?', at: 1 } }, {}, { decision: { question: 'Second?', at: 2 } }]
+  assert.deepEqual(rowReason({ sessions: asked, prNotice: notice }), { kind: 'decision', text: 'Decision: First? (+1)' })
+  assert.equal(rowReason({ sessions: [{ decision: { question: '', at: 1 } }] }).text, 'Needs a decision')
+  assert.deepEqual(rowReason({ missing: true, sessions: asked, prNotice: notice }), { kind: 'missing', text: 'Missing on the server' })
+})
+
+test('rowLabel: what a screen reader says for a row', () => {
+  assert.equal(
+    rowLabel({ name: 'main', isMain: true, mark: 'working', saved: 0, git: { counts: '↑2 ↓1', dirty: true }, line: 'In Review · PR #42' }),
+    'main, main checkout, working, uncommitted changes, ahead 2 behind 1, In Review · PR #42'
+  )
+  assert.equal(rowLabel({ name: 'feature-x', isMain: false, mark: 'none', saved: 2, git: null, line: '' }), 'feature-x, 2 saved sessions')
+  assert.equal(rowLabel({ name: 'feature-x', isMain: false, mark: 'none', saved: 0, git: null, line: '' }), 'feature-x, no sessions')
+})
+
+test('branchParts: the line in pieces, tags with their colours', () => {
+  const settings = { worktreeTags: [{ id: 't1', name: 'In Review', color: '#c9a0ff' }], customTags: [{ id: 'c1', name: 'urgent', color: '#ff0000' }] }
+  const repo = { branchData: { b: { tag: 't1', customTags: ['c1'], pr: 'https://github.com/o/r/pull/42' } } }
+  assert.deepEqual(branchParts(settings, repo, 'b', []), [{ text: 'In Review', color: '#c9a0ff' }, { text: 'urgent', color: '#ff0000' }, { text: 'PR #42' }])
+  assert.deepEqual(branchParts(settings, repo, 'other', []), [])
+  assert.equal(branchLine(settings, repo, 'b', []), 'In Review · urgent · PR #42')
+})
+
+test('attentionMark: blue for a finished session, amber for anything that waits on you', () => {
+  assert.equal(attentionMark({ status: 'done' }), 'done')
+  assert.equal(attentionMark({ status: 'attention' }), 'attention')
+  assert.equal(attentionMark({ status: 'done', decision: { question: 'Q?', at: 1 } }), 'attention')
+  assert.equal(attentionMark({ pullRequest: { text: 'Checks failed' } }), 'attention')
 })

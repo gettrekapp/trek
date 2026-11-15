@@ -12,7 +12,7 @@ import { globalSocketFactory, parsePairingLink, redeemPairingCode, PairingError 
 import { checkServerUrl } from '../src/logic/serverUrl.ts'
 import { useServers } from '../src/state/ServersProvider.tsx'
 import { Button } from '../src/ui/Button.tsx'
-import { ui } from '../src/ui/theme.ts'
+import { colors, ui } from '../src/ui/theme.ts'
 
 /** The entry's id, the phone's own: 128 random bits as hex. */
 const randomId = (): string => {
@@ -125,7 +125,7 @@ export default function AddServer(): React.JSX.Element {
       ) : null}
       <Text style={ui.heading}>Or type it</Text>
       <Text style={ui.muted}>Server address</Text>
-      <TextInput style={ui.input} value={url} onChangeText={setUrl} placeholder="wss://dev.example.com" placeholderTextColor="#6c7086" autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Server address" />
+      <TextInput style={ui.input} value={url} onChangeText={setUrl} placeholder="wss://dev.example.com" placeholderTextColor={colors.placeholder} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Server address" />
       {checked && !checked.ok ? <Text style={ui.error}>{checked.message}</Text> : null}
       {checked?.ok && checked.warning ? <Text style={ui.warn}>{checked.warning}</Text> : null}
       <View style={ui.row}>
@@ -135,7 +135,7 @@ export default function AddServer(): React.JSX.Element {
       {mode === 'code' ? (
         <>
           <Text style={ui.muted}>Code (works once, for 5 minutes)</Text>
-          <TextInput style={ui.input} value={code} onChangeText={setCode} placeholder="ABCDE-FGHIJ-…" placeholderTextColor="#6c7086" autoCapitalize="characters" autoCorrect={false} accessibilityLabel="Pairing code" />
+          <TextInput style={ui.input} value={code} onChangeText={setCode} placeholder="ABCDE-FGHIJ-…" placeholderTextColor={colors.placeholder} autoCapitalize="characters" autoCorrect={false} accessibilityLabel="Pairing code" />
           <Text style={ui.muted}>This phone's name (the token is named after it)</Text>
           <TextInput style={ui.input} value={deviceName} onChangeText={setDeviceName} autoCorrect={false} accessibilityLabel="Phone name" />
         </>

@@ -3,7 +3,7 @@
 // logic/review.ts'; the requests are the screen's.
 import { createContext, useContext, useEffect, useRef, useState, type ComponentRef } from 'react'
 import { Keyboard, StyleSheet, Text, TextInput, View } from 'react-native'
-import { MAX_REVIEW_BODY, type NumberedLine, type ReviewComment } from '../shared.ts'
+import { MAX_REVIEW_BODY, commentAuthorLabel, type NumberedLine, type ReviewComment } from '../shared.ts'
 import { canSaveComment, type CommentEdit } from '../logic/review.ts'
 import { Button } from './Button.tsx'
 import { colors, ui } from './theme.ts'
@@ -82,7 +82,7 @@ export function CommentBox({ conflict, inList = true }: { conflict?: string; inL
         maxLength={MAX_REVIEW_BODY}
         textAlignVertical="top"
         placeholder="Comment on this line"
-        placeholderTextColor="#6c7086"
+        placeholderTextColor={colors.placeholder}
         accessibilityLabel="Comment"
       />
       {conflict !== undefined ? (
@@ -108,9 +108,11 @@ export function CommentBox({ conflict, inList = true }: { conflict?: string; inL
 export function CommentView({ comment, where, editable = true, inList = true }: { comment: ReviewComment; where?: string; editable?: boolean; inList?: boolean }): React.JSX.Element {
   const { edit, busy, canWrite, actions } = useReview()
   const off = busy || !canWrite
+  const author = commentAuthorLabel(comment)
   return (
     <View style={styles.comment}>
       {where ? <Text style={ui.muted}>{where}</Text> : null}
+      {author ? <Text style={ui.muted}>{author}</Text> : null}
       {edit?.commentId === comment.id ? (
         <CommentBox conflict={edit.conflict ? edit.expected : undefined} inList={inList} />
       ) : (

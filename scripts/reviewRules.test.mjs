@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { numberedLines, patchBody } from '../src/shared/changes.ts'
 import {
   MAX_REVIEW_LINE_TEXT,
+  commentAuthorLabel,
   isCommitSha,
   isOutdated,
   placeComments,
@@ -141,4 +142,10 @@ test('reviewPrompt drops control characters from the worktree name', () => {
   assert.match(prompt, /^Review comments on the changes in feat\[201~x \(1 comment\)/)
   // eslint-disable-next-line no-control-regex
   assert.equal(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(prompt), false)
+})
+
+test('commentAuthorLabel: an agent comment names its session; the user\'s has no label', () => {
+  assert.equal(commentAuthorLabel({}), undefined)
+  assert.equal(commentAuthorLabel({ by: { kind: 'mcp' } }), 'From an agent')
+  assert.equal(commentAuthorLabel({ by: { kind: 'mcp', sessionTitle: 'Review 2' } }), 'From Review 2')
 })

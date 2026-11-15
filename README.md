@@ -128,8 +128,10 @@ sends every action to its server, and every other window on that project sees it
   root, with the trek-dev MCP tools to drive the worktree sessions.
 - **MCP server**: each trek-server serves the `trek-dev` MCP tools to its sessions,
   scoped to the session's own project (list worktrees, start, load and unload sessions,
-  send prompts and keystrokes, read terminal output, wait for sessions, edit a queue,
-  set a branch's tag, note or ticket, ask the user to decide). See
+  send prompts and keystrokes, read terminal output, wait for sessions, rename, restart
+  and mark sessions complete, edit a queue, set a branch's tag, note or ticket, manage
+  and run the project's automations, see what the user is looking at and show them a
+  session, ask the user to decide). See
   [PROTOCOL.md](PROTOCOL.md#mcp-trek-dev-on-the-server).
 - **Multiple windows**: one window per project. Opening a project another window holds
   focuses that window; `File → New Window` (⌘⇧N) opens an empty one. Closing a window
@@ -153,11 +155,11 @@ start first proves the sandbox works by trying to read a canary file. If the rea
 succeeds, or no sandbox is available, the bot won't run. A bot folder or repository
 inside the user-data directory is refused too.
 
-Trek's MCP server enforces the bot's policy on every tool call. These nine tools
+Trek's MCP server enforces the bot's policy on every tool call. These thirteen tools
 run or delete something outside the sandbox, so they always ask for your approval,
-whatever `POLICY.json` says: `start_session`, `send_prompt`, `send_keys`, `start_stack`,
+whatever `POLICY.json` says: `start_session`, `restart_session`, `send_prompt`, `send_keys`, `start_stack`,
 `create_worktree`, `load_worktree`, `remove_worktree`, `save_session_type`,
-`delete_session_type`.
+`delete_session_type`, `save_automation`, `delete_automation`, `run_automation`.
 
 **What it doesn't do yet:** it does not stop a determined, prompt-injected bot from
 getting code run outside the sandbox. The main ways:
@@ -269,7 +271,8 @@ other window on that project sees them live.
   `read_stack_log` MCP tools. A server older than this Trek (without the `linear`,
   `voice` and `skills` capabilities) shows none of these.
 - **Pull request watch, on the server**: with a pull request linked to a branch, the
-  worktree's … menu has **Watch pull request** (agents can call `watch_pull_request`).
+  worktree's … menu has **Watch pull request** (agents can call `watch_pull_request`,
+  and read the pull request's state at any time with `get_pull_request`).
   The server asks `gh` on its own machine about it every few minutes; when its checks
   fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is
   merged or closed, a prompt saying so (and which `gh` command shows it) is queued on
@@ -290,8 +293,9 @@ other window on that project sees them live.
   since shows as outdated at the top of its file, and is still sent with the line
   as it read. Comments on another source are listed in the review bar. The tab
   stays read-only: nothing stages or reverts. Agents can read the draft with the
-  `get_review_comments` MCP tool (read-only; each comment says whether it is
-  outdated). A server older than this Trek (without the `review` capability) shows
+  `get_review_comments` MCP tool (each comment says whether it is outdated and who
+  wrote it) and leave their own line comments with `add_review_comment`, shown as
+  "From <session>" (or "From an agent"). A server older than this Trek (without the `review` capability) shows
   only the branch against its base.
 - **Web client**: a server started with `trek-server start --web` serves the project
   window to a browser at its own address, for any device (through the server's TLS
@@ -371,7 +375,7 @@ title or status, and does not edit the project's tag lists.
   **Stop watching** in the worktree's Branch section, while `gh` is signed in on the
   server's machine (a watch already on can be stopped without it). What the watch
   reports (checks, reviews and comments, a conflict, merged, closed) shows as a notice
-  on the worktree's screen, with **Open** and **Dismiss**, as a line on its card in the
+  on the worktree's screen, with **Open** and **Dismiss**, as a line on its row in the
   project, and in the home tab, where it can be dismissed too. There is no live view of
   a pull request's checks, and review comments on GitHub are not answered from the phone.
 - **Automations**: a project's row on its screen opens its automations, each with its

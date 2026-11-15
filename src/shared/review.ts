@@ -17,6 +17,8 @@ export const MAX_REVIEW_PATH = 4096
 export const MAX_REVIEW_LINE = 10_000_000
 /** The highest draft revision; a saved one past it (or below 1) is replaced at load. */
 export const MAX_REVIEW_REVISION = 2 ** 50
+/** A comment author's session title: at most this many characters */
+export const MAX_REVIEW_AUTHOR = 200
 /** How many commits `worktree.commits` lists, and the picker offers. */
 export const COMMIT_LIST_LIMIT = 100
 
@@ -52,6 +54,12 @@ export function reviewLineText(raw: string): string {
   // eslint-disable-next-line no-control-regex
   const text = raw.replace(/[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/g, '')
   return text.length > MAX_REVIEW_LINE_TEXT ? text.slice(0, MAX_REVIEW_LINE_TEXT) : text
+}
+
+/** "From <session>" for a comment an agent wrote through the MCP tools; undefined for the user's own. */
+export function commentAuthorLabel(comment: Pick<ReviewComment, 'by'>): string | undefined {
+  if (!comment.by) return undefined
+  return `From ${comment.by.sessionTitle ?? 'an agent'}`
 }
 
 const byPlace = (a: ReviewComment, b: ReviewComment): number =>

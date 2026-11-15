@@ -5,6 +5,7 @@ import { Link } from 'expo-router'
 import { statusLabel, useServers, type ServerView } from '../src/state/ServersProvider.tsx'
 import { Button } from '../src/ui/Button.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
+import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
 
 const needsPairing = (status: ServerView['status']): boolean => status === 'needs-auth' || status === 'no-token'
@@ -27,6 +28,7 @@ export default function ServersScreen(): React.JSX.Element {
   return (
     <View style={ui.screen}>
       <FlatList
+        style={{ flex: 1 }}
         contentContainerStyle={ui.pad}
         data={servers}
         keyExtractor={(s) => s.id}
@@ -78,6 +80,7 @@ export default function ServersScreen(): React.JSX.Element {
           </Link>
         }
       />
+      <TabBar active="servers" />
     </View>
   )
 }

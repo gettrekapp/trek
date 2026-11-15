@@ -236,7 +236,7 @@ export default function AutomationScreen(): React.JSX.Element {
                     editable={busy === null}
                     maxLength={MAX_AUTOMATION_NAME}
                     placeholder="Name"
-                    placeholderTextColor="#6c7086"
+                    placeholderTextColor={colors.placeholder}
                     accessibilityLabel="Name"
                   />
                   <Text style={ui.muted}>Prompt</Text>
@@ -249,7 +249,7 @@ export default function AutomationScreen(): React.JSX.Element {
                     multiline
                     textAlignVertical="top"
                     placeholder="What the agent is asked on each run"
-                    placeholderTextColor="#6c7086"
+                    placeholderTextColor={colors.placeholder}
                     accessibilityLabel="Prompt"
                   />
                   {edit.changed ? <Text style={ui.warn}>{AUTOMATION_CHANGED}</Text> : null}

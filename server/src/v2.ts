@@ -25,6 +25,9 @@ import type { AutomationScheduler } from './automations/scheduler.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
+import { uiHandlers } from './ui/uiHandlers.ts'
+import type { UiSelections } from './ui/selections.ts'
+import type { UiClientKind } from '../../src/shared/ui.ts'
 import { historyHandlers } from './history/historyHandlers.ts'
 import type { HistoryStore } from './history/store.ts'
 import { updateHandlers } from './update/updateHandlers.ts'
@@ -87,6 +90,10 @@ export interface V2Context {
   automations?: AutomationScheduler
   /** promote_to_primary's confirmations (5e): `promote.listen`, `promote.claim`, `promote.answer` and `worktree.promote {requestId}` */
   promoteRequests?: PromoteRequests
+  /** What each client shows (`ui.report`), for get_selected_worktree and focus_session */
+  selections?: UiSelections
+  /** This connection's kind of client, as the hello told (absent: a desktop window) */
+  clientKind?: UiClientKind
   /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
   promoteRecoveryDir?: string
   /** Phone pairing's one-time codes (6a) */
@@ -412,6 +419,7 @@ const handlers: Record<string, Handler> = {
   ...reviewHandlers,
   ...moveHandlers,
   ...promoteHandlers,
+  ...uiHandlers,
   ...historyHandlers,
   ...updateHandlers,
   ...pluginInstallHandlers,
