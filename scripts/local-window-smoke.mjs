@@ -21,7 +21,7 @@
 //   - Settings: Audio alerts and the session mode, saved on the server;
 //   - the overflow menus: the primary's (Open in VS Code, Reveal and Promote branch to worktree; no
 //     Move or Delete) and a worktree's (Delete and Promote to primary; no Move);
-//   - ⏏ unloads the worktree on the server (no tab, a dormant dot, ▸1, "1 saved session") and ▸1
+//   - Unload (shown on the row's hover) unloads the worktree on the server (no tab, a dormant dot, ▸1, "1 saved session") and ▸1
 //     loads it again;
 //   - the Changes tab: Changes when clean; branch commits, edits and untracked files totalled
 //     ("3 files +4 −1"), one row each, deleted lines, the base; a same-count edit replaces the
@@ -230,6 +230,22 @@ try {
   const sections = sw.locator('.repo-section')
   const rows = sw.locator('.wt-row')
   const detail = sw.locator('.detail')
+  // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.
+  const openRun = async () => {
+    if ((await detail.locator('.run-btn').count()) && !(await detail.locator('.run-menu:not(.closed)').count())) await detail.locator('.run-btn').click()
+  }
+  // The detail re-renders just after a worktree is selected, which closes an open Run menu: open it again and retry.
+  const runClick = async (target) => {
+    for (let attempt = 0; ; attempt++) {
+      await openRun()
+      try {
+        await target.click({ timeout: 3000 })
+        return
+      } catch (err) {
+        if (attempt >= 5) throw err
+      }
+    }
+  }
   await until(() => rows.count(), 4)
 
   // ---- 2. The sidebar and the detail -------------------------------------------------------------
@@ -237,7 +253,7 @@ try {
   check('a section per repository, two rows each', [await sections.count(), await rows.count()], [2, 4])
   check('one primary per section, one row selected', [await sections.nth(0).locator('.primary-tag').count(), await sections.nth(1).locator('.primary-tag').count(), await sw.locator('.wt-row.selected').count()], [1, 1, 1])
   await sections.nth(0).locator('.wt-row', { hasText: 'main' }).click()
-  check("the detail names api's main, Clean", [await until(async () => (await detail.locator('.detail-title').innerText()).trim(), 'main'), await until(() => detail.locator('.chip-clean').count(), 1)], ['main', 1])
+  check("the detail names api's main, with nothing uncommitted to say", [await until(async () => (await detail.locator('.detail-title').innerText()).trim(), 'main'), await detail.locator('.chip-git').count()], ['main', 0])
   check('with the empty state', await detail.locator('.no-session:visible').count(), 1)
 
   // ---- 3. A session: working, done, complete; attention -------------------------------------------
@@ -298,6 +314,28 @@ try {
   const webFeatureRow = sections.nth(1).locator('.wt-row', { hasText: 'feature-auth' })
   check("api's feature row: its tag, ticket and PR chips", [await apiFeatureRow.locator('.mini-chip', { hasText: 'In Review' }).count(), await apiFeatureRow.locator('.mini-chip.ticket').count(), await apiFeatureRow.locator('.mini-chip.pr').count()], [1, 1, 1])
   check("web's row of the same branch has none of them", [await webFeatureRow.locator('.mini-chip', { hasText: 'In Review' }).count(), await webFeatureRow.locator('.mini-chip.ticket').count(), await webFeatureRow.locator('.mini-chip.pr').count()], [0, 0, 0])
+  // Resting the pointer on a row shows its card beside it; the card goes when the pointer leaves.
+  await apiFeatureRow.hover()
+  const card = sw.locator('.wt-card')
+  const cardText = async () => (await card.count()) ? await card.innerText() : ''
+  check("resting on api's feature row shows its card", await until(() => card.count(), 1), 1)
+  const cardHas = await cardText()
+  check('which names the branch, the tag, the ticket and the PR', ['feature-auth', 'In Review', 'ABC-123', '#7'].map((t) => cardHas.includes(t)), [true, true, true, true])
+  await sw.locator('.sidebar-filter').hover()
+  check('and it goes when the pointer leaves the row', await until(() => card.count(), 0), 0)
+  // The Sort menu: Attention first groups each repository's rows; Compact rows drops the second line.
+  const sortBtn = sw.locator('.sidebar-sort .sort-btn')
+  const sortItem = (name) => sw.locator('.sort-menu .tag-menu-item', { hasText: name })
+  const rowCount = await rows.count()
+  await sortBtn.click()
+  await sortItem('Attention first').click()
+  check('Attention first groups the rows under labels, keeps every row, stops them dragging, and marks the Sort button', [await until(async () => (await sw.locator('.wt-group-label').count()) > 0, true), await rows.count(), await apiFeatureRow.getAttribute('draggable'), (await sortBtn.getAttribute('class')).includes('filtered')], [true, rowCount, 'false', true])
+  await sortBtn.click()
+  await sortItem('Compact rows').click()
+  check("Compact rows: the feature row is one line, its PR number beside the name", [await until(() => apiFeatureRow.locator('.wt-meta').count(), 0), await apiFeatureRow.locator('.wt-compact-pr').innerText()], [0, '#7'])
+  await sortItem('Compact rows').click()
+  await sortItem('Manual order').click()
+  check('Manual order and full rows come back', [await until(() => sw.locator('.wt-group-label').count(), 0), await apiFeatureRow.locator('.wt-meta').count(), await apiFeatureRow.getAttribute('draggable'), await sw.locator('.sort-menu').count()], [0, 1, 'true', 0])
   const fields = (d) => [d.tag ?? null, d.note ?? null, d.ticket ?? null, d.pr ?? null]
   const branchFields = async (repo) => fields((await project()).repositories[repo].branchData['feature-auth'] ?? {})
   check("on the server, api's feature-auth has its tag, note, ticket and PR", await branchFields(0), ['In Review', "api's auth work", 'ABC-123', 'https://github.com/o/r/pull/7'])
@@ -308,6 +346,7 @@ try {
   check("api's feature row shows dirty (the server's poll), web's does not", await until(dirtyFlags, [1, 0, true, false]), [1, 0, true, false])
   await webFeatureRow.click()
   check("web's detail: its own feature-auth, with no PR or ticket", [await until(async () => (await detail.locator('.detail-path').innerText()).includes(webFeature), true), (await detail.locator('.detail-title').innerText()).trim(), await detail.locator('.chip-pr').count(), await detail.locator('.chip-ticket').count()], [true, 'feature-auth', 0, 0])
+  check('where they would be, the header offers to link them', await detail.locator('.chip-link').allTextContents(), ['Link ticket', 'Link pull request'])
   await apiFeatureRow.click()
   await detail.locator('.chip-ticket').waitFor({ timeout: 5000 })
   check("api's detail: the ticket and PR chips, the tag", [await detail.locator('.chip-ticket').count(), await detail.locator('.chip-pr').count(), (await detail.locator('.chip-tag').innerText()).trim().startsWith('In Review')], [1, 1, true])
@@ -331,17 +370,21 @@ try {
   await detail.locator('.notes-panel:visible textarea').fill('remember the thing')
   await detail.locator('.panel-btn', { hasText: /^Notes$/ }).click()
   check('a note is saved on the server', await until(async () => (await branchData(0, 'main')).note ?? null, 'remember the thing'), 'remember the thing')
-  await detail.locator('.panel-btn', { hasText: 'All Notes' }).click()
-  const cards = detail.locator('.note-card')
-  check("All Notes: the three notes, the one with no worktree marked gone", [await until(() => cards.count(), 3), await detail.locator('.note-gone-tag').count(), await detail.locator('.note-card-btn:not(.danger)').count()], [3, 1, 2])
-  const goneDelete = detail.locator('.note-card', { hasText: 'gone-branch' }).locator('.note-card-btn.danger')
+  const notesRow = sw.locator('.sidebar-nav-row', { hasText: 'All Notes' })
+  check('the sidebar has the All Notes row with its count, and the tab strip has no All Notes button', [(await notesRow.locator('.sidebar-nav-count').innerText()).trim(), await detail.locator('.panel-btn', { hasText: 'All Notes' }).count()], ['3', 0])
+  await notesRow.click()
+  const notesPage = sw.locator('.allnotes-panel')
+  const cards = notesPage.locator('.note-card')
+  check("All Notes: the three notes, the one with no worktree marked gone", [await until(() => cards.count(), 3), await notesPage.locator('.note-gone-tag').count(), await notesPage.locator('.note-card-btn:not(.danger)').count()], [3, 1, 2])
+  const goneDelete = notesPage.locator('.note-card', { hasText: 'gone-branch' }).locator('.note-card-btn.danger')
   await goneDelete.click()
   // A stray pointer event disarms the confirm (mouseleave): re-arm, so the delete itself is tested.
   if ((await goneDelete.innerText()).trim() !== 'Really delete?') await goneDelete.click()
   check('its delete asks again first', (await goneDelete.innerText()).trim(), 'Really delete?')
   await goneDelete.click()
   check('then clears it on the server', [await until(() => cards.count(), 2), await until(async () => (await branchData(0, 'gone-branch')).note ?? null, null)], [2, null])
-  await detail.locator('.panel-btn', { hasText: 'All Notes' }).click()
+  await notesPage.locator('.note-card', { hasText: 'main' }).locator('.note-card-btn:not(.danger)').first().click()
+  check('Show closes the page and selects the worktree', [await until(() => notesPage.isVisible(), false), await until(() => notesRow.evaluate((el) => el.classList.contains('active')), false)], [false, false])
 
   // ---- 6. Settings: audio alerts and the session mode ----------------------------------------------
 
@@ -415,9 +458,11 @@ try {
 
   // ---- 9. Unload and load --------------------------------------------------------------------------
 
+  // Unload shows only while the row is hovered or focused.
+  await sections.nth(0).locator('.wt-row.selected').hover()
   await sections.nth(0).locator('.wt-row.selected .wt-power.loaded').click()
   const mainWt = async () => (await project()).repositories[0].worktrees.find((w) => w.isMain)
-  check('⏏ unloads the worktree on the server, keeping its session', await until(async () => [(await mainWt()).loaded, (await mainWt()).sessions.length], [false, 1]), [false, 1])
+  check('Unload unloads the worktree on the server, keeping its session', await until(async () => [(await mainWt()).loaded, (await mainWt()).sessions.length], [false, 1]), [false, 1])
   check('no tab, a dormant dot, ▸1, and the empty state says so', [await until(() => detail.locator('.session-tab').count(), 0), await sections.nth(0).locator('.wt-dot.dormant').count(), await sections.nth(0).locator('.wt-power.dormant').count(), (await detail.locator('.no-session:visible').innerText()).includes('1 saved session')], [0, 1, 1, true])
   await sections.nth(0).locator('.wt-power.dormant').click()
   check('▸1 loads it again', [await until(async () => (await mainWt()).loaded, true), await until(() => detail.locator('.session-tab').count(), 1)], [true, 1])
@@ -443,7 +488,7 @@ try {
   // ---- 11. The Env panel ----------------------------------------------------------------------------------
 
   await apiFeatureRow.click()
-  await detail.locator('.panel-btn', { hasText: 'Env' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
   const envPanel = detail.locator('.env-panel:visible')
   await envPanel.waitFor({ timeout: 10_000 })
   check("the Env panel: its VM's three actions, and No services", [await until(() => envPanel.locator('.env-header .docker-actions button').count(), 3), await until(() => envPanel.locator('.muted', { hasText: 'No services' }).count(), 1)], [3, 1])

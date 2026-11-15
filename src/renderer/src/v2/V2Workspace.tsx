@@ -11,6 +11,7 @@ import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
 import { MissedRunsModal } from '../components/MissedRunsModal'
 import { SettingsPanel } from '../components/SettingsPanel'
+import { AllNotesPanel } from '../components/AllNotesPanel'
 import { AutomationsPanel } from '../components/AutomationsPanel'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
@@ -74,7 +75,8 @@ export function V2Workspace(): React.JSX.Element {
         {/* The project-level pages cover the detail, which stays mounted under them. */}
         <div className="workspace-main">
           {/* The mirror refreshes the rows by itself after a pull, push or delete. */}
-          <WorktreeDetail info={info} worktrees={worktrees} onWorktreesChanged={() => {}} />
+          <WorktreeDetail info={info} onWorktreesChanged={() => {}} />
+          <AllNotesPanel visible={projectPage === 'notes'} worktrees={worktrees} />
           {features.settingsEdit && <SettingsPanel visible={projectPage === 'settings'} />}
           {features.automations && <AutomationsPanel visible={projectPage === 'automations'} />}
         </div>

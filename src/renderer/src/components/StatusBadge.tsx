@@ -24,7 +24,7 @@ export function StatusBadge({ status, onToggleComplete }: Props): React.JSX.Elem
   if (status === 'attention') {
     return (
       <span className="badge badge-attention" title={TITLES.attention}>
-        ?
+        !
       </span>
     )
   }

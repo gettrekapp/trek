@@ -373,6 +373,22 @@ try {
   }), [true, true, true, true, true, true, false, true, true]), [true, true, true, true, true, true, false, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
+  // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.
+  const openRun = async () => {
+    if ((await detail.locator('.run-btn').count()) && !(await detail.locator('.run-menu:not(.closed)').count())) await detail.locator('.run-btn').click()
+  }
+  // The detail re-renders just after a worktree is selected, which closes an open Run menu: open it again and retry.
+  const runClick = async (target) => {
+    for (let attempt = 0; ; attempt++) {
+      await openRun()
+      try {
+        await target.click({ timeout: 3000 })
+        return
+      } catch (err) {
+        if (attempt >= 5) throw err
+      }
+    }
+  }
   const mainRow = rows.filter({ hasNotText: 'feature-x' })
   await mainRow.click()
   await detail.locator('.detail-path', { hasText: repo }).waitFor({ timeout: 10_000 })
@@ -392,9 +408,9 @@ try {
   check('Reveal shows the repository in Finder', await until(() => app.evaluate(() => globalThis.__revealed), [repo]), [repo])
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
   // The repository has docker/stack/stack.sh too, so main has a Stack tab (once its status is read).
-  const mainTabs = ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack']
-  check("main's tabs: All Notes, Docker and Stack", await until(() => tabs(), mainTabs), mainTabs)
-  await detail.locator('.docker-menu-trigger').click()
+  const mainTabs = ['Changes', 'Notes', 'History', 'Docker ▾', 'Stack']
+  check("main's tabs: Docker and Stack", await until(() => tabs(), mainTabs), mainTabs)
+  await runClick(detail.locator('.docker-menu-trigger'))
   await win.locator('.docker-menu .skill-menu-item', { hasText: 'compose up -d' }).first().click()
   check('the Docker menu runs docker compose in the repository', await until(() => callsOf('docker').filter((c) => c.includes('|compose')), [`${repo}|compose up -d`]), [`${repo}|compose up -d`])
 
@@ -428,7 +444,7 @@ try {
   await (await menuItem('Open in VS Code')).click()
   check('Open in VS Code runs `code` on the worktree', await until(() => callsOf('code').at(-1), worktree), worktree)
 
-  await detail.locator('.panel-btn', { hasText: 'Env' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
   // The Stack panel shares the class; only the open one is visible.
   const envPanel = detail.locator('.env-panel:visible')
   await envPanel.waitFor({ timeout: 5000 })
@@ -439,14 +455,14 @@ try {
   await envPanel.locator('.env-vars-toggle').click()
   check('and saved on the server on blur', await until(async () => ((await project()).repositories[0].branchData['feature-x'] ?? {}).env ?? null, 'FOO=bar'), 'FOO=bar')
 
-  await detail.locator('.panel-btn', { hasText: 'Stack' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
   check("the Stack panel reads the worktree's stack", await until(() => detail.locator('.env-panel:visible', { hasText: 'trek-app-feature-x' }).count(), 1), 1)
   // The app's `up`, by the pid file the server took over: still starting, with its log.
   check("the app's running up counts, and its log shows", [await until(() => detail.locator('.env-panel:visible .docker-meta').first().innerText(), 'Starting…'), await until(() => detail.locator('.env-panel:visible .docker-log').innerText().then((t) => t.includes('started by the app before 5a'), () => false), true)], ['Starting…', true])
 
   // ---- 5. A skill, typed into the server's pty ------------------------------------------------------
 
-  await detail.locator('.panel-btn', { hasText: 'Stack' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
   await detail.locator('.no-session button', { hasText: 'Start session' }).click()
   const tab = detail.locator('.session-tab').first()
   await tab.waitFor({ timeout: 10_000 })

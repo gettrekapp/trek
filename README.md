@@ -68,14 +68,33 @@ sends every action to its server, and every other window on that project sees it
   removes a repository from the project without touching the disk; it can't be removed
   while it has live sessions. Tags, notes, tickets, PR links and env vars are kept per
   repository, so a branch name shared by two repositories has independent data.
-- **Worktree sidebar**: lists every git worktree of each repository, with the session
-  status dot, branch, workflow tag, ticket/PR chips and git ahead/behind/dirty state,
-  as the server's git poller reports them. The `+` on a repository's section creates a
+- **Worktree sidebar**: lists every git worktree of each repository in two lines: the
+  session status dot, the branch's last segment and its git state (a dot for uncommitted
+  work, then ahead/behind), as the server's git poller reports them; then the workflow
+  tag in its color, a square per custom tag, the ticket and the PR as plain text. When a
+  row needs you, that second line says why instead: an open decision's question, a
+  watched pull request's notice, or that the worktree is missing on the server. Rest
+  the pointer on a row and a card beside it has the rest: the full branch and path, the
+  tags by name, the ticket's status and title, the PR's watch and notice, the git state
+  in words, and each session with its status. The `+` on a repository's section creates a
   worktree (`git worktree add`, next to the repository as `<repo>-<branch>`) or checks
-  one out from a pull request. The main checkout is tagged **PRIMARY**.
+  one out from a pull request. The main checkout is marked **primary**.
+- **Worktree header**: the branch, then one line of text: the workflow tag (click it to
+  change it), the custom tags, the ticket and the PR as links (or **Link ticket** /
+  **Link pull request** when there is none), and "Uncommitted changes" when there are
+  any. **Pull** and **Push** carry the behind/ahead counts and are dim with nothing to
+  do. A watched pull request's notice is a strip under the header with **Open PR** and
+  **Dismiss**. The **…** menu starts with the worktree's path and has Copy path and
+  Unload sessions; hover an item to read what it does.
+- **Sort menu** (beside the tag filter): **Manual order** is the order you dragged the
+  rows into; **Attention first** groups each repository's rows under Needs you, Working
+  and Quiet, in your order within each (rows do not drag in this view). **Compact rows**
+  shows one line a row, keeping the second line for a row that needs you, and **Hide
+  unloaded** leaves out worktrees with no loaded session (the selected one stays). The
+  choices are kept per window.
 - **Workflow tags**: each branch can carry a tag (In Progress, In Review, Changes
   Needed, Waiting for SQL, In Testing, Ready for Dev, Ready to Deploy, Remove) — click
-  the tag chip in the detail pane to change it, and filter the sidebar by tag with the
+  the tag in the worktree header to change it, and filter the sidebar by tag with the
   "Tag:" dropdown under the worktree list. New worktrees start as **In Progress**. Tags,
   like notes, tickets and PR links, are keyed to the branch, so they survive the
   worktree being deleted and re-created.
@@ -86,17 +105,18 @@ sends every action to its server, and every other window on that project sees it
   branch name contains a Linear id the ticket dialog pre-fills it. Add a Linear API key
   in ⚙ Settings → Plugins to show each issue's status and title on its chip; the key is the
   window's server's (stored there, owner-only, never sent back to any client), shared by
-  every project on that server. The **All Notes** panel
-  collects every branch note in one place — including branches whose worktree is gone —
-  with a per-note delete.
+  every project on that server. The **All Notes** row in the
+  sidebar's footer opens a page that collects every branch note in one place — including
+  branches whose worktree is gone — with a per-note delete; the row counts the notes.
 - **Sessions** (per worktree): each session tab is an agent the server runs in the
   worktree, in a real PTY. ⌘T (or the `+` next to the tabs) opens a new one, click the
   active tab's title to rename it, and an exited session shows **Restart** (which
   resumes the same conversation).
 - **Loading / unloading worktrees**: each session costs a process on the server, so
-  worktrees with saved sessions start unloaded. A hollow dot and a **▸N** button in the
-  sidebar row (and **Load sessions** in the detail pane) load them; **⏏** unloads them
-  again, keeping the sessions to resume.
+  worktrees with saved sessions start unloaded. A dotted ring and a **▸N** button in the
+  sidebar row (and **Load sessions** in the detail pane) load them; **Unload**, which a
+  loaded row shows on hover (and the detail pane always), unloads them again, keeping
+  the sessions to resume.
 - **Agents**: each session runs one agent CLI: **Claude** (`claude`), **Codex**
   (`codex`), **Gemini** (`gemini`), **Grok** (`grok`) or **Local** (Claude Code pointed at
   Ollama or LM Studio). The server's config (`llm`) sets each agent's command and the
@@ -505,21 +525,32 @@ Each session tab shows a status badge, and each sidebar row a status dot:
 
 | Badge | Meaning |
 | --- | --- |
-| spinner | Claude is producing output (working) |
-| orange `?` (pulsing tab) | Claude rang the terminal bell — it's waiting on you |
-| green `✓` | Output went quiet after activity — Claude is likely done |
+| green spinning arc | Claude is producing output (working) |
+| orange `!` (bold tab) | Claude rang the terminal bell — it's waiting on you |
+| blue `✓` (bold tab) | Output went quiet after activity — Claude is likely done |
 | hollow `✓` | Marked fully complete — status tracking paused |
 | gray `✕` | The process exited |
 
-Click a green `✓` to mark that terminal **fully complete**: the badge hollows
+A tab's skills menu and close button show on the active tab and under the pointer.
+Beside the tabs are the worktree's panels: Changes, Notes and History. When a worktree has two or more of Docker, Env and Stack they sit
+behind one **Run** button, whose dot is green while an environment or stack is running.
+
+Under the terminal, the quick buttons sit on one row: as many as fit, in the order
+set in Settings, with the rest behind **N more**. A button whose text asks for input
+ends in `…`; right-click a button (or use Edit in the More menu) to change it. The
+**Queue** chip at the row's right end opens the queue beside the terminal and counts
+what is queued.
+
+Click a blue `✓` to mark that terminal **fully complete**: the badge hollows
 out and the terminal stops producing status changes and notifications entirely.
 Click the hollow `✓` to resume tracking — or just type in the terminal, which
 re-engages it automatically.
 
 Focusing/clicking a terminal clears its badge. A sidebar row's dot shows the
-highest-priority status of that worktree's sessions (pulsing green = working,
-orange = needs you, solid green = done, gray = idle, hollow ring = unloaded
-with saved sessions).
+highest-priority status of that worktree's sessions, each with its own shape
+(spinning green arc = working, orange `!` = needs you, solid blue = done, hollow
+ring = idle, solid gray = exited, dotted ring = unloaded with saved sessions). The
+branch name is bold while the row has something you have not looked at.
 
 The server works the status out from each session's output. You also get native
 macOS notifications, raised once by the app for every server: when a session needs

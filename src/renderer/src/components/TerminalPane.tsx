@@ -23,7 +23,8 @@ import {
   subscribeForeignSize
 } from '../terminals'
 import { getBackend } from '../backend'
-import { QueuePanel } from './QueuePanel'
+import { QueueChip, QueuePanel } from './QueuePanel'
+import { moreLabel, overflowCount, splitOverflow } from '../quickButtonRow'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus } from '../../../shared/client/connection.ts'
 
@@ -86,6 +87,53 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     const list = quickButtons ?? []
     setButtons(
       list.some((b) => b.id === button.id) ? list.map((b) => (b.id === button.id ? button : b)) : [...list, button]
+    )
+  }
+  // The quick buttons' row: how many wrapped out of sight (they go behind More), read back from the layout.
+  const buttons = quickButtons ?? []
+  const listRef = useRef<HTMLDivElement>(null)
+  const [hidden, setHidden] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false)
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const measure = (): void => setHidden(overflowCount([...list.children].map((el) => (el as HTMLElement).offsetTop)))
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [quickButtons, visible, status])
+  useEffect(() => {
+    if (hidden === 0 || !visible) setMoreOpen(false)
+  }, [hidden, visible])
+  const overflow = splitOverflow(buttons, hidden)
+  /** One button in the More menu: run it, or edit it. */
+  const moreRow = (btn: TerminalQuickButton): React.JSX.Element => {
+    const label = btn.label.trim() || btn.text
+    return (
+      <div key={btn.id} className="quick-more-item">
+        <button
+          className="quick-more-run"
+          title={btn.text}
+          onClick={() => {
+            setMoreOpen(false)
+            run(btn)
+          }}
+        >
+          {label}
+          {templateInputs(btn.text).length > 0 ? '…' : ''}
+        </button>
+        <button
+          className="quick-more-edit"
+          aria-label={`Edit ${label}`}
+          onClick={() => {
+            setMoreOpen(false)
+            setEditing(btn)
+          }}
+        >
+          Edit
+        </button>
+      </div>
     )
   }
   // A server window whose link is down: input would be dropped, so the pane is covered.
@@ -159,32 +207,76 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           <div ref={ref} className="terminal-host" />
           {status !== 'exited' && (
             <div className="quick-buttons">
-              {(quickButtons ?? []).map((btn) => {
-                const label = btn.label.trim() || btn.text
-                return (
-                  <div key={btn.id} className="quick-btn">
-                    <button className="quick-btn-main" title={btn.text} onClick={() => run(btn)}>
-                      {templateInputs(btn.text).length > 0 && (
-                        <span className="quick-btn-input-icon" title="Asks for input">
-                          ⌨
-                        </span>
-                      )}
-                      <span className="quick-btn-label">{label}</span>
-                    </button>
-                    <button
-                      className="quick-btn-edit"
-                      title="Edit button"
-                      aria-label={`Edit ${label}`}
-                      onClick={() => setEditing(btn)}
-                    >
-                      ✎
-                    </button>
-                  </div>
-                )
-              })}
+              {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}
+              <div className="quick-btn-list" ref={listRef}>
+                {buttons.map((btn) => {
+                  const label = btn.label.trim() || btn.text
+                  return (
+                    <div key={btn.id} className="quick-btn">
+                      <button
+                        className="quick-btn-main"
+                        title={`${btn.text}\n\nRight-click to edit`}
+                        onClick={() => run(btn)}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          setEditing(btn)
+                        }}
+                      >
+                        <span className="quick-btn-label">{label}</span>
+                        {templateInputs(btn.text).length > 0 && (
+                          <span className="quick-btn-input-icon" title="Asks for input">
+                            …
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+              {hidden > 0 && (
+                <div className="quick-more">
+                  <button
+                    className="quick-more-btn"
+                    title="The quick buttons that do not fit on the row"
+                    aria-expanded={moreOpen}
+                    onClick={() => setMoreOpen((v) => !v)}
+                  >
+                    {moreLabel(hidden)} <span className="chip-caret">▴</span>
+                  </button>
+                  {moreOpen && (
+                    <>
+                      <div className="detail-menu-backdrop" onClick={() => setMoreOpen(false)} />
+                      <div className="quick-more-menu">
+                        {overflow.more.map(moreRow)}
+                        {overflow.shown.length > 0 && (
+                          <>
+                            <div className="detail-menu-divider" />
+                            <div className="quick-more-heading">On the row</div>
+                            {overflow.shown.map(moreRow)}
+                          </>
+                        )}
+                        <div className="detail-menu-divider" />
+                        <div className="quick-more-item">
+                          <button
+                            className="quick-more-run quiet"
+                            onClick={() => {
+                              setMoreOpen(false)
+                              setEditing('new')
+                            }}
+                          >
+                            New quick button…
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               <button className="quick-btn-add" title="Add quick button" onClick={() => setEditing('new')}>
-                +
+                {buttons.length === 0 ? 'Add a quick button' : '+'}
               </button>
+              <span className="quick-buttons-spacer" />
+              <QueueChip terminalId={terminalId} global={global} />
             </div>
           )}
         </div>

@@ -754,8 +754,8 @@ try {
   await runModal.locator('input[aria-label="AREA"]').press('Enter')
   await runModal.waitFor({ state: 'detached', timeout: 5000 })
   check('the filled text reaches the agent', await until(async () => (await term(s1)).includes('GOT:Check smoke on smoke-wt'), true), true)
-  await made.hover()
-  await made.locator('.quick-btn-edit').click()
+  // A right-click on a quick button edits it.
+  await made.locator('.quick-btn-main').click({ button: 'right' })
   const editModal = w1.locator('.modal', { hasText: 'Edit quick button' })
   await editModal.locator('button', { hasText: 'Delete' }).click()
   check('deleting it from the edit modal clears it on the server', await until(async () => (await projectNow()).settings.terminalButtons ?? [], []), [])

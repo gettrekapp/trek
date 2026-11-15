@@ -283,17 +283,33 @@ try {
   // ---- 3. The main checkout: Docker on the server -----------------------------------------------------
 
   const detail = win.locator('.server-window .detail')
+  // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.
+  const openRun = async () => {
+    if ((await detail.locator('.run-btn').count()) && !(await detail.locator('.run-menu:not(.closed)').count())) await detail.locator('.run-btn').click()
+  }
+  // The detail re-renders just after a worktree is selected, which closes an open Run menu: open it again and retry.
+  const runClick = async (target) => {
+    for (let attempt = 0; ; attempt++) {
+      await openRun()
+      try {
+        await target.click({ timeout: 3000 })
+        return
+      } catch (err) {
+        if (attempt >= 5) throw err
+      }
+    }
+  }
   const mainRow = rows.filter({ hasNotText: 'feature-x' })
   await mainRow.click()
   await detail.locator('.detail-path', { hasText: repo }).waitFor({ timeout: 10_000 })
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
-  check("main's tabs: Docker and Stack (the server's), and no Open in VS Code or Reveal", [await until(() => tabs(), ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack']), await detail.locator('.detail-actions button', { hasText: /VS Code|Reveal/ }).count()], [['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack'], 0])
-  await detail.locator('.panel-btn', { hasText: 'Docker' }).click()
+  check("main's tabs: Docker and Stack (the server's), and no Open in VS Code or Reveal", [await until(() => tabs(), ['Changes', 'Notes', 'History', 'Docker ▾', 'Stack']), await detail.locator('.detail-actions button', { hasText: /VS Code|Reveal/ }).count()], [['Changes', 'Notes', 'History', 'Docker ▾', 'Stack'], 0])
+  await runClick(detail.locator('.panel-btn', { hasText: 'Docker' }))
   const dockerPanel = detail.locator('.docker-panel')
   check("the Docker panel lists the server's containers", await until(() => dockerPanel.locator('.docker-row .docker-name').allTextContents(), ['web']), ['web'])
   await dockerPanel.locator('.docker-row', { hasText: 'web' }).locator('button', { hasText: 'Restart' }).click()
   check('Restart runs docker restart on the server', await until(() => callsOf('docker').filter((c) => c.includes('|restart ')).map((c) => c.split('|')[1]), ['restart c1']), ['restart c1'])
-  await detail.locator('.docker-menu-trigger').click()
+  await runClick(detail.locator('.docker-menu-trigger'))
   await win.locator('.docker-menu .skill-menu-item', { hasText: 'compose up -d' }).first().click()
   check("the compose menu runs docker compose in the repository, on the server", await until(() => callsOf('docker').filter((c) => c.includes('|compose ')), [`${repo}|compose up -d|FOO=`]), [`${repo}|compose up -d|FOO=`])
   check("and its output streams back to the panel (docker.log)", await until(async () => (await dockerPanel.locator('.docker-log').textContent().catch(() => '')).includes('[docker compose exited with code 0]'), true), true)
@@ -319,7 +335,7 @@ try {
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
   check('its tabs: Env and Stack', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack']), ['Changes', 'Notes', 'History', 'Env', 'Stack'])
-  await detail.locator('.panel-btn', { hasText: 'Env' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
   const envPanel = detail.locator('.env-panel:visible')
   await envPanel.waitFor({ timeout: 5000 })
   await envPanel.locator('.env-vars-toggle').click()
@@ -336,7 +352,7 @@ try {
 
   // ---- 6. Its stack, on the server ---------------------------------------------------------------------
 
-  await detail.locator('.panel-btn', { hasText: 'Stack' }).click()
+  await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
   const stackPanel = detail.locator('.env-panel:visible', { hasText: 'trek-app-feature-x' })
   await stackPanel.waitFor({ timeout: 10_000 })
   await stackPanel.locator('button', { hasText: /^Start$/ }).click()

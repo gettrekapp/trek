@@ -11,13 +11,15 @@ interface Props {
 /**
  * Every branch note in the project — including branches whose worktree has
  * since been deleted. Notes are removed with a two-step inline confirm.
+ * A project page: the sidebar's All Notes row opens it over the worktree detail.
  */
 export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element {
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
   const setBranchNote = useAppStore((s) => s.setBranchNote)
   const [confirming, setConfirming] = useState<string | null>(null)
 
-  const hasNotes = repositories.some((r) => Object.keys(r.branchNotes ?? {}).length > 0)
+  const noteCount = repositories.reduce((n, r) => n + Object.keys(r.branchNotes ?? {}).length, 0)
+  const hasNotes = noteCount > 0
 
   const show = (info: GitWorktreeInfo): void => {
     const project = useAppStore.getState().project
@@ -39,6 +41,14 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
 
   return (
     <div className="allnotes-panel" style={{ display: visible ? 'flex' : 'none' }}>
+      <div className="allnotes-header">
+        <h2>All Notes</h2>
+        {hasNotes && (
+          <span className="muted">
+            {noteCount} note{noteCount === 1 ? '' : 's'}, one per branch
+          </span>
+        )}
+      </div>
       <div className="allnotes-list">
         {!hasNotes && (
           <div className="allnotes-empty muted">
