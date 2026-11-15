@@ -2,10 +2,13 @@
 // pull request (with its watch: logic/prWatch.ts), read from the project's snapshot and saved at
 // once with the matching branch.set* request. A failure shows in the section's error line; the snapshot remains the truth. The
 // project's tag lists are not edited here, and a ticket's title and status are not looked up.
+// History opens the branch's change log (app/history), on a server that keeps one.
 import { useEffect, useRef, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { router } from 'expo-router'
 import { CAPABILITY, DEFAULT_WORKTREE_TAGS, type Project, type Repository, type ServerConnection } from '../shared.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink, type NoteEdit } from '../logic/branchDetails.ts'
+import { branchParam } from '../logic/history.ts'
 import { watchAction, watchOffered, watchSuffix } from '../logic/prWatch.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../logic/tickets.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
@@ -71,6 +74,9 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
   const canWatch = useRef(false)
   const welcome = server?.connection.welcome
   if (welcome) canWatch.current = welcome.capabilities.includes(CAPABILITY.prWatch)
+  // Whether the server keeps a history of its branches, held the same way across a reconnect.
+  const hasHistory = useRef(false)
+  if (welcome) hasHistory.current = welcome.capabilities.includes(CAPABILITY.history)
   const watch = watchAction(data)
   const ref = { projectId, repoId: repo.id, branch }
   const off = busy || !server
@@ -302,6 +308,17 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
         )}
       </View>
       {error ? <Text style={ui.error}>{error}</Text> : null}
+      {hasHistory.current ? (
+        <View style={ui.row}>
+          {/* The branch goes as a parameter, in a form no link changes (a name can hold "/", "?", "%41"). */}
+          <Button
+            ghost
+            label="History"
+            accessibilityLabel={`History of ${branch}`}
+            onPress={() => router.push({ pathname: '/history/[serverId]/[projectId]/[repoId]', params: { serverId, projectId, repoId: repo.id, branch: branchParam(branch) } })}
+          />
+        </View>
+      ) : null}
     </View>
   )
 }

@@ -1918,7 +1918,7 @@ import {
   scheduleWords,
   turnOffQuestion
 } from '../apps/mobile/src/logic/automations.ts'
-import { EMPTY_HISTORY, historyAdded, historyDays, historyTime, olderCursor, olderLoaded, reloadFailed, reloadStarted, reloaded } from '../apps/mobile/src/logic/history.ts'
+import { EMPTY_HISTORY, branchFromParam, branchParam, historyAdded, historyDays, historyTime, olderCursor, olderLoaded, reloadFailed, reloadStarted, reloaded } from '../apps/mobile/src/logic/history.ts'
 import { automationHandlers } from '../server/src/automations/automationHandlers.ts'
 import { MAX_AUTOMATION_NAME as SERVER_MAX_AUTOMATION_NAME, MAX_AUTOMATION_PROMPT } from '../server/src/automations/model.ts'
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
@@ -2539,4 +2539,29 @@ test('automations: a Run choice lasts only while its automation has missed runs'
   // Answered elsewhere, then missed again: Skip again until Run is chosen.
   const kept = missedChoicesKept([automation({ id: 'a1' })], choices)
   assert.deepEqual(missedAnswer(list, kept), { run: [], dismiss: ['a1', 'a3'] })
+})
+
+// ── History: the screen's rules ──────────────────────────────────────────────────────────────
+
+test("history: a branch's name survives the route as a parameter, whatever it holds", () => {
+  const names = ['main', 'feature/mobile-functionality', 'fix/50%-off', 'a%2Fb', 'feat%41', 'user@host/x+y z', 'q?a=1&b=2#c', 'tilde~1', 'ünïcödé/分支', 'emoji-😀', '~007e', '']
+  for (const name of names) {
+    const param = branchParam(name)
+    // Only characters a URL leaves alone: encoding or decoding it, any number of times, changes nothing.
+    assert.match(param, /^[A-Za-z0-9._~-]*$/, name)
+    assert.equal(encodeURIComponent(param), param, name)
+    assert.equal(decodeURIComponent(param), param, name)
+    assert.equal(branchFromParam(param), name, name)
+    // As Expo Router carries a search parameter: encoded into the link, read by URLSearchParams, then decoded once more by useLocalSearchParams.
+    const link = `/history/s/p/r?branch=${encodeURIComponent(param)}`
+    const read = decodeURIComponent(new URL(link, 'http://x').searchParams.get('branch'))
+    assert.equal(branchFromParam(read), name, name)
+  }
+  assert.equal(branchParam('feature/x'), 'feature~002fx')
+  // The name itself would not survive that: its second decoding reads "%41" as "A".
+  assert.equal(decodeURIComponent(new URL(`/h?branch=${encodeURIComponent('feat%41')}`, 'http://x').searchParams.get('branch')), 'featA')
+  // A parameter that is missing or was not made by branchParam is read as it is.
+  assert.equal(branchFromParam(undefined), '')
+  assert.equal(branchFromParam(['feature~002fx', 'other']), 'feature/x')
+  assert.equal(branchFromParam('plain~zz'), 'plain~zz')
 })

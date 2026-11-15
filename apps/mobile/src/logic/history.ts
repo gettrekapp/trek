@@ -30,6 +30,24 @@ export interface HistoryList {
 export const EMPTY_HISTORY: HistoryList = { events: [], more: false, arriving: null }
 
 /**
+ * A branch's name as the history screen's `branch` route parameter. A name can hold what a link
+ * gives meaning to ("/", "?", "#", "+", "%41"), and Expo Router decodes a search parameter twice
+ * (URLSearchParams, then useLocalSearchParams' decodeURIComponent), which turns a name's own "%41"
+ * into "A". So the parameter holds only letters, digits, ".", "_", "-" and "~": every other
+ * character (and "~") is "~" and its UTF-16 code unit as four hex digits ("feature~002fx"), which
+ * no encoding or decoding of a link changes.
+ */
+export function branchParam(branch: string): string {
+  return branch.replace(/[^A-Za-z0-9._-]/g, (c) => `~${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
+/** The branch a `branch` route parameter names (`branchParam`'s inverse); '' without one. */
+export function branchFromParam(param: string | string[] | undefined): string {
+  const value = Array.isArray(param) ? param[0] : param
+  return (value ?? '').replace(/~([0-9a-f]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+/**
  * A reload from the newest begins (the screen opens, pull to refresh, the screen regains focus, the
  * connection was made again): `history.list {projectId, repoId, branch}` is asked for. The list
  * stays as it is on screen meanwhile.
