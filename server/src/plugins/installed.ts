@@ -3,7 +3,7 @@
 // runs client.js. Another process may change the folder (`trek-server plugin add`): a running
 // server watches it.
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, watch as watchDir, writeFileSync, type FSWatcher } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, watch as watchDir, writeFileSync, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { MAX_PLUGIN_CLIENT_BYTES, MAX_PLUGIN_MANIFEST_BYTES, PLUGIN_ID_RE, checkPluginPackage, type PluginManifest, type PluginPackage, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
 import { codedError } from '../errors.ts'
@@ -31,6 +31,7 @@ export interface InstalledPlugins {
   add(pkg: PluginPackage): InstalledPlugin
   /** False when no plugin has the id */
   remove(id: string): boolean
+  /** client.js as it is now, with its hash. One edited in place since the last scan is a change (the listeners are told); undefined when it can no longer be installed. */
   bundle(id: string): { sha256: string; client: string } | undefined
   /** Reads the folder again; true (and the listeners are told) when it differs from what was known */
   rescan(): boolean
@@ -53,38 +54,54 @@ export const presenceOf = (p: InstalledPlugin): PluginPresence => ({
   sha256: p.sha256
 })
 
+/** A staging folder (`.tmp-*`, `.old-*`) this old was left by an install that died: one running now is younger. */
+const STALE_SCRATCH_MS = 10 * 60_000
+/** Linux has a recursive fs.watch from Node 20. */
+const RECURSIVE_WATCH = process.platform === 'darwin' || process.platform === 'win32' || Number(process.versions.node.split('.')[0]) >= 20
+
+/** The file's bytes, or why it is not read. Never through a link, nor from a pipe or a folder: lstat, and a regular file only. */
+function regularFile(path: string, name: string, maxBytes: number, tooLarge: string): Buffer | string {
+  try {
+    const stat = lstatSync(path)
+    if (!stat.isFile()) return `its ${name} is not a regular file`
+    if (stat.size > maxBytes) return tooLarge
+    return readFileSync(path)
+  } catch (err) {
+    return `its ${name} cannot be read: ${(err as Error).message}`
+  }
+}
+
+/** Whether the bytes are UTF-8 text. A client checks the hash of the text it is sent: other bytes would never match. */
+const isUtf8Text = (bytes: Buffer): boolean => Buffer.from(bytes.toString('utf8'), 'utf8').equals(bytes)
+
 export function createInstalledPlugins(options: InstalledPluginsOptions): InstalledPlugins {
   const { dir } = options
   const warn = options.warn ?? ((message: string) => console.warn(message))
   const listeners = new Set<(ids: string[]) => void>()
   let known = new Map<string, InstalledPlugin>()
+  /** The folders the last scan did not list, and why: a rescan warns of what is new. */
+  let skipped = new Map<string, string>()
   let watcher: FSWatcher | undefined
   let timer: NodeJS.Timeout | undefined
+
+  const clientBytes = (id: string): Buffer | string => regularFile(join(dir, id, 'client.js'), 'client.js', MAX_PLUGIN_CLIENT_BYTES, 'its client bundle is larger than 1 MB')
 
   /** One folder's plugin, or why it is not one. */
   const read = (name: string): InstalledPlugin | string => {
     if (!PLUGIN_ID_RE.test(name)) return 'its folder name is not a plugin id'
     if (options.reserved(name)) return 'its id is a built-in plugin or a core namespace'
-    const manifestPath = join(dir, name, 'manifest.json')
-    const clientPath = join(dir, name, 'client.js')
+    const manifestBytes = regularFile(join(dir, name, 'manifest.json'), 'manifest.json', MAX_PLUGIN_MANIFEST_BYTES, 'its manifest is larger than 16 KB')
+    if (typeof manifestBytes === 'string') return manifestBytes
     let manifest: unknown
-    let bytes: Buffer
     try {
-      if (statSync(manifestPath).size > MAX_PLUGIN_MANIFEST_BYTES) return 'its manifest is larger than 16 KB'
-      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      manifest = JSON.parse(manifestBytes.toString('utf8'))
     } catch (err) {
       return `its manifest.json cannot be read: ${(err as Error).message}`
     }
-    try {
-      if (statSync(clientPath).size > MAX_PLUGIN_CLIENT_BYTES) return 'its client bundle is larger than 1 MB'
-      bytes = readFileSync(clientPath)
-    } catch (err) {
-      return `its client.js cannot be read: ${(err as Error).message}`
-    }
-    const client = bytes.toString('utf8')
-    // A client checks the hash of the text it is sent: bytes that are not UTF-8 would never match.
-    if (!Buffer.from(client, 'utf8').equals(bytes)) return 'its client.js is not UTF-8 text'
-    const checked = checkPluginPackage({ manifest, client })
+    const bytes = clientBytes(name)
+    if (typeof bytes === 'string') return bytes
+    if (!isUtf8Text(bytes)) return 'its client.js is not UTF-8 text'
+    const checked = checkPluginPackage({ manifest, client: bytes.toString('utf8') })
     if (checked.problem !== undefined) return checked.problem
     if (checked.package.manifest.id !== name) return `its manifest's id (${checked.package.manifest.id}) is not its folder's name`
     return { manifest: checked.package.manifest, sha256: sha256Of(bytes) }
@@ -92,34 +109,68 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
 
   const scan = (): Map<string, InstalledPlugin> => {
     const found = new Map<string, InstalledPlugin>()
-    let names: string[]
+    const reasons = new Map<string, string>()
     try {
-      names = readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-        .map((entry) => entry.name)
-        .sort()
+      // A link to a folder is named too, to be refused aloud: the entry is the link's own (not followed).
+      const entries = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !entry.name.startsWith('.'))
+        .sort((a, b) => (a.name < b.name ? -1 : 1))
+      for (const entry of entries) {
+        const plugin = entry.isSymbolicLink() ? 'it is a symbolic link, and a plugin is a folder of its own' : read(entry.name)
+        if (typeof plugin === 'string') reasons.set(entry.name, plugin)
+        else found.set(entry.name, plugin)
+      }
     } catch {
-      return found
+      // No folder yet: no plugins.
     }
-    for (const name of names) {
-      const plugin = read(name)
-      if (typeof plugin === 'string') warn(`[plugins] installed plugin ${name} not listed: ${plugin}`)
-      else found.set(name, plugin)
-    }
+    for (const [name, reason] of reasons) if (skipped.get(name) !== reason) warn(`[plugins] installed plugin ${name} not listed: ${reason}`)
+    skipped = reasons
     return found
   }
 
-  /** Takes `next` as what is known; tells the listeners the ids that differ. */
+  const same = (a: InstalledPlugin | undefined, b: InstalledPlugin | undefined): boolean =>
+    a === b || (!!a && !!b && JSON.stringify(presenceOf(a)) === JSON.stringify(presenceOf(b)))
+
+  /** Takes `next` as what is known; tells the listeners the ids whose entry differs (a name or a description too). */
   const adopt = (next: Map<string, InstalledPlugin>): boolean => {
-    const ids = [...new Set([...known.keys(), ...next.keys()])].filter((id) => known.get(id)?.sha256 !== next.get(id)?.sha256 || known.get(id)?.manifest.version !== next.get(id)?.manifest.version).sort()
+    const ids = [...new Set([...known.keys(), ...next.keys()])].filter((id) => !same(known.get(id), next.get(id))).sort()
     known = next
     if (ids.length === 0) return false
-    for (const listener of [...listeners]) listener(ids)
+    for (const listener of [...listeners]) {
+      // One that throws fails neither the install that was just made nor the listeners after it, and the watch's timer has nobody to throw to.
+      try {
+        listener(ids)
+      } catch (err) {
+        warn(`[plugins] a listener of installed plugin changes failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     return true
   }
 
   const scratch = (prefix: string, id: string): string => join(dir, `.${prefix}-${id}-${randomBytes(6).toString('hex')}`)
 
+  /** Removes what an install that died left behind. Best effort. */
+  const sweep = (): void => {
+    let names: string[]
+    try {
+      names = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^\.(tmp|old)-/.test(entry.name))
+        .map((entry) => entry.name)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      try {
+        // Another process may be installing right now (`trek-server plugin add`): its folders are new.
+        if (Date.now() - lstatSync(join(dir, name)).mtimeMs < STALE_SCRATCH_MS) continue
+        rmSync(join(dir, name), { recursive: true, force: true })
+      } catch (err) {
+        warn(`[plugins] could not remove the leftover folder ${join(dir, name)}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  sweep()
   known = scan()
 
   return {
@@ -134,20 +185,42 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
       mkdirSync(dir, { recursive: true })
       const staged = scratch('tmp', id)
       mkdirSync(staged)
+      let old: string | undefined
       try {
-        writeFileSync(join(staged, 'manifest.json'), `${JSON.stringify(pkg.manifest, null, 2)}\n`)
+        // Compact, as checkPluginPackage measured it: what was accepted is never too large for the scan.
+        writeFileSync(join(staged, 'manifest.json'), `${JSON.stringify(pkg.manifest)}\n`)
         writeFileSync(join(staged, 'client.js'), pkg.client)
         const target = join(dir, id)
         if (existsSync(target)) {
           // A folder cannot be renamed onto one that has files: the old one steps aside first.
-          const old = scratch('old', id)
-          renameSync(target, old)
+          const aside = scratch('old', id)
+          renameSync(target, aside)
+          old = aside
+        }
+        try {
           renameSync(staged, target)
-          rmSync(old, { recursive: true, force: true })
-        } else renameSync(staged, target)
+        } catch (err) {
+          // A failed upgrade is not an uninstall: the old one goes back.
+          if (old) {
+            try {
+              renameSync(old, target)
+            } catch (back) {
+              warn(`[plugins] ${id} could not be put back after its replacement failed; it was left in ${old}: ${(back as Error).message}`)
+            }
+          }
+          throw err
+        }
       } catch (err) {
         rmSync(staged, { recursive: true, force: true })
         throw err
+      }
+      // The new one is in place whatever becomes of the old: a folder that stays is swept at a later start.
+      if (old) {
+        try {
+          rmSync(old, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+        } catch (err) {
+          warn(`[plugins] could not remove ${old}, the replaced ${id}: ${(err as Error).message}`)
+        }
       }
       const plugin: InstalledPlugin = { manifest: pkg.manifest, sha256: sha256Of(Buffer.from(pkg.client, 'utf8')) }
       adopt(new Map(known).set(id, plugin))
@@ -162,16 +235,16 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
       return true
     },
     bundle(id) {
-      const plugin = known.get(id)
-      if (!plugin) return undefined
-      let bytes: Buffer
-      try {
-        bytes = readFileSync(join(dir, id, 'client.js'))
-      } catch {
-        return undefined
-      }
-      // The file as it is now: its own hash, so a client never accepts text under a stale one.
-      return { sha256: sha256Of(bytes), client: bytes.toString('utf8') }
+      if (!known.has(id)) return undefined
+      // The file as it is now, under its own hash: a client never accepts text under a stale one.
+      const bytes = clientBytes(id)
+      const sha256 = typeof bytes === 'string' ? '' : sha256Of(bytes)
+      // Edited in place since the scan (a watch that is not recursive never says so): the scan decides
+      // whether it is still a plugin, and the listeners hear of the new hash.
+      if (sha256 !== known.get(id)!.sha256) adopt(scan())
+      // The scan checked the bytes that have this hash. Changed again meanwhile: the asker asks again.
+      if (typeof bytes === 'string' || known.get(id)?.sha256 !== sha256) return undefined
+      return { sha256, client: bytes.toString('utf8') }
     },
     rescan: () => adopt(scan()),
     onChange(listener) {
@@ -182,11 +255,27 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
       if (watcher) return
       mkdirSync(dir, { recursive: true })
       // One rescan for a burst of events (an add is several renames and writes).
-      watcher = watchDir(dir, () => {
+      const changed = (): void => {
         clearTimeout(timer)
         timer = setTimeout(() => adopt(scan()), 200)
+      }
+      // Recursive, to hear a client.js edited inside its folder; plain where that cannot be had
+      // (bundle() still notices such an edit when the bundle is next asked for).
+      const open = (recursive: boolean): FSWatcher => watchDir(dir, { recursive }, changed)
+      let opened: FSWatcher
+      try {
+        opened = open(RECURSIVE_WATCH)
+      } catch (err) {
+        if (!RECURSIVE_WATCH) throw err
+        opened = open(false)
+      }
+      watcher = opened
+      opened.on('error', (err) => {
+        warn(`[plugins] cannot watch ${dir}: ${err.message}`)
+        opened.close()
+        // Cleared, so that watch() starts a new one.
+        if (watcher === opened) watcher = undefined
       })
-      watcher.on('error', (err) => warn(`[plugins] cannot watch ${dir}: ${err.message}`))
     },
     dispose() {
       clearTimeout(timer)
