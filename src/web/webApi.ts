@@ -150,6 +150,8 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
       test: refuse,
       pairPhone: refuse,
       cancelPairing: async () => false,
+      // Phone access is the Local server's, set from the Trek app: a page has no Local entry.
+      phoneAccess: { get: refuse, set: refuse, revoke: refuse, onChanged: none },
       // Updating a server is done from the Trek app: the page's entry never offers it.
       checkUpdate: refuse,
       applyUpdate: refuse,

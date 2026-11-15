@@ -32,11 +32,11 @@ import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
 import { checkLocalServer, localEntry, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 import { LOCAL_ENTRY_ID } from './localServerRules'
-import { isLocalEntryId, isLoopbackUrl } from '../shared/appServerRules.ts'
+import { isLocalEntryId, isLoopbackUrl, phoneAccessLabel, phonePairingAddress } from '../shared/appServerRules.ts'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import { createServerUpdates, type ServerUpdates } from './serverUpdates'
 import { NOT_CONNECTED, applyServerUpdate } from './applyServerUpdate'
-import type { UpdateStatus } from '../shared/protocolV2.ts'
+import type { PhoneAccess, UpdateStatus } from '../shared/protocolV2.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServerPairing, AppServersChanged, AppServerTest } from '../shared/types'
 
@@ -329,23 +329,68 @@ export async function adoptAppServerToken(id: string, url: string, token: string
 
 /**
  * "Pair a phone…" (6a): asks the server, over main's own connection, for a one-time pairing code.
- * The window gets the code, its expiry and the URL this app uses for the server: never a token.
- * Refused for the Local server and a loopback URL (a phone can't reach either), and for a server
- * whose welcome doesn't list `pairing`.
+ * The window gets the code, its expiry and the address the phone is to use: never a token. For a
+ * remote server that is the URL this app uses (refused when it is loopback: a phone can't reach
+ * it); for the Local server, its phone listener's address (refused while there is none). Refused
+ * for a server whose welcome doesn't list `pairing`.
  */
 async function pairPhone(id: unknown): Promise<AppServerPairing> {
   const server = requireKnown(id)
-  if (isLocalEntryId(server.id)) throw new Error('A phone cannot reach the Local server')
-  if (isLoopbackUrl(server.url)) throw new Error('A phone cannot reach a server at a loopback address (localhost or 127.0.0.1)')
+  const local = isLocalEntryId(server.id)
+  if (!local && isLoopbackUrl(server.url)) throw new Error('A phone cannot reach a server at a loopback address (localhost or 127.0.0.1)')
   const link = links?.get(server.id)
   const welcome = link?.connection.welcome
   if (!link || link.connection.status !== 'connected' || !welcome) throw new Error('Not connected to this server')
   if (!welcome.capabilities.includes('pairing')) throw new Error('This server does not pair phones; update it')
+  let url: string
+  if (local) {
+    const access = await localPhoneLink().connection.request('phoneAccess.get', {})
+    const address = phonePairingAddress(access)
+    if (address === null) throw new Error(access.enabled ? phoneAccessLabel(access) : 'Turn on "Allow phones over Tailscale" first')
+    url = address
+  } else {
+    url = pairingUrl(server.url)
+  }
   const created = await link.connection.request('pairing.create', { name: '' })
   // The countdown runs on this machine's clock: the server's may be off.
   const expiresAt = pairingDeadline(created, Date.now())
-  const url = pairingUrl(server.url)
   return { url, code: created.code, expiresAt, link: pairingLink(url, created.code) }
+}
+
+/** Main's connection to the Local server, for `phoneAccess.*`: refused unless it is connected and has phone access. */
+function localPhoneLink(): RegisteredServer {
+  const link = links?.get(LOCAL_ENTRY_ID)
+  const welcome = link?.connection.welcome
+  if (!link || link.connection.status !== 'connected' || !welcome) throw new Error('The Local server is not running')
+  if (!welcome.capabilities.includes('phoneAccess')) throw new Error('This Local server is older than this Trek: restart it to pair a phone')
+  return link
+}
+
+/** The panel's switch, port and address. Only those three fields go on; the server checks each. */
+function setPhoneAccess(patch: unknown): Promise<PhoneAccess> {
+  const p = patch !== null && typeof patch === 'object' ? (patch as Record<string, unknown>) : {}
+  const params: { enabled?: boolean; port?: number; url?: string | null } = {}
+  if (typeof p.enabled === 'boolean') params.enabled = p.enabled
+  if (typeof p.port === 'number') params.port = p.port
+  if (typeof p.url === 'string' || p.url === null) params.url = p.url
+  return localPhoneLink().connection.request('phoneAccess.set', params)
+}
+
+/** Revoke on a paired phone: its token is removed, its connections close. */
+async function revokePhone(name: unknown): Promise<boolean> {
+  if (typeof name !== 'string' || name === '') throw new Error('No phone named')
+  return (await localPhoneLink().connection.request('phoneAccess.revoke', { name })).revoked === true
+}
+
+/** The Local server's phone access changed: every window's pairing panel follows. */
+function broadcastPhoneAccess(access: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('appServers:phoneAccessChanged', access)
+    } catch (err) {
+      console.warn('trek: could not send appServers:phoneAccessChanged to a window', err)
+    }
+  }
 }
 
 /**
@@ -450,6 +495,9 @@ export function registerAppServerHandlers(
         registered.connection.on('status', ({ status }) => {
           if (status !== 'connected') checkLocalServer()
         })
+        registered.connection.on('event', (event) => {
+          if (event.event === 'phoneAccess.changed') broadcastPhoneAccess(event.payload)
+        })
       } else {
         // Local is updated with the app: nothing is asked of it, nothing is shown for it.
         following.follow(id, registered.connection)
@@ -489,6 +537,9 @@ export function registerAppServerHandlers(
   ipcMain.handle('appServers:test', (_event, id: unknown) => test(id))
   ipcMain.handle('appServers:pairPhone', (_event, id: unknown) => pairPhone(id))
   ipcMain.handle('appServers:cancelPairing', (_event, id: unknown, code: unknown) => cancelPairing(id, code))
+  ipcMain.handle('appServers:phoneAccess', () => localPhoneLink().connection.request('phoneAccess.get', {}))
+  ipcMain.handle('appServers:setPhoneAccess', (_event, patch: unknown) => setPhoneAccess(patch))
+  ipcMain.handle('appServers:revokePhone', (_event, name: unknown) => revokePhone(name))
   ipcMain.handle('appServers:checkUpdate', (_event, id: unknown) => checkUpdate(id))
   ipcMain.handle('appServers:applyUpdate', (event, id: unknown) => applyUpdate(event.sender, id))
 }

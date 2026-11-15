@@ -12,6 +12,7 @@ import type {
   InitialWindowState,
   RecentEntry,
 } from '../shared/types'
+import type { PhoneAccess } from '../shared/protocolV2'
 import type { LlmSettings, LlmSettingsPatch, LocalBackend, ModelInfo } from '../shared/providers/types'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
@@ -85,6 +86,14 @@ const api = {
     pairPhone: (id: string): Promise<AppServerPairing> => ipcRenderer.invoke('appServers:pairPhone', id),
     /** Drops a pairing code the server gave (New code, or the panel closing): it no longer redeems */
     cancelPairing: (id: string, code: string): Promise<boolean> => ipcRenderer.invoke('appServers:cancelPairing', id, code),
+    /** The Local server's listener for phones (Tailscale): its setting, state, address and paired phones */
+    phoneAccess: {
+      get: (): Promise<PhoneAccess> => ipcRenderer.invoke('appServers:phoneAccess'),
+      set: (patch: { enabled?: boolean; port?: number; url?: string | null }): Promise<PhoneAccess> =>
+        ipcRenderer.invoke('appServers:setPhoneAccess', patch),
+      revoke: (name: string): Promise<boolean> => ipcRenderer.invoke('appServers:revokePhone', name),
+      onChanged: (callback: (access: PhoneAccess) => void): (() => void) => subscribe('appServers:phoneAccessChanged', callback)
+    },
     /** Has the server look for a newer release now (a server that can update itself); what it finds comes with `onChanged` */
     checkUpdate: (id: string): Promise<void> => ipcRenderer.invoke('appServers:checkUpdate', id).then(() => undefined),
     /** Asks, in a dialog from main, then has the server install its latest release. `started` is false when the user cancelled. */
