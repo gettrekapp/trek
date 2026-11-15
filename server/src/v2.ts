@@ -115,7 +115,12 @@ function pushGrantsOf(ctx: V2Context): PushGrants {
   return ctx.push.grants
 }
 
-/** `phoneAccess.*`: the local server only, and only its own `local` token (a phone may not open the door wider, or revoke another). */
+/**
+ * `phoneAccess.*`: the local server only, and only the app's own connection (the `local` token), so
+ * a phone's UI can't change the listener or revoke another phone. A guard rail, not a boundary:
+ * any token on the local server can already start a shell there (and so read local.json or edit
+ * the config).
+ */
 function phoneControlOf(ctx: V2Context): PhoneAccessControl {
   if (!ctx.phoneAccess) throw codedError('NOT_FOUND', 'Only the local server has phone access')
   if (ctx.tokenName !== LOCAL_TOKEN_NAME) throw codedError('UNAUTHORIZED', `Only the "${LOCAL_TOKEN_NAME}" token may change the local server's phone access`)

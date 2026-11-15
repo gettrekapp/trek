@@ -294,10 +294,8 @@ export function startServer(
       if (droppedGrants) console.warn(`[push] dropped ${droppedGrants} push grant(s) of a revoked token`)
     }
     // A revoked token's waiting pairing codes go with it: a code it asked for no longer pairs.
-    if (pairing) {
-      const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
-      if (dropped) console.warn(`[auth] dropped ${dropped} waiting pairing code(s) asked for by a revoked token`)
-    }
+    const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
+    if (dropped) console.warn(`[auth] dropped ${dropped} waiting pairing code(s) asked for by a revoked token`)
     for (const [ws, hash] of authed) {
       if (active.has(hash)) continue
       console.warn('[auth] token revoked; closing its connection')
@@ -383,23 +381,34 @@ export function startServer(
         res.writeHead(426, { 'content-type': 'text/plain' })
         res.end('trek-server: WebSocket only\n')
       })
+      // Reachable from the tailnet (the main listener is loopback only): a bound on what it holds open.
+      server.maxConnections = 64
       const sockets = new Set<Socket>()
+      /** The WebSockets that came in through this server */
+      const webSockets = new Set<WebSocket>()
       server.on('connection', (socket) => {
         sockets.add(socket)
         socket.on('close', () => sockets.delete(socket))
       })
       server.on('upgrade', (req, socket, head) => {
         phoneRequests.add(req)
-        wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          webSockets.add(ws)
+          ws.on('close', () => webSockets.delete(ws))
+          wss.emit('connection', ws, req)
+        })
       })
       server.once('error', reject)
       server.listen(port, host, () => {
         server.off('error', reject)
         server.on('error', (err) => console.warn(`[phone] the listener on ${host}:${port}: ${err.message}`))
         resolve({
+          // Its phones are told (1001) rather than cut off: the close frame is written, then each
+          // socket ends once what is pending on it has gone out.
           close: () => {
             server.close()
-            for (const socket of sockets) socket.destroy()
+            for (const ws of webSockets) if (ws.readyState === WebSocket.OPEN) ws.close(1001, 'phone access is off')
+            for (const socket of sockets) socket.destroySoon()
           }
         })
       })
@@ -442,7 +451,10 @@ export function startServer(
     // The config as it is now, and after every change (the setting, a phone paired or revoked).
     followPhoneConfig = () => {
       const cfg = phoneAccessOf(store.config)
-      void listener.want(cfg.enabled, cfg.port).then(notify)
+      void listener
+        .want(cfg.enabled, cfg.port)
+        .then(notify)
+        .catch((err) => console.warn('[phone] could not announce phone access:', err))
     }
     store.on('change', followPhoneConfig)
     followPhoneConfig()
@@ -579,7 +591,6 @@ export function startServer(
             rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, reason), BAD_TOKEN_CLOSE_DELAY_MS)
           }
           const address = req.socket.remoteAddress ?? ''
-          if (!pairing) return refuse(PAIRING_CLOSE_REASON.unknown)
           const deviceName = typeof frame.deviceName === 'string' ? frame.deviceName : ''
           const outcome = redeemForPhone({ codes: pairing, limiter: pairingLimiter, store }, frame.pairingCode, deviceName, address, Date.now())
           if (!outcome.ok) {
@@ -785,7 +796,6 @@ export function startServer(
     const cleared = moveTransfers.clear().catch(() => {})
     store.off('change', onConfigChange)
     if (followPhoneConfig) store.off('change', followPhoneConfig)
-    phoneListener?.stop()
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
     const payload = { reason, ...(detail?.version !== undefined ? { version: detail.version } : {}) }
@@ -794,6 +804,8 @@ export function startServer(
       if (authed.has(ws)) sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload })
       ws.close(1001, 'server shutting down')
     }
+    // After the loop above, so a phone gets the same frames as everyone else before its listener ends.
+    phoneListener?.stop()
     wss.close()
     httpServer.close()
     return cleared

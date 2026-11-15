@@ -3,6 +3,7 @@
 // carrier-grade NAT one, so an ISP's or a hotspot's interface can hold such an address too: the
 // address is taken only from an interface whose name looks like Tailscale's. An interface given a
 // custom name is not recognised, and phone access then reports no Tailscale address.
+import { isIPv4 } from 'node:net'
 import type { NetworkInterfaceInfo } from 'node:os'
 
 /** A dotted IPv4 address in 100.64.0.0/10. */
@@ -41,5 +42,5 @@ export function tailscaleAddress(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>
  * only when it is a loopback address (127.x.y.z), so it can never open the server to a network.
  */
 export function testPhoneAddress(value: string | undefined): string | undefined {
-  return value !== undefined && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value) ? value : undefined
+  return value !== undefined && value.startsWith('127.') && isIPv4(value) ? value : undefined
 }

@@ -191,28 +191,45 @@ async function suite(rt) {
     check(off.enabled === false && off.state === 'off' && off.phones.length === 0, 'phone access starts off, with no phones', JSON.stringify(off))
     const on = await conn.request('phoneAccess.set', { enabled: true, port: phonePort })
     must(on.state === 'listening' && on.address === '127.0.0.1' && on.url === `ws://127.0.0.1:${phonePort}`, 'turned on, it listens at the port and says the address for a phone', JSON.stringify(on))
-    const localOnPhonePort = await connect(phonePort, infoA.token, 'local-token-on-phone-port')
-    check(localOnPhonePort.status === 'needs-auth', 'the local token is refused on the phone listener', localOnPhonePort.status)
-    const { code } = await conn.request('pairing.create', { name: '' })
-    let paired
+    // Whatever fails in here, phone access ends off and the smoke's phone is gone: the later sections restart on this profile.
     try {
-      paired = await redeemPairingCode({ url: on.url, code, deviceName: 'Smoke Phone', createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.0.0' })
-    } catch (err) {
-      fail(`a phone pairs through the phone listener: ${err.message}`)
+      const localOnPhonePort = await connect(phonePort, infoA.token, 'local-token-on-phone-port')
+      check(localOnPhonePort.status === 'needs-auth', 'the local token is refused on the phone listener', localOnPhonePort.status)
+      localOnPhonePort.close()
+      const { code } = await conn.request('pairing.create', { name: '' })
+      let paired
+      try {
+        paired = await redeemPairingCode({ url: on.url, code, deviceName: 'Smoke Phone', createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.0.0' })
+      } catch (err) {
+        fail(`a phone pairs through the phone listener: ${err.message}`)
+      }
+      if (paired) {
+        check(paired.tokenName === 'phone-Smoke-Phone' && paired.capabilities.includes('local'), `the phone is paired as ${paired.tokenName}`)
+        const phone = await connect(phonePort, paired.token, 'phone')
+        check(phone.status === 'connected', 'the phone connects with its own token on the phone listener', phone.status)
+        const refusedGet = await phone.request('phoneAccess.get', {}).then(() => 'answered', (err) => err.code)
+        check(refusedGet === 'UNAUTHORIZED', 'a phone may not read or change phone access', String(refusedGet))
+        check(await waitFor(() => phoneEvents.some((p) => p.phones.some((x) => x.name === paired.tokenName && x.pairedBy === 'local')), 5000), 'the desktop hears of the paired phone (phoneAccess.changed)')
+        // Off with a phone connected: its connection closes. Then on again, for the revoke.
+        const offWithPhone = await conn.request('phoneAccess.set', { enabled: false })
+        check(offWithPhone.state === 'off' && (await waitFor(() => phone.status !== 'connected', 5000)), 'turning phone access off closes a connected phone\'s connection', `${offWithPhone.state} ${phone.status}`)
+        phone.close()
+        const onAgain = await conn.request('phoneAccess.set', { enabled: true })
+        must(onAgain.state === 'listening' && onAgain.url === on.url, 'turned on again, it listens at the same port', JSON.stringify(onAgain))
+        const phoneAgain = await connect(phonePort, paired.token, 'phone-again')
+        const wasConnected = phoneAgain.status === 'connected'
+        const { revoked } = await conn.request('phoneAccess.revoke', { name: paired.tokenName })
+        check(wasConnected && revoked === true && (await waitFor(() => phoneAgain.status !== 'connected', 5000)), 'revoking the phone closes its connection', phoneAgain.status)
+        phoneAgain.close()
+      }
+      const offAgain = await conn.request('phoneAccess.set', { enabled: false })
+      const afterOff = await connect(phonePort, infoA.token, 'phone-port-after-off')
+      check(offAgain.state === 'off' && afterOff.status !== 'connected' && afterOff.status !== 'needs-auth', 'turned off, nothing listens at the phone port', `${offAgain.state} ${afterOff.status}`)
+      afterOff.close()
+    } finally {
+      await conn.request('phoneAccess.set', { enabled: false }).catch(() => {})
+      await conn.request('phoneAccess.revoke', { name: 'phone-Smoke-Phone' }).catch(() => {})
     }
-    if (paired) {
-      check(paired.tokenName === 'phone-Smoke-Phone' && paired.capabilities.includes('local'), `the phone is paired as ${paired.tokenName}`)
-      const phone = await connect(phonePort, paired.token, 'phone')
-      check(phone.status === 'connected', 'the phone connects with its own token on the phone listener', phone.status)
-      const refusedGet = await phone.request('phoneAccess.get', {}).then(() => 'answered', (err) => err.code)
-      check(refusedGet === 'UNAUTHORIZED', 'a phone may not read or change phone access', String(refusedGet))
-      check(await waitFor(() => phoneEvents.some((p) => p.phones.some((x) => x.name === paired.tokenName && x.pairedBy === 'local')), 5000), 'the desktop hears of the paired phone (phoneAccess.changed)')
-      const { revoked } = await conn.request('phoneAccess.revoke', { name: paired.tokenName })
-      check(revoked === true && (await waitFor(() => phone.status !== 'connected', 5000)), 'revoking the phone closes its connection', phone.status)
-    }
-    const offAgain = await conn.request('phoneAccess.set', { enabled: false })
-    const afterOff = await connect(phonePort, infoA.token, 'phone-port-after-off')
-    check(offAgain.state === 'off' && afterOff.status !== 'connected' && afterOff.status !== 'needs-auth', 'turned off, nothing listens at the phone port', `${offAgain.state} ${afterOff.status}`)
     check(conn.status === 'connected', 'the desktop\'s own connection is untouched throughout')
 
     // --- 4. a repo outside any root, a project, a session through node-pty ---

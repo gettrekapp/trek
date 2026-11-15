@@ -47,7 +47,7 @@ test('an address in 100.64.0.0/10 is taken only from an interface named like Tai
 test('the test-only address override is taken only when it is a loopback address', () => {
   assert.equal(testPhoneAddress('127.0.0.1'), '127.0.0.1')
   assert.equal(testPhoneAddress('127.0.0.2'), '127.0.0.2')
-  for (const a of [undefined, '', '0.0.0.0', '192.168.1.20', '100.101.102.103', 'localhost']) assert.equal(testPhoneAddress(a), undefined, String(a))
+  for (const a of [undefined, '', '0.0.0.0', '192.168.1.20', '100.101.102.103', 'localhost', '127.999.1.1', '127.1']) assert.equal(testPhoneAddress(a), undefined, String(a))
 })
 
 /**
