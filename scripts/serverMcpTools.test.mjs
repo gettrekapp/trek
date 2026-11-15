@@ -194,7 +194,7 @@ test("get_review_comments: the worktree's draft, each comment outdated or not ag
   const res = await s.call('get_review_comments', { worktree: 'main' })
   assert.equal(res.revision, 9)
   assert.deepEqual(res.comments.map((c) => [c.id, c.outdated]), [['fresh', false], ['changed', true], ['nofile', true], ['nocommit', null]])
-  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', by: 'the user', source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
+  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', by: 'the user', agent: false, source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
   // Read-only: the draft is as it was.
   assert.equal(s.projects.require(s.projectId).repositories[0].worktrees[0].review.comments.length, 4)
   await assert.rejects(s.call('get_review_comments', { worktree: 'nope' }), (e) => e.code === 'NOT_FOUND')
@@ -965,7 +965,7 @@ test("add_review_comment writes a labelled comment on a line the diff shows; rem
   assert.deepEqual(added, {
     worktree: main().id,
     revision: main().review.revision,
-    comment: { id: added.comment.id, file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'Why two?', by: 'an agent', source, sourceLabel: 'Uncommitted changes', outdated: false }
+    comment: { id: added.comment.id, file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'Why two?', by: 'an agent', agent: true, source, sourceLabel: 'Uncommitted changes', outdated: false }
   })
   assert.deepEqual(main().review.comments[0].by, { kind: 'mcp' })
 
@@ -984,7 +984,7 @@ test("add_review_comment writes a labelled comment on a line the diff shows; rem
     [{ file: 'nope.txt', line: 1, comment: 'x', source }, /nope\.txt has no changes in Uncommitted changes/],
     [{ file: 'a.txt', line: 1, side: 'left', comment: 'x', source }, /side must be "old" or "new"/],
     [{ file: 'a.txt', line: 0, comment: 'x', source }, /line must be a whole number/],
-    [{ file: 'a.txt', line: 1, comment: '  ', source }, /must not be empty/],
+    [{ file: 'a.txt', line: 1, comment: '  ', source }, /comment must not be empty/],
     [{ file: 'a.txt', line: 1, source }, /comment is required/],
     [{ line: 1, comment: 'x', source }, /file is required/],
     [{ file: 'a.txt', line: 1, comment: 'x', source: { kind: 'staged' } }, /source\.kind/]
@@ -1003,4 +1003,15 @@ test("add_review_comment writes a labelled comment on a line the diff shows; rem
   assert.deepEqual(await s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), { worktree: main().id, removed: added.comment.id })
   await assert.rejects(s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), (e) => e.code === 'NOT_FOUND')
   assert.deepEqual(main().review.comments.map((c) => c.id), [named.comment.id, 'mine'])
+})
+
+test('add_review_comment: a removed line (side old), an unknown terminalId and a stray reason', async (t) => {
+  const s = await toolSetup(t)
+  writeFileSync(join(s.a, 'a.txt'), 'one\ntwo\n')
+  execFileSync('git', ['-C', s.a, 'add', '.'], { env: gitEnv })
+  execFileSync('git', ['-C', s.a, 'commit', '-q', '-m', 'a'], { env: gitEnv })
+  writeFileSync(join(s.a, 'a.txt'), 'one\n')
+  const source = { kind: 'uncommitted' }
+  const old = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 2, side: 'old', comment: 'Why drop it?', source, terminalId: 'no-such-session', reason: 7 })
+  assert.deepEqual([old.comment.side, old.comment.line, old.comment.lineText, old.comment.by, old.comment.agent], ['old', 2, 'two', 'an agent', true])
 })

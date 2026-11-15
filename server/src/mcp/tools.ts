@@ -385,7 +385,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'get_review_comments',
     description:
-      "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
+      "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent; agent: true when an agent did), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
@@ -619,6 +619,8 @@ function describeComment(c: ReviewComment, outdated: boolean | null) {
     lineText: c.lineText,
     comment: c.body,
     by: c.by ? (c.by.sessionTitle ?? 'an agent') : 'the user',
+    // A session can be titled anything, "the user" included: this says it plainly.
+    agent: c.by !== undefined,
     source: c.source,
     sourceLabel: sourceLabel(c.source),
     outdated
@@ -1045,6 +1047,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) throw bad('line must be a whole number from 1')
         const body = rawArg(args.comment, 'comment')
         if (body === undefined) throw bad('comment is required')
+        if (body.trim() === '') throw bad('comment must not be empty')
         const source = checkSource(args.source ?? undefined)
         const label = sourceLabel(source)
         // The line's text is read here, not taken from the agent: a comment sits on a line the diff shows.
@@ -1057,7 +1060,8 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { commentId } = (await v2(
           'review.add',
           { worktreeId: worktree.id, source, path, side, line, lineText: reviewLineText(shown.text), body },
-          attributionOf(args, project)
+          // Only who: this tool takes no reason.
+          attributionOf({ terminalId: args.terminalId }, project)
         )) as { commentId: string }
         const draft = resolveWorktree(deps.projects.require(projectId), worktree.id).worktree.review
         const added = draft?.comments.find((c) => c.id === commentId)

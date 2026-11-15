@@ -389,3 +389,14 @@ test('cleanReview keeps an agent comment\'s by, without a title that is not one 
     assert.equal(by(value), undefined, JSON.stringify(value))
   }
 })
+
+test("review.edit keeps an agent comment's by", async (t) => {
+  const s = await setup(t)
+  const { commentId } = await s.ok('review.add', comment())
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].review.comments[0].by = { kind: 'mcp', sessionTitle: 'Review 2' }
+  })
+  await s.ok('review.edit', { commentId, body: 'Edited by the user' })
+  assert.deepEqual(s.main().review.comments[0].by, { kind: 'mcp', sessionTitle: 'Review 2' })
+  assert.equal(s.main().review.comments[0].body, 'Edited by the user')
+})
