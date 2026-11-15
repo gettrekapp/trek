@@ -49,7 +49,7 @@ test('describeAutomation: a stored cron that no longer parses just has no nextRu
 
 test('resolveAutomation: id first, then name (trimmed, case-insensitive)', () => {
   const p = project([auto(), auto({ id: 'a2', name: 'Nightly' })])
-  assert.equal(resolveAutomation(p, 'a2').id, 'a2')
+  assert.equal(resolveAutomation(p, ' a2 ').id, 'a2')
   assert.equal(resolveAutomation(p, '  morning ').id, 'a1')
 })
 

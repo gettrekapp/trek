@@ -445,7 +445,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
         llm: {
           type: ['object', 'null'],
           description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
-          properties: LLM_PARAMS
+          properties: { ...LLM_PARAMS, provider: { ...LLM_PARAMS.provider, description: "Agent CLI to run; one that can use Trek's tools (MCP)" } }
         }
       }
     }

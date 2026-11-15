@@ -41,7 +41,7 @@ export function describeAutomation(project: Project, a: Automation, now: number)
 export function resolveAutomation(project: Project, ref: unknown): Automation {
   if (typeof ref !== 'string' || ref.trim() === '') throw bad('automation is required: an id or name from list_automations')
   const list = project.automations ?? []
-  const byId = list.find((a) => a.id === ref)
+  const byId = list.find((a) => a.id === ref.trim())
   if (byId) return byId
   const wanted = ref.trim().toLowerCase()
   const named = list.filter((a) => a.name.trim().toLowerCase() === wanted)

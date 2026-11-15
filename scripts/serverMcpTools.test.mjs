@@ -124,8 +124,9 @@ async function toolSetup(t, opts = {}) {
   const history = new HistoryStore(join(dir, 'history'))
   // The automations scheduler over the real session manager, never started: runs happen only when a tool asks.
   // `automations: false` in opts leaves it out, as a server without one.
-  const { automations: withAutomations = true, ...callerOpts } = opts
-  const automations = withAutomations ? new AutomationScheduler({ projects, sessions }) : undefined
+  // `automationsNow` is the scheduler's clock, for tests that move it.
+  const { automations: withAutomations = true, automationsNow, ...callerOpts } = opts
+  const automations = withAutomations ? new AutomationScheduler({ projects, sessions, now: automationsNow }) : undefined
   const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, automations, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...callerOpts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
@@ -856,7 +857,11 @@ test('save_automation creates with defaults and list_automations lists it', asyn
   assert.equal('llm' in created, false)
   assert.equal('runSession' in created, false)
   assert.deepEqual((await s.call('list_automations', {})).map((a) => a.id), [created.id])
-  await assert.rejects(s.call('save_automation', { name: 'X', prompt: 'p' }), (e) => e.code === 'BAD_REQUEST' && /cron is required to create an automation/.test(e.message))
+  for (const missing of ['name', 'prompt', 'cron']) {
+    const args = { ...MORNING }
+    delete args[missing]
+    await assert.rejects(s.call('save_automation', args), (e) => e.code === 'BAD_REQUEST' && e.message.includes(`${missing} is required to create an automation`), missing)
+  }
 })
 
 test('save_automation updates by name or id, changing only what is passed', async (t) => {
@@ -935,4 +940,18 @@ test("read_terminal and wait_for_sessions take an automation's run tab; tools th
   for (const [name, args] of refused) {
     await assert.rejects(s.call(name, args), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message), name)
   }
+})
+
+test('run_automation: CONFLICT while the run tab is working (as when a run calls it on itself); it runs again in the same tab once done', async (t) => {
+  let clock = Date.now()
+  const s = await toolSetup(t, { automationsNow: () => clock })
+  await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  // Past the window in which a tab counts as busy just for having started.
+  clock += 60_000
+  const setStatus = (status) => s.projects.apply(s.projectId, (d) => { d.globalSessions.find((g) => g.id === terminalId).status = status })
+  setStatus('working')
+  await assert.rejects(s.call('run_automation', { automation: 'Morning' }), (e) => e.code === 'CONFLICT')
+  setStatus('done')
+  assert.deepEqual(await s.call('run_automation', { automation: 'Morning' }), { terminalId })
 })
