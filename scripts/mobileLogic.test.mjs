@@ -3,7 +3,8 @@
 // the ref counts, the connection notices, the per-server generations, the held topic view and
 // the value a promote request waits for, the quick buttons' list and built-in context, and the
 // rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow)
-// and a ticket's label, link and input through the project's trackers.
+// and a ticket's label, link and input through the project's trackers, and what the worktree list
+// says about a branch (its tag, custom tags, ticket and pull request on one line).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -16,6 +17,7 @@ import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/qu
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -788,4 +790,63 @@ test("tickets: typed or pasted input is taken as the desktop's ticket dialog tak
   assert.deepEqual(parseTicketInput(both, ''), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
   assert.deepEqual(parseTicketInput(both, '   '), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
   assert.deepEqual(parseTicketInput([], 'TOW-12'), { error: 'No ticket tracker is on in this project (Settings → Plugins).' })
+})
+
+test("worktree list: a branch's line is its tag, custom tags, ticket and pull request, when present", () => {
+  const settings = {
+    worktreeTags: [{ id: 't1', name: 'In Review', color: '#fff' }],
+    customTags: [
+      { id: 'c1', name: 'urgent', color: '#fff' },
+      { id: 'c2', name: 'blocked', color: '#fff' }
+    ],
+    linearWorkspace: 'acme'
+  }
+  const linear = activeTicketProviders({ plugins: [{ id: 'linear', defaultEnabled: true }] }, settings)
+  const repo = {
+    branchData: {
+      full: { tag: 't1', customTags: ['c2', 'c1', 'gone'], ticket: 'TOW-12', pr: 'https://github.com/o/r/pull/42', note: 'not on the line' },
+      tagOnly: { tag: 't1' },
+      prOnly: { pr: 'https://github.com/o/r' },
+      stale: { tag: 'deleted', customTags: ['gone'] },
+      empty: {}
+    }
+  }
+  // Custom tags in the project's order; one the project no longer has is left out.
+  assert.equal(branchLine(settings, repo, 'full', linear), 'In Review · urgent · blocked · TOW-12 · PR #42')
+  assert.equal(branchLine(settings, repo, 'tagOnly', linear), 'In Review')
+  // A link without a number is still a pull request.
+  assert.equal(branchLine(settings, repo, 'prOnly', linear), 'PR')
+  assert.equal(branchLine(settings, repo, 'stale', linear), '')
+  assert.equal(branchLine(settings, repo, 'empty', linear), '')
+  assert.equal(branchLine(settings, repo, 'unknown', linear), '')
+  // Not an inherited property of the record.
+  assert.equal(branchLine(settings, repo, 'toString', linear), '')
+  assert.equal(branchLine(settings, repo, undefined, linear), '')
+  // No tracker on: the ticket's id as stored.
+  assert.equal(branchLine(settings, { branchData: { b: { ticket: 'TOW-12' } } }, 'b', []), 'TOW-12')
+  // A project that never set its tags has the default ones (their ids are their names).
+  assert.equal(branchLine({}, { branchData: { b: { tag: 'In Progress' } } }, 'b', []), 'In Progress')
+  assert.equal(branchLine({ worktreeTags: [] }, { branchData: { b: { tag: 'In Progress' } } }, 'b', []), '')
+})
+
+test('worktree list: the worktree a branch is checked out in; a missing one does not count', () => {
+  const repo = {
+    worktrees: [
+      { id: 'm', branch: 'main', isMain: true },
+      { id: 'gone', branch: 'pr/7', missing: true },
+      { id: 'w7', branch: 'pr/7' },
+      { id: 'detached' }
+    ]
+  }
+  assert.equal(worktreeOnBranch(repo, 'pr/7')?.id, 'w7')
+  assert.equal(worktreeOnBranch(repo, 'main')?.id, 'm')
+  assert.equal(worktreeOnBranch(repo, 'pr/8'), undefined)
+  assert.equal(worktreeOnBranch({ worktrees: [{ id: 'gone', branch: 'pr/7', missing: true }] }, 'pr/7'), undefined)
+})
+
+test("worktree list: a repository's folder name, from a path of either kind", () => {
+  assert.equal(repoFolder('/Users/me/code/trek'), 'trek')
+  assert.equal(repoFolder('/Users/me/code/trek/'), 'trek')
+  assert.equal(repoFolder('C:\\code\\trek\\'), 'trek')
+  assert.equal(repoFolder('trek'), 'trek')
 })
