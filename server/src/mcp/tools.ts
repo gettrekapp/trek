@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import type { BranchData, Project, Repository, Session } from '../../../src/shared/model/types'
 import { keySequence } from '../../../src/shared/keys.ts'
-import { isProviderId } from '../../../src/shared/providers/registry.ts'
+import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
 import { parseTicketWith, ticketView } from '../../../src/shared/tickets.ts'
@@ -445,7 +445,11 @@ export const MCP_TOOLS: ToolDefinition[] = [
         llm: {
           type: ['object', 'null'],
           description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
-          properties: { ...LLM_PARAMS, provider: { ...LLM_PARAMS.provider, description: "Agent CLI to run; one that can use Trek's tools (MCP)" } }
+          properties: {
+            ...LLM_PARAMS,
+            // Only the agents automation.save takes: those that can use Trek's tools.
+            provider: { type: 'string', enum: PROVIDER_IDS.filter((id) => getProvider(id).capabilities.mcp), description: "Agent CLI to run; one that can use Trek's tools (MCP)" }
+          }
         }
       }
     }

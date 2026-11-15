@@ -1963,7 +1963,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
 | `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog; the session that hears the outcome in its queue if its call drops) | `{promoted: true, primary}` once a window confirmed and promoted (`{promoted: true, path}` if the main checkout can't be described; see [Promote to primary](#promote-to-primary)); a second call for the same worktree joins the first; `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window listens; `GIT_ERROR` when the promote failed (or no open window lists the worktree) |
-| `list_automations` | none | automation entries: `{id, name, prompt, cron, timezone, enabled, llm?, nextRun?, missed?: {since, count}, runSession?: {terminalId, status}, history: [{at, trigger, outcome, error?}]}`; times are ISO; `nextRun` is absent when disabled |
+| `list_automations` | none | automation entries: `{id, name, prompt, cron, timezone, enabled, llm?, nextRun?, missed?: {since, count}, runSession?: {terminalId, status}, history: [{at, trigger, outcome, error?}]}`; times are ISO; `nextRun` is absent when disabled (or when a stored cron no longer parses); `history` is newest first, at most 20 |
 | `save_automation` | `automation?` (omit to create); `name?`, `prompt?`, `cron?` (all three needed to create); `timezone?` (create: the server machine's); `enabled?` (create: true); `llm?` (`null` = the Global agent) | the saved automation entry; an update changes only what is passed; through `automation.save`, with its checks |
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation` | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run |
@@ -1979,10 +1979,11 @@ unknown `id` is `NOT_FOUND`), else the one with the same name, else creates one,
 and needs a `name` to create. A name already used by another type is `BAD_REQUEST`.
 `start_session` opens the pty with 120 columns and 32 rows.
 
-An `automation` parameter accepts an automation's id, else its name (trimmed,
-case-insensitive); names are not unique, so a name several share is `BAD_REQUEST` and
+An `automation` parameter accepts an automation's id, else its name (both trimmed, the
+name case-insensitive); names are not unique, so a name several share is `BAD_REQUEST` and
 lists their ids, and an unknown one is `NOT_FOUND` with the names that exist. The four
-automation tools are `TOOL_ERROR` on a server that runs no automations.
+automation tools are `TOOL_ERROR` on a server that runs no automations. In `save_automation`
+an argument that is `null` counts as not passed, except `llm`, where `null` clears the agent.
 
 **Left out.** The server does not serve these `trek-dev` tools: they are not
 listed, and calling one is `-32602`.
