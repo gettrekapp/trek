@@ -149,8 +149,11 @@ export interface V2BackendDeps {
   onStateChange(listener: () => void): () => void
   /** Calls `listener` each time the window gains focus; returns the unsubscribe */
   onWindowFocus(listener: () => void): () => void
-  /** Shows a session in this window as a notification click does (its worktree, its tab), waiting for it to appear; never raises the window */
-  selectSession(select: SessionSelect): void
+  /**
+   * Shows a session in this window as a notification click does (its worktree, its tab), waiting for it to appear; never raises the window.
+   * `revealOnly`: the terminal is not given the keyboard focus and the session is not marked seen
+   */
+  selectSession(select: SessionSelect, options?: { revealOnly?: boolean }): void
   /** A failure only a developer sees (the console) */
   log(message: string, err?: unknown): void
 }
@@ -669,10 +672,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           deps.onStateChange(() => report(false)),
           // A window used again is the project's most recently used client.
           deps.onWindowFocus(() => report(true)),
-          // focus_session: the worktree and the tab, as a notification click; the window is not raised.
+          // focus_session: the worktree and the tab only. The window is not raised, the terminal takes
+          // no keyboard focus and the session is not marked seen: the user may not be looking.
           deps.onEvent('ui.focus', (event) => {
             if (deps.left() || event.projectId !== projectId) return
-            deps.selectSession({ projectId, sessionId: event.sessionId, worktreeId: event.worktreeId })
+            deps.selectSession({ projectId, sessionId: event.sessionId, worktreeId: event.worktreeId }, { revealOnly: true })
           })
         ]
         report(true)

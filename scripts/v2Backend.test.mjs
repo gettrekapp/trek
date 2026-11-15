@@ -79,7 +79,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const backend = createV2Backend({
     onStateChange: subscribeTo(stateListeners),
     onWindowFocus: subscribeTo(focusListeners),
-    selectSession: (select) => void selects.push(select),
+    selectSession: (select, options) => void selects.push([select, options]),
     projectId: 'p1',
     closeDialog: (id) => void closed.push(id),
     onConnected: (listener) => {
@@ -1230,14 +1230,16 @@ test('ui.report: a dropped link is silent; another failure is logged once', asyn
   assert.match(failing.logs[0], /ui\.report/)
 })
 
-test('ui.focus: this project reaches the select path, another project does not; nothing takes focus', async () => {
-  const { backend, listeners, selects, ui } = setup({ capabilities: ['ui'] })
+test('ui.focus: this project reaches the select path as reveal-only, another project does not', async () => {
+  const { backend, calls, listeners, selects, ui } = setup({ capabilities: ['ui'] })
   backend.worktrees.followSelection()
   listeners['ui.focus'][0]({ projectId: 'p2', worktreeId: 'w2', sessionId: 's1' })
   assert.deepEqual(selects, [])
   listeners['ui.focus'][0]({ projectId: 'p1', worktreeId: 'w2', sessionId: 's1' })
-  assert.deepEqual(selects, [{ projectId: 'p1', sessionId: 's1', worktreeId: 'w2' }])
+  // Reveal-only: the select path shows the worktree and the tab, and neither focuses the terminal nor marks it seen.
+  assert.deepEqual(selects, [[{ projectId: 'p1', sessionId: 's1', worktreeId: 'w2' }, { revealOnly: true }]])
   assert.deepEqual(ui, [])
+  assert.deepEqual(calls.filter(([method]) => method === 'session.seen'), [])
 })
 
 test('ui: leaving stops the reports and the focus requests', async () => {

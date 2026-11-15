@@ -18,6 +18,7 @@ import {
   attachTerminal,
   fitTerminal,
   focusTerminal,
+  isQuietReveal,
   foreignSize,
   sendV2Size,
   subscribeForeignSize
@@ -158,7 +159,8 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
       requestAnimationFrame(() => {
         // A server window's pty keeps the last resizer's size: claim it on every show (it fits too).
         if (!sendV2Size(terminalId)) fitTerminal(terminalId)
-        focusTerminal(terminalId)
+        // Shown for an agent's focus_session: the user's caret and the session's attention stay as they are.
+        if (!isQuietReveal(terminalId)) focusTerminal(terminalId)
       })
     }
   }, [visible, terminalId])
