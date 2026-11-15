@@ -396,8 +396,17 @@ test('every answer carries the security headers', async (t) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.equal(res.headers.get(name), value, `${path} ${name}`)
   }
   const csp = SECURITY_HEADERS['content-security-policy']
-  for (const part of ["script-src 'self' blob:;", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'self'"]) assert.ok(csp.includes(part), part)
-  assert.ok(!/script-src[^;]*unsafe/.test(csp), 'no unsafe script source')
+  const directive = (name) =>
+    csp
+      .split(';')
+      .map((part) => part.trim().split(/\s+/))
+      .find(([first]) => first === name)
+      ?.slice(1)
+      .join(' ')
+  // The whole directive: blob: is for an installed plugin's bundle, and for a script only, not a worker.
+  assert.equal(directive('script-src'), "'self' blob:")
+  assert.equal(directive('worker-src'), "'self'")
+  for (const [name, value] of [['connect-src', "'self'"], ['frame-ancestors', "'none'"], ['form-action', "'self'"]]) assert.equal(directive(name), value, name)
 })
 
 test('signed out: the page and its routes go to /login; the sign-in page and the files are served', async (t) => {

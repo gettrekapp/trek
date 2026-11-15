@@ -198,10 +198,22 @@ test('the same bundle listed under another id, or another version, is not served
   assert.equal(f.calls.length, 3, 'the listed one is still in memory')
 })
 
-test("both pages' content security policies allow a blob: script, and nothing looser", () => {
+/** A policy's directive: what follows its name, or undefined when the policy has none. */
+const directive = (policy, name) =>
+  policy
+    .split(';')
+    .map((part) => part.trim().split(/\s+/))
+    .find(([first]) => first === name)
+    ?.slice(1)
+    .join(' ')
+
+test("both pages' content security policies allow a blob: script and nothing else new: no blob: worker", () => {
   for (const page of ['src/renderer/index.html', 'src/web/index.html']) {
     const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
-    assert.ok(html.includes("script-src 'self' blob:;"), page)
-    assert.equal(/script-src[^;]*unsafe/.test(html), false, page)
+    const policy = /http-equiv="Content-Security-Policy"\s+content="([^"]*)"/.exec(html)?.[1]
+    assert.ok(policy, page)
+    assert.equal(directive(policy, 'script-src'), "'self' blob:", page)
+    // Without it, a worker falls back to script-src, and blob: there would allow new Worker(blobUrl).
+    assert.equal(directive(policy, 'worker-src'), "'self'", page)
   }
 })

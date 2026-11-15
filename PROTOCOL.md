@@ -881,9 +881,10 @@ session is live and its token still listed; the `welcome` is the same as a token
 Anything else is `4003` as for a bad token.
 
 **Headers.** Every answer carries `Content-Security-Policy: default-src 'self';
-script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src
-'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none';
-base-uri 'none'; form-action 'self'; object-src 'none'`, `X-Content-Type-Options:
+script-src 'self' blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src
+'self' data:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self';
+frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'` (`blob:`
+is for an installed plugin's bundle, as a script and not as a worker), `X-Content-Type-Options:
 nosniff`, `Referrer-Policy: same-origin` (not `no-referrer`: under it a browser sends
 `Origin: null` with the page's own form posts), `X-Frame-Options: DENY`,
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Resource-Policy:
