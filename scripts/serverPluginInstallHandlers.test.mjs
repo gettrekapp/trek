@@ -6,12 +6,18 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { removeDir } from './testPlatform.mjs'
+import { removeDir, removeDirWhenFree } from './testPlatform.mjs'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
+import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { createInstalledPlugins } from '../server/src/plugins/installed.ts'
 import { installedIdReserved } from '../server/src/plugins/reserved.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
+import { ProjectStore } from '../server/src/projects/store.ts'
+import { startServer } from '../server/src/server.ts'
+import { addToken } from '../server/src/tokens.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 
 test('pluginInstall is listed only when asked for, after update', () => {
   const off = welcomeCapabilities(true, false, false, [], 'linux', true)
@@ -101,4 +107,121 @@ test('a server with no installed plugins store answers NOT_FOUND to all three', 
     const outcome = await dispatchV2(method, params, {})
     assert.deepEqual([outcome.ok, outcome.error.code], [false, 'NOT_FOUND'], method)
   }
+})
+
+const WAIT_MS = 10_000
+
+/** A server with a token and the built-in plugins, on a port the OS picks; nothing outside its temp folder is read or written. */
+async function server(t, config = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-wire-'))
+  const configPath = join(dir, 'config.json')
+  saveConfig(configPath, { repos: [], ...config })
+  const store = new ConfigStore(configPath)
+  let token = ''
+  store.update((c) => { token = addToken(c, 'test') })
+  const files = new ProjectStore(join(dir, 'projects'))
+  const trek = startServer(
+    store,
+    '1.0.0',
+    { create: (hub, onSummariesChange) => new ProjectState({ hub, store: files, onSummariesChange }, files.loadAll()), store: files },
+    { sweepStaleMoves: false, plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: join(dir, 'secrets.json'), dataDir: dir, env: {} } }
+  )
+  const sockets = []
+  t.after(async () => {
+    for (const ws of sockets) ws.close()
+    await trek.shutdown('test over')
+    trek.httpServer.closeAllConnections()
+    trek.sessions.terminals.forceKillAll()
+    store.close()
+    files.close()
+    await removeDirWhenFree(dir)
+  })
+  await new Promise((done, reject) => {
+    trek.httpServer.once('error', reject)
+    trek.httpServer.listen(0, '127.0.0.1', done)
+  })
+  const url = `ws://127.0.0.1:${trek.httpServer.address().port}`
+  const connect = async () => {
+    const ws = new WebSocket(url)
+    sockets.push(ws)
+    const frames = []
+    const waiters = new Set()
+    ws.addEventListener('message', (event) => {
+      frames.push(JSON.parse(String(event.data)))
+      for (const wake of waiters) wake()
+    })
+    const frame = (pred, what) =>
+      new Promise((done, reject) => {
+        const look = () => {
+          const found = frames.find(pred)
+          if (!found) return
+          clearTimeout(timer)
+          waiters.delete(look)
+          done(found)
+        }
+        const timer = setTimeout(() => {
+          waiters.delete(look)
+          reject(new Error(`no ${what} within ${WAIT_MS} ms; received ${JSON.stringify(frames)}`))
+        }, WAIT_MS)
+        waiters.add(look)
+        look()
+      })
+    await new Promise((done, reject) => {
+      ws.addEventListener('open', done)
+      ws.addEventListener('error', () => reject(new Error(`could not connect to ${url}`)))
+    })
+    let nextId = 1
+    const request = async (method, params = {}) => {
+      const id = nextId++
+      ws.send(JSON.stringify({ type: 'req', id, method, params }))
+      return frame((f) => f.type === 'res' && f.id === id, `answer to ${method}`)
+    }
+    ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, client: 'test', clientVersion: '0', token }))
+    const welcome = await frame((f) => f.type === 'welcome', 'welcome')
+    const event = (name, pred = () => true) => frame((f) => f.type === 'event' && f.event === name && pred(f.payload), name)
+    return { frames, request, welcome, event }
+  }
+  return { dir, connect }
+}
+
+test('on the wire: the welcome lists installed plugins after the built-ins, and every connection hears an install and a removal', async (t) => {
+  const s = await server(t)
+  const a = await s.connect()
+  const b = await s.connect()
+  assert.ok(a.welcome.capabilities.includes('pluginInstall'))
+  const builtIns = a.welcome.plugins.map((p) => p.id)
+  assert.ok(builtIns.includes('voice') && !builtIns.includes('solarized'))
+
+  const res = await a.request('plugins.install', { package: packageText() })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  const listed = (await b.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'solarized'))).payload.plugins
+  assert.deepEqual(listed.map((p) => p.id), [...builtIns, 'solarized'], 'built-ins first')
+  assert.deepEqual(listed.at(-1), res.result)
+  await b.event('plugins.changed', (p) => p.id === 'solarized')
+  await a.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'solarized'))
+
+  const late = await s.connect()
+  assert.deepEqual(late.welcome.plugins.at(-1), res.result, 'a later welcome lists it')
+  const bundle = await late.request('plugins.bundle', { id: 'solarized' })
+  assert.deepEqual(bundle.result, { sha256: res.result.sha256, client: 'export default {}' })
+
+  assert.equal((await late.request('plugins.remove', { id: 'solarized' })).ok, true)
+  const after = (await a.event('plugins.list', (p) => !p.plugins.some((x) => x.id === 'solarized') && a.frames.some((f) => f.event === 'plugins.changed'))).payload.plugins
+  assert.deepEqual(after.map((p) => p.id), builtIns)
+})
+
+test('on the wire: a plugin added in the folder by another process reaches the connected clients', async (t) => {
+  const s = await server(t)
+  const a = await s.connect()
+  const other = createInstalledPlugins({ dir: join(s.dir, 'plugins-installed'), reserved: () => false, warn: () => {} })
+  other.add(JSON.parse(packageText({ id: 'nord', name: 'Nord', defaultEnabled: false })))
+  const listed = (await a.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'nord'))).payload.plugins
+  assert.equal(listed.at(-1).name, 'Nord')
+})
+
+test('on the wire: remoteInstall off drops the capability', async (t) => {
+  const s = await server(t, { plugins: { remoteInstall: false } })
+  const a = await s.connect()
+  assert.ok(!a.welcome.capabilities.includes('pluginInstall'))
+  assert.equal((await a.request('plugins.install', { package: packageText() })).error.code, 'NOT_FOUND')
 })
