@@ -328,7 +328,9 @@ server, newest first: decisions waiting (answered right there), sessions that fi
 or stopped, pull request notices. From there: a server's projects, a worktree (load or
 unload it, start a session with an agent or session type, close or restart one, its
 read-only Changes), and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
-arrows, y, n) and a prompt box that sends now or queues. While a project is open on
+arrows, y, n), a prompt box that sends now or queues, and the project's quick
+buttons (run only: a button that asks for input opens a sheet for it; `[ticket_url]`
+has no value on the phone, so it is asked for too). While a project is open on
 the phone, an agent's `promote_to_primary` can be confirmed there, unless the
 worktree's dev stack or Docker VM is running (then only the desktop can, since it
 tears them down first).
@@ -349,7 +351,8 @@ tears them down first).
   switches on the phone (Servers → Push…), and the Servers screen has **Pause all pushes**. A push
   says only the project and what happened. The relay holds the APNs key and the FCM credentials;
   your servers never do.
-- **Not yet**: creating or moving worktrees, or starting a promote, from the phone.
+- **Not yet**: creating or moving worktrees, starting a promote, or adding and editing
+  quick buttons, from the phone.
 
 See `apps/mobile/README.md` to build and run it.
 

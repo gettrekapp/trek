@@ -2,7 +2,7 @@
 
 Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS and
 Android: what needs you on every paired trek-server, sessions and their terminals,
-prompts, decisions and read-only Changes, and pushes while it is closed. The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone
+prompts, quick buttons, decisions and read-only Changes, and pushes while it is closed. The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone
 pairing") how it signs in.
 
 It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-exports
@@ -158,6 +158,15 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
      "link" opens nothing.
    - With the keyboard up, the prompt box stays above it, below the header.
    - **Send** types the prompt now. **Queue** adds it to the queue below, where **Remove** takes it out.
+   - **Quick buttons** (set them up on the desktop: a terminal's button row): the project's
+     buttons are in a row above the prompt box; a Global session shows the Global ones; a
+     project with none shows no row.
+     - A button with plain text or built-ins that have a value (`[branch]`) sends at once.
+     - A button with an `{INPUT}` (marked ⌨) opens a sheet: the field, a preview that follows
+       what is typed, **Send** and **Cancel**. Text in the prompt box is still there afterwards.
+     - A button using `[ticket_url]`, or `[ticket]` on a branch without one, opens the sheet
+       with that field marked "no value here".
+     - Add a button on the desktop: it appears on the phone without reopening the screen.
 6. **Changes:** files with their status and counts. Tapping one shows its patch: additions green, deletions red.
 7. **Promote:**
    - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
