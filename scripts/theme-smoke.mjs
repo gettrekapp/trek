@@ -1,4 +1,4 @@
-// scripts/theme-smoke.mjs — theme plugins in a project window (theme plugins phase 2).
+// scripts/theme-smoke.mjs — theme plugins in a project window (theme plugins phases 2 and 3).
 //
 // Run: npm run smoke:theme   (builds the app with out/server, then runs this script)
 //
@@ -13,6 +13,11 @@
 //   - the bundle replaced on the server: the default look, Settings offers Apply; Apply brings
 //     the new bundle's look and records its hash;
 //   - the theme removed: the default look, "Not installed on this server", the choice kept;
+//   - from the app (phase 3): the Installed themes row is there with no theme installed; a URL
+//     that is not https is refused in the row, unsent; a file that is not a package is refused
+//     with the server's reason; the example theme installs from its .trekplugin file and is
+//     listed, not chosen; chosen, then removed with Remove after its confirmation: the default
+//     look, and the row no longer lists it;
 //   - no error dialogs, no console or page errors.
 //
 // The teardown (scripts/smokeTeardown.mjs) always stops the run's server. The app is launched
@@ -195,6 +200,9 @@ try {
   const themeSelect = settings.locator('select[aria-label="Theme"]')
   // `has` is matched inside each row: a locator from the page, not one that starts at .server-window.
   const themeRow = settings.locator('.settings-row', { has: win.locator('select[aria-label="Theme"]') })
+  const installRow = settings.locator('.theme-install')
+  const installNote = installRow.locator('.settings-desc')
+  const installFileInput = installRow.locator('input[type="file"]')
   /** What a theme changes in the page. */
   const look = () =>
     win.evaluate(() => ({
@@ -222,6 +230,7 @@ try {
   await openSettings()
   check('with no theme installed, Settings shows no Theme row', await themeSelect.count(), 0)
   check('and the window has the default look', await look(), DEFAULT_LOOK)
+  check('but the Installed themes row is there, with its two buttons and no theme listed', [await installRow.locator('button').allTextContents(), await installRow.locator('.theme-list li').count()], [['Install from file…', 'Install from URL…'], 0])
 
   // ---- 3. Installed on the running server: the row appears ------------------------------------
 
@@ -282,6 +291,40 @@ try {
   )
   await themeSelect.selectOption('')
   check('Default clears the choice, and with no themes the row goes', [await until(() => themeSelect.count(), 0), await until(storedThemes, {})], [0, {}])
+
+  // ---- 8. From the app: a refused URL, a bad file, install from a file, Remove ---------------
+
+  await openSettings()
+  await installRow.locator('button', { hasText: 'Install from URL…' }).click()
+  const urlInput = installRow.locator('input[aria-label="Theme package URL"]')
+  await urlInput.fill('http://themes.test/example-theme.trekplugin')
+  await installRow.locator('.theme-url button[type="submit"]').click()
+  check('a URL that is not https is refused in the row', [await until(() => installNote.getAttribute('data-theme-install'), 'problem'), await installNote.textContent()], ['problem', 'The URL must start with https://.'])
+  await installRow.locator('.theme-url button', { hasText: 'Cancel' }).click()
+  check('Cancel closes the URL form and clears the message', [await until(() => urlInput.count(), 0), await installNote.getAttribute('data-theme-install')], [0, 'about'])
+
+  const notPackage = join(work, 'not-a-package.trekplugin')
+  writeFileSync(notPackage, JSON.stringify({ manifest: { id: 'nope' }, client: 'export default 1' }))
+  await installFileInput.setInputFiles(notPackage)
+  check('a file that is not a package is refused', await until(() => installNote.getAttribute('data-theme-install'), 'problem'), 'problem')
+  check("with the server's reason, and nothing is installed", [/version must be a semver version/.test((await installNote.textContent()) ?? ''), await installRow.locator('.theme-list li').count(), await themeSelect.count()], [true, 0, 0])
+
+  await installFileInput.setInputFiles(packagePath)
+  check('the example theme installs from its file', await until(() => installNote.textContent(), 'Installed Example theme 1.0.0.'), 'Installed Example theme 1.0.0.')
+  check('it is listed in the row, with Remove', [await until(() => installRow.locator('.theme-list li').count(), 1), await installRow.locator('.theme-list li button').allTextContents()], [1, ['Remove']])
+  check('and offered in the Theme row, not chosen', [await until(() => themeSelect.count(), 1), await themeSelect.inputValue(), await look()], [1, '', DEFAULT_LOOK])
+  check('the server has it', await until(() => (sdk.welcome?.plugins ?? []).filter((p) => p.type === 'theme').map((p) => [p.id, p.sha256]), [['example-theme', sha]]), [['example-theme', sha]])
+
+  await themeSelect.selectOption('example-theme')
+  check('chosen, it applies', await until(look, THEMED), THEMED)
+  await installRow.locator('.theme-list li button', { hasText: 'Remove' }).click()
+  check('Remove asks first, naming the theme', (await until(async () => (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.message === 'Remove "Example theme" from this server?').length, 1)), 1)
+  check('then the theme is gone from the server', await until(() => (sdk.welcome?.plugins ?? []).filter((p) => p.type === 'theme').length, 0), 0)
+  check('the window returns to the default look', await until(look, DEFAULT_LOOK), DEFAULT_LOOK)
+  check('the row says so and lists nothing', [await until(() => installNote.textContent(), 'Removed Example theme.'), await installRow.locator('.theme-list li').count()], ['Removed Example theme.', 0])
+  check('the choice is kept, as not installed', [await themeSelect.inputValue(), await themeRow.locator('.settings-desc').textContent()], ['example-theme', 'Not installed on this server. The window shows the default look.'])
+  await themeSelect.selectOption('')
+  check('Default clears it', await until(storedThemes, {}), {})
 
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])
