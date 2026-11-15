@@ -9,6 +9,7 @@ import { CAPABILITY, type Project, type PromoteRequestEvent, type PromoteSettled
 import { Latest } from '../logic/latest.ts'
 import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
+import { teardownBlocker } from '../state/teardown.ts'
 import { Button } from './Button.tsx'
 import { colors, ui } from './theme.ts'
 
@@ -118,14 +119,10 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
         await fail(request, errorMessage(err))
         return
       }
-      const caps = conn.welcome?.capabilities ?? []
-      const stack = caps.includes(CAPABILITY.stacks) ? await conn.request('stack.status', { projectId, worktreeId: worktree.id }).catch(() => null) : null
-      const envs = caps.includes(CAPABILITY.env) ? await conn.request('env.list', { projectId, repoId: repo.id }).catch(() => []) : []
-      const vm = envs.find((e) => e.worktreePath === worktree.path && e.vmState === 'running')
+      const why = await teardownBlocker(server, projectId, repo.id, worktree)
       // Settled meanwhile (another window, or the agent stopped waiting): no dialog.
       if (settledIds.has(request.requestId)) return
-      if (stack && (stack.containers > 0 || stack.upRunning)) show({ kind: 'desktop', request, why: 'its dev stack is running' })
-      else if (vm) show({ kind: 'desktop', request, why: `its Docker VM (${vm.profile}) is running` })
+      if (why) show({ kind: 'desktop', request, why })
       else show({ kind: 'confirm', request, summary })
     }
     return () => {

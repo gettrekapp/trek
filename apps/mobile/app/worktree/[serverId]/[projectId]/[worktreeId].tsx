@@ -1,10 +1,14 @@
 // A worktree (6a): load or unload it, start a session (agent and session type), its sessions
-// with close and restart, and the read-only Changes.
-import { useEffect, useState } from 'react'
+// with close and restart, the read-only Changes, and Remove (not for the main checkout; with its
+// dev stack or Docker VM running, only the desktop can).
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native'
-import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { CAPABILITY, type AgentInfo, type Project, type SessionType, type Worktree } from '../../../../src/shared.ts'
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { CAPABILITY, type AgentInfo, type Project, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
+import { refusedAsDirty, removeWorktree } from '../../../../src/logic/worktrees.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
+import { teardownBlocker } from '../../../../src/state/teardown.ts'
+import { confirmAlert } from '../../../../src/ui/alerts.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
@@ -20,8 +24,8 @@ const START_SIZE = { cols: 80, rows: 24 }
 /** A restart keeps the size the phone last saw the session's pty at (else START_SIZE, as for a new one). */
 const restartSize = (serverId: string, sessionId: string): { cols: number; rows: number } => knownPtySize(serverId, sessionId) ?? START_SIZE
 
-function findWorktree(project: Project, worktreeId: string): Worktree | undefined {
-  for (const repo of project.repositories) for (const wt of repo.worktrees) if (wt.id === worktreeId) return wt
+function findWorktree(project: Project, worktreeId: string): { repo: Repository; worktree: Worktree } | undefined {
+  for (const repo of project.repositories) for (const worktree of repo.worktrees) if (worktree.id === worktreeId) return { repo, worktree }
   return undefined
 }
 
@@ -34,6 +38,29 @@ export default function WorktreeScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
+  // Why Remove is the desktop's to do (its dev stack or VM is running).
+  const [blocked, setBlocked] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
+  // One removal at a time, also for two taps before the button is drawn disabled.
+  const removingNow = useRef(false)
+  // Whether this screen is the one shown: a removal that goes on after it went (Back), or under
+  // another screen, neither asks nor navigates.
+  const shown = useRef(false)
+  useFocusEffect(
+    useCallback(() => {
+      shown.current = true
+      return () => {
+        shown.current = false
+      }
+    }, [])
+  )
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!server || !server.connection.welcome?.capabilities.includes(CAPABILITY.agents)) return
@@ -44,13 +71,15 @@ export default function WorktreeScreen(): React.JSX.Element {
   }, [server, projectId])
 
   const project = topic.state === 'ready' ? topic.snapshot : null
-  const worktree = project ? findWorktree(project, worktreeId) : undefined
+  const found = project ? findWorktree(project, worktreeId) : undefined
+  const worktree = found?.worktree
   const sessionTypes: SessionType[] = project?.settings.sessionTypes ?? []
 
   const run = async (fn: () => Promise<unknown>): Promise<unknown> => {
     if (!server) return
     setBusy(true)
     setError(null)
+    setBlocked(null)
     try {
       return await fn()
     } catch (err) {
@@ -82,6 +111,50 @@ export default function WorktreeScreen(): React.JSX.Element {
     ])
   }
 
+  // The desktop's order (backendV2.ts' worktree remove) without what only it can do: with the dev
+  // stack or VM running, nothing is done here. Then the question, the unload, the removal, and
+  // the discard question when git refuses for changes (logic/worktrees.ts).
+  const remove = async (): Promise<void> => {
+    if (!server || !found || found.worktree.isMain || removingNow.current) return
+    const conn = server.connection
+    const { repo, worktree: target } = found
+    const name = target.branch ?? target.name
+    const ref = { projectId, worktreeId: target.id }
+    removingNow.current = true
+    // The agent list goes: no session is started in a worktree that is being removed.
+    setPicking(false)
+    setBusy(true)
+    setRemoving(true)
+    setError(null)
+    setBlocked(null)
+    try {
+      const why = await teardownBlocker(server, projectId, repo.id, target)
+      if (!shown.current) return
+      if (why) {
+        setBlocked(`Remove this worktree on the desktop: ${why}, and only the desktop can tear it down first.`)
+        return
+      }
+      const outcome = await removeWorktree({
+        worktree: { id: target.id, name, loaded: target.loaded, dirty: target.dirty },
+        unload: async () => void (await conn.request('worktree.unload', ref)),
+        load: async () => void (await conn.request('worktree.load', ref)),
+        remove: async (force) => void (await conn.request('worktree.remove', { ...ref, force })),
+        confirmRemove: () => confirmAlert(`Remove ${name}?`, "The worktree's folder is deleted. Its branch stays.", 'Remove', true),
+        confirmDiscard: () => confirmAlert(`${name} has uncommitted changes.`, 'Removing it discards them. This cannot be undone.', 'Discard and remove', true),
+        refusedAsDirty
+      })
+      if (outcome.kind === 'failed') {
+        if (mounted.current) setError(errorMessage(outcome.error))
+      } else if (outcome.kind === 'removed' && shown.current) router.back()
+    } finally {
+      removingNow.current = false
+      if (mounted.current) {
+        setBusy(false)
+        setRemoving(false)
+      }
+    }
+  }
+
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad}>
       <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
@@ -103,6 +176,7 @@ export default function WorktreeScreen(): React.JSX.Element {
             />
             <Button ghost label="Changes" onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })} />
             <Button label="New session" disabled={busy || !server} onPress={() => setPicking((p) => !p)} />
+            {worktree.isMain ? null : <Button ghost danger label={removing ? 'Removing…' : 'Remove'} disabled={busy || !server} onPress={() => void remove()} />}
           </View>
           {picking ? (
             <View style={ui.card}>
@@ -122,6 +196,7 @@ export default function WorktreeScreen(): React.JSX.Element {
               ))}
             </View>
           ) : null}
+          {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
           {error ? <Text style={ui.error}>{error}</Text> : null}
           <Text style={ui.heading}>Sessions</Text>
           {worktree.sessions.length === 0 ? <Text style={ui.muted}>No sessions.</Text> : null}
