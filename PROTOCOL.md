@@ -1279,7 +1279,12 @@ Every client sees it, and every change to it, in the topic's patches. Each comme
 path, side, line, lineText, body, at}`: the diff it was written on, the file's path there, `side`
 `old` (a removed line, numbered in the old file) or `new` (an added or unchanged line, in the new
 file), the 1-based line, the line as it read then (without the diff's `+`, `-` or space), the
-comment, and when it was written or last edited (the server's clock). The server never re-reads the
+comment, and when it was written or last edited (the server's clock).
+A comment an agent wrote through `add_review_comment` also has `by: {kind: "mcp", sessionTitle?}`
+(the session's title when the call named one); only the server sets it, a `by` in `review.add`'s
+params is ignored, and `review.edit` keeps it. At load and import a `by` of another shape is
+dropped, and a `sessionTitle` that is not one line of at most 200 characters without control
+characters is left out. The server never re-reads the
 line: a client shows a comment whose line no longer reads the same as outdated, and it is still sent
 with the text it was written on. `revision` goes up by one with every change and never repeats on a
 worktree: the worktree's `reviewRevision`, saved with the project, is the last one handed out and
@@ -1300,7 +1305,9 @@ The prompt lists every comment, grouped by the diff it was written on (`## Uncom
 (`reviewPrompt` in `src/shared/review.ts`; control characters are dropped from the worktree's name
 there). Like every queued prompt it is not sent on its own: the
 user sends it from the session's queue. An agent can read a worktree's draft with the MCP tool
-`get_review_comments` (read-only, with each comment's `outdated`); no tool writes one.
+`get_review_comments` (with each comment's `outdated` and who wrote it), add a comment with
+`add_review_comment` and remove an agent's with `remove_review_comment`; no tool edits, clears
+or sends a draft.
 
 ## Moving a worktree between servers
 
@@ -1952,7 +1959,9 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_ticket` | `worktree`; `ticket?` (an id or URL of a tracker on in the project: a Linear id or URL, an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
-| `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source. Because it reads only the commented files, `outdated` does not depend on the full diff's 8 MiB size cap or git's rename limit, so it can differ from what the Changes tab shows when the whole diff hits either |
+| `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, by, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `by` is `the user`, the writing session's title, or `an agent`. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source. Because it reads only the commented files, `outdated` does not depend on the full diff's 8 MiB size cap or git's rename limit, so it can differ from what the Changes tab shows when the whole diff hits either |
+| `add_review_comment` | `worktree`, `file`, `line`, `comment`; `side?` (`new`, the default, or `old` for a removed line); `source?` (default the branch against its base); `terminalId?` (names the session on the comment) | `{worktree, revision, comment}`, the comment as `get_review_comments` gives it. The line's text is read from the file's patch in that source (`worktree.diff`), then `review.add` with its limits; `BAD_REQUEST` when the file has no patch there or the patch shows no such line on that side |
+| `remove_review_comment` | `worktree`, `id` | `{worktree, removed}`; through `review.remove`; `BAD_REQUEST` for a comment the user wrote (one without `by`), `NOT_FOUND` for an unknown id |
 | `get_worktree_history` | `worktree`; `limit?` (default 20, at most 100) | `{branch, more, entries: [{at, change, by, reason?}]}`, newest first; `by` is `the user`, an MCP session or `Trek` |
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
@@ -1968,7 +1977,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation` | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run |
 
-That is 35 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 37 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the

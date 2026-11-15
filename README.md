@@ -291,8 +291,9 @@ other window on that project sees them live.
   since shows as outdated at the top of its file, and is still sent with the line
   as it read. Comments on another source are listed in the review bar. The tab
   stays read-only: nothing stages or reverts. Agents can read the draft with the
-  `get_review_comments` MCP tool (read-only; each comment says whether it is
-  outdated). A server older than this Trek (without the `review` capability) shows
+  `get_review_comments` MCP tool (each comment says whether it is outdated and who
+  wrote it) and leave their own line comments with `add_review_comment`, shown as
+  "From <session>". A server older than this Trek (without the `review` capability) shows
   only the branch against its base.
 - **Web client**: a server started with `trek-server start --web` serves the project
   window to a browser at its own address, for any device (through the server's TLS
