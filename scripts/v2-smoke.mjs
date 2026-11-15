@@ -1115,7 +1115,7 @@ try {
   check('the commands are disabled', [
     await detail.locator('.session-add').first().isDisabled(),
     await detail.locator('.btn-icon[title="Server disconnected"]').isDisabled(),
-    await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled(),
+    await sidebar.locator('.sidebar-nav-row', { hasText: 'Add repository…' }).isDisabled(),
     await sidebar.locator('.repo-action').first().isDisabled()
   ], [true, true, true, true])
   if (process.env.SHOT_DIR) await w1.screenshot({ path: join(process.env.SHOT_DIR, 'server-window-down.png') })
@@ -1125,7 +1125,7 @@ try {
   check('the overlay goes and the commands come back', [
     await detail.locator('.reconnecting-overlay').count(),
     await detail.locator('.session-add').first().isDisabled(),
-    await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled()
+    await sidebar.locator('.sidebar-nav-row', { hasText: 'Add repository…' }).isDisabled()
   ], [0, false, false])
 
   // ---- 7b. The Global panel: the server has MCP, so it is offered; opening it starts one session.
