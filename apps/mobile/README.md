@@ -195,6 +195,9 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - A large file: a patch of more than 2,000 lines shows its first 2,000 and **Show all <n>
      lines**, which draws the rest. Opening a 10,000-line patch does not hang the screen.
    - Pulling down reloads the file list and the patches for the shown source.
+   - A failed refresh leaves no file on "Loading…": open a file and pull down at once with the
+     server's network cut. The error shows under the source, and the open file says "Diff not
+     available" with the error (or keeps the patch it had); closing and opening it reads it again.
    - Tapping an added, removed or unchanged line opens a comment box under it. A hunk header
      (`@@ … @@`) opens nothing.
    - **Save** is disabled while the box is blank. **Save** puts the comment under its line,
@@ -203,13 +206,26 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - With text typed in a box, tapping another line asks "Discard your comment?"; **Cancel**
      keeps the box and its text.
    - With text typed in a new comment's box, choosing another source asks the same.
+   - While a box is open (a new comment or an edit), its file's header says " · writing a
+     comment", also with the file closed or the box scrolled away.
+   - A refresh that removes the file being commented on: write a comment on a file without
+     saving, revert that file in the worktree, pull down. The box is gone and the line above the
+     bar says "The file you were commenting on is no longer in this diff." and, on a new line,
+     "You had written: <the text>"; the text can be selected and copied.
+   - A comment on a line beyond the first 2,000 of a large file: tap **Edit**, close the file
+     and open it again. The box is drawn (the lines down to it are shown).
    - **Edit** on a comment opens the box with its text; **Save** changes it, on the desktop too.
    - **Delete** asks "Delete this comment?" and then removes it.
    - Edit conflict: tap **Edit** on the phone, change that comment on the desktop, then
      **Save** on the phone. The box stays open with what was typed, with "The comment changed
      on the server" and the desktop's text under it. **Save** again overwrites it.
-   - Delete that comment on the desktop instead, then **Save**: "Could not save the comment:
-     it is no longer in the review".
+   - Delete that comment on the desktop while it is being edited on the phone: with nothing
+     changed in the box it just closes; with changed text the box closes and the line above the
+     bar says "The comment you were editing is no longer in the review." and, on a new line,
+     "You had written: <the text>". The same when the desktop sends or discards the review.
+   - A **Save** whose reply was lost but which the server did apply (cut the network just
+     after tapping it), saved again once back online: the box closes with the comment as
+     typed, and no "The comment changed on the server".
    - Outdated: comment on a line, change that line in the worktree, pull down. The comment is
      at the top of its file under "Outdated: its line has changed", with "line <n>: <the line
      as it was>"; **Edit** and **Delete** still work there.
@@ -222,7 +238,12 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - **Send to…** with no session running: "Start a session in this worktree to send the
      review to"; for an unloaded worktree, "Load the worktree to send the review to one of
      its sessions". Nothing can be tapped.
+   - **Send to…** with text typed in a box that is not saved (a new comment, or an edit that
+     changed something) asks "Your comment is not saved": **Cancel** sends nothing and keeps the
+     box and its text; **Send without it** closes the box and sends the review as it was saved.
    - **Discard** asks "Discard <n> comments?" and then deletes the review, on the desktop too.
+     With unsaved text in a box the same question adds that the comment being written is
+     discarded too: **Cancel** keeps the review, the box and its text; **Discard** closes the box.
    - Review conflict: with the **Discard** question up, add a comment on the desktop, then
      answer **Discard**. "The review changed on the server. Check it and send again." shows
      above the bar, nothing is discarded, and the bar has the new count.
@@ -240,9 +261,14 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
      on screen instead of being left behind at the left (not checked on a device yet).
    - The two line-number columns are wide enough for the file's largest numbers, and the code
      is in a monospace font, also on Android (not checked on a device yet).
+   - An edit box in the bar's "elsewhere" list (edit a comment, then pull down after its file
+     left the diff): the file list behind it does not scroll by itself when the box is drawn or
+     the keyboard comes up (not checked on a device yet).
    - A server without `review` (an older trek-server): no **Branch** / **Uncommitted** /
      **Commit**, no comments and no bar. The files of the branch against its base, with the
      uncommitted work, open as coloured patches; tapping a line does nothing.
+   - Opening Changes before the server has connected shows "Loading…" (with the connection's
+     notice, if any) until it has, never the read-only screen first on a server with `review`.
 7. **Promote:**
    - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
    - With the worktree's stack running, the phone says to confirm on the desktop.
