@@ -5,7 +5,8 @@
 // rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow,
 // and state/teardown.ts' check for what only the desktop can tear down first)
 // and a ticket's label, link and input through the project's trackers, and what the worktree list
-// says about a branch (its tag, custom tags, ticket and pull request on one line).
+// says about a branch (its tag, custom tags, ticket and pull request on one line), and the Branch
+// section's rules (the custom tags' toggle, the note's edit and its conflict, a pull request's input).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -20,6 +21,9 @@ import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, ref
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
 import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
+import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
+import { ClientError } from '../src/shared/client/connection.ts'
+import { checkExpected } from '../server/src/validate.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -950,4 +954,123 @@ test("worktree list: a repository's folder name, from a path of either kind", ()
   assert.equal(repoFolder('/Users/me/code/trek/'), 'trek')
   assert.equal(repoFolder('C:\\code\\trek\\'), 'trek')
   assert.equal(repoFolder('trek'), 'trek')
+})
+
+test('branch details: toggling a custom tag gives the new list, or null when it empties', () => {
+  assert.deepEqual(toggledCustomTags(undefined, 'c1'), ['c1'])
+  assert.deepEqual(toggledCustomTags([], 'c1'), ['c1'])
+  assert.deepEqual(toggledCustomTags(['c1'], 'c2'), ['c1', 'c2'])
+  assert.deepEqual(toggledCustomTags(['c1', 'c2'], 'c1'), ['c2'])
+  assert.equal(toggledCustomTags(['c1'], 'c1'), null)
+  // One the project no longer has stays as it is, as on the desktop.
+  assert.deepEqual(toggledCustomTags(['gone', 'c1'], 'c1'), ['gone'])
+  // The list given is not changed.
+  const current = ['c1']
+  toggledCustomTags(current, 'c2')
+  assert.deepEqual(current, ['c1'])
+})
+
+/** The server's own guard (server/src/validate.ts, as setBranchField calls it for a note), as the phone gets its refusal. */
+const noteGuard = (current, expected) => {
+  try {
+    checkExpected('branchData.note', current, expected)
+    return null
+  } catch (err) {
+    return new ClientError(err.code, err.message)
+  }
+}
+
+test("branch details: the server's refusal of a note that changed meanwhile is told from other errors", () => {
+  const refusal = noteGuard('theirs', 'mine')
+  assert.equal(refusal.code, 'CONFLICT')
+  assert.equal(refusal.message, 'branchData.note changed since you read it')
+  assert.equal(isNoteConflict(refusal), true)
+  assert.equal(isNoteConflict(new ClientError('CONFLICT', 'branchData.note changed since you read it')), true)
+  assert.equal(isNoteConflict(new ClientError('BAD_REQUEST', 'note must be a string or null')), false)
+  assert.equal(isNoteConflict(new ClientError('NOT_FOUND', 'changed since you read it')), false)
+  assert.equal(isNoteConflict(new Error('branchData.note changed since you read it')), false)
+  assert.equal(isNoteConflict('CONFLICT'), false)
+  assert.equal(isNoteConflict(null), false)
+  assert.equal(isNoteConflict(undefined), false)
+})
+
+test("branch details: a note's save carries the note as it was when editing began, as the server compares it", () => {
+  const fresh = beginNoteEdit(undefined)
+  assert.deepEqual(fresh, { text: '', expected: null, conflict: false })
+  // No note is null for the server, never '' (which it would refuse as a change) and never left out (no check at all).
+  assert.deepEqual(noteSave({ ...fresh, text: 'first' }), { note: 'first', expected: null })
+  assert.equal(noteGuard(undefined, noteSave(fresh).expected), null)
+  assert.notEqual(noteGuard(undefined, ''), null)
+  assert.equal(noteGuard('theirs', undefined), null)
+  assert.deepEqual(beginNoteEdit(''), { text: '', expected: null, conflict: false })
+
+  const edit = beginNoteEdit('as it was')
+  assert.deepEqual(edit, { text: 'as it was', expected: 'as it was', conflict: false })
+  assert.deepEqual(noteSave({ ...edit, text: 'mine\n  indented' }), { note: 'mine\n  indented', expected: 'as it was' })
+  assert.equal(noteGuard('as it was', noteSave(edit).expected), null)
+  assert.equal(isNoteConflict(noteGuard('theirs', noteSave(edit).expected)), true)
+  // Written elsewhere meanwhile, also when there was none or it was cleared.
+  assert.equal(isNoteConflict(noteGuard('theirs', noteSave(fresh).expected)), true)
+  assert.equal(isNoteConflict(noteGuard(undefined, noteSave(edit).expected)), true)
+
+  // An empty note clears it (blank lines and spaces only are empty).
+  assert.deepEqual(noteSave({ ...edit, text: '' }), { note: null, expected: 'as it was' })
+  assert.deepEqual(noteSave({ ...edit, text: ' \n\t ' }), { note: null, expected: 'as it was' })
+})
+
+test("branch details: after a conflict the user's text stays, and the next save expects the server's note shown", () => {
+  const mine = { ...beginNoteEdit('as it was'), text: 'mine' }
+  const conflicted = noteConflicted(mine, 'theirs')
+  assert.deepEqual(conflicted, { text: 'mine', expected: 'theirs', conflict: true })
+  assert.deepEqual(noteSave(conflicted), { note: 'mine', expected: 'theirs' })
+  assert.equal(noteGuard('theirs', noteSave(conflicted).expected), null)
+  // The edit given is not changed.
+  assert.deepEqual(mine, { text: 'mine', expected: 'as it was', conflict: false })
+
+  // The note was cleared on the server meanwhile.
+  const cleared = noteConflicted(mine, undefined)
+  assert.deepEqual(cleared, { text: 'mine', expected: null, conflict: true })
+  assert.equal(noteGuard(undefined, noteSave(cleared).expected), null)
+  assert.deepEqual(noteConflicted(mine, ''), { text: 'mine', expected: null, conflict: true })
+
+  // Changed once more before that save: a conflict again, with the newer note.
+  assert.equal(isNoteConflict(noteGuard('theirs again', noteSave(conflicted).expected)), true)
+  assert.deepEqual(noteConflicted(conflicted, 'theirs again'), { text: 'mine', expected: 'theirs again', conflict: true })
+})
+
+test('branch details: a pull request box takes a github.com pull request link, saved in its canonical form', () => {
+  assert.deepEqual(pullRequestInput(' https://github.com/o/r/pull/42/files '), { pr: 'https://github.com/o/r/pull/42' })
+  assert.deepEqual(pullRequestInput('http://www.github.com/o/r/pull/7'), { pr: 'https://github.com/o/r/pull/7' })
+  for (const bad of ['https://gitlab.com/o/r/pull/1', 'https://github.com/o/r/issues/1', '42', 'pr 42']) {
+    assert.deepEqual(pullRequestInput(bad), { error: 'Not a GitHub pull request link' }, bad)
+  }
+  // Nothing typed is nothing to save (Clear is what unlinks).
+  assert.equal(pullRequestInput(''), null)
+  assert.equal(pullRequestInput('   '), null)
+})
+
+test('branch details: a pull request reads "PR #<n>"; only a web link is opened', () => {
+  assert.equal(pullRequestText('https://github.com/o/r/pull/42'), 'PR #42')
+  assert.equal(pullRequestText('https://dev.azure.com/o/p/_git/r/pullrequest/9'), 'PR #9')
+  assert.equal(pullRequestText('https://github.com/o/r'), 'PR')
+  assert.equal(webLink('https://github.com/o/r/pull/42'), 'https://github.com/o/r/pull/42')
+  assert.equal(webLink(' HTTP://example.com/x '), 'HTTP://example.com/x')
+  for (const not of ['', 'github.com/o/r/pull/1', 'javascript:alert(1)', 'tel:+3112345678', 'file:///etc/passwd', 'intent://x#Intent;end', 'https://', 'https://a b']) {
+    assert.equal(webLink(not), null, not)
+  }
+  assert.equal(webLink(null), null)
+  assert.equal(webLink(undefined), null)
+})
+
+test("branch details: a chip in its tag's colour has text that reads on it", () => {
+  assert.deepEqual(chipColors('#5dabef'), { fill: '#5dabef', text: '#11111b' })
+  assert.deepEqual(chipColors('#FFFFFF'), { fill: '#ffffff', text: '#11111b' })
+  assert.deepEqual(chipColors('#000'), { fill: '#000000', text: '#ffffff' })
+  assert.deepEqual(chipColors('#1e3a8a'), { fill: '#1e3a8a', text: '#ffffff' })
+  assert.deepEqual(chipColors(' #ff0000 '), { fill: '#ff0000', text: '#11111b' })
+  assert.deepEqual(chipColors('#0000ff'), { fill: '#0000ff', text: '#ffffff' })
+  // Every default tag is a light colour.
+  for (const color of ['#5dabef', '#b8a8f0', '#ff8589', '#e2a336', '#55c7e4', '#b8b8b8', '#5bb98b', '#ff7eb0']) assert.equal(chipColors(color).text, '#11111b', color)
+  // Not a hex colour: a neutral chip, never text that can't be read.
+  for (const bad of ['', 'red', '#12', '#12345', '#gggggg', 'rgb(1,2,3)', undefined]) assert.deepEqual(chipColors(bad), { fill: '#9399b2', text: '#11111b' }, String(bad))
 })

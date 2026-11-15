@@ -1,14 +1,17 @@
 // A worktree (6a): load or unload it, start a session (agent and session type), its sessions
-// with close and restart, the read-only Changes, and Remove (not for the main checkout; with its
-// dev stack or Docker VM running, only the desktop can).
+// with close and restart, the read-only Changes, Remove (not for the main checkout; with its
+// dev stack or Docker VM running, only the desktop can), and its branch's tag, custom tags, note,
+// ticket and pull request (ui/BranchDetails.tsx).
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Pressable, ScrollView, Text, View } from 'react-native'
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { useHeaderHeight } from 'expo-router/react-navigation'
 import { CAPABILITY, type AgentInfo, type Project, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
 import { refusedAsDirty, removeWorktree } from '../../../../src/logic/worktrees.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../src/state/teardown.ts'
 import { confirmAlert } from '../../../../src/ui/alerts.ts'
+import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
@@ -34,6 +37,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   const server = useServer(serverId)
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
+  const headerHeight = useHeaderHeight()
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -160,69 +164,76 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
   }
 
+  // The Branch section's boxes stay above the keyboard, and one tap on Save works with it up.
   return (
-    <ScrollView style={ui.screen} contentContainerStyle={ui.pad}>
-      <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
-      {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
-      {project && !worktree ? <Text style={ui.muted}>This worktree is gone.</Text> : null}
-      {worktree ? (
-        <>
-          <Text style={ui.muted}>{worktree.path}</Text>
-          <Text style={ui.text}>
-            {worktree.loaded ? 'Loaded' : 'Unloaded'}
-            {worktree.dirty ? ' · uncommitted changes' : ''}
-          </Text>
-          <View style={[ui.row, { flexWrap: 'wrap' }]}>
-            <Button
-              ghost
-              label={worktree.loaded ? 'Unload' : 'Load'}
-              disabled={busy || !server}
-              onPress={() => void run(() => req!.request(worktree.loaded ? 'worktree.unload' : 'worktree.load', { projectId, worktreeId }))}
-            />
-            <Button ghost label="Changes" onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })} />
-            <Button label="New session" disabled={busy || !server} onPress={() => setPicking((p) => !p)} />
-            {worktree.isMain ? null : <Button ghost danger label={removing ? 'Removing…' : 'Remove'} disabled={busy || !server} onPress={() => void remove()} />}
-          </View>
-          {picking ? (
-            <View style={ui.card}>
-              <Pressable accessibilityRole="button" onPress={() => void start({})}>
-                <Text style={ui.text}>The project's default agent</Text>
-              </Pressable>
-              {agents.map((a) => (
-                <Pressable key={a.provider} accessibilityRole="button" onPress={() => void start({ agent: a })}>
-                  <Text style={ui.text}>{a.label}</Text>
-                </Pressable>
-              ))}
-              {sessionTypes.length ? <Text style={ui.heading}>Session types</Text> : null}
-              {sessionTypes.map((t) => (
-                <Pressable key={t.id} accessibilityRole="button" onPress={() => void start({ type: t })}>
-                  <Text style={ui.text}>{t.name}</Text>
-                </Pressable>
-              ))}
+    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
+      <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
+        <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
+        {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
+        {project && !worktree ? <Text style={ui.muted}>This worktree is gone.</Text> : null}
+        {worktree ? (
+          <>
+            <Text style={ui.muted}>{worktree.path}</Text>
+            <Text style={ui.text}>
+              {worktree.loaded ? 'Loaded' : 'Unloaded'}
+              {worktree.dirty ? ' · uncommitted changes' : ''}
+            </Text>
+            <View style={[ui.row, { flexWrap: 'wrap' }]}>
+              <Button
+                ghost
+                label={worktree.loaded ? 'Unload' : 'Load'}
+                disabled={busy || !server}
+                onPress={() => void run(() => req!.request(worktree.loaded ? 'worktree.unload' : 'worktree.load', { projectId, worktreeId }))}
+              />
+              <Button ghost label="Changes" onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })} />
+              <Button label="New session" disabled={busy || !server} onPress={() => setPicking((p) => !p)} />
+              {worktree.isMain ? null : <Button ghost danger label={removing ? 'Removing…' : 'Remove'} disabled={busy || !server} onPress={() => void remove()} />}
             </View>
-          ) : null}
-          {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
-          {error ? <Text style={ui.error}>{error}</Text> : null}
-          <Text style={ui.heading}>Sessions</Text>
-          {worktree.sessions.length === 0 ? <Text style={ui.muted}>No sessions.</Text> : null}
-          {worktree.sessions.map((s) => (
-            <View key={s.id} style={ui.card}>
-              <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: s.id } })}>
-                <Text style={ui.title}>{s.title}</Text>
-                <Text style={{ color: statusColor(s.status) }}>
-                  {STATUS_TEXT[s.status]}
-                  {s.decision ? ` · ${s.decision.question}` : ''}
-                  {s.queue.length ? ` · ${s.queue.length} queued` : ''}
-                </Text>
-              </Pressable>
-              <View style={[ui.row, { marginTop: 6 }]}>
-                <Button ghost label="Restart" disabled={busy || !server} onPress={() => void run(() => req!.request('session.restart', { projectId, sessionId: s.id, ...restartSize(serverId, s.id) }))} />
-                <Button ghost danger label="Close" disabled={busy || !server} onPress={() => confirmClose(s.id, s.title)} />
+            {picking ? (
+              <View style={ui.card}>
+                <Pressable accessibilityRole="button" onPress={() => void start({})}>
+                  <Text style={ui.text}>The project's default agent</Text>
+                </Pressable>
+                {agents.map((a) => (
+                  <Pressable key={a.provider} accessibilityRole="button" onPress={() => void start({ agent: a })}>
+                    <Text style={ui.text}>{a.label}</Text>
+                  </Pressable>
+                ))}
+                {sessionTypes.length ? <Text style={ui.heading}>Session types</Text> : null}
+                {sessionTypes.map((t) => (
+                  <Pressable key={t.id} accessibilityRole="button" onPress={() => void start({ type: t })}>
+                    <Text style={ui.text}>{t.name}</Text>
+                  </Pressable>
+                ))}
               </View>
-            </View>
-          ))}
-        </>
-      ) : null}
-    </ScrollView>
+            ) : null}
+            {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
+            {error ? <Text style={ui.error}>{error}</Text> : null}
+            {/* Keyed by the branch: an edit begun for one is not saved to another checked out meanwhile. */}
+            {project && found && worktree.branch ? (
+              <BranchDetails key={`${found.repo.id}\n${worktree.branch}`} serverId={serverId} projectId={projectId} project={project} repo={found.repo} branch={worktree.branch} />
+            ) : null}
+            <Text style={ui.heading}>Sessions</Text>
+            {worktree.sessions.length === 0 ? <Text style={ui.muted}>No sessions.</Text> : null}
+            {worktree.sessions.map((s) => (
+              <View key={s.id} style={ui.card}>
+                <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: s.id } })}>
+                  <Text style={ui.title}>{s.title}</Text>
+                  <Text style={{ color: statusColor(s.status) }}>
+                    {STATUS_TEXT[s.status]}
+                    {s.decision ? ` · ${s.decision.question}` : ''}
+                    {s.queue.length ? ` · ${s.queue.length} queued` : ''}
+                  </Text>
+                </Pressable>
+                <View style={[ui.row, { marginTop: 6 }]}>
+                  <Button ghost label="Restart" disabled={busy || !server} onPress={() => void run(() => req!.request('session.restart', { projectId, sessionId: s.id, ...restartSize(serverId, s.id) }))} />
+                  <Button ghost danger label="Close" disabled={busy || !server} onPress={() => confirmClose(s.id, s.title)} />
+                </View>
+              </View>
+            ))}
+          </>
+        ) : null}
+      </ScrollView>
+    </KeyboardAvoidingView>
   )
 }
