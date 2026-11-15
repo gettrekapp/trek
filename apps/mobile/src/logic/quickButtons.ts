@@ -1,7 +1,7 @@
 // Quick buttons on the session screen: which buttons a session shows, and the built-in context
 // ([branch], [ticket], …) its templates are filled from, read from the project's snapshot. Pure.
-// [ticket_url] has no value on the phone: it comes from the ticket plugins, which the phone
-// doesn't load, so a button using it asks for it.
+// [ticket_url] comes from the project's ticket trackers: the caller passes their lookup
+// (logic/tickets.ts); without one, or for a ticket with no link, a button using it asks for it.
 import type { BuiltinContext, Project, Repository, Session, TerminalQuickButton, Worktree } from '../shared.ts'
 
 interface Found {
@@ -31,8 +31,15 @@ export function quickButtonsFor(project: Project, sessionId: string): TerminalQu
 /**
  * What the session's built-ins resolve from, or null when the snapshot doesn't hold the session.
  * `agentLabel`: the session's agent as the server names it ("Claude"), when known.
+ * `ticketUrl`: a ticket's link through the project's trackers, or null; none by default.
  */
-export function quickButtonContext(project: Project, sessionId: string, agentLabel: string | undefined, now: Date): BuiltinContext | null {
+export function quickButtonContext(
+  project: Project,
+  sessionId: string,
+  agentLabel: string | undefined,
+  now: Date,
+  ticketUrl: (ticketId: string) => string | null = () => null
+): BuiltinContext | null {
   const found = find(project, sessionId)
   if (!found) return null
   const { session, repo, worktree } = found
@@ -43,7 +50,7 @@ export function quickButtonContext(project: Project, sessionId: string, agentLab
     branch && value !== undefined ? { [branch]: value } : undefined
   return {
     project: { name: project.name, worktreeTags: project.settings.worktreeTags, customTags: project.settings.customTags },
-    ticketUrl: () => null,
+    ticketUrl,
     repo: repo && {
       name: repo.name,
       path: repo.path,

@@ -1,4 +1,5 @@
-// What the phone takes from the repo's shared protocol code (Metro watches ../../src/shared).
+// What the phone takes from the repo's shared protocol code and from the ticket plugins' pure
+// shared files (Metro watches ../../src/shared and ../../plugins).
 // Keep in step with MOBILE_ENTRIES in scripts/sharedForMobile.test.mjs.
 export * from '../../../src/shared/client/index.ts'
 export type * from '../../../src/shared/model/topics.ts'
@@ -12,3 +13,11 @@ export type { PromoteRequestEvent, PromoteSettledEvent } from '../../../src/shar
 export { ALL_PUSH_KINDS_ON, PUSH_GROUPS } from '../../../src/shared/push.ts'
 export type { PushKinds, PushGroup, PushData } from '../../../src/shared/push.ts'
 export type { PushStatusResult } from '../../../src/shared/protocolV2.ts'
+export { pluginEnabled } from '../../../src/shared/plugins/manifest.ts'
+export type { PluginManifest, PluginPresence, ProjectPluginSettings } from '../../../src/shared/plugins/manifest.ts'
+export type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
+export { ticketLinkPlan, ticketView as providerTicketView } from '../../../src/shared/tickets.ts'
+export { LINEAR_MANIFEST } from '../../../plugins/linear/manifest.ts'
+export { linearTickets } from '../../../plugins/linear/shared/ticket.ts'
+export { AZURE_DEVOPS_MANIFEST } from '../../../plugins/azure-devops/manifest.ts'
+export { azureDevOpsTickets } from '../../../plugins/azure-devops/shared/ticket.ts'

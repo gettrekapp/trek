@@ -329,8 +329,7 @@ or stopped, pull request notices. From there: a server's projects, a worktree (l
 unload it, start a session with an agent or session type, close or restart one, its
 read-only Changes), and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
 arrows, y, n), a prompt box that sends now or queues, and the project's quick
-buttons (run only: a button that asks for input opens a sheet for it; `[ticket_url]`
-has no value on the phone, so it is asked for too). While a project is open on
+buttons (run only: a button that asks for input opens a sheet for it). While a project is open on
 the phone, an agent's `promote_to_primary` can be confirmed there, unless the
 worktree's dev stack or Docker VM is running (then only the desktop can, since it
 tears them down first).

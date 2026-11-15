@@ -164,8 +164,10 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
      - A button with plain text or built-ins that have a value (`[branch]`) sends at once.
      - A button with an `{INPUT}` (marked ⌨) opens a sheet: the field, a preview that follows
        what is typed, **Send** and **Cancel**. Text in the prompt box is still there afterwards.
-     - A button using `[ticket_url]`, or `[ticket]` on a branch without one, opens the sheet
-       with that field marked "no value here".
+     - A button using `[ticket_url]` on a branch whose ticket links (the project has its
+       tracker's setting: the Linear workspace, the Azure DevOps project URL) sends the link at
+       once. Without that setting, or with `[ticket]` on a branch without a ticket, it opens
+       the sheet with that field marked "no value here".
      - Add a button on the desktop: it appears on the phone without reopening the screen.
      - With the sheet open and the keyboard up, the fields, the preview and **Send** are all visible above the keyboard, on iOS and on Android (not checked on a device yet).
      - With the sheet open and something typed, send the app to the background for 30 s and come back: the sheet and what was typed are still there; with the server out of reach, **Send** shows the error in the sheet and keeps it open.

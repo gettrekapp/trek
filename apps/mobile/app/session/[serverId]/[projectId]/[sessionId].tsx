@@ -10,6 +10,7 @@ import { WebView as RNWebView, type WebViewMessageEvent } from 'react-native-web
 import { CAPABILITY, fillTemplate, parseTemplate, planQuickButton, resolveBuiltins } from '../../../../src/shared.ts'
 import type { AgentInfo, BuiltinValues, Project, QuickButtonPlan, Session, TerminalQuickButton } from '../../../../src/shared.ts'
 import { quickButtonContext, quickButtonsFor } from '../../../../src/logic/quickButtons.ts'
+import { activeTicketProviders, ticketView } from '../../../../src/logic/tickets.ts'
 import { errorMessage, useConnectionNotice, useServer, useServerStatus, useTopic } from '../../../../src/state/hooks.ts'
 import { KEY_BAR } from '../../../../src/logic/keys.ts'
 import { sessionPlaceholder } from '../../../../src/logic/connection.ts'
@@ -167,7 +168,9 @@ export default function SessionScreen(): React.JSX.Element {
   const pressQuick = (button: TerminalQuickButton): void => {
     if (!project || !session) return
     const agent = agents.find((a) => a.provider === session.llm.provider)?.label
-    const ctx = quickButtonContext(project, sessionId, agent, new Date())
+    // [ticket_url]: the ticket's link through the trackers on for the project.
+    const trackers = activeTicketProviders(server?.connection.welcome, project.settings)
+    const ctx = quickButtonContext(project, sessionId, agent, new Date(), (ticketId) => ticketView(trackers, project.settings, ticketId).url)
     if (!ctx) return
     const builtins = resolveBuiltins(ctx)
     const plan = planQuickButton(button.text, builtins)

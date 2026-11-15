@@ -2,7 +2,8 @@
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
 // the ref counts, the connection notices, the per-server generations, the held topic view and
 // the value a promote request waits for, the quick buttons' list and built-in context, and the
-// rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow).
+// rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow)
+// and a ticket's label, link and input through the project's trackers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -14,6 +15,7 @@ import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/c
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
+import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -461,6 +463,17 @@ test('TerminalFeed: a Windows server\'s pty sets xterm up for ConPTY before the 
   ])
 })
 
+const tkServer = (over = {}) => ({
+  capabilities: [],
+  plugins: [
+    { id: 'voice', version: '1.0.0', defaultEnabled: true },
+    { id: 'linear', version: '1.0.0', defaultEnabled: true },
+    { id: 'azure-devops', version: '1.0.0', defaultEnabled: true }
+  ],
+  ...over
+})
+const tkIds = (server, settings = {}) => activeTicketProviders(server, settings).map((p) => p.id)
+
 const qbSession = (id, extra = {}) => ({ id, title: `tab ${id}`, llm: { provider: 'claude' }, queue: [], status: 'idle', ...extra })
 const qbWorktree = (id, branch, sessions) => ({ id, name: branch, path: `/r/trek-${branch}`, branch, isMain: false, loaded: true, sessions })
 const qbProject = () => ({
@@ -498,7 +511,7 @@ test('quick buttons: a worktree session gets the project buttons, a Global sessi
   assert.deepEqual(quickButtonsFor(project, 'g'), [])
 })
 
-test('quick buttons: every built-in from the snapshot, except ticket_url', () => {
+test('quick buttons: every built-in from the snapshot; ticket_url only with a link lookup', () => {
   const ctx = quickButtonContext(qbProject(), 's1', 'Claude', qbNow)
   assert.deepEqual(resolveBuiltins(ctx), {
     worktree_id: 'w1',
@@ -522,8 +535,28 @@ test('quick buttons: every built-in from the snapshot, except ticket_url', () =>
     date: '2026-11-15',
     time: '09:05'
   })
-  // A button using [ticket_url] asks for it on the phone.
+  // Without a lookup (or with one that has no link), a button using [ticket_url] asks for it.
   assert.deepEqual(planQuickButton('see [ticket_url]', resolveBuiltins(ctx)), { inputs: [], missing: ['ticket_url'], needsModal: true })
+  const noLink = quickButtonContext(qbProject(), 's1', 'Claude', qbNow, () => null)
+  assert.equal(resolveBuiltins(noLink).ticket_url, undefined)
+
+  // With the project's trackers' lookup, it is the ticket's link.
+  const asked = []
+  const linked = quickButtonContext(qbProject(), 's1', 'Claude', qbNow, (id) => {
+    asked.push(id)
+    return `https://linear.app/acme/issue/${id}`
+  })
+  const values = resolveBuiltins(linked)
+  assert.equal(values.ticket_url, 'https://linear.app/acme/issue/TOW-12')
+  assert.deepEqual(asked, ['TOW-12'])
+  assert.deepEqual(planQuickButton('see [ticket_url]', values), { inputs: [], missing: [], needsModal: false })
+
+  // The session screen's lookup: the providers on for the project, and its settings.
+  const project = qbProject()
+  project.settings.linearWorkspace = 'acme'
+  const providers = activeTicketProviders(tkServer(), project.settings)
+  const viaTrackers = quickButtonContext(project, 's1', 'Claude', qbNow, (id) => ticketView(providers, project.settings, id).url)
+  assert.equal(resolveBuiltins(viaTrackers).ticket_url, 'https://linear.app/acme/issue/TOW-12')
 })
 
 test('quick buttons: what has no value: an unknown agent id or label, a branch without data, a Global session', () => {
@@ -699,4 +732,60 @@ test('worktrees: a failed removal loads again what the phone unloaded, and never
   const askFails = removal({ loaded: true }, { remove: rejects(dirtyRefusal()), confirmDiscard: rejects(boom) })
   assert.deepEqual(await askFails.run(), { kind: 'failed', error: boom })
   assert.deepEqual(askFails.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+})
+
+test("tickets: the providers on for the project, by the server's plugin list and the project's plugins setting", () => {
+  assert.deepEqual(tkIds(tkServer()), ['linear', 'azure-devops'])
+  assert.deepEqual(tkIds(tkServer(), { plugins: { linear: { enabled: false } } }), ['azure-devops'])
+  assert.deepEqual(tkIds(tkServer(), { plugins: { linear: { enabled: false }, 'azure-devops': { enabled: false } } }), [])
+  // The server's default decides a project with no setting, not the app's manifest.
+  const offByDefault = tkServer({ plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: false }, { id: 'azure-devops', version: '1.0.0', defaultEnabled: true }] })
+  assert.deepEqual(tkIds(offByDefault), ['azure-devops'])
+  assert.deepEqual(tkIds(offByDefault, { plugins: { linear: { enabled: true } } }), ['linear', 'azure-devops'])
+  // A server that lists plugins but not this one does not have it.
+  assert.deepEqual(tkIds(tkServer({ plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: true }] })), ['linear'])
+  assert.deepEqual(tkIds(tkServer({ plugins: [] })), [])
+  // No welcome yet.
+  assert.deepEqual(tkIds(undefined), [])
+  assert.deepEqual(tkIds(null), [])
+})
+
+test('tickets: a server older than plugins has Azure DevOps built in, and Linear with its capability; always on there', () => {
+  assert.deepEqual(tkIds({ capabilities: ['agents', 'linear'] }), ['linear', 'azure-devops'])
+  assert.deepEqual(tkIds({ capabilities: ['agents'] }), ['azure-devops'])
+  assert.deepEqual(tkIds({}), ['azure-devops'])
+  // The project's plugins setting is not read there.
+  assert.deepEqual(tkIds({ capabilities: ['linear'] }, { plugins: { linear: { enabled: false }, 'azure-devops': { enabled: false } } }), ['linear', 'azure-devops'])
+})
+
+test("tickets: a ticket's label and link from the project's settings; the raw id with no provider", () => {
+  const providers = activeTicketProviders(tkServer(), {})
+  assert.deepEqual(ticketView(providers, { linearWorkspace: 'acme' }, 'TOW-12'), { label: 'TOW-12', url: 'https://linear.app/acme/issue/TOW-12' })
+  assert.deepEqual(ticketView(providers, {}, 'TOW-12'), { label: 'TOW-12', url: null })
+  assert.deepEqual(ticketView(providers, { linearWorkspace: '' }, 'TOW-12'), { label: 'TOW-12', url: null })
+  assert.deepEqual(ticketView(providers, { azureDevOpsBaseUrl: 'https://dev.azure.com/org/Proj/' }, '123'), { label: '#123', url: 'https://dev.azure.com/org/Proj/_workitems/edit/123' })
+  assert.deepEqual(ticketView(providers, { linearWorkspace: 'acme' }, '123'), { label: '#123', url: null })
+  assert.deepEqual(ticketView(providers, { linearWorkspace: 'acme' }, 'whatever'), { label: 'whatever', url: null })
+
+  // Linear turned off for the project: nothing owns its ids.
+  const settings = { linearWorkspace: 'acme', plugins: { linear: { enabled: false } } }
+  assert.deepEqual(ticketView(activeTicketProviders(tkServer(), settings), settings, 'TOW-12'), { label: 'TOW-12', url: null })
+  assert.deepEqual(ticketView([], settings, '123'), { label: '123', url: null })
+})
+
+test("tickets: typed or pasted input is taken as the desktop's ticket dialog takes it", () => {
+  const both = activeTicketProviders(tkServer(), {})
+  const linearOnly = activeTicketProviders(tkServer(), { plugins: { 'azure-devops': { enabled: false } } })
+  assert.deepEqual(parseTicketInput(both, 'https://linear.app/acme/issue/tow-12/fix-login'), { ticketId: 'TOW-12' })
+  assert.deepEqual(parseTicketInput(both, '  tow-12 '), { ticketId: 'TOW-12' })
+  assert.deepEqual(parseTicketInput(both, '123'), { ticketId: '123' })
+  assert.deepEqual(parseTicketInput(both, 'https://dev.azure.com/org/Proj/_workitems/edit/123'), { ticketId: '123' })
+
+  // What no tracker on in the project reads is refused, saying what they take.
+  assert.deepEqual(parseTicketInput(both, 'fix the login'), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
+  assert.deepEqual(parseTicketInput(linearOnly, '123'), { error: 'Enter a Linear issue id (TOW-123) or issue URL.' })
+  assert.deepEqual(parseTicketInput(linearOnly, 'https://dev.azure.com/org/Proj/_workitems/edit/123'), { error: 'Enter a Linear issue id (TOW-123) or issue URL.' })
+  assert.deepEqual(parseTicketInput(both, ''), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
+  assert.deepEqual(parseTicketInput(both, '   '), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
+  assert.deepEqual(parseTicketInput([], 'TOW-12'), { error: 'No ticket tracker is on in this project (Settings → Plugins).' })
 })
