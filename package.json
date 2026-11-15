@@ -1,7 +1,7 @@
 {
   "name": "trek-developer",
   "productName": "Trek",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Multi-worktree Claude workspace manager",
   "license": "MIT",
   "main": "out/main/index.js",
