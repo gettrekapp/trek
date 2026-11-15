@@ -31,15 +31,18 @@ import {
   MAX_LINES_SHOWN,
   REVIEW_CHANGED,
   barText,
+  boxAfter,
   canComment,
   canSaveComment,
   commentPlace,
   commitRow,
+  discardQuestion,
   draftOnDiff,
   editConflicted,
   editOf,
   editorAfter,
   elsewherePlace,
+  fileMark,
   fileReview,
   gutter,
   hasUnsavedText,
@@ -51,6 +54,7 @@ import {
   noTargetsText,
   reviewFailure,
   saveRequest,
+  sendQuestion,
   sendTargets,
   writingOn
 } from '../apps/mobile/src/logic/review.ts'
@@ -1657,6 +1661,14 @@ test('review: a large patch opens with its first 2,000 lines, and a button for t
   assert.deepEqual(lineCap({ byLine, newAt: 2000 }, 10000, false), { shown: 2001, more: 'Show all 10,000 lines · 2 comments further down' })
   assert.deepEqual(lineCap({ byLine, newAt: 9999 }, 10000, false), { shown: 10000, more: null })
   assert.deepEqual(lineCap({ byLine, newAt: 5 }, 10000, false), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
+  // So is the line of a comment being edited: its box is drawn when the file is opened again.
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false, 'c6'), { shown: 7001, more: 'Show all 10,000 lines' })
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false, 'c3'), { shown: 2001, more: 'Show all 10,000 lines · 2 comments further down' })
+  assert.deepEqual(lineCap({ byLine, newAt: 2500 }, 10000, false, 'c3'), { shown: 2501, more: 'Show all 10,000 lines · 2 comments further down' })
+  // One in the first lines, one that is not under a line of this file, and none.
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false, 'c1'), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false, 'c4'), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false, null), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
 })
 
 test('review: what the phone sends is what the server takes, and a saved draft reads back as shown', () => {
@@ -1690,6 +1702,96 @@ test("review: after an edit's conflict the box keeps going, guarded by the comme
   // The comment went meanwhile (sent, deleted): nothing to edit.
   assert.equal(editConflicted(edit, { revision: 8, comments: [onRemoved] }), null)
   assert.equal(editConflicted(edit, undefined), null)
+})
+
+test('review: a conflict on an edit whose text the comment already has is that edit, done: the box closes', () => {
+  // The reply to the first Save was lost (TIMEOUT, NOT_CONNECTED) though the server applied it;
+  // Save again is then refused, as the comment is no longer the body the edit began from.
+  const { worktree, call } = reviewServer({ revision: 6, comments: [onAdded] })
+  const edit = editOf(onAdded)
+  assert.equal(call('review.edit', saveRequest(edit, 'mine\r\nnow').params), null)
+  assert.equal(isReviewConflict(call('review.edit', saveRequest(edit, 'mine\r\nnow').params)), true)
+  assert.equal(editConflicted(edit, worktree.review, 'mine\r\nnow'), null)
+  // Compared as Save sends it (line breaks as LF), and nothing else: other text is a conflict.
+  assert.equal(editConflicted(edit, worktree.review, 'mine\rnow'), null)
+  assert.deepEqual(editConflicted(edit, worktree.review, 'mine now'), { kind: 'edit', commentId: 'c1', expected: 'mine\nnow', conflict: true })
+  assert.deepEqual(editConflicted(edit, worktree.review, 'mine\nnow '), { kind: 'edit', commentId: 'c1', expected: 'mine\nnow', conflict: true })
+  // Without the text (as before) it is a conflict.
+  assert.deepEqual(editConflicted(edit, worktree.review), { kind: 'edit', commentId: 'c1', expected: 'mine\nnow', conflict: true })
+})
+
+test('review: Send and Discard ask about a comment that is being written and not saved', () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  const edit = editOf(onAdded)
+  const unsaved = { title: 'Your comment is not saved', message: 'Send the review without it? What you typed is discarded.', confirm: 'Send without it' }
+  // Send asks nothing with no box, a blank new comment or an edit that changed nothing.
+  assert.equal(sendQuestion(null, 'x'), null)
+  assert.equal(sendQuestion(fresh, ' \n'), null)
+  assert.equal(sendQuestion(edit, 'body of c1'), null)
+  assert.deepEqual(sendQuestion(fresh, 'x'), unsaved)
+  assert.deepEqual(sendQuestion(edit, 'body of c1, better'), unsaved)
+
+  // Discard always asks; one question, which says so when a comment being written goes too.
+  const plain = { title: 'Discard 3 comments?', message: 'The review is deleted, on the desktop too. This cannot be undone.', confirm: 'Discard' }
+  assert.deepEqual(discardQuestion(3, null, ''), plain)
+  assert.deepEqual(discardQuestion(3, fresh, ''), plain)
+  assert.deepEqual(discardQuestion(3, edit, 'body of c1'), plain)
+  assert.equal(discardQuestion(1, null, '').title, 'Discard 1 comment?')
+  const both = { title: 'Discard 3 comments?', message: 'The review is deleted, on the desktop too. The comment you are writing is not saved, and is discarded too. This cannot be undone.', confirm: 'Discard' }
+  assert.deepEqual(discardQuestion(3, fresh, 'x'), both)
+  assert.deepEqual(discardQuestion(3, edit, ''), both)
+})
+
+test('review: a box that closes under the user says why, with what was typed', () => {
+  const paths = ['src/a.ts', 'src/b.ts']
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  const edit = editOf(onUncommitted)
+  const without = { revision: 7, comments: [onAdded] }
+  // Nothing closes: the same object, nothing said.
+  assert.deepEqual(boxAfter(null, 'x', DRAFT, BRANCH_SOURCE, paths), { editor: null, notice: null })
+  assert.equal(boxAfter(fresh, 'x', undefined, BRANCH_SOURCE, paths).editor, fresh)
+  assert.equal(boxAfter(fresh, 'x', undefined, BRANCH_SOURCE, paths).notice, null)
+  assert.equal(boxAfter(edit, 'x', DRAFT, BRANCH_SOURCE, paths).editor, edit)
+  assert.equal(boxAfter(edit, 'x', DRAFT, BRANCH_SOURCE, []).editor, edit)
+
+  // An edit whose comment went (sent, discarded or deleted on the desktop): the text typed is kept in the line.
+  assert.deepEqual(boxAfter(edit, 'mine\nand more', without, BRANCH_SOURCE, paths), {
+    editor: null,
+    notice: 'The comment you were editing is no longer in the review.\nYou had written: mine\nand more'
+  })
+  assert.deepEqual(boxAfter(edit, 'mine', undefined, BRANCH_SOURCE, null), { editor: null, notice: 'The comment you were editing is no longer in the review.\nYou had written: mine' })
+  // Emptied: it says so, with nothing to keep.
+  assert.deepEqual(boxAfter(edit, ' ', without, BRANCH_SOURCE, paths), { editor: null, notice: 'The comment you were editing is no longer in the review.' })
+  // Nothing changed in the box: it just closes.
+  assert.deepEqual(boxAfter(edit, 'body of c4', without, BRANCH_SOURCE, paths), { editor: null, notice: null })
+
+  // A new comment whose file a refresh took out of the diff: no row is left to draw its box in.
+  assert.deepEqual(boxAfter(fresh, 'why 3?', DRAFT, BRANCH_SOURCE, ['src/b.ts']), {
+    editor: null,
+    notice: 'The file you were commenting on is no longer in this diff.\nYou had written: why 3?'
+  })
+  assert.deepEqual(boxAfter(fresh, '', DRAFT, BRANCH_SOURCE, []), { editor: null, notice: 'The file you were commenting on is no longer in this diff.' })
+  // The file list is not there to judge by (not loaded yet): the box stays.
+  assert.equal(boxAfter(fresh, 'why 3?', DRAFT, BRANCH_SOURCE, null).editor, fresh)
+  // Another source is shown: the screen asked before showing it, so the box closes and nothing is said.
+  assert.deepEqual(boxAfter(fresh, 'why 3?', DRAFT, UNCOMMITTED, ['src/b.ts']), { editor: null, notice: null })
+  assert.deepEqual(boxAfter(fresh, 'why 3?', DRAFT, UNCOMMITTED, null), { editor: null, notice: null })
+
+  // Where editorAfter closes or keeps a box, so does this.
+  for (const [editor, draft, source] of [[fresh, DRAFT, BRANCH_SOURCE], [fresh, DRAFT, UNCOMMITTED], [edit, DRAFT, BRANCH_SOURCE], [edit, without, BRANCH_SOURCE], [null, DRAFT, BRANCH_SOURCE]]) {
+    assert.equal(boxAfter(editor, 'x', draft, source, paths).editor, editorAfter(editor, draft, source))
+  }
+})
+
+test("review: a file's header says a comment is being written on it, open or not", () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.equal(fileMark(fresh, BRANCH_SOURCE, 'src/a.ts', []), ' · writing a comment')
+  assert.equal(fileMark(fresh, BRANCH_SOURCE, 'src/b.ts', []), '')
+  assert.equal(fileMark(fresh, UNCOMMITTED, 'src/a.ts', []), '')
+  // An edit: on the file whose comments (on the shown diff) hold the one being edited.
+  assert.equal(fileMark(editOf(onRemoved), BRANCH_SOURCE, 'src/a.ts', [onAdded, onRemoved]), ' · writing a comment')
+  assert.equal(fileMark(editOf(onUncommitted), BRANCH_SOURCE, 'src/a.ts', [onAdded, onRemoved]), '')
+  assert.equal(fileMark(null, BRANCH_SOURCE, 'src/a.ts', [onAdded]), '')
 })
 
 test("review: a draft goes to one of a loaded worktree's open sessions, newest first", () => {

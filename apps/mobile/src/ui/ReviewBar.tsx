@@ -68,7 +68,7 @@ export function ReviewBar({ draft, elsewhere, targets, noTargets, inset, onSend,
       {showElsewhere ? (
         <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
           {elsewhere.map((c) => (
-            <CommentView key={c.id} comment={c} where={elsewherePlace(c)} editable={false} />
+            <CommentView key={c.id} comment={c} where={elsewherePlace(c)} editable={false} inList={false} />
           ))}
         </ScrollView>
       ) : null}

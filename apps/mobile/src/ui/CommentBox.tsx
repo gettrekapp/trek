@@ -24,7 +24,7 @@ export interface ReviewActions {
   cancel(): void
   /** Deletes a comment, after asking */
   remove(comment: ReviewComment): void
-  /** Scrolls the screen so the open box is in view (it was drawn, or the keyboard came up) */
+  /** Scrolls the screen's list so the open box, drawn in that list, is in view (it was drawn, or the keyboard came up) */
   reveal(box: ComponentRef<typeof View>): void
 }
 
@@ -50,22 +50,24 @@ export function useReview(): ReviewUi {
 /**
  * The open comment box: the text, Save and Cancel. `conflict` is the comment's body on the server
  * after it refused an edit because the comment changed meanwhile: shown under the user's text,
- * which the next Save puts in its place.
+ * which the next Save puts in its place. `inList` false is a box drawn outside the screen's list (in
+ * the bar, which is always on screen): the list is not scrolled for it.
  */
-export function CommentBox({ conflict }: { conflict?: string }): React.JSX.Element {
+export function CommentBox({ conflict, inList = true }: { conflict?: string; inList?: boolean }): React.JSX.Element {
   const { busy, canWrite, actions } = useReview()
   const [text, setText] = useState(() => actions.text.current)
   const box = useRef<ComponentRef<typeof View>>(null)
   const show = (): void => {
-    if (box.current) actions.reveal(box.current)
+    if (inList && box.current) actions.reveal(box.current)
   }
   // The keyboard comes up over the box that was just opened under the tapped line.
   useEffect(() => {
+    if (!inList) return
     const shown = Keyboard.addListener('keyboardDidShow', () => {
       if (box.current) actions.reveal(box.current)
     })
     return () => shown.remove()
-  }, [actions])
+  }, [actions, inList])
   return (
     <View ref={box} collapsable={false} onLayout={show} style={styles.box}>
       <TextInput
@@ -100,16 +102,17 @@ export function CommentBox({ conflict }: { conflict?: string }): React.JSX.Eleme
 /**
  * A comment of the draft: where it was written (`where`, for one not under its line), its body,
  * Edit and Delete; the box in its place while it is edited. `editable` false leaves Edit out (the
- * bar's "elsewhere" list).
+ * bar's "elsewhere" list); `inList` false is a comment drawn outside the screen's list (the same
+ * list), whose box the screen's list is not scrolled to.
  */
-export function CommentView({ comment, where, editable = true }: { comment: ReviewComment; where?: string; editable?: boolean }): React.JSX.Element {
+export function CommentView({ comment, where, editable = true, inList = true }: { comment: ReviewComment; where?: string; editable?: boolean; inList?: boolean }): React.JSX.Element {
   const { edit, busy, canWrite, actions } = useReview()
   const off = busy || !canWrite
   return (
     <View style={styles.comment}>
       {where ? <Text style={ui.muted}>{where}</Text> : null}
       {edit?.commentId === comment.id ? (
-        <CommentBox conflict={edit.conflict ? edit.expected : undefined} />
+        <CommentBox conflict={edit.conflict ? edit.expected : undefined} inList={inList} />
       ) : (
         <>
           <Text style={ui.text}>{comment.body}</Text>

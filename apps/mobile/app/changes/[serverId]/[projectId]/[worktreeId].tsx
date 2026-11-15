@@ -31,17 +31,20 @@ import { useServers } from '../../../../src/state/ServersProvider.tsx'
 import { classifyDiff } from '../../../../src/logic/diff.ts'
 import {
   barText,
+  boxAfter,
   commitRow,
+  discardQuestion,
   draftOnDiff,
   editConflicted,
   editOf,
-  editorAfter,
+  fileMark,
   hasUnsavedText,
   isReviewConflict,
   newCommentAt,
   noTargetsText,
   reviewFailure,
   saveRequest,
+  sendQuestion,
   sendTargets,
   writingOn,
   type CommentEditor,
@@ -68,11 +71,25 @@ export default function ChangesScreen(): React.JSX.Element {
   const review = useRef<boolean | null>(null)
   const welcome = server?.connection.welcome
   if (welcome) review.current = welcome.capabilities.includes(CAPABILITY.review)
+  // Not known before the connection's first welcome: neither screen is shown (and nothing asked of
+  // the server) until it is, so a server with `review` never shows the read-only one first.
+  if (server && review.current === null) return <Waiting serverId={serverId} />
   return review.current ? (
     // Keyed by the worktree: a comment begun on one is never saved to another.
     <ReviewChanges key={`${serverId}\n${projectId}\n${worktreeId}`} serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
   ) : (
     <ReadOnlyChanges serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+  )
+}
+
+/** Until the server's first welcome says whether it has `review`; with why, when it is not connected. */
+function Waiting({ serverId }: { serverId: string }): React.JSX.Element {
+  const notice = useConnectionNotice(serverId)
+  return (
+    <View style={[ui.screen, ui.pad]}>
+      {notice ? <Text style={ui.warn}>{notice}</Text> : null}
+      <Text style={ui.muted}>Loading…</Text>
+    </View>
   )
 }
 
@@ -247,7 +264,20 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
       setPatches((held) => ({ view: askedView, value: file && held?.view === askedView && Object.hasOwn(held.value, file.path) ? { [file.path]: held.value[file.path] } : {} }))
       if (file && !noteOnly(file)) await readPatch(server.connection, id, asked, askedView, file.path)
     } catch (err) {
-      if (current()) setError({ view: askedView, value: errorMessage(err) })
+      if (current()) {
+        const message = errorMessage(err)
+        setError({ view: askedView, value: message })
+        // The open file's patch may have been asked for by the load before this one: that answer is
+        // dropped as stale, and this load never got to read it. Without a patch it would say
+        // "Loading…" for good, so it is held as not read (opening the file again asks once more).
+        const shown = openRef.current
+        if (shown !== null) {
+          setPatches((held) => {
+            const have = held?.view === askedView ? held.value : {}
+            return Object.hasOwn(have, shown) ? held : { view: askedView, value: { ...have, [shown]: { error: message } } }
+          })
+        }
+      }
     } finally {
       if (current()) setLoading(false)
     }
@@ -305,6 +335,8 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const draftRef = useRef(draft)
   draftRef.current = draft
   const onDiff = useMemo(() => draftOnDiff(draft, source, files.map((f) => f.path)), [draft, source, files])
+  /** The shown source's file list as paths; null until it has loaded. */
+  const shownPaths = useMemo(() => (changes ? changes.files.map((f) => f.path) : null), [changes])
 
   // ── The comment box and the review's requests ──
   const [editor, setEditor] = useState<CommentEditor | null>(null)
@@ -318,12 +350,18 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const running = useRef(false)
   const asking = useRef(false)
 
-  // The box closes when its comment is gone or another source is shown (never for a topic that is
-  // only away: the snapshot it is judged by is the last one read).
+  // The box closes when its comment is gone (never for a topic that is only away: the snapshot it
+  // is judged by is the last one read), when another source is shown, or when a refresh took its
+  // file out of the diff. What was typed in a box that closes under the user is put in the error line.
   const known = project !== null
   useEffect(() => {
-    if (known) setEditor((now) => editorAfter(now, draft, source))
-  }, [known, draft, source])
+    const now = editorRef.current
+    if (!now || (now.kind === 'edit' && !known)) return
+    const after = boxAfter(now, text.current, draft, source, shownPaths)
+    if (after.editor === now) return
+    setEditor((latest) => (latest === now ? after.editor : latest))
+    if (after.notice !== null) setReviewError(after.notice)
+  }, [known, draft, source, shownPaths])
 
   /** A question before something that cannot be taken back; false when it is declined, or cannot be asked now. */
   const ask = async (title: string, message: string, confirm: string): Promise<boolean> => {
@@ -396,8 +434,10 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
             (err) => {
               if (saving.kind !== 'edit' || !isReviewConflict(err)) return false
               // The box stays open with the user's text; the next Save is guarded by the comment's
-              // body on the server, shown under it. Never saved again by itself.
-              setEditor((now) => (now === saving ? editConflicted(saving, draftRef.current) : now))
+              // body on the server, shown under it. Never saved again by itself. Unless that body
+              // is the text being saved: an earlier Save's reply was lost, and the box closes.
+              const saved = text.current
+              setEditor((now) => (now === saving ? editConflicted(saving, draftRef.current, saved) : now))
               return true
             }
           )
@@ -411,13 +451,26 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
     void request('remove', (conn) => conn.request('review.remove', { ...ref, commentId: comment.id }))
   }
 
-  /** `revision` is the draft's as the bar showed it when the session was tapped: a draft that changed since is refused, and not sent again. */
-  const send = (sessionId: string, revision: number): void => {
+  /**
+   * `revision` is the draft's as the bar showed it when the session was tapped: a draft that changed
+   * since is refused, and not sent again. Unsaved text in the open box is not part of what is sent:
+   * that is asked about first. Declined, nothing is sent and the box stays; agreed, the box closes.
+   */
+  const send = async (sessionId: string, revision: number): Promise<void> => {
+    const question = sendQuestion(editorRef.current, text.current)
+    if (question) {
+      if (!(await ask(question.title, question.message, question.confirm))) return
+      setEditor(null)
+    }
     void request('send', (conn) => conn.request('review.send', { ...ref, sessionId, revision }))
   }
 
+  /** One question, which also says so when a comment being written is discarded with the review; its box then closes. */
   const discard = async (revision: number, count: number): Promise<void> => {
-    if (!(await ask(`Discard ${barText(count, 0).count}?`, 'The review is deleted, on the desktop too. This cannot be undone.', 'Discard'))) return
+    const unsaved = hasUnsavedText(editorRef.current, text.current)
+    const question = discardQuestion(count, editorRef.current, text.current)
+    if (!(await ask(question.title, question.message, question.confirm))) return
+    if (unsaved) setEditor(null)
     void request('clear', (conn) => conn.request('review.clear', { ...ref, revision }))
   }
 
@@ -541,6 +594,7 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
                       {f.status}
                       {f.binary ? ' · binary' : ` · +${f.added} −${f.deleted}`}
                       {comments.length > 0 ? <Text style={{ color: colors.accent }}>{` · ${barText(comments.length, 0).count}`}</Text> : null}
+                      <Text style={{ color: colors.attention }}>{fileMark(editor, source, f.path, comments)}</Text>
                     </Text>
                   </Pressable>
                   {expanded ? (
@@ -548,9 +602,10 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
                       file={f}
                       patch={read && 'patch' in read ? read.patch : undefined}
                       loading={read === undefined && !noteOnly(f)}
-                      failed={read && 'error' in read ? read.error : null}
+                      failed={read && 'error' in read && !noteOnly(f) ? read.error : null}
                       comments={comments}
                       writing={writingOn(editor, source, f.path)}
+                      editingId={edit && comments.some((c) => c.id === edit.commentId) ? edit.commentId : null}
                       canWrite={canWrite}
                       onOpen={actions.openNew}
                     />
@@ -561,12 +616,15 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
           </ScrollView>
         </View>
         {reviewError ? (
-          <Text accessibilityRole="alert" style={[ui.error, styles.error, hasDraft ? null : { paddingBottom: 8 + inset }]}>
-            {reviewError}
-          </Text>
+          // It can carry a whole comment that was being written: it scrolls, so the bar stays on screen, and its text can be copied.
+          <ScrollView style={styles.errorPort} contentContainerStyle={[styles.error, hasDraft ? null : { paddingBottom: 8 + inset }]} keyboardShouldPersistTaps="handled">
+            <Text accessibilityRole="alert" selectable style={ui.error}>
+              {reviewError}
+            </Text>
+          </ScrollView>
         ) : null}
         {hasDraft ? (
-          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} inset={inset} onSend={send} onDiscard={(revision, count) => void discard(revision, count)} />
+          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} inset={inset} onSend={(sessionId, revision) => void send(sessionId, revision)} onDiscard={(revision, count) => void discard(revision, count)} />
         ) : null}
       </ReviewContext.Provider>
     </KeyboardAvoidingView>
@@ -576,5 +634,6 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
 const styles = StyleSheet.create({
   port: { flex: 1 },
   commit: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
-  error: { backgroundColor: colors.panel, paddingHorizontal: 16, paddingTop: 8 }
+  errorPort: { maxHeight: 200, flexGrow: 0, backgroundColor: colors.panel },
+  error: { paddingHorizontal: 16, paddingTop: 8 }
 })

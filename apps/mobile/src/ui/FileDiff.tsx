@@ -85,9 +85,10 @@ const Row = memo(function Row({ line, path, oldNumber, newNumber, numberWidth, c
 
 /**
  * Its props stay the same across a save, a delete or an opened edit (`writing` is the new comment's
- * box only for the file it is on), and across typing, so the rows are not drawn again for those.
+ * box, and `editingId` the edited comment, only for the file it is on), and across typing, so the
+ * rows are not drawn again for those.
  */
-export const FileDiff = memo(function FileDiff({ file, patch, loading, failed, comments, writing, canWrite, onOpen }: {
+export const FileDiff = memo(function FileDiff({ file, patch, loading, failed, comments, writing, editingId, canWrite, onOpen }: {
   file: ChangedFile
   /** The file's patch for the shown source; undefined while it loads, when it failed, and when there is none */
   patch: string | undefined
@@ -98,6 +99,8 @@ export const FileDiff = memo(function FileDiff({ file, patch, loading, failed, c
   comments: readonly ReviewComment[]
   /** The new comment being written on this file (writingOn), if any */
   writing: NewComment | null
+  /** The id of the comment being edited, when it is one of this file's `comments`; null otherwise */
+  editingId: string | null
   canWrite: boolean
   /** Opens the box for a new comment on a line of this file */
   onOpen(path: string, line: NumberedLine): void
@@ -122,7 +125,7 @@ export const FileDiff = memo(function FileDiff({ file, patch, loading, failed, c
     return String(most).length * 8 + 6
   }, [numbers])
   const [showAll, setShowAll] = useState(false)
-  const cap = lineCap(review, lines?.length ?? 0, showAll)
+  const cap = lineCap(review, lines?.length ?? 0, showAll, editingId)
 
   // The part of the diff on screen: its width (the window's, less the screen's and the card's
   // padding, until it is measured) and how far it is scrolled to the right, once a scroll ends.

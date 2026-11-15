@@ -1,5 +1,6 @@
 // The Changes screen's review: which of the draft's comments sit where on the shown diff, the
-// draft bar's text, the comment box's state (new / edit / conflict) and what it sends, the server's
+// draft bar's text, the comment box's state (new / edit / conflict) and what it sends, what becomes
+// of a box with unsaved text when the review is sent or discarded or its place goes, the server's
 // refusals and what the error line says (also for a reply that was lost), a patch's line numbers and
 // how many of a large patch's lines are drawn, the sessions a draft can go to, and a commit's row. The
 // rules are the desktop's (ChangesPanel.tsx, WorktreeDetail.tsx' reviewTargets) and the server's
@@ -86,10 +87,16 @@ export function editOf(comment: ReviewComment): CommentEdit {
  * stays (it is the screen's), and the next save is guarded by the comment's body now, from the
  * snapshot's `draft`, which the box shows as `expected`, so it overwrites knowingly. Null when the
  * comment is no longer in the draft: there is nothing to edit, and the box closes.
+ *
+ * Null also when the comment's body now is `text`, the text being saved, as Save sends it: the edit
+ * is done, and there is no conflict to show. That is a Save whose reply was lost (`isReplyLost`)
+ * though the server applied it, saved again: refused, as the comment is no longer what the edit
+ * began from.
  */
-export function editConflicted(edit: CommentEdit, draft: ReviewDraft | undefined): CommentEdit | null {
+export function editConflicted(edit: CommentEdit, draft: ReviewDraft | undefined, text?: string): CommentEdit | null {
   const current = draft?.comments.find((c) => c.id === edit.commentId)
-  return current ? { ...edit, expected: current.body, conflict: true } : null
+  if (!current || (text !== undefined && current.body === bodyOf(text))) return null
+  return { ...edit, expected: current.body, conflict: true }
 }
 
 /**
@@ -115,6 +122,66 @@ export function hasUnsavedText(editor: CommentEditor | null, text: string): bool
 
 /** A pasted CR LF or CR is a line break: the server takes LF only, as a browser's textarea gives the desktop. */
 const bodyOf = (text: string): string => text.replace(/\r\n?/g, '\n')
+
+/** A question asked before something that cannot be taken back: an alert's title, message and confirming button. */
+export interface Question {
+  title: string
+  message: string
+  confirm: string
+}
+
+/**
+ * What Send asks first, or null when it asks nothing: the open box has unsaved text
+ * (`hasUnsavedText`), which is not part of the review that is sent (an edit's comment goes as it
+ * was saved). Declined: nothing is sent and the box stays. Agreed: the box closes, then the send.
+ */
+export function sendQuestion(editor: CommentEditor | null, text: string): Question | null {
+  if (!hasUnsavedText(editor, text)) return null
+  return { title: 'Your comment is not saved', message: 'Send the review without it? What you typed is discarded.', confirm: 'Send without it' }
+}
+
+/**
+ * What Discard asks, for a draft of `count` comments: one question, which also says that the
+ * comment being written goes when the open box has unsaved text. Agreed: that box closes, then the
+ * discard.
+ */
+export function discardQuestion(count: number, editor: CommentEditor | null, text: string): Question {
+  const unsaved = hasUnsavedText(editor, text) ? ' The comment you are writing is not saved, and is discarded too.' : ''
+  return { title: `Discard ${barText(count, 0).count}?`, message: `The review is deleted, on the desktop too.${unsaved} This cannot be undone.`, confirm: 'Discard' }
+}
+
+/** What the error line says when a box closed under the user: why, and what was typed (if anything), so it is not lost. */
+const closedNotice = (why: string, text: string): string => (text.trim() === '' ? why : `${why}\nYou had written: ${text}`)
+
+/**
+ * `editorAfter`, with the file list and what the user is told: the open box after the snapshot's
+ * draft, the shown source or its file list changed, and the error line's text when the box closed
+ * with something to say (null otherwise). `text` is what is typed in the box; `shownPaths` the
+ * paths of the shown source's file list, or null while there is none to judge by (not loaded).
+ * - An edit whose comment is gone (sent, discarded or deleted elsewhere) closes; with unsaved text
+ *   the line says so and carries the text.
+ * - A new comment whose file is no longer in the diff (a refresh took it out) closes, as no row is
+ *   left to draw its box in; the line says so and carries the text.
+ * - A new comment closes without a word when another source is shown: the screen asked first.
+ */
+export function boxAfter(
+  editor: CommentEditor | null,
+  text: string,
+  draft: ReviewDraft | undefined,
+  source: ChangesSource,
+  shownPaths: readonly string[] | null
+): { editor: CommentEditor | null; notice: string | null } {
+  const after = editorAfter(editor, draft, source)
+  if (!editor) return { editor: null, notice: null }
+  if (!after) {
+    const lost = editor.kind === 'edit' && hasUnsavedText(editor, text)
+    return { editor: null, notice: lost ? closedNotice('The comment you were editing is no longer in the review.', text) : null }
+  }
+  if (editor.kind === 'new' && shownPaths !== null && !shownPaths.includes(editor.path)) {
+    return { editor: null, notice: closedNotice('The file you were commenting on is no longer in this diff.', text) }
+  }
+  return { editor: after, notice: null }
+}
 
 /** Whether Save is offered for the box's text: not blank, and at most MAX_REVIEW_BODY characters. */
 export function canSaveComment(text: string): boolean {
@@ -143,6 +210,17 @@ export function saveRequest(editor: CommentEditor | null, text: string): SaveReq
 /** The new comment being written on `path` of the shown `source`, for that file's `fileReview`; null for any other file, source or box. */
 export function writingOn(editor: CommentEditor | null, source: ChangesSource, path: string): NewComment | null {
   return editor?.kind === 'new' && editor.path === path && sameSource(editor.source, source) ? editor : null
+}
+
+/**
+ * What a file's header adds while the open box is on that file, drawn or not (the file may be
+ * folded, or the box far down it): a new comment on `path` of the shown `source`, or an edit of one
+ * of `comments`, the file's comments on the shown diff (its `draftOnDiff().byPath` entry).
+ */
+export function fileMark(editor: CommentEditor | null, source: ChangesSource, path: string, comments: readonly ReviewComment[]): string {
+  if (!editor) return ''
+  const here = editor.kind === 'new' ? writingOn(editor, source, path) !== null : comments.some((c) => c.id === editor.commentId)
+  return here ? ' · writing a comment' : ''
 }
 
 /** One expanded file's comments and new comment box, placed on its numbered lines. */
@@ -223,13 +301,22 @@ const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g
 /**
  * How many of a file's `total` numbered lines are drawn, from the first, and the text of the button
  * that draws the rest (null when all are drawn): the first MAX_LINES_SHOWN until `showAll` (the
- * button was tapped), so opening a large patch never draws every row at once. The box of a comment
- * being written (`review.newAt`) is always among them. The button counts the comments under lines
- * it hides: "Show all 10,000 lines · 2 comments further down".
+ * button was tapped), so opening a large patch never draws every row at once. The open box is
+ * always among them: a comment being written (`review.newAt`), and the comment being edited
+ * (`editingId`, its id; null for none, and one that is not under a line of this file changes
+ * nothing). The button counts the comments under lines it hides: "Show all 10,000 lines · 2
+ * comments further down".
  */
-export function lineCap(review: Pick<FileReview, 'byLine' | 'newAt'>, total: number, showAll: boolean): { shown: number; more: string | null } {
+export function lineCap(
+  review: Pick<FileReview, 'byLine' | 'newAt'>,
+  total: number,
+  showAll: boolean,
+  editingId: string | null = null
+): { shown: number; more: string | null } {
   if (showAll || total <= MAX_LINES_SHOWN) return { shown: total, more: null }
-  const shown = Math.max(MAX_LINES_SHOWN, review.newAt + 1)
+  let editAt = -1
+  if (editingId !== null) for (const [index, comments] of review.byLine) if (comments.some((c) => c.id === editingId)) editAt = index
+  const shown = Math.max(MAX_LINES_SHOWN, review.newAt + 1, editAt + 1)
   if (shown >= total) return { shown: total, more: null }
   let below = 0
   for (const [index, comments] of review.byLine) if (index >= shown) below += comments.length
