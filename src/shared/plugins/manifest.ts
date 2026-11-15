@@ -109,9 +109,27 @@ export interface PluginPackage {
 }
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+const MAX_VERSION_CHARS = 64
 /** What only a built-in plugin may declare. */
 const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn'] as const
+/** Matches PLUGIN_ID_RE, and is a key of every plain object: `byId[id]` would find Object's own. */
+const UNUSABLE_IDS: readonly string[] = ['constructor']
+/** Control characters, and the format ones: bidi overrides, zero-width characters. */
+const UNSEEN_RE = /[\p{Cc}\p{Cf}]/u
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length
+
+/** A name or description, trimmed; undefined when it is not 1 to `max` characters a person can see. */
+function visibleText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  return text && text.length <= max && !UNSEEN_RE.test(text) ? text : undefined
+}
+
+/** A refused id as a problem shows it: the start of a long one, and nothing of what is not a string. */
+function echoedId(id: unknown): string {
+  if (typeof id !== 'string') return 'The id'
+  return JSON.stringify(id.length > 40 ? `${id.slice(0, 40)}…` : id)
+}
 
 /**
  * A package as it may be installed, or why it can't be. The manifest it returns has the known
@@ -124,18 +142,29 @@ export function checkPluginPackage(raw: unknown): { package: PluginPackage; prob
   if (!m || typeof m !== 'object' || Array.isArray(m)) return { problem: 'manifest must be an object' }
   if (typeof client !== 'string' || !client) return { problem: 'client must be a non-empty string (the bundle)' }
   const f = m as Record<string, unknown>
-  if (utf8Bytes(JSON.stringify(m)) > MAX_PLUGIN_MANIFEST_BYTES) return { problem: 'the manifest is larger than 16 KB' }
-  if (typeof f.id !== 'string' || !PLUGIN_ID_RE.test(f.id)) return { problem: `${JSON.stringify(f.id)} is not a plugin id (lowercase letters, digits and -, starting with a letter, at most 32)` }
-  if (typeof f.version !== 'string' || !SEMVER_RE.test(f.version)) return { problem: 'version must be a semver version (1.2.3)' }
-  if (typeof f.name !== 'string' || !f.name.trim() || f.name.length > 64) return { problem: 'name must be 1 to 64 characters' }
-  if (typeof f.description !== 'string' || !f.description.trim() || f.description.length > 300) return { problem: 'description must be 1 to 300 characters' }
+  let manifestBytes: number
+  try {
+    manifestBytes = utf8Bytes(JSON.stringify(m))
+  } catch {
+    // Never a throw: a cycle, a BigInt, or arrays nested deeper than the stack.
+    return { problem: 'the manifest cannot be measured: it is not plain JSON, or it is nested too deeply' }
+  }
+  if (manifestBytes > MAX_PLUGIN_MANIFEST_BYTES) return { problem: 'the manifest is larger than 16 KB' }
+  if (typeof f.id !== 'string' || !PLUGIN_ID_RE.test(f.id)) return { problem: `${echoedId(f.id)} is not a plugin id (lowercase letters, digits and -, starting with a letter, at most 32)` }
+  if (UNUSABLE_IDS.includes(f.id)) return { problem: `"${f.id}" is not a usable plugin id (every object has a key of that name)` }
+  if (typeof f.version !== 'string' || f.version.length > MAX_VERSION_CHARS || !SEMVER_RE.test(f.version)) return { problem: `version must be a semver version (1.2.3) of at most ${MAX_VERSION_CHARS} characters` }
+  const name = visibleText(f.name, 64)
+  if (name === undefined) return { problem: 'name must be 1 to 64 visible characters, with no control or invisible characters' }
+  const description = visibleText(f.description, 300)
+  if (description === undefined) return { problem: 'description must be 1 to 300 visible characters, with no control or invisible characters' }
   if (f.type !== 'theme') return { problem: 'type must be "theme": only theme plugins can be installed' }
   if (f.contract !== PLUGIN_CONTRACT_VERSION) return { problem: `contract must be ${PLUGIN_CONTRACT_VERSION}: this Trek does not load a plugin built for another plugin contract` }
   for (const key of BUILT_IN_ONLY) if (f[key] !== undefined) return { problem: `an installed plugin cannot declare ${key}` }
-  if (utf8Bytes(client) > MAX_PLUGIN_CLIENT_BYTES) return { problem: 'the client bundle is larger than 1 MB' }
+  // Its UTF-8 size is never less than its length: one that long is refused without a copy being made.
+  if (client.length > MAX_PLUGIN_CLIENT_BYTES || utf8Bytes(client) > MAX_PLUGIN_CLIENT_BYTES) return { problem: 'the client bundle is larger than 1 MB' }
   return {
     package: {
-      manifest: { id: f.id, version: f.version, name: f.name, description: f.description, defaultEnabled: false, type: 'theme', contract: PLUGIN_CONTRACT_VERSION },
+      manifest: { id: f.id, version: f.version, name, description, defaultEnabled: false, type: 'theme', contract: PLUGIN_CONTRACT_VERSION },
       client
     }
   }
