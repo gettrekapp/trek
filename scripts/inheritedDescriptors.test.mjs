@@ -65,11 +65,27 @@ test("on Linux it keeps Node's IPC channel, though it looks inherited", () => {
   assert.deepEqual(closed, [4])
 })
 
-test('Linux: a child handed a socket beyond its stdio closes it, and nothing of its own', { skip: process.platform !== 'linux' && 'Linux only: /proc/self/fdinfo' }, () => {
+test('Linux: a child handed a socket beyond its stdio is left with no inherited socket or pipe, and its own stdio works', { skip: process.platform !== 'linux' && 'Linux only: /proc/self/fdinfo' }, () => {
   const module = fileURLToPath(new URL('../server/src/inheritedDescriptors.ts', import.meta.url))
-  const script = `import { closeInheritedDescriptors } from ${JSON.stringify(module)}; process.stdout.write(JSON.stringify(closeInheritedDescriptors()))`
-  // stdio[3] 'pipe': Node hands the child one end of a socketpair as fd 3, not close-on-exec.
+  // After the cleanup, the child lists what still looks inherited: nothing should. What it closed
+  // depends on the environment too (a CI runner leaks pipes of its own into every process), so
+  // only its kind is checked, not an exact list.
+  const script = [
+    `import { readdirSync, readlinkSync, readFileSync } from 'node:fs'`,
+    `import { closeInheritedDescriptors, isInheritedDescriptor } from ${JSON.stringify(module)}`,
+    `const closed = closeInheritedDescriptors()`,
+    `const left = []`,
+    `for (const n of readdirSync('/proc/self/fd')) {`,
+    `  if (Number(n) <= 2) continue`,
+    `  try { const link = readlinkSync('/proc/self/fd/' + n); if (isInheritedDescriptor(link, readFileSync('/proc/self/fdinfo/' + n, 'utf8'))) left.push(n + ' ' + link) } catch {}`,
+    `}`,
+    `process.stdout.write(JSON.stringify({ closed, left }))`
+  ].join('\n')
+  // stdio[3] 'pipe': the child gets a socket beyond its stdio.
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], encoding: 'utf8' })
   assert.equal(child.status, 0, child.stderr)
-  assert.deepEqual(JSON.parse(child.stdout).map((d) => d.split(' ')[0]), ['3'])
+  const { closed, left } = JSON.parse(child.stdout)
+  assert.deepEqual(left, [], 'no inherited socket or pipe is left open')
+  for (const entry of closed) assert.match(entry, /^\d+ (socket|pipe):\[\d+\]$/)
+  assert.ok(closed.every((entry) => Number(entry.split(' ')[0]) > 2), 'stdio is never closed')
 })
