@@ -339,8 +339,12 @@ async function operate(job: () => Promise<void>): Promise<void> {
   if (failed) await showError(failed)
 }
 
-/** Opens the log for appending (0600), moving a large one aside first, with a header line. */
-function openLog(): number {
+/**
+ * Opens the log for appending (0600), moving a large one aside first, with a header line naming
+ * this Trek's pid and why it starts one (`why`: launch, start, restart, reset), so two starts in
+ * one log can be told apart.
+ */
+function openLog(why: string): number {
   const { dir, log } = profile()
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   try {
@@ -349,7 +353,7 @@ function openLog(): number {
     // no log yet
   }
   const fd = openSync(log, 'a', 0o600)
-  writeSync(fd, `--- ${new Date().toISOString()} Trek ${app.getVersion()} starts the local server ---\n`)
+  writeSync(fd, `--- ${new Date().toISOString()} Trek ${app.getVersion()} starts the local server (Trek pid ${process.pid}, ${why}) ---\n`)
   return fd
 }
 
@@ -357,14 +361,14 @@ function openLog(): number {
  * Spawns `start --local` and waits for its local.json (bounded), an exit 3 (another start
  * holds the lock: use its server once it answers) or another exit (reported, never retried).
  */
-async function spawnAndWait(): Promise<void> {
+async function spawnAndWait(why: string): Promise<void> {
   const bundle = serverBundle()
   if (!existsSync(bundle)) {
     fail(`The bundled server is missing (${bundle}). Run npm run build:server.`)
     return
   }
   setStatus({ state: 'starting', message: '', canReset: false })
-  const fd = openLog()
+  const fd = openLog(why)
   let exit: number | string | undefined
   let child
   try {
@@ -444,10 +448,10 @@ async function spawnAndWait(): Promise<void> {
 }
 
 /** Reuses the server local.json names if it answers; otherwise spawns one. */
-async function ensure(): Promise<void> {
+async function ensure(why: string): Promise<void> {
   const found = await probe()
   if ('info' in found) useServer(found.info)
-  else await spawnAndWait()
+  else await spawnAndWait(why)
 }
 
 /** A spawn's options with stdout and stderr piped (hidden() would widen the stdio tuple otherwise). */
@@ -527,7 +531,7 @@ async function restart(): Promise<void> {
     }
   }
   current = null
-  await spawnAndWait()
+  await spawnAndWait('restart')
 }
 
 /** "Reset local server": the lock goes only under resetDecision's rule; then a start. */
@@ -566,7 +570,7 @@ async function reset(): Promise<void> {
       }
     }
   }
-  await ensure()
+  await ensure('reset')
 }
 
 /**
@@ -704,8 +708,8 @@ export function checkLocalServer(): void {
   refreshSoon()
 }
 
-export function startLocalServer(): Promise<void> {
-  return operate(() => ensure())
+export function startLocalServer(why = 'start'): Promise<void> {
+  return operate(() => ensure(why))
 }
 
 export function stopLocalServer(): Promise<void> {
@@ -724,7 +728,7 @@ export function restartLocalServer(options: { confirm?: boolean } = {}): Promise
     await operate(async () => {
       // Begun: a restart asked for from now on is a new one.
       if (restartRequested === request) restartRequested = null
-      if (!current && !readInfo()) await spawnAndWait()
+      if (!current && !readInfo()) await spawnAndWait('restart')
       else await restart()
     })
   })()
@@ -774,14 +778,14 @@ export function superviseLocalServer(): Promise<void> {
     console.warn('trek: cannot create the local server profile', err)
   }
   armWatch()
-  return startLocalServer()
+  return startLocalServer('launch')
 }
 
 /** The window actions: the server list's Start/Restart, a Local window's Start, an error's Reset. */
 export function registerLocalServerHandlers(): void {
   // Off (the other smokes): no entry, no menu, and no way for a window to start one.
   if (LOCAL_SERVER_DISABLED) return
-  ipcMain.handle('localServer:start', () => startLocalServer())
+  ipcMain.handle('localServer:start', () => startLocalServer('a window'))
   ipcMain.handle('localServer:restart', () => restartLocalServer())
   ipcMain.handle('localServer:reset', () => resetLocalServer())
 }
