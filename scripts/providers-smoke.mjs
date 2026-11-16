@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { commandOf, localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
@@ -306,15 +306,23 @@ try {
     if (!pidMatch) {
       check('codex global: the agent printed its pid', false, text.slice(-300))
     } else {
-      const seen = argvAndEnvironment(Number(pidMatch[1]))
-      // The control: the environment ps shows is this session's (the server sets TREK_TERMINAL_ID to its id).
-      check("codex global: ps -E shows its environment (its own TREK_TERMINAL_ID)", seen.includes(`TREK_TERMINAL_ID=${id} `) || seen.trimEnd().endsWith(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
-      check('codex global: the token is not in its environment or argv (ps -E)', !!token && !seen.includes(token))
+      if (process.platform === 'win32') {
+        // Windows: no tool reads another process's environment (no ps -E, no /proc); its command
+        // line is what Win32_Process shows.
+        console.log("SKIP codex global: ps -E shows its environment (its own TREK_TERMINAL_ID) (Windows: another process's environment cannot be read)")
+        check('codex global: the token is not in its command line (Win32_Process)', !!token && !commandOf(Number(pidMatch[1])).includes(token))
+      } else {
+        const seen = argvAndEnvironment(Number(pidMatch[1]))
+        // The control: the environment ps shows is this session's (the server sets TREK_TERMINAL_ID to its id).
+        check("codex global: ps -E shows its environment (its own TREK_TERMINAL_ID)", seen.includes(`TREK_TERMINAL_ID=${id} `) || seen.trimEnd().endsWith(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
+        check('codex global: the token is not in its environment or argv (ps -E)', !!token && !seen.includes(token))
+      }
     }
     if (helperArg && url) {
-      // Run the helper as Codex does (sh -c, cleared environment), then use what it prints.
+      // Run the helper as Codex does (sh -c, or cmd /C on Windows; a cleared environment), then use what it prints.
       const helper = JSON.parse(helperArg.slice(helperArg.indexOf('=') + 1, -1))
-      const headers = JSON.parse(execSync(helper, { encoding: 'utf8', shell: '/bin/sh', env: {} }))
+      const shell = process.platform === 'win32' ? process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe' : '/bin/sh'
+      const headers = JSON.parse(execSync(helper, { encoding: 'utf8', shell, env: {} }))
       check('codex global: the helper prints the Authorization header', headers.Authorization === `Bearer ${token}`)
       const res = await fetch(url, {
         method: 'POST',
