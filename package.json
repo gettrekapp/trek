@@ -45,7 +45,9 @@
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "npm run build && electron-builder --mac --arm64 --publish never",
-    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir --publish never"
+    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir --publish never",
+    "dist:linux": "npm run build && electron-builder --linux deb --publish never",
+    "dist:linux:dir": "npm run build && electron-builder --linux dir --publish never"
   },
   "build": {
     "appId": "com.trek.trekdev",
@@ -69,7 +71,8 @@
       {
         "ext": "trekproj",
         "name": "Trek Project",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "application/x-trekproj"
       }
     ],
     "asarUnpack": [
@@ -100,6 +103,31 @@
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Trek Dev switches to an already-open Chrome tab when opening a link."
       }
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "executableName": "trek",
+      "icon": "build/icons",
+      "category": "Development",
+      "synopsis": "Multi-worktree workspace for coding agents",
+      "description": "Trek runs coding agents (Claude Code, Codex, Gemini, Grok) across git worktrees, on this computer or on a trek-server.",
+      "maintainer": "Trek <gettrekapp@users.noreply.github.com>",
+      "vendor": "Trek",
+      "files": [
+        "!**/node_modules/node-pty/prebuilds/**"
+      ]
+    },
+    "deb": {
+      "packageName": "trek",
+      "priority": "optional"
     }
   },
   "dependencies": {
