@@ -75,6 +75,7 @@ import { delimiter, join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { fileURLToPath } from 'node:url'
+import { SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent, ARGS } from './fakeAgent.mjs'
 
@@ -869,10 +870,11 @@ try {
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
   })), { actions: [], tabs: [], skills: 1 })
+  // Windows: the server has no env or stacks (SERVER_HAS_ENVS), and the window follows it.
   check("and its features say so; the server's docker, env, stacks and skills are on", await w1.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, true, true, false, false])
+  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, false, false])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -1005,19 +1007,21 @@ try {
   await settingsRow.click()
   await settings.waitFor({ timeout: 5000 })
   // Environments too since 5a: the server runs them on its own machine.
+  // Not on Windows, whose server has no environments: no Environments tab there.
   check("a server window's Settings show the project's tabs, General first", [await settingsTabNames(settings), await settings.locator('.settings-tab.active').textContent()], [
-    ['General', 'Agents', 'Sessions', 'Worktrees', 'Environments', 'Plugins'],
+    ['General', 'Agents', 'Sessions', 'Worktrees', ...(SERVER_HAS_ENVS ? ['Environments'] : []), 'Plugins'],
     'General'
   ])
   const tabHeadings = async (name) => {
     await openSettingsTab(settings, name)
     return settings.locator('h3').allTextContents()
   }
-  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), await tabHeadings('Environments'), await tabHeadings('Plugins'), await tabHeadings('General')], [
+  if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
+  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await tabHeadings('Plugins'), await tabHeadings('General')], [
     ['Agents', 'Session types'],
     ['Session system prompt', 'Terminal quick buttons', 'Global system prompt', 'Global quick buttons'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
-    ['Environments'],
+    ...(SERVER_HAS_ENVS ? [['Environments']] : []),
     ['Plugins', 'Voice summaries', 'Linear'],
     ['Appearance', 'Notifications', 'Local server']
   ])

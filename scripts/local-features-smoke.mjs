@@ -46,7 +46,7 @@ import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile, SERVER_HAS_ENVS } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { fileURLToPath } from 'node:url'
@@ -330,7 +330,8 @@ try {
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'local-features-smoke' })
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
-  check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, true])
+  // Windows: no env or stacks on its server (SERVER_HAS_ENVS).
+  check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, SERVER_HAS_ENVS, SERVER_HAS_ENVS])
   // The app's childEnv keeps TREK_SERVER_GH: the Local server asked smokeGh.mjs's stub, not the real gh (5c-1).
   check("the Local server's gh is the smoke's stub: no prWatch", sdk.welcome?.capabilities.includes('prWatch'), false)
   // The upgrade: the server took the app's files over before it served anything; the app's stay.
@@ -378,7 +379,7 @@ try {
   check("the window's features: the machine-local ones, the server's skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.bot, f.promote, f.moveWorktree]
-  }), [true, true, true, true, true, true, false, true, true]), [true, true, true, true, true, true, false, true, true])
+  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true]), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.

@@ -44,7 +44,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
-import { homeEnv } from './smokeShell.mjs'
+import { homeEnv, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
@@ -308,7 +308,8 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
   check("the window's promote feature follows the server's capability", await until(() => win.evaluate(() => window.__features().promote), true), true)
-  check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  if (SERVER_HAS_ENVS) check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  else console.log(`SKIP the environments poll lists feature-x's VM, running (${NO_ENVS})`)
 
   // The other window: an SDK connection subscribed to the project that listens, recording what it hears.
   other = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'server-promote-smoke-other' })
@@ -345,11 +346,18 @@ try {
   check('Promote asked first', asked, 1)
   const first = (await confirmOf(PROMOTE_MESSAGE))[0] ?? {}
   const promptText = first.detail ?? ''
-  check('the confirmation says the work and the session move, and the VM goes', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText), promptText.includes(`Colima VM “${vmProfile}”`)], [true, true, true])
-  check('it offers to destroy the dev stack (ticked here)', /^Also destroy its dev stack “trek-/.test(first.checkbox ?? ''), true)
+  // Windows: no VM or dev stack (NO_ENVS); the rest of the confirmation is the same.
+  check('the confirmation says the work and the session move, and the VM goes', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText), SERVER_HAS_ENVS ? promptText.includes(`Colima VM “${vmProfile}”`) : 'no VM on Windows'], [true, true, SERVER_HAS_ENVS ? true : 'no VM on Windows'])
+  if (SERVER_HAS_ENVS) check('it offers to destroy the dev stack (ticked here)', /^Also destroy its dev stack “trek-/.test(first.checkbox ?? ''), true)
+  else console.log(`SKIP it offers to destroy the dev stack (ticked here) (${NO_ENVS})`)
   check('it says the ignored .trek/ is deleted with the worktree', /Deleted with the worktree, never moved \(ignored by git\): \.trek\//.test(promptText), true)
-  check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
-  check("the VM is gone from the server's registry", Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), [])
+  if (SERVER_HAS_ENVS) {
+    check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
+    check("the VM is gone from the server's registry", Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), [])
+  } else {
+    console.log(`SKIP the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main (${NO_ENVS})`)
+    console.log(`SKIP the VM is gone from the server's registry (${NO_ENVS})`)
+  }
   rmSync(stackRunning, { force: true })
   check('the worktree folder is gone', await until(() => existsSync(worktree), false), false)
   check("the main checkout has the worktree's work, unstaged", status(repo), [' M a.txt', '?? c.txt'])

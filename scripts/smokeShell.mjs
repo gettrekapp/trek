@@ -61,3 +61,11 @@ export function homeEnv(home) {
 
 /** The Local server profile `name` (`dev`: local-dev; none: local) of the smoke's temp `home` (homeEnv), where the app's Local server reads it. */
 export const smokeLocalProfile = (home, name) => localProfilePath(join, process.platform, homeEnv(home), home, name)
+
+/**
+ * Whether the smoke's trek-server (always on this machine) has environments and dev stacks: not on
+ * Windows yet (welcomeCapabilities drops env and stacks on win32, server/src/capabilities.ts). A
+ * check of them prints `SKIP <check> (NO_ENVS)` there instead.
+ */
+export const SERVER_HAS_ENVS = !WIN
+export const NO_ENVS = 'trek-server on Windows has no environments or dev stacks yet'

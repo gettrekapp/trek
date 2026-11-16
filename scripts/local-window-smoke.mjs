@@ -47,7 +47,7 @@ import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
@@ -412,11 +412,16 @@ try {
   check('the session mode starts at the default', await mode.inputValue(), '')
   await mode.selectOption('acceptEdits')
   check('a picked mode is saved on the server', await until(async () => (await project()).settings.claudePermissionMode ?? null, 'acceptEdits'), 'acceptEdits')
-  const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
-  await openSettingsTab(settings, 'Environments')
-  await envSwitch.click()
-  check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
-  check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)
+  if (SERVER_HAS_ENVS) {
+    const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
+    await openSettingsTab(settings, 'Environments')
+    await envSwitch.click()
+    check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
+    check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)
+  } else {
+    console.log(`SKIP the environments switch is saved on the server (${NO_ENVS})`)
+    console.log(`SKIP Settings: the environments' three VM size fields (${NO_ENVS})`)
+  }
   await sw.locator('.sidebar button[title="App settings"]').click()
 
   // ---- 7. The overflow menus ------------------------------------------------------------------------

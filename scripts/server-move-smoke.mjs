@@ -42,7 +42,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
-import { homeEnv } from './smokeShell.mjs'
+import { homeEnv, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -317,7 +317,8 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 4)
   check("the window's moveWorktree feature follows the server's move", await until(() => win.evaluate(() => window.__features().moveWorktree), true), true)
-  check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  if (SERVER_HAS_ENVS) check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  else console.log(`SKIP the environments poll lists feature-x's VM, running (${NO_ENVS})`)
 
   // ---- 3. The dialog ---------------------------------------------------------------------------------
 
@@ -354,16 +355,21 @@ try {
     lines.some((l) => l.includes('1 queued prompt(s) are not moved')),
     lines.some((l) => l.includes('running sessions are stopped first'))
   ], [true, true, true])
+  // Windows: no VM or dev stack to tear down (NO_ENVS), so no teardown box.
   const teardownBox = modal.locator('.move-teardown input')
-  await teardownBox.waitFor({ timeout: 10_000 })
-  const teardownLabel = await modal.locator('.move-teardown').textContent()
-  check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
+  if (SERVER_HAS_ENVS) {
+    await teardownBox.waitFor({ timeout: 10_000 })
+    const teardownLabel = await modal.locator('.move-teardown').textContent()
+    check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
+  } else console.log(`SKIP the dialog offers to tear down its running VM and dev stack, ticked (${NO_ENVS})`)
   check('it warns the ignored .trek/ is deleted with the source', [await modal.locator('.move-ignored').count(), (await modal.locator('.move-ignored .move-paths').textContent()).includes('.trek/')], [1, true])
   await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
   await modal.locator('.move-path').waitFor({ timeout: 10_000 })
-  await teardownBox.uncheck()
-  check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
-  await teardownBox.check()
+  if (SERVER_HAS_ENVS) {
+    await teardownBox.uncheck()
+    check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
+    await teardownBox.check()
+  } else console.log(`SKIP unticked while the stack runs, the move is refused (${NO_ENVS})`)
   check('B\'s project is offered, with the new path', await until(() => modal.locator('.move-path').textContent().catch(() => null), `New worktree: ${targetPath}`), `New worktree: ${targetPath}`)
   check('the place is On B — app', (await modal.locator('.move-row select').nth(1).locator('option:checked').textContent()).trim(), 'On B — app')
 
@@ -372,9 +378,13 @@ try {
   await modal.locator('button', { hasText: 'Move worktree' }).click()
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
   check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done', 'done'])
-  check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
-  check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
-  check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
+  if (SERVER_HAS_ENVS) {
+    check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
+    check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
+    check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
+  } else {
+    for (const name of ["the dev stack was destroyed on A after B had it, while A's folder was still there", "the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", "and is gone from A's registry"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
   check('the history step copied the whole 17 MB', (await modal.locator('.move-step.done', { hasText: 'Copy the session histories' }).locator('.move-step-detail').textContent()).includes('1 session history, 17.0 MB'), true)
   check('origin has the branch at the source commit', git('--git-dir', origin, 'rev-parse', 'refs/heads/feature-x').trim(), head)
   check('B has the worktree on the same commit', existsSync(targetPath) && git('-C', targetPath, 'rev-parse', 'HEAD').trim(), head)
@@ -426,7 +436,7 @@ try {
 
   const held = await Promise.all(app.windows().map((w) => w.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))))
   check("no window's store or page holds either server's token", held.some((h) => h.includes(A.token) || h.includes(B.token)), false)
-  const machineLines = readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean)
+  const machineLines = existsSync(machineCalls) ? readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean) : []
   const unexpected = machineLines.filter((l) => !(l.startsWith('docker ps') || l.startsWith('colima list') || l === `colima delete ${vmProfile} --force` || (l.startsWith('docker ') && l.includes(' compose ') && l.endsWith(' down -v'))))
   check('docker and colima ran only as the stubs: status, the VM\'s compose down and delete (never colima start)', unexpected, [])
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])
