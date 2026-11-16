@@ -395,3 +395,41 @@ test('isLocalServerCommand: flags in any order, and the trek-daemon alias, as th
   assert.equal(isLocalServerCommand('"C:\\Tool\\tool.exe" "C:\\x\\trek-server.cjs --local start"', undefined, 'win32'), false)
 })
 
+/** libuv's quote_cmd_arg (src/win/process.c), as Node's spawn quotes each argument on Windows. */
+function quoteCmdArg(arg) {
+  if (arg.length === 0) return '""'
+  if (!/[ \t"]/.test(arg)) return arg
+  if (!/["\\]/.test(arg)) return `"${arg}"`
+  // Backwards: backslashes before a quote (or the closing one) doubled, each quote escaped.
+  const out = []
+  let quoteHit = true
+  for (let i = arg.length - 1; i >= 0; i--) {
+    const c = arg[i]
+    out.push(c)
+    if (quoteHit && c === '\\') out.push('\\')
+    else if (c === '"') {
+      quoteHit = true
+      out.push('\\')
+    } else quoteHit = false
+  }
+  return `"${out.reverse().join('')}"`
+}
+
+test("windowsArgv: reads back what libuv's quoting writes", () => {
+  const program = 'C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\Trek.exe'
+  const cases = [
+    ['C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek\\'],
+    ['a"b', 'say "hi"', '\\"'],
+    ['', 'x', ''],
+    ['two words', '\ttab', 'trailing \\\\'],
+    ['C:\\a\\b', 'C:\\a b\\', '\\\\server\\share\\x y'],
+    ['--import-env-from', 'C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek Dev']
+  ]
+  for (const args of cases) {
+    const line = [program, ...args].map(quoteCmdArg).join(' ')
+    assert.deepEqual(windowsArgv(line), [program, ...args], line)
+  }
+  const server = [program, 'C:\\Users\\Jo Smith\\x\\trek-server.cjs', 'start', '--local', '--import-env-from', 'C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek\\']
+  assert.equal(isLocalServerCommand(server.map(quoteCmdArg).join(' '), undefined, 'win32'), true)
+})
+

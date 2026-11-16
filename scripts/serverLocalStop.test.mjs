@@ -54,7 +54,7 @@ function setup(t) {
  * either file is written, and local.json is written last, whole (a rename), so a stop under load
  * never sees a half-written file or a server that a SIGTERM would still kill.
  */
-async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
+async function fakeServer(t, profile, { ignoreTerm = false, asServer = false } = {}) {
   const code = `
     const fs = require('node:fs')
     const stop = () => {
@@ -71,7 +71,15 @@ async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
     fs.renameSync(tmp, ${JSON.stringify(profile.infoPath)})
     setInterval(() => {}, 1000)
   `
-  const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
+  // asServer: run from <tmp>/trek-server.cjs with `start --local`, so its command line is a server's.
+  let args = ['-e', code]
+  if (asServer) {
+    const bin = join(realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-bin-'))), 'trek-server.cjs')
+    t.after(() => removeDir(join(bin, '..')))
+    writeFileSync(bin, code)
+    args = [bin, 'start', '--local']
+  }
+  const child = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
   const exited = new Promise((resolve) => child.on('exit', (c, s) => resolve(c ?? s)))
   t.after(() => child.kill('SIGKILL'))
   const ready = () => {
@@ -286,3 +294,17 @@ test('readCommandLineSync: this process, through ps', { skip: posixOnly('ps') },
   const line = readCommandLineSync(process.pid)
   assert.match(line ?? '', /serverLocalStop\.test\.mjs/)
 })
+
+test("stopLocal: by default, a stand-in run as trek-server.cjs start --local is read by ps and judged a server", { skip: posixOnly('ps') }, async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile, { asServer: true })
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, requestStop: unreachable }), 0)
+  assert.equal(await exited, 0)
+  assert.deepEqual(out.lines, [
+    'The local trek-server did not take a stop request (unreachable); sending SIGTERM.',
+    `Stopping the local trek-server (pid ${child.pid})…`,
+    'Stopped.'
+  ])
+})
+

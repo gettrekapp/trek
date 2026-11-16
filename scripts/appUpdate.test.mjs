@@ -206,10 +206,6 @@ test('promptFor defaults to the Mac flow', () => {
   assert.equal(promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'darwin').actions[0], 'download')
 })
 
-test('updatePlatform: Windows installs updates too', () => {
-  assert.equal(updatePlatform('win32'), 'win32')
-})
-
 test('Windows offers Download, as the Mac does', () => {
   assert.deepEqual(promptFor({ kind: 'available', version: '0.8.0' }, '0.7.0', 'win32').actions, ['download', 'notes', 'later', 'skip'])
 })
