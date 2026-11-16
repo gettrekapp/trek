@@ -87,9 +87,17 @@ const claudeDir = (cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA
 // ---- Fixtures --------------------------------------------------------------
 
 const root = new URL('..', import.meta.url).pathname
-// Not realpath'd: under /var/folders, whose realpath is /private/var/folders.
-const work = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
-const real = realpathSync(work)
+// Not realpath'd: macOS, under /var/folders, whose realpath is /private/var/folders. Linux's /tmp
+// is no symlink, so a symlink to the dir beside it stands in for /var (the file's paths through it
+// are not the realpaths, which the server stores).
+const made = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
+const real = realpathSync(made)
+const work = made === real ? `${real}-var` : made
+if (work !== made) symlinkSync(real, work)
+const removeWork = () => {
+  rmSync(real, { recursive: true, force: true })
+  if (work !== made) rmSync(work, { force: true })
+}
 const home = join(real, 'home')
 const remoteHome = join(real, 'remote-home')
 const userData = join(real, 'user-data')
@@ -251,7 +259,7 @@ const realHomeLeaks = () => {
   return leaks
 }
 if (realHome === home || realHome.startsWith(real)) {
-  rmSync(real, { recursive: true, force: true })
+  removeWork()
   throw new Error("the real HOME is the run's own: refusing to run")
 }
 
@@ -414,7 +422,7 @@ const finish = async (reason) => {
       } catch {}
     }
   }
-  rmSync(real, { recursive: true, force: true })
+  removeWork()
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
   console.log(exitCode === 0 ? `IMPORT SMOKE PASS (${checks.length} checks)` : `IMPORT SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
   process.exit(exitCode)
