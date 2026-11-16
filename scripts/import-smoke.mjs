@@ -29,7 +29,7 @@
 //
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { SMOKE_SHELL } from './smokeShell.mjs'
+import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -40,7 +40,7 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import electronPath from 'electron'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { localProfilePath, parseLocalInfo } from '../src/shared/localServer.ts'
 import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
 import { encodeTokenRecord } from '../src/main/serverTokenRules.ts'
 import { fileURLToPath } from 'node:url'
@@ -104,7 +104,7 @@ const removeWork = () => {
 const home = join(real, 'home')
 const remoteHome = join(real, 'remote-home')
 const userData = join(real, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
 for (const dir of [profile, remoteHome, userData, join(real, 'files'), join(real, 'real'), join(real, 'remote')]) mkdirSync(dir, { recursive: true })
@@ -251,7 +251,7 @@ const realHomeLeaks = () => {
   }
   const appSupport = join(realHome, 'Library', 'Application Support')
   const files = [
-    ...['local', 'local-dev'].flatMap((p) => ['config.json', 'local.json'].map((f) => join(realHome, '.config', 'trek-server', p, f))),
+    ...[undefined, 'dev'].flatMap((p) => ['config.json', 'local.json'].map((f) => join(localProfilePath(join, process.platform, process.env, realHome, p), f))),
     ...['Trek Dev', 'Trek'].flatMap((a) => ['migrated.json', 'recent-projects.json', 'open-windows.json', 'app-servers.json'].map((f) => join(appSupport, a, f)))
   ]
   for (const f of files) {
@@ -343,7 +343,7 @@ const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', remoteConfig, '--port', String(port), '--data-dir', join(real, 'remote-data')], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: remoteHome, SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(remoteHome), SHELL: '/bin/sh' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -364,7 +364,7 @@ const startDaemon = () =>
 
 const env = {
   ...process.env,
-  HOME: home,
+  ...homeEnv(home),
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
   ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
@@ -417,7 +417,7 @@ const finish = async (reason) => {
   for (const sdk of sdks) sdk.close()
   await closeApp(app)
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   const left = info()

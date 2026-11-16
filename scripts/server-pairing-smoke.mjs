@@ -32,6 +32,7 @@ import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory, parsePairingLink, redeemPairingCode } from '../src/shared/client/index.ts'
 import { closeApp } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { homeEnv } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -142,7 +143,7 @@ const watchdog = setTimeout(() => void finish(`watchdog: the run took over ${WAT
 try {
   // ---- 1. The server ---------------------------------------------------------------------------------
   const port = await freePort()
-  const serverEnv = { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' }
+  const serverEnv = { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' }
   await new Promise((resolve, reject) => {
     // Only on the LAN address: never 0.0.0.0.
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--host', lan, '--insecure', '--data-dir', data], {
@@ -178,7 +179,7 @@ try {
   const cli = (...args) => execFileSync(process.execPath, ['dist/trek-server.cjs', ...args, '--config', configPath], { cwd: join(root, 'server'), env: serverEnv, encoding: 'utf8' })
 
   // ---- 2. The app, with the server saved, on the Servers view ---------------------------------------
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)

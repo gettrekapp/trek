@@ -17,6 +17,7 @@ import electronPath from 'electron'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { processCommandLine } from '../src/shared/processCommand.ts'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 
 export const APP_CLOSE_MS = 15_000
 const HARD_MS = 45_000
@@ -120,7 +121,7 @@ export async function closeApp(app, ms = APP_CLOSE_MS) {
  * then `work` removed. `isAgent(command)` tells an agent's command line.
  */
 export function localTeardown({ root, home, work, agentPids, isAgent }) {
-  const infoPath = join(home, '.config', 'trek-server', `local-${PROFILE}`, 'local.json')
+  const infoPath = join(smokeLocalProfile(home, PROFILE), 'local.json')
   // A throw before the run's try (the fixtures) exits without finish: remove the work dir anyway.
   process.on('exit', () => rmSync(work, { recursive: true, force: true }))
   const info = () => {
@@ -135,7 +136,7 @@ export function localTeardown({ root, home, work, agentPids, isAgent }) {
     if (done) return
     done = true
     spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', PROFILE], {
-      env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
       timeout: 15_000
     })
     const left = info()

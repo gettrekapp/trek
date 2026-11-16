@@ -43,6 +43,7 @@ import { delimiter, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -215,7 +216,7 @@ try {
       cwd: join(root, 'server'),
       env: {
         ...process.env,
-        HOME: serverHome,
+        ...homeEnv(serverHome),
         XDG_STATE_HOME: join(serverHome, '.local', 'state'),
         SHELL: '/bin/sh',
         PATH: `${stubs}${delimiter}${process.env.PATH}`,
@@ -267,7 +268,7 @@ try {
 
   // ---- 2. The app, with the server saved, and the project's window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.TREK_SERVER_LINEAR_URL
   delete env.TREK_SERVER_ELEVENLABS_URL

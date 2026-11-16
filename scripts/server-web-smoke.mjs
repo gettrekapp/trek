@@ -50,6 +50,7 @@ import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 150_000
@@ -213,7 +214,7 @@ try {
 
   const localWeb = spawnSync(process.execPath, ['dist/trek-server.cjs', 'start', '--local', '--web'], {
     cwd: join(root, 'server'),
-    env: { ...process.env, HOME: serverHome },
+    env: { ...process.env, ...homeEnv(serverHome) },
     encoding: 'utf8',
     timeout: 10_000
   })
@@ -225,7 +226,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--web', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -295,7 +296,7 @@ try {
 
   // ---- 4. The page: sign in ------------------------------------------------------------------------
 
-  const env = { ...process.env, HOME: pageHome, TREK_WEB_URL: `${base}/`, TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(pageHome), TREK_WEB_URL: `${base}/`, TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: [pageMain, `--user-data-dir=${userData}`], cwd: work, env })
   app.on('window', watch)

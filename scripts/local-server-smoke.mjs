@@ -28,6 +28,7 @@ import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '.
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
 import { fileURLToPath } from 'node:url'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
 const WAIT_MS = 15000
@@ -101,10 +102,10 @@ async function suite(rt) {
     copyFileSync(bundle, cli)
     symlinkSync(join(root, 'node_modules', 'node-pty'), join(app, 'node_modules', 'node-pty'))
   }
-  const env = { ...process.env, ...rt.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), TREK_SERVER_PHONE_ADDRESS: '127.0.0.1' }
+  const env = { ...process.env, ...rt.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), TREK_SERVER_PHONE_ADDRESS: '127.0.0.1' }
   // Only the app's node_modules may resolve: no NODE_PATH fallback.
   delete env.NODE_PATH
-  const profile = join(home, '.config', 'trek-server', 'local')
+  const profile = smokeLocalProfile(home)
   const infoPath = join(profile, 'local.json')
   const lockPath = join(profile, 'local.lock')
 
@@ -344,7 +345,7 @@ async function suite(rt) {
       '--local-profile ../x, and --local-profile without --local, are usage errors (exit 2)',
       `${badName.status} ${noLocal.status} ${noLocal.stderr.slice(0, 200)}`
     )
-    const devProfile = join(home, '.config', 'trek-server', 'local-dev')
+    const devProfile = smokeLocalProfile(home, 'dev')
     const devInfo = join(devProfile, 'local.json')
     const devLock = join(devProfile, 'local.lock')
     const p = start()

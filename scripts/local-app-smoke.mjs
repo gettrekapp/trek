@@ -53,6 +53,7 @@ import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
 import { closeApp, commandOf } from './smokeTeardown.mjs'
 import { windowsArgv } from '../src/shared/processCommand.ts'
 import { fileURLToPath } from 'node:url'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
@@ -96,7 +97,7 @@ const home = join(work, 'home')
 const userData = join(work, 'user-data')
 // An unpackaged app uses the dev profile, a packaged one the default (localProfileName).
 const profileArgs = packaged ? [] : ['--local-profile', 'dev']
-const profile = join(home, '.config', 'trek-server', packaged ? 'local' : 'local-dev')
+const profile = smokeLocalProfile(home, packaged ? undefined : 'dev')
 const infoPath = join(profile, 'local.json')
 const lockPath = join(profile, 'local.lock')
 const logPath = join(profile, 'server.log')
@@ -160,7 +161,7 @@ const watch = (page) => {
 const launch = async (answers = {}) => {
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     TREK_NO_WINDOW_RESTORE: '1',
     // A packaged app would ask the release feed for an update: a smoke never contacts GitHub.
@@ -249,7 +250,7 @@ const finish = async (reason) => {
   if (app) await quit()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', ...profileArgs], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   const left = info()

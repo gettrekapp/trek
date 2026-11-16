@@ -35,7 +35,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { sha256Hex } from '../src/renderer/src/plugins/installedLoader.ts'
 import { buildExampleTheme } from '../plugins/example-theme/build.mjs'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL } from './smokeShell.mjs'
+import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 180_000
@@ -68,7 +68,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-theme-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 // From here on, the work dir goes on exit, whatever throws. No agents run here.
 const { info, teardown } = localTeardown({ root, home, work, agentPids: join(work, 'agent-pids'), isAgent: () => false })
@@ -114,7 +114,7 @@ dialog.showMessageBox = async (...args) => {
 
 const env = {
   ...process.env,
-  HOME: home,
+  ...homeEnv(home),
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
   ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),

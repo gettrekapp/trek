@@ -43,6 +43,7 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
@@ -238,7 +239,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}`, TMPDIR: serverTmp, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
+      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}`, TMPDIR: serverTmp, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -290,7 +291,7 @@ try {
 
   // ---- 2. The app, with the server saved, and the project's window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)

@@ -46,7 +46,7 @@ import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { fileURLToPath } from 'node:url'
@@ -89,7 +89,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
 mkdirSync(profile, { recursive: true })
@@ -205,7 +205,7 @@ await new Promise((r) => services.listen(0, '127.0.0.1', r))
 const servicesUrl = `http://127.0.0.1:${services.address().port}`
 
 // The Local profile's data dir, where the server keeps them from now on (server/src/dataDir.ts).
-const localData = join(defaultDataDir(process.platform, { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
+const localData = join(defaultDataDir(process.platform, { ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
 
 // Main's dialogs and Reveal, stubbed before its script runs: every message box is recorded with its
 // detail, its checkbox and a number from the stubs' shared sequence (for the order against
@@ -278,7 +278,7 @@ const finish = async (reason) => {
   services.close()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   // Each only when its command line is still the one this run started (a reused pid is left alone).
@@ -300,7 +300,7 @@ try {
 
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
     ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),

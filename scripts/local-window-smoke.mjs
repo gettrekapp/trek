@@ -47,7 +47,7 @@ import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
 import { writeFakeAgent } from './fakeAgent.mjs'
 
@@ -88,7 +88,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 const agentPids = join(work, 'agent-pids')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
@@ -188,7 +188,7 @@ try {
 
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
     ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),

@@ -15,6 +15,7 @@
 // (stubsFirstOnPath), since no startup file is read.
 import { existsSync, writeFileSync } from 'node:fs'
 import { basename, delimiter, join } from 'node:path'
+import { localProfilePath } from '../src/shared/localServer.ts'
 
 const WIN = process.platform === 'win32'
 
@@ -45,3 +46,18 @@ export function stubsFirstOnPath(env, dir) {
   env[key] = env[key] ? `${dir}${delimiter}${env[key]}` : dir
   return env
 }
+
+/**
+ * The variables that put a smoke's temp `home` where the app, trek-server and the agents look for
+ * the user's folders: HOME, and on Windows, which does not derive them from HOME, USERPROFILE
+ * (os.homedir(): ~/.claude), APPDATA (trek-server's config dir, which holds the Local server's
+ * profile) and LOCALAPPDATA (its data dir). Without them a smoke on Windows writes its fixtures
+ * under HOME while the server reads, and writes, the runner's own profile.
+ */
+export function homeEnv(home) {
+  if (!WIN) return { HOME: home }
+  return { HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local') }
+}
+
+/** The Local server profile `name` (`dev`: local-dev; none: local) of the smoke's temp `home` (homeEnv), where the app's Local server reads it. */
+export const smokeLocalProfile = (home, name) => localProfilePath(join, process.platform, homeEnv(home), home, name)
