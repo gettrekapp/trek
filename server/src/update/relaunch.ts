@@ -25,8 +25,7 @@ export interface DescriptorFs {
 }
 
 /**
- * Closes this process's descriptors above stderr that are character devices, or that the kernel
- * has revoked: the terminals'.
+ * Closes this process's descriptors above stderr that are character devices: the terminals'.
  * Only as the very last thing before execve, when nothing in this process will run again.
  *
  * Why: execve keeps every descriptor that is not close-on-exec. Node opens its own that way, but
@@ -40,6 +39,13 @@ export interface DescriptorFs {
  * process opens for itself) is all that this can close, so a descriptor someone deliberately
  * handed the server to keep (a service manager's socket, a log pipe) is left alone. Returns how
  * many it closed. Never throws.
+ *
+ * Why never one that fstat cannot describe: on macOS that is also what a kernel-guarded descriptor
+ * looks like (NECP, the network policy one the system opens once the server has connected out,
+ * to the release feed for one), and closing a guarded descriptor is EXC_GUARD: the kernel kills
+ * the process at once (SIGKILL, nothing logged), so the server would be gone instead of
+ * restarted. A killed shell's revoked terminal looks the same and is left too: it holds no pty,
+ * only a dead handle the new version carries.
  */
 export function closeTerminalDescriptors(platform: NodeJS.Platform = process.platform, fs: DescriptorFs = { readdirSync, fstatSync, closeSync }): number {
   let names: string[]
@@ -56,10 +62,10 @@ export function closeTerminalDescriptors(platform: NodeJS.Platform = process.pla
     try {
       terminal = fs.fstatSync(fd).isCharacterDevice()
     } catch {
-      // A terminal whose shell has just been killed: the kernel revokes its slave side, and
-      // fstat then fails (EBADF) on a descriptor that is still held. (Or the listing's own
-      // descriptor, closed again by now: closing that fails too, and changes nothing.)
-      terminal = true
+      // Not known to be a terminal, so never closed: a guarded descriptor (macOS NECP) fails
+      // fstat with EBADF, and closing it kills this process. So does a killed shell's revoked
+      // terminal, and the listing's own descriptor, closed again by now.
+      terminal = false
     }
     if (!terminal) continue
     try {

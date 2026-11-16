@@ -334,27 +334,34 @@ test('relaunchRefusal says, before anything is shut down, why a relaunch cannot 
   }
 })
 
-test('closeTerminalDescriptors closes the character devices above stderr, and the revoked ones, and nothing else', () => {
+test('closeTerminalDescriptors closes the character devices above stderr, and nothing else', () => {
   // 11: a killed shell's terminal, revoked by the kernel: fstat fails on it, and it is still held.
   // 13: the listing's own descriptor, closed again by the time it is looked at.
-  const kinds = { 0: 'chr', 1: 'chr', 2: 'chr', 3: 'file', 4: 'chr', 5: 'socket', 9: 'chr', 11: 'revoked', 12: 'chr', 13: 'gone' }
+  // 15: a guarded descriptor (macOS NECP): fstat fails on it too, and closing it is EXC_GUARD,
+  // the kernel's SIGKILL, so a server restarting into an update would be gone.
+  const kinds = { 0: 'chr', 1: 'chr', 2: 'chr', 3: 'file', 4: 'chr', 5: 'socket', 9: 'chr', 11: 'revoked', 12: 'chr', 13: 'gone', 15: 'guarded' }
   const closed = []
   const listed = []
   const ebadf = () => Object.assign(new Error('EBADF'), { code: 'EBADF' })
   const fs = {
     readdirSync: (dir) => { listed.push(dir); return [...Object.keys(kinds), 'not-a-number', '-1', '4.5'] },
     fstatSync: (fd) => {
-      if (kinds[fd] === 'gone' || kinds[fd] === 'revoked') throw ebadf()
+      if (kinds[fd] === 'gone' || kinds[fd] === 'revoked' || kinds[fd] === 'guarded') throw ebadf()
       return { isCharacterDevice: () => kinds[fd] === 'chr' }
     },
     closeSync: (fd) => {
+      // Recorded, not thrown: the real one never returns.
+      if (kinds[fd] === 'guarded') {
+        closed.push(`${fd}: EXC_GUARD, the process is killed`)
+        return
+      }
       if (fd === 9 || kinds[fd] === 'gone') throw ebadf()
       closed.push(fd)
     }
   }
-  assert.equal(closeTerminalDescriptors('darwin', fs), 3)
-  assert.deepEqual(closed, [4, 11, 12], 'never stdin, stdout or stderr, a file or a socket; one that cannot be closed stops nothing')
-  assert.equal(closeTerminalDescriptors('linux', fs), 3)
+  assert.equal(closeTerminalDescriptors('darwin', fs), 2)
+  assert.deepEqual(closed, [4, 12], 'never stdin, stdout or stderr, a file, a socket, or one fstat cannot describe; one that cannot be closed stops nothing')
+  assert.equal(closeTerminalDescriptors('linux', fs), 2)
   assert.deepEqual(listed, ['/dev/fd', '/proc/self/fd'])
   assert.equal(closeTerminalDescriptors('linux', { ...fs, readdirSync: () => { throw new Error('ENOENT') } }), 0, 'no listing: nothing is closed, and nothing is thrown')
 })
@@ -421,7 +428,7 @@ test('relaunch into a launcher that is not there is an error the caller can catc
 const LIST_OPEN = '#!/bin/sh\nif [ -d "/proc/$$/fd" ]; then\n  for f in /proc/$$/fd/*; do n=${f##*/}; if [ "$n" -gt 2 ]; then echo "open $n $(readlink "$f")"; fi; done\nelse\n  lsof -a -p $$ -d 3-999 -Fn | sed -n "s/^n/open /p"\nfi\necho listed\n'
 const canList = process.platform === 'linux' || spawnSync('lsof', ['-v'], { encoding: 'utf8' }).error === undefined
 
-test('a server that restarts into an update hands on no descriptor of its terminals', { skip: execve.skip || (!canList && 'no way to list a process\'s descriptors here (no /proc, no lsof)') }, () => {
+test('a server that restarts into an update hands on no live descriptor of its terminals', { skip: execve.skip || (!canList && 'no way to list a process\'s descriptors here (no /proc, no lsof)') }, () => {
   const dir = temp()
   try {
     const install = installWith(dir, LIST_OPEN)
@@ -440,7 +447,9 @@ test('a server that restarts into an update hands on no descriptor of its termin
     `], { encoding: 'utf8', timeout: 60_000 })
     assert.match(child.stdout, /^terminals 3\n/, child.stdout + child.stderr)
     assert.match(child.stdout, /\nlisted\n$/, child.stdout + child.stderr)
-    const terminals = child.stdout.split('\n').filter((line) => /ptmx|\/pts\/|\/dev\/tty|revoked/.test(line))
+    // A killed shell's terminal that macOS has revoked may be handed on: fstat cannot tell it from a
+    // guarded descriptor, which must never be closed (closeTerminalDescriptors). It holds no pty.
+    const terminals = child.stdout.split('\n').filter((line) => /ptmx|\/pts\/|\/dev\/tty/.test(line))
     assert.deepEqual(terminals, [], `the new process still holds its predecessor's terminals:\n${child.stdout}`)
   } finally {
     removeDir(dir)
