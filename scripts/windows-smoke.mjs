@@ -34,7 +34,7 @@ import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
@@ -232,7 +232,7 @@ try {
 
   const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)])) : [])
   const mcpList = async (projectId) => {
-    const config = filesUnder(home).find((f) => f.endsWith(`/mcp/${projectId}.json`))
+    const config = filesUnder(home).find((f) => basename(f) === `${projectId}.json` && basename(dirname(f)) === 'mcp')
     const { url, headers } = JSON.parse(readFileSync(config, 'utf8')).mcpServers['trek-dev']
     const res = await fetch(url, {
       method: 'POST',

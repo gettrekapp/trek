@@ -26,7 +26,7 @@ import { _electron as electron } from 'playwright-core'
 import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
@@ -279,7 +279,7 @@ try {
     const args = argLines(text)
     const pidMatch = /PID\[(\d+)\]/.exec(text)
     // The project's MCP files, which the server writes under its data dir (in the temp HOME).
-    const mcpConfig = filesUnder(home).find((f) => f.endsWith(`/mcp/${projectId}.json`))
+    const mcpConfig = filesUnder(home).find((f) => basename(f) === `${projectId}.json` && basename(dirname(f)) === 'mcp')
     const configUrl = mcpConfig ? JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers?.['trek-dev']?.url ?? null : null
     const headersFile = filesUnder(home).find((f) => f.endsWith(`${projectId}.codex.json`))
     const token = headersFile ? JSON.parse(readFileSync(headersFile, 'utf8')).Authorization.replace(/^Bearer /, '') : null
