@@ -1,10 +1,89 @@
+# Trek on Windows: the desktop app and trek-server
+
+The Trek desktop app and trek-server run on Windows 10 (1809 or later) and Windows 11, x64.
+trek-server serves the Trek desktop app on any platform, the web client and the phone. Environments
+and dev stacks are not available on Windows yet, on the desktop app's Local server or on a Windows
+trek-server: the server's welcome leaves the `env` and `stacks` capabilities out, so clients hide
+them. The project bot does not run on Windows.
+
+The first part below is the desktop app; the second is trek-server.
+
+# Trek desktop on Windows
+
+## Install
+
+Download `Trek-<version>-win-x64.exe` from the
+[latest release](https://github.com/gettrekapp/trek/releases/latest) and run it. It is a one-click
+NSIS installer that installs for your user only: no administrator rights and no UAC prompt. Trek
+goes to `%LOCALAPPDATA%\Programs\Trek`, with Start-menu and desktop shortcuts, and `.trekproj`
+files open in Trek. The installer is signed with Azure Trusted Signing, as is `Trek.exe`.
+
+The agent CLIs you use (`claude`, `codex`, `gemini`, `grok`) and Git for Windows must be installed
+and signed in as your user, as for trek-server below.
+
+## Where things live
+
+- `%APPDATA%\Trek Dev`: Trek's user data (windows, settings, saved tokens). The app's name is
+  "Trek Dev".
+- `%APPDATA%\trek-server\local`: the Local server's profile.
+- `%LOCALAPPDATA%\Programs\Trek`: the app itself.
+
+## The Local server
+
+The Local server runs on `Trek.exe` in Node mode, with no console window. It keeps running after
+Trek quits, so your sessions survive. Turn on "Stop local server on quit" to stop it with the app.
+A second launch of Trek focuses the running one.
+
+Open in VS Code works: Trek finds `code.cmd` and runs VS Code's `Code.exe` directly.
+
+## Updating
+
+Trek checks for a newer release as on the Mac: "Update available", then **Download**, then
+**Restart to Update**. **File → Check for Updates…** checks on demand. Before it installs, Trek
+stops the Local server, because the installer must replace `Trek.exe`. Its terminals close, and
+agent sessions resume when you open their worktrees again. If the server can't be stopped, the
+update isn't installed and Trek says so. An update installs only through Restart to Update, never
+when Trek quits.
+
+## Reinstalling and uninstalling
+
+Running the installer over an installed Trek, and uninstalling, find every process running from the
+install folder, the Local server included. Interactively they ask, then close them; run silently
+(`/S`) they close them without asking. That is a hard stop: the Local server's sessions end and
+resume when their worktrees are opened again.
+
+Uninstall from Settings → Apps. `%APPDATA%\Trek Dev` stays, so reinstalling finds your projects and
+settings.
+
+## Not on Windows yet
+
+Environments and dev stacks (planned) and the project bot. A remote trek-server on macOS or Linux
+has environments and stacks.
+
+## Manual checklist for the desktop app (before the first Windows release)
+
+Run on a real Windows PC (x64), with the draft release's `Trek-<version>-win-x64.exe`.
+
+1. Install it from the draft and start it. No console window appears for the Local server. The
+   installer and `Trek.exe` show the signed publisher (Properties → Digital Signatures).
+2. A Claude session's terminal works (ConPTY).
+3. Quit Trek: the Local server keeps running. Start Trek again: it reconnects.
+4. Launch Trek a second time: the running Trek comes forward.
+5. Double-click a `.trekproj` file: Trek imports it.
+6. A session that needs a decision raises a toast notification.
+7. Open in VS Code opens the worktree.
+8. Install the previous Windows release, then update to this one with Restart to Update. The Local
+   server stops, Trek restarts on the new version, and opening a worktree resumes its sessions.
+9. Run this release's installer over itself with Trek and the Local server running. It asks, then
+   closes them.
+10. Uninstall from Settings → Apps. The app is gone and `%APPDATA%\Trek Dev` remains.
+
+Report anything that differs.
+
 # trek-server on Windows
 
-trek-server runs on Windows 10 (1809 or later) and Windows 11, x64, as a server that the Trek
-desktop app on macOS, the web client and the phone connect to. The desktop app itself does not
-run on Windows yet. Environments and dev stacks are not available on a Windows server yet: its
-welcome leaves the `env` and `stacks` capabilities out, so clients hide them. The project bot
-does not run on Windows.
+trek-server runs on Windows as a server that the Trek desktop app on any platform, the web client
+and the phone connect to.
 
 ## What it needs
 
@@ -38,9 +117,11 @@ does not run on Windows.
   and spaces, and get a `-` after a device name (`CON`, `NUL`, `COM1`…). The branch keeps its name.
 - **Launchers.** The zip has `bin\trek-server.cmd` (what `trek-server` resolves to on PATH) and
   `bin\trek-server.ps1`. With the `.cmd`, cmd.exe may ask "Terminate batch job (Y/N)?" on Ctrl+C
-  (answer Y); the PowerShell one does not. Until the scripts are signed (W2), Windows may refuse
-  the unsigned `.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File bin\trek-server.ps1 start`,
-  or `Get-ChildItem -Recurse <folder> | Unblock-File` once after unzipping.
+  (answer Y); the PowerShell one does not. The release zip's `.ps1` is signed (Azure Trusted Signing), so the
+  execution policy accepts it. For an unsigned build (one from source, or the artifact of ci.yml's
+  Windows job) Windows may refuse the `.ps1`: run
+  `powershell -NoProfile -ExecutionPolicy Bypass -File bin\trek-server.ps1 start`, or
+  `Get-ChildItem -Recurse <folder> | Unblock-File` once after unzipping.
   Both run the `node` found on PATH, and cmd.exe looks in the current directory before PATH: a
   `node.exe` (or `node.cmd`) in the folder you start `bin\trek-server.cmd` from would run instead.
   Start it from a directory you trust (not a repository's), or set `TREK_NODE` to the absolute
@@ -53,7 +134,7 @@ does not run on Windows.
   stop the server, unzip the new release beside the old one and start that. The config and the
   projects are not in the folder, so they carry over.
 
-## Manual checklist (before a release)
+## Manual checklist for trek-server (before a release)
 
 Run on a real Windows PC (x64), with the release's `trek-server-<version>-win32-x64.zip`. Use a
 throwaway repository.
