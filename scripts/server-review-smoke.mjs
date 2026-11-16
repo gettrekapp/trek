@@ -247,7 +247,13 @@ try {
   check('the commit list: newest first, with subjects', await commitSelect.locator('option').allTextContents(), [`${newestSha.slice(0, 7)} shout two`, `${olderSha.slice(0, 7)} add b`, `${shaOf('main').slice(0, 7)} init`])
   check("the newest commit's files", await until(shownFiles, ['a.txt']), ['a.txt'])
   await commitSelect.selectOption(olderSha)
-  check("another commit's files", await until(shownFiles, ['b.txt']), ['b.txt'])
+  const olderFiles = await until(shownFiles, ['b.txt'])
+  check("another commit's files", olderFiles, ['b.txt'])
+  // Should it fail: what the server answers for that commit, beside what the panel shows.
+  if (JSON.stringify(olderFiles) !== JSON.stringify(['b.txt'])) {
+    const answer = await sdk.request('worktree.changes', { projectId, worktreeId: featureId, source: { kind: 'commit', sha: olderSha } }).catch((err) => ({ error: String(err) }))
+    console.log(`  the server's worktree.changes for ${olderSha}: ${JSON.stringify(answer)}; picked ${JSON.stringify(await commitSelect.inputValue().catch(() => null))}`)
+  }
   await commitSelect.selectOption(newestSha)
   await until(shownFiles, ['a.txt'])
   // Another worktree selected and back: the tab shows the branch again.

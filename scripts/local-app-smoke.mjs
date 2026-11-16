@@ -152,6 +152,13 @@ const alive = (pid) => {
   }
 }
 const spawnsInLog = () => (existsSync(logPath) ? readFileSync(logPath, 'utf8').split('\n').filter((l) => l.includes('starts the local server')).length : 0)
+/** Should a spawn count be off: server.log's lines around each spawn's header, to tell who spawned and how each start ended. */
+const showSpawns = (expected) => {
+  if (spawnsInLog() === expected || !existsSync(logPath)) return
+  const lines = readFileSync(logPath, 'utf8').split('\n')
+  const around = lines.flatMap((l, i) => (l.includes('starts the local server') ? [lines.slice(i, i + 4).join(' | ')] : []))
+  console.log(`  server.log's spawns (${around.length}, expected ${expected}):\n    ${around.join('\n    ')}`)
+}
 
 // ---- The app ---------------------------------------------------------------
 
@@ -315,6 +322,7 @@ try {
     console.log(`note: ${note ?? 'the server closed no inherited descriptor'}`)
   } else console.log("SKIP it keeps none of the app's sockets or pipes open (Linux: macOS's spawn passes only stdio)")
   check('its output goes to server.log in the profile, 0600', [existsSync(logPath), existsSync(logPath) && modeOf(logPath), spawnsInLog()], [true, mode(0o600), 1])
+  showSpawns(1)
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------
 
@@ -416,6 +424,7 @@ try {
   win = await launch()
   check('the next launch reuses it: Local running on the same pid', await until(async () => (await localLink(win))?.local?.pid ?? null, third.pid), third.pid)
   check('no new spawn', spawnsInLog(), 3)
+  showSpawns(3)
   check("main's connection to it is up", await until(async () => (await localLink(win))?.status, 'connected'), 'connected')
   check('no skew question for the same build', (await dialogs()).filter((m) => m.includes('local server is running')).length, 0)
   await quit()
