@@ -15,12 +15,15 @@ import {
   promptFor,
   releaseNotesUrl,
   updateCheckDisabled,
+  updatePlatform,
   type AppUpdateState,
   type UpdateAction
 } from '../shared/appUpdate.ts'
 import { appSettings, updateAppSettings } from './appSettings'
 
-/** What a check found: the feed's newer version this Mac can install (null when there is none), or why it failed. */
+const PLATFORM = updatePlatform(process.platform)
+
+/** What a check found: the feed's newer version this computer can install (null when there is none), or why it failed. */
 type CheckOutcome = { latest: string | null } | { error: unknown }
 
 let state: AppUpdateState = { kind: 'idle' }
@@ -38,7 +41,7 @@ let installing = false
  * with TREK_NO_UPDATE_CHECK set: the smokes launch a packaged app too, and must not reach the feed.
  */
 export function appUpdatesEnabled(): boolean {
-  return app.isPackaged && !updateCheckDisabled(process.env)
+  return app.isPackaged && PLATFORM !== null && !updateCheckDisabled(process.env)
 }
 
 function setState(next: AppUpdateState): void {
@@ -93,7 +96,7 @@ async function runCheck(manual: boolean): Promise<CheckOutcome> {
   try {
     const result = await autoUpdater.checkForUpdates()
     rememberCheck()
-    // A newer release this Mac cannot take (isUpdateAvailable false) is not one it can install.
+    // A newer release this computer cannot take (isUpdateAvailable false) is not one it can install.
     const found: unknown = result?.isUpdateAvailable ? result.updateInfo.version : null
     const latest = typeof found === 'string' ? found : null
     // Offered unless it is not newer, or the user skipped it (a background check).
@@ -301,7 +304,7 @@ export function requestAppUpdateCheck(manual: boolean): void {
 /** The dialog for the current state (the indicator was clicked, or a manual check found an update), and its answer. */
 export async function openUpdatePrompt(): Promise<void> {
   const at = state
-  const prompt = promptFor(at, app.getVersion())
+  const prompt = promptFor(at, app.getVersion(), PLATFORM ?? 'darwin')
   if (!prompt) return
   // `ask` holds the others off only while the dialog is open, not through the download or the install.
   const response = await ask({
@@ -330,7 +333,7 @@ export function startAppUpdates(opts: { prepareQuit: () => Promise<boolean> }): 
   if (!appUpdatesEnabled()) return
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = PLATFORM === 'darwin'
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
   autoUpdater.logger = console

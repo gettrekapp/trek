@@ -37,6 +37,16 @@ export function releaseNotesUrl(version: string): string {
   return `${RELEASES_URL}/tag/v${version}`
 }
 
+/**
+ * How this OS takes an update: the Mac downloads and installs it (Squirrel.Mac); Linux (a .deb)
+ * only offers the release page; anything else has no updater yet (null).
+ */
+export type UpdatePlatform = 'darwin' | 'linux'
+
+export function updatePlatform(platform: string): UpdatePlatform | null {
+  return platform === 'darwin' || platform === 'linux' ? platform : null
+}
+
 /** No check yet, a day since the last one, or a last check in the future (the clock was set back). */
 export function checkDue(lastCheckAt: number | undefined, now: number): boolean {
   return lastCheckAt === undefined || lastCheckAt > now || now - lastCheckAt >= CHECK_INTERVAL_MS
@@ -151,10 +161,26 @@ export interface UpdatePrompt {
   cancelId: number
 }
 
-/** The dialog the indicator (or a manual check) opens for this state; null when there is none. */
-export function promptFor(state: AppUpdateState, current: string): UpdatePrompt | null {
+/**
+ * The dialog the indicator (or a manual check) opens for this state; null when there is none.
+ * On Linux an available update offers the release page (no download); the Mac flow is the default.
+ */
+export function promptFor(state: AppUpdateState, current: string, platform: UpdatePlatform = 'darwin'): UpdatePrompt | null {
   switch (state.kind) {
     case 'available':
+      if (platform === 'linux') {
+        return {
+          message: `Trek ${state.version} is available`,
+          detail:
+            `You have ${current}. Download Trek-${state.version}-linux-<arch>.deb (x64 or arm64) from the release page ` +
+            `and install it with sudo apt install ./Trek-${state.version}-linux-<arch>.deb. The local server keeps ` +
+            'running; Trek then offers to restart it with the new version.',
+          buttons: ['Open Release Page', 'Later', 'Skip This Version'],
+          actions: ['notes', 'later', 'skip'],
+          defaultId: 0,
+          cancelId: 1
+        }
+      }
       return {
         message: `Trek ${state.version} is available`,
         detail: `You have ${current}. Nothing is downloaded until you choose Download.`,

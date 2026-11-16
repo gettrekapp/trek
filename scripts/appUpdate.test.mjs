@@ -14,7 +14,8 @@ import {
   promptFor,
   releaseNotesUrl,
   shouldOffer,
-  updateCheckDisabled
+  updateCheckDisabled,
+  updatePlatform
 } from '../src/shared/appUpdate.ts'
 
 const NOW = 1_800_000_000_000
@@ -179,4 +180,26 @@ test('the release notes link names the tag; a download percent is a whole number
   assert.equal(clampPercent(-3), 0)
   assert.equal(clampPercent(250), 100)
   assert.equal(clampPercent(NaN), 0)
+})
+
+test('updatePlatform: the Mac installs updates, Linux only offers the release page, Windows has no updater yet', () => {
+  assert.equal(updatePlatform('darwin'), 'darwin')
+  assert.equal(updatePlatform('linux'), 'linux')
+  assert.equal(updatePlatform('win32'), null)
+  assert.equal(updatePlatform('freebsd'), null)
+})
+
+test('on Linux an available update offers the release page, never a download', () => {
+  const p = promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'linux')
+  assert.deepEqual(p.buttons, ['Open Release Page', 'Later', 'Skip This Version'])
+  assert.deepEqual(p.actions, ['notes', 'later', 'skip'])
+  assert.equal(p.defaultId, 0)
+  assert.equal(p.cancelId, 1)
+  assert.match(p.detail, /sudo apt install \.\/Trek-0\.7\.0-linux-<arch>\.deb/)
+  assert.ok(!p.actions.includes('download'))
+})
+
+test('promptFor defaults to the Mac flow', () => {
+  assert.deepEqual(promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0'), promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'darwin'))
+  assert.equal(promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'darwin').actions[0], 'download')
 })
