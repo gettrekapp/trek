@@ -4,6 +4,7 @@
   "version": "0.6.0",
   "description": "Multi-worktree Claude workspace manager",
   "license": "MIT",
+  "homepage": "https://github.com/gettrekapp/trek",
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
