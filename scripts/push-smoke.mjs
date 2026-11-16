@@ -31,6 +31,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { startApnsStub, testApnsKey } from './relayStubs.mjs'
+import { fileURLToPath } from 'node:url'
 
 // The server's heartbeat drops a silent socket after about 45 s (section 6), so this runs ~70 s.
 const WATCHDOG_MS = 180_000
@@ -55,7 +56,7 @@ const until = async (fn, expected, ms = 15_000) => {
   return value
 }
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const WebSocket = createRequire(join(root, 'server', 'package.json'))('ws')
 const hashOf = (t) => createHash('sha256').update(t, 'utf8').digest('hex')
 const desktopToken = randomBytes(16).toString('base64url')

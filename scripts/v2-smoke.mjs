@@ -74,6 +74,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 360_000
 const DAEMON_READY_MS = 15_000
@@ -161,7 +162,7 @@ let daemon = null
 const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', join(work, 'data')], {
-      cwd: new URL('../server/', import.meta.url).pathname,
+      cwd: fileURLToPath(new URL('../server/', import.meta.url)),
       env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}` },
       stdio: ['ignore', 'pipe', 'pipe']
     })

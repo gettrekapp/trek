@@ -27,9 +27,10 @@ import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
+import { fileURLToPath } from 'node:url'
 
 const WAIT_MS = 15000
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const bundle = join(root, 'server', 'dist', 'trek-server.cjs')
 const built = JSON.parse(readFileSync(join(root, 'server', 'dist', 'build.json'), 'utf8'))
 

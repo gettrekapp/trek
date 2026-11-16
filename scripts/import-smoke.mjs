@@ -43,6 +43,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
 import { encodeTokenRecord } from '../src/main/serverTokenRules.ts'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 300_000
 const DAEMON_READY_MS = 15_000
@@ -87,7 +88,7 @@ const claudeDir = (cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 // Not realpath'd: macOS, under /var/folders, whose realpath is /private/var/folders. Linux's /tmp
 // is no symlink, so a symlink to the dir beside it stands in for /var (the file's paths through it
 // are not the realpaths, which the server stores).

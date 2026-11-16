@@ -49,6 +49,7 @@ import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 180_000
 
@@ -83,7 +84,7 @@ const first = async (fn, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')

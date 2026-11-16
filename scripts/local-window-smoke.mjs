@@ -48,6 +48,7 @@ import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 240_000
 
@@ -82,7 +83,7 @@ const first = async (fn, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')

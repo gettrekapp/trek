@@ -38,6 +38,7 @@ import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 240_000
 
@@ -60,7 +61,7 @@ const until = async (fn, expected, ms = 15_000) => {
   return value
 }
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-windows-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')

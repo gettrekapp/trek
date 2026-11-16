@@ -51,6 +51,7 @@ import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
 import { closeApp } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
@@ -76,7 +77,7 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const packagedAt = process.argv.indexOf('--packaged')
 const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
 if (packagedAt >= 0 && !packaged) {
