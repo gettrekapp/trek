@@ -33,12 +33,25 @@ export function isInheritedDescriptor(link: string, fdinfo: string): boolean {
 
 const REAL_FS: InheritedFs = { readdirSync, readlinkSync, readFileSync, closeSync }
 
+/** The descriptor of Node's IPC channel, when this process was spawned with one: never closed. */
+function channelFd(): number | undefined {
+  const fd = (process.channel as { fd?: unknown } | undefined)?.fd
+  return typeof fd === 'number' ? fd : undefined
+}
+
 /**
  * Linux: closes the sockets and pipes above stderr that this process inherited (see
- * isInheritedDescriptor). Only for `start --local`: the app hands it nothing but stdin, stdout
- * and stderr. Returns each one it closed, as `<fd> <link>`. Never throws; elsewhere it does nothing.
+ * isInheritedDescriptor), except `keep` (Node's IPC channel, if any). Only for `start --local`:
+ * the app hands it nothing but stdin, stdout and stderr, and a user who runs `start --local` from
+ * a terminal gets the same cleanup. A descriptor named in the environment (a make jobserver's
+ * MAKEFLAGS) is closed all the same: the server never uses one. Returns each one it closed, as
+ * `<fd> <link>`. Never throws; elsewhere it does nothing.
  */
-export function closeInheritedDescriptors(platform: NodeJS.Platform = process.platform, fs: InheritedFs = REAL_FS): string[] {
+export function closeInheritedDescriptors(
+  platform: NodeJS.Platform = process.platform,
+  fs: InheritedFs = REAL_FS,
+  keep: number | undefined = channelFd()
+): string[] {
   if (platform !== 'linux') return []
   let names: string[]
   try {
@@ -49,7 +62,7 @@ export function closeInheritedDescriptors(platform: NodeJS.Platform = process.pl
   const closed: string[] = []
   for (const name of names) {
     const fd = Number(name)
-    if (!Number.isInteger(fd) || fd <= 2) continue
+    if (!Number.isInteger(fd) || fd <= 2 || fd === keep) continue
     try {
       const link = fs.readlinkSync(`/proc/self/fd/${fd}`)
       if (!isInheritedDescriptor(link, fs.readFileSync(`/proc/self/fdinfo/${fd}`, 'utf8'))) continue

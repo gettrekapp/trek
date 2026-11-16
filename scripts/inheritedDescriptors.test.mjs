@@ -53,6 +53,18 @@ test('on Linux it closes only the inherited ones above stderr, and survives one 
   assert.deepEqual(closeInheritedDescriptors('linux', { ...fs, readdirSync: () => { throw new Error('no /proc') } }), [])
 })
 
+test("on Linux it keeps Node's IPC channel, though it looks inherited", () => {
+  const closed = []
+  const fs = {
+    readdirSync: () => ['3', '4'],
+    readlinkSync: (p) => (p.endsWith('/3') ? 'socket:[7]' : 'pipe:[8]'),
+    readFileSync: () => fdinfo('02'),
+    closeSync: (fd) => closed.push(fd)
+  }
+  assert.deepEqual(closeInheritedDescriptors('linux', fs, 3), ['4 pipe:[8]'])
+  assert.deepEqual(closed, [4])
+})
+
 test('Linux: a child handed a socket beyond its stdio closes it, and nothing of its own', { skip: process.platform !== 'linux' && 'Linux only: /proc/self/fdinfo' }, () => {
   const module = fileURLToPath(new URL('../server/src/inheritedDescriptors.ts', import.meta.url))
   const script = `import { closeInheritedDescriptors } from ${JSON.stringify(module)}; process.stdout.write(JSON.stringify(closeInheritedDescriptors()))`
