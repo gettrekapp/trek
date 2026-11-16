@@ -35,6 +35,7 @@ import { parseLocalInfo, parseLockText, type LocalInfo } from '../shared/localSe
 import { globalSocketFactory } from '../shared/client/index.ts'
 import { commandPath } from '../host/commandPath.ts'
 import { hidden } from '../host/childOptions.ts'
+import { killTree } from '../host/processTree.ts'
 import { probeServer } from './appServerProbe'
 import {
   LOCAL_ENTRY_ID,
@@ -815,7 +816,7 @@ export async function quitLocalServer(stopIt: boolean): Promise<void> {
 
 /**
  * Windows, before an update installs: the Local server runs on Trek.exe, which the installer must
- * replace, so it is stopped (`stop --local`, then the restart path's checked TerminateProcess). True
+ * replace, so it is stopped (`stop --local`, then, checked as a restart's SIGKILL is, its process tree ended). True
  * once nothing runs; false when it could not be stopped (the install is then not attempted).
  * Outside the job queue: it runs after prepareQuit, when the queue takes no new job (`quitting`),
  * and with the profile watch closed, so nothing respawns the server it stops. A job begun before
@@ -850,10 +851,16 @@ export async function stopLocalServerForInstall(): Promise<boolean> {
   const lock = readLock()
   const next = afterStop({ code, target, lockPid: lock?.pid, infoPid: readInfo()?.pid, alive: true, holderIsServer: await holderIsServer(target) })
   if (next !== 'sigkill') return false
-  try {
-    process.kill(target, 'SIGKILL')
-  } catch {
-    // Gone meanwhile (ESRCH), or refused (EPERM): the wait below tells which.
+  if (process.platform === 'win32') {
+    // Its whole tree, as stop --local ends it: node-pty's OpenConsole.exe children run from the
+    // install folder too, and would hold the installer up.
+    await killTree(target, { platform: 'win32' })
+  } else {
+    try {
+      process.kill(target, 'SIGKILL')
+    } catch {
+      // Gone meanwhile (ESRCH), or refused (EPERM): the wait below tells which.
+    }
   }
   const killedBy = Date.now() + 3000
   while (pidAlive(target) && Date.now() < killedBy) await sleep(POLL_MS)

@@ -342,8 +342,8 @@ test('isLocalServerCommand: the line Node builds on Windows, a quoted --import-e
 })
 
 test('processCommandLine: ps elsewhere, PowerShell from System32 on Windows', () => {
-  assert.deepEqual(processCommandLine(42, 'darwin'), { file: 'ps', args: ['-o', 'command=', '-p', '42'] })
-  assert.deepEqual(processCommandLine(42, 'linux'), { file: 'ps', args: ['-o', 'command=', '-p', '42'] })
+  assert.deepEqual(processCommandLine(42, 'darwin'), { file: 'ps', args: ['-ww', '-o', 'command=', '-p', '42'] })
+  assert.deepEqual(processCommandLine(42, 'linux'), { file: 'ps', args: ['-ww', '-o', 'command=', '-p', '42'] })
   const win = processCommandLine(42, 'win32', 'C:\\Windows')
   assert.equal(win.file, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
   assert.deepEqual(win.args, [

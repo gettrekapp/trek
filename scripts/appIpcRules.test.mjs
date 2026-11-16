@@ -52,13 +52,14 @@ test('dialogIdOf: a short string, from the options or alone; else none', () => {
 })
 
 test("vscodeLaunch: what code.cmd runs, Code.exe as Node on its cli.js", () => {
-  const env = { PATH: 'C:\\x', ELECTRON_RUN_AS_NODE: undefined }
+  const env = { PATH: 'C:\\x', ELECTRON_RUN_AS_NODE: undefined, VSCODE_DEV: '1' }
   assert.deepEqual(vscodeLaunch('C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd', 'C:\\repo', env), {
     file: 'C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe',
     args: ['C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\resources\\app\\out\\cli.js', 'C:\\repo'],
     env: { PATH: 'C:\\x', ELECTRON_RUN_AS_NODE: '1' }
   })
   assert.equal(env.ELECTRON_RUN_AS_NODE, undefined, 'the env given is not changed')
+  assert.equal(env.VSCODE_DEV, '1')
   const insiders = vscodeLaunch('C:\\Program Files\\Microsoft VS Code Insiders\\bin\\CODE-INSIDERS.CMD', 'D:\\w', {})
   assert.equal(insiders.file, 'C:\\Program Files\\Microsoft VS Code Insiders\\Code - Insiders.exe')
   assert.deepEqual(insiders.args, ['C:\\Program Files\\Microsoft VS Code Insiders\\resources\\app\\out\\cli.js', 'D:\\w'])
@@ -69,5 +70,7 @@ test('vscodeLaunch: the cli.js code.cmd names, when it names one inside the inst
   const text = '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0..\\Code.exe" "%~dp0..\\abc123\\resources\\app\\out\\cli.js" %*\r\n'
   assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, text).args, ['C:\\VS\\abc123\\resources\\app\\out\\cli.js', 'C:\\r'])
   assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, '"%~dp0..\\..\\evil\\cli.js"').args, ['C:\\VS\\resources\\app\\out\\cli.js', 'C:\\r'], 'never outside the install')
+  assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, '"%~dp0..\\x/../../evil\\cli.js"').args, ['C:\\VS\\resources\\app\\out\\cli.js', 'C:\\r'], 'nor with forward slashes')
+  assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, '"%~dp0..\\x/y\\cli.js"').args, ['C:\\VS\\x\\y\\cli.js', 'C:\\r'], 'a forward slash inside is kept inside')
   assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, 'garbage').args, ['C:\\VS\\resources\\app\\out\\cli.js', 'C:\\r'])
 })

@@ -33,12 +33,21 @@ export function vscodeLaunch(
   const install = win32.dirname(win32.dirname(codeCmd))
   const insiders = win32.basename(codeCmd).toLowerCase() === 'code-insiders.cmd'
   const named = /"%~dp0\.\.\\([^"%]+\\cli\.js)"/i.exec(cmdText)?.[1]
-  const cli = named && !named.split('\\').includes('..') ? win32.join(install, named) : win32.join(install, 'resources', 'app', 'out', 'cli.js')
+  const cli = named !== undefined && inside(install, named) ? win32.resolve(install, named) : win32.join(install, 'resources', 'app', 'out', 'cli.js')
+  // As code.cmd: VSCODE_DEV cleared (a dev build's would point Code.exe at its sources).
+  const launchEnv: Record<string, string | undefined> = { ...env, ELECTRON_RUN_AS_NODE: '1' }
+  delete launchEnv.VSCODE_DEV
   return {
     file: win32.join(install, insiders ? 'Code - Insiders.exe' : 'Code.exe'),
     args: [cli, folder],
-    env: { ...env, ELECTRON_RUN_AS_NODE: '1' }
+    env: launchEnv
   }
+}
+
+/** `rel` (either slash) resolved under `dir` stays inside it. */
+function inside(dir: string, rel: string): boolean {
+  const back = win32.relative(dir, win32.resolve(dir, rel))
+  return back !== '' && back !== '..' && !back.startsWith('..\\') && !win32.isAbsolute(back)
 }
 
 /** A .trekproj to open: an absolute path ending in .trekproj; else null. */

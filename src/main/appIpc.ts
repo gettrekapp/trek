@@ -180,7 +180,15 @@ export function registerAppIpc(): void {
     const codeCmd = process.platform === 'win32' ? windowsCodeCmd() : undefined
     if (codeCmd) {
       const { file, args, env } = vscodeLaunch(codeCmd, dirPath, process.env, await readFile(codeCmd, 'utf8').catch(() => ''))
-      await execFileAsync(commandPath(file), args, hidden({ env }))
+      try {
+        await execFileAsync(commandPath(file), args, hidden({ env }))
+      } catch (err) {
+        // A PATH entry left by an uninstalled VS Code.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`VS Code was not found at ${file} (from ${codeCmd} on PATH). Reinstall VS Code, or remove its old folder from PATH.`)
+        }
+        throw err
+      }
       return
     }
     try {
