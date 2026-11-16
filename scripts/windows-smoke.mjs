@@ -244,13 +244,21 @@ try {
       headers: { ...headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_worktrees', arguments: {} } })
     })
-    return { config, text: JSON.stringify(await res.json()) }
+    // The tool's answer is JSON in a text part: its worktrees' paths, parsed (a raw substring match
+    // misses a Windows path, whose backslashes JSON escapes).
+    const answer = await res.json()
+    let paths = null
+    try {
+      paths = JSON.parse(answer.result.content[0].text).map((w) => w.path)
+    } catch {}
+    return { config, paths, raw: JSON.stringify(answer).slice(0, 600) }
   }
   const mcpA = await mcpList(ids.alpha)
   const mcpB = await mcpList(ids.beta)
   check('each project has its own MCP config', mcpA.config !== mcpB.config, true)
-  check("alpha's token lists alpha's worktrees, not beta's", [mcpA.text.includes(repos.alpha), mcpA.text.includes(repos.beta)], [true, false])
-  check("beta's token lists beta's worktrees, not alpha's", [mcpB.text.includes(repos.beta), mcpB.text.includes(repos.alpha)], [true, false])
+  check("alpha's token lists alpha's worktrees, not beta's", [mcpA.paths?.includes(repos.alpha) ?? null, mcpA.paths?.includes(repos.beta) ?? null], [true, false])
+  check("beta's token lists beta's worktrees, not alpha's", [mcpB.paths?.includes(repos.beta) ?? null, mcpB.paths?.includes(repos.alpha) ?? null], [true, false])
+  for (const [name, m] of [['alpha', mcpA], ['beta', mcpB]]) if (!m.paths?.includes(repos[name])) console.log(`  ${name}'s token listed: ${JSON.stringify(m.paths)} (${m.raw})`)
 
   // ---- Closing a window ------------------------------------------------------------------------------
 
