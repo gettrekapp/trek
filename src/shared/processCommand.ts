@@ -5,18 +5,25 @@
 
 /**
  * How to read a pid's command line: `ps` on macOS and Linux; PowerShell's Win32_Process on Windows
- * (there is no ps), from System32 (`systemRoot`, %SystemRoot%), never PATH or the cwd.
+ * (there is no ps), from System32 (`systemRoot`: %SystemRoot%, or %windir%, as commandPath finds
+ * Windows' own tools), never PATH or the cwd.
  */
 export function processCommandLine(
   pid: number,
   platform: string = process.platform,
-  systemRoot: string = process.env.SystemRoot ?? 'C:\\Windows'
+  systemRoot: string = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
 ): { file: string; args: string[] } {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error(`not a pid: ${pid}`)
   if (platform !== 'win32') return { file: 'ps', args: ['-o', 'command=', '-p', String(pid)] }
   return {
     file: `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-    args: ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`]
+    // UTF-8 out, so a path with non-ASCII letters decodes as Node reads it.
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`
+    ]
   }
 }
 

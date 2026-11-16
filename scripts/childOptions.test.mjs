@@ -15,7 +15,7 @@ const PLUGIN_SERVERS = readdirSync(join(root, 'plugins'))
   .map((id) => `plugins/${id}/server`)
   .filter((dir) => existsSync(join(root, dir)) && statSync(join(root, dir)).isDirectory())
 const TREES = ['server/src', 'src/host', 'src/main', ...PLUGIN_SERVERS]
-/** Calls that are not child_process ones, or that never run on Windows. */
+/** Calls that are not child_process ones, or that never run on Windows. Each entry exempts its whole file. */
 const ALLOWED = new Set([
   // The bot refuses to start on win32 (src/host/bot/sandbox.ts), so its processes never run there.
   'src/host/bot/turnProcess.ts',

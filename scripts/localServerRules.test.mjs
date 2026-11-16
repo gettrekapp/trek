@@ -346,7 +346,12 @@ test('processCommandLine: ps elsewhere, PowerShell from System32 on Windows', ()
   assert.deepEqual(processCommandLine(42, 'linux'), { file: 'ps', args: ['-o', 'command=', '-p', '42'] })
   const win = processCommandLine(42, 'win32', 'C:\\Windows')
   assert.equal(win.file, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
-  assert.deepEqual(win.args, ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter 'ProcessId=42').CommandLine"])
+  assert.deepEqual(win.args, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter 'ProcessId=42').CommandLine"
+  ])
   assert.throws(() => processCommandLine(1.5, 'win32', 'C:\\Windows'), /pid/)
 })
 

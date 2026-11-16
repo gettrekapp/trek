@@ -74,6 +74,8 @@ import type { LocalServerStatus } from '../shared/types'
 export const LOCAL_SERVER_DISABLED = localServerDisabled(process.env)
 /** `stop --local` waits up to 10 s itself; this bounds the wait for it. */
 const STOP_TIMEOUT_MS = 15_000
+/** stopLocalServerForInstall's bound for stop --local */
+const INSTALL_STOP_TIMEOUT_MS = 20_000
 /** Quit with "Stop local server on quit": how long it waits for a job in progress before stopping directly */
 const QUIT_WAIT_MS = 20_000
 /** ...and how long that direct `stop --local` may take */
@@ -197,8 +199,11 @@ function portRefused(port: number): Promise<boolean> {
 /**
  * The pid's command line (processCommandLine: `ps -o command= -p <pid>`, or PowerShell's
  * Win32_Process on Windows) is this profile's local server (isLocalServerCommand); undefined if
- * the command fails or prints nothing (unknown). 5 s: PowerShell's start alone can take seconds.
+ * the command fails or prints nothing (unknown).
  */
+/** ps answers at once; PowerShell's cold start alone can take several seconds. */
+const HOLDER_TIMEOUT_MS = process.platform === 'win32' ? 10_000 : 3000
+
 function holderIsServer(pid: number): Promise<boolean | undefined> {
   return new Promise((resolve) => {
     let command: { file: string; args: string[] }
@@ -209,7 +214,7 @@ function holderIsServer(pid: number): Promise<boolean | undefined> {
       return
     }
     const { file, args } = command
-    execFile(commandPath(file), args, hidden({ timeout: 5000, encoding: 'utf8' as const }), (err, stdout) => {
+    execFile(commandPath(file), args, hidden({ timeout: HOLDER_TIMEOUT_MS, encoding: 'utf8' as const }), (err, stdout) => {
       const command = String(stdout ?? '').trim()
       resolve(err || command === '' ? undefined : isLocalServerCommand(command, PROFILE))
     })
@@ -363,8 +368,8 @@ async function spawnAndWait(): Promise<void> {
   let child
   try {
     // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
-    // windowsHide (hidden): on Windows, detached gives the console-less server a console window of
-    // its own otherwise.
+    // windowsHide (hidden): belt and braces. Trek.exe is a GUI-subsystem program, so the server it
+    // runs as gets no console; were it a console one, detached would give it a window of its own.
     // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
     // server takes them over once (server/src/integrations/envSeed.ts). Resolved: the server takes only an absolute path.
     child = spawn(
@@ -818,6 +823,9 @@ export async function quitLocalServer(stopIt: boolean): Promise<void> {
  */
 export async function stopLocalServerForInstall(): Promise<boolean> {
   if (LOCAL_SERVER_DISABLED) return true
+  // Only after the quit steps (quitLocalServer): before them a job could start a server again, and
+  // the watch would follow (and report) the stop.
+  if (!quitting) return false
   // A job begun before quit (a start or restart) still runs, and may spawn a server: wait for it, bounded.
   let timer: NodeJS.Timeout | undefined
   const settled = await Promise.race([
@@ -833,7 +841,9 @@ export async function stopLocalServerForInstall(): Promise<boolean> {
   const ours = await holderIsServer(target)
   if (ours === false) return true
   if (ours === undefined) return false
-  const { code } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)])
+  // stop --local on Windows can take past STOP_TIMEOUT_MS: its 10 s wait, PowerShell's command-line
+  // check (seconds when cold), then up to 5 s after taskkill. A timeout is a code null: refused below.
+  const { code } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)], INSTALL_STOP_TIMEOUT_MS)
   const until = Date.now() + 5000
   while (pidAlive(target) && Date.now() < until) await sleep(POLL_MS)
   if (!pidAlive(target)) return true
