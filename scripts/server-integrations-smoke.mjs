@@ -52,6 +52,10 @@ const DAEMON_READY_MS = 15_000
 
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -324,7 +328,7 @@ try {
   check('a good key connects, as its Linear user', await until(() => linearSection.locator('.settings-desc', { hasText: 'Connected' }).textContent().catch(() => null), 'Connected as Ada Lovelace'), 'Connected as Ada Lovelace')
   const secrets = join(work, 'secrets.json')
   check('every connection hears the key changed, subscribed to nothing or not', await until(() => sdkChanges.filter((c) => c.linear).length > 0, true), true)
-  check("the key is in the server's secrets file, beside its config, owner-only", [existsSync(secrets) ? JSON.parse(readFileSync(secrets, 'utf8')).linear === LINEAR_KEY : false, existsSync(secrets) ? statSync(secrets).mode & 0o777 : null], [true, 0o600])
+  check("the key is in the server's secrets file, beside its config, owner-only", [existsSync(secrets) ? JSON.parse(readFileSync(secrets, 'utf8')).linear === LINEAR_KEY : false, existsSync(secrets) ? modeOf(secrets) : null], [true, mode(0o600)])
   check("the branch's ticket chip shows the issue, looked up by the server", await until(() => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null), 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
   check('every Linear request carried the key the user typed, from the server', [...new Set(linearRequests.map((r) => r.auth))], ['lin_api_wrong', LINEAR_KEY])
 

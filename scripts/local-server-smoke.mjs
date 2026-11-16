@@ -63,6 +63,9 @@ let failed = false
 const ok = (msg) => { checks++; console.log(`ok: ${msg}`) }
 const fail = (msg) => { checks++; failed = true; console.error(`FAIL: ${msg}`) }
 const check = (cond, msg, detail = '') => (cond ? ok(msg) : fail(detail ? `${msg}: ${detail}` : msg))
+/** A check this platform cannot make: named, with why, and not counted. */
+const skip = (msg, why) => console.log(`SKIP ${msg} (${why})`)
+const WIN = process.platform === 'win32'
 
 /** Resolves true once `pred()` holds, false after `ms`. */
 const waitFor = async (pred, ms = WAIT_MS) => {
@@ -173,11 +176,13 @@ async function suite(rt) {
     const a = start()
     must(await waitFor(() => info()?.pid === a.child.pid || a.code !== undefined), 'local.json appears with the server\'s pid', `code ${a.code}, ${a.err}`)
     const infoA = info()
-    check((statSync(infoPath).mode & 0o777) === 0o600, 'local.json is 0600', (statSync(infoPath).mode & 0o777).toString(8))
+    if (WIN) skip('local.json is 0600', 'Windows has no file modes; the user profile protects it')
+    else check((statSync(infoPath).mode & 0o777) === 0o600, 'local.json is 0600', (statSync(infoPath).mode & 0o777).toString(8))
     check(infoA.version === built.version && infoA.build === built.build, `local.json has the bundle's version and build (${infoA.version}, ${infoA.build})`, JSON.stringify(infoA))
     check(lockPid() === a.child.pid, 'local.lock holds the pid')
     // The smoke made the profile directory 0755; the lock tightens it.
-    check((statSync(profile).mode & 0o777) === 0o700, 'the profile directory is 0700', (statSync(profile).mode & 0o777).toString(8))
+    if (WIN) skip('the profile directory is 0700', 'Windows has no file modes; the user profile protects it')
+    else check((statSync(profile).mode & 0o777) === 0o700, 'the profile directory is 0700', (statSync(profile).mode & 0o777).toString(8))
     check(a.out.includes(`listening on ws://127.0.0.1:${infoA.port}`), 'it listens on 127.0.0.1 at the port in local.json', a.out)
 
     // --- 3. the welcome ---

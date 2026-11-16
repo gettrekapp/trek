@@ -57,6 +57,10 @@ const WATCHDOG_MS = 180_000
 
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -343,7 +347,7 @@ try {
   const handover = join(userData, 'integrations-handover.json')
   check('main handed the Linear and ElevenLabs settings to this Local profile once', await until(() => (existsSync(handover) ? JSON.parse(readFileSync(handover, 'utf8')) : null), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true }), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true })
   const serverSecrets = join(profile, 'secrets.json')
-  check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? statSync(serverSecrets).mode & 0o777 : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, 0o600])
+  check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? modeOf(serverSecrets) : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, mode(0o600)])
   const voiceFile = join(localData, 'plugins', 'voice', 'config.json')
   check("and the voice and model, with Summarize automatically (the voice plugin's config)", existsSync(voiceFile) ? JSON.parse(readFileSync(voiceFile, 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
   check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).plugins.voice?.active, false)

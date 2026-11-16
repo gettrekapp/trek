@@ -65,6 +65,10 @@ const WIN = process.platform === 'win32'
 const winPath = (p) => win32.normalize(p).toLowerCase()
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -310,7 +314,7 @@ try {
     const note = readFileSync(logPath, 'utf8').split('\n').find((l) => l.startsWith('local: closed '))
     console.log(`note: ${note ?? 'the server closed no inherited descriptor'}`)
   } else console.log("SKIP it keeps none of the app's sockets or pipes open (Linux: macOS's spawn passes only stdio)")
-  check('its output goes to server.log in the profile, 0600', [existsSync(logPath), statSync(logPath).mode & 0o777, spawnsInLog()], [true, 0o600, 1])
+  check('its output goes to server.log in the profile, 0600', [existsSync(logPath), existsSync(logPath) && modeOf(logPath), spawnsInLog()], [true, mode(0o600), 1])
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------
 
