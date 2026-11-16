@@ -7,6 +7,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
+import { hidden } from '../host/childOptions.ts'
+import { commandPath } from '../host/commandPath.ts'
 import { getRecents, removeRecent } from './recents'
 import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
@@ -158,10 +160,10 @@ export function registerAppIpc(): void {
     const dirPath = editorPath(raw)
     if (!dirPath) throw new Error('dirPath must be an absolute path')
     try {
-      await execFileAsync('code', [dirPath])
+      await execFileAsync(commandPath('code'), [dirPath], hidden({}))
     } catch {
       // `code` shell command not installed — launch the app bundle directly.
-      await execFileAsync('open', ['-a', 'Visual Studio Code', dirPath])
+      await execFileAsync(commandPath('open'), ['-a', 'Visual Studio Code', dirPath], hidden({}))
     }
   })
 }

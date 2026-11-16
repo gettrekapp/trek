@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { hidden } from '../host/childOptions.ts'
+import { commandPath } from '../host/commandPath.ts'
 import { ghBinary, publicApiFallback } from './ghBinary.ts'
 
 const execFileAsync = promisify(execFile)
@@ -25,9 +27,9 @@ async function prHeadBranch(owner: string, repo: string, number: number): Promis
   try {
     if (gh === null) throw new Error('TREK_SERVER_GH is not an absolute path')
     const { stdout } = await execFileAsync(
-      gh,
+      commandPath(gh),
       ['pr', 'view', String(number), '--repo', `${owner}/${repo}`, '--json', 'headRefName'],
-      { timeout: 15_000 }
+      hidden({ timeout: 15_000 })
     )
     const name = (JSON.parse(stdout) as { headRefName?: unknown }).headRefName
     if (typeof name === 'string' && name) return name

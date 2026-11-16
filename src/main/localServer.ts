@@ -10,7 +10,7 @@
 // never restarts the installed Trek's server. The decisions are pure, in localServerRules.ts; this file
 // does the I/O.
 import { app, dialog, ipcMain } from 'electron'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type SpawnOptions, type SpawnOptionsWithStdioTuple, type StdioNull, type StdioPipe } from 'node:child_process'
 import {
   closeSync,
   copyFileSync,
@@ -33,6 +33,8 @@ import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { parseLocalInfo, parseLockText, type LocalInfo } from '../shared/localServer.ts'
 import { globalSocketFactory } from '../shared/client/index.ts'
+import { commandPath } from '../host/commandPath.ts'
+import { hidden } from '../host/childOptions.ts'
 import { probeServer } from './appServerProbe'
 import {
   LOCAL_ENTRY_ID,
@@ -54,6 +56,7 @@ import {
   lostRaceDeadline,
   parseBuildJson,
   probeVerdict,
+  processCommandLine,
   resetDecision,
   sameFile,
   skewOf,
@@ -192,12 +195,21 @@ function portRefused(port: number): Promise<boolean> {
 }
 
 /**
- * The pid's command line (`ps -o command= -p <pid>`) is this profile's local server
- * (isLocalServerCommand); undefined if ps fails or prints nothing (unknown).
+ * The pid's command line (processCommandLine: `ps -o command= -p <pid>`, or PowerShell's
+ * Win32_Process on Windows) is this profile's local server (isLocalServerCommand); undefined if
+ * the command fails or prints nothing (unknown). 5 s: PowerShell's start alone can take seconds.
  */
 function holderIsServer(pid: number): Promise<boolean | undefined> {
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000, encoding: 'utf8' }, (err, stdout) => {
+    let command: { file: string; args: string[] }
+    try {
+      command = processCommandLine(pid)
+    } catch {
+      resolve(undefined)
+      return
+    }
+    const { file, args } = command
+    execFile(commandPath(file), args, hidden({ timeout: 5000, encoding: 'utf8' as const }), (err, stdout) => {
       const command = String(stdout ?? '').trim()
       resolve(err || command === '' ? undefined : isLocalServerCommand(command, PROFILE))
     })
@@ -351,14 +363,20 @@ async function spawnAndWait(): Promise<void> {
   let child
   try {
     // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
+    // windowsHide (hidden): on Windows, detached gives the console-less server a console window of
+    // its own otherwise.
     // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
     // server takes them over once (server/src/integrations/envSeed.ts). Resolved: the server takes only an absolute path.
-    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', resolvePath(app.getPath('userData'))], {
-      cwd: homedir(),
-      detached: true,
-      env: childEnv(process.env),
-      stdio: ['ignore', fd, fd]
-    })
+    child = spawn(
+      process.execPath,
+      [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', resolvePath(app.getPath('userData'))],
+      hidden<SpawnOptions>({
+        cwd: homedir(),
+        detached: true,
+        env: childEnv(process.env),
+        stdio: ['ignore', fd, fd]
+      })
+    )
   } catch (err) {
     closeSync(fd)
     fail(`Could not start the local server: ${err instanceof Error ? err.message : String(err)}`)
@@ -426,11 +444,14 @@ async function ensure(): Promise<void> {
   else await spawnAndWait()
 }
 
+/** A spawn's options with stdout and stderr piped (hidden() would widen the stdio tuple otherwise). */
+type PipedOutput = SpawnOptionsWithStdioTuple<StdioNull, StdioPipe, StdioPipe>
+
 /** Runs the bundled CLI (`stop --local`) to its end; its exit code (null on a timeout) and output. */
 function runCli(args: string[], timeoutMs = STOP_TIMEOUT_MS): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
     let output = ''
-    const child = spawn(process.execPath, [serverBundle(), ...args], { cwd: homedir(), env: childEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [serverBundle(), ...args], hidden<PipedOutput>({ cwd: homedir(), env: childEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] }))
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       resolve({ code: null, output })
@@ -785,4 +806,41 @@ export async function quitLocalServer(stopIt: boolean): Promise<void> {
   console.warn(`trek: the local server was still busy after ${QUIT_WAIT_MS / 1000} s at quit; running stop --local directly`)
   const { code, output } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)], QUIT_DIRECT_STOP_MS)
   if (code !== 0) console.error(`trek: stop --local at quit exited ${code ?? 'on a timeout'}: ${output.trim()}`)
+}
+
+/**
+ * Windows, before an update installs: the Local server runs on Trek.exe, which the installer must
+ * replace, so it is stopped (`stop --local`, then the restart path's checked TerminateProcess). True
+ * once nothing runs; false when it could not be stopped (the install is then not attempted).
+ * Outside the job queue: it runs after prepareQuit, when the queue takes no new job (`quitting`),
+ * and with the profile watch closed, so nothing respawns the server it stops. A job begun before
+ * quit is waited for first (QUIT_WAIT_MS); still running then, it gives up (false).
+ */
+export async function stopLocalServerForInstall(): Promise<boolean> {
+  if (LOCAL_SERVER_DISABLED) return true
+  // A job begun before quit (a start or restart) still runs, and may spawn a server: wait for it, bounded.
+  let timer: NodeJS.Timeout | undefined
+  const settled = await Promise.race([
+    chain.then(() => true),
+    new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), QUIT_WAIT_MS)))
+  ])
+  clearTimeout(timer)
+  if (!settled || busy) return false
+  const target = current?.pid ?? readInfo()?.pid
+  if (target === undefined || !pidAlive(target)) return true
+  const { code } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)])
+  const until = Date.now() + 5000
+  while (pidAlive(target) && Date.now() < until) await sleep(POLL_MS)
+  if (!pidAlive(target)) return true
+  const lock = readLock()
+  const next = afterStop({ code, target, lockPid: lock?.pid, infoPid: readInfo()?.pid, alive: true, holderIsServer: await holderIsServer(target) })
+  if (next !== 'sigkill') return false
+  try {
+    process.kill(target, 'SIGKILL')
+  } catch {
+    // Gone meanwhile (ESRCH), or refused (EPERM): the wait below tells which.
+  }
+  const killedBy = Date.now() + 3000
+  while (pidAlive(target) && Date.now() < killedBy) await sleep(POLL_MS)
+  return !pidAlive(target)
 }

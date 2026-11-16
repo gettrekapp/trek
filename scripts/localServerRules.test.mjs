@@ -24,6 +24,7 @@ import {
   lostRaceDeadline,
   parseBuildJson,
   probeVerdict,
+  processCommandLine,
   resetDecision,
   sameFile,
   skewOf,
@@ -314,4 +315,36 @@ test('keepAfterFailure: a failed stop or restart keeps a server local.json still
   assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur, pid: 1 }, alive: true }), false, 'another pid')
   assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur, port: 1 }, alive: true }), false, 'another port')
   assert.equal(keepAfterFailure({ op: 'restart', current: cur, info: { ...cur, token: 'u' }, alive: true }), false, 'another token')
+})
+
+test('isLocalServerCommand: a Windows command line, quoted executable and backslashes', () => {
+  const exe = '"C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\Trek.exe"'
+  const bundle = 'C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs'
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from C:\\Users\\me\\AppData\\Roaming\\Trek Dev`, undefined), true)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, 'dev'), true)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, undefined), false)
+  assert.equal(isLocalServerCommand(`${exe} --type=renderer`, undefined), false)
+  // A quoted bundle path (a user folder with a space).
+  assert.equal(isLocalServerCommand(`${exe} "C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs" start --local`, undefined), true)
+})
+
+test('isLocalServerCommand: the line Node builds on Windows, a quoted --import-env-from beside --local-profile', () => {
+  // libuv quotes an argument with a space as one ("…\Trek Dev"); the profile sits between quoted args.
+  const exe = '"C:\\Users\\Jo Smith\\repo\\node_modules\\electron\\dist\\electron.exe"'
+  const bundle = '"C:\\Users\\Jo Smith\\repo\\out\\server\\trek-server.cjs"'
+  const line = `${exe} ${bundle} start --local --local-profile dev-wt2 --import-env-from "C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek Dev"`
+  assert.equal(isLocalServerCommand(line, 'dev-wt2'), true)
+  assert.equal(isLocalServerCommand(line, 'dev'), false)
+  assert.equal(isLocalServerCommand(line, undefined), false)
+  // The default profile: no --local-profile, a quoted import path last.
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from "C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek"`, undefined), true)
+})
+
+test('processCommandLine: ps elsewhere, PowerShell from System32 on Windows', () => {
+  assert.deepEqual(processCommandLine(42, 'darwin'), { file: 'ps', args: ['-o', 'command=', '-p', '42'] })
+  assert.deepEqual(processCommandLine(42, 'linux'), { file: 'ps', args: ['-o', 'command=', '-p', '42'] })
+  const win = processCommandLine(42, 'win32', 'C:\\Windows')
+  assert.equal(win.file, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+  assert.deepEqual(win.args, ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter 'ProcessId=42').CommandLine"])
+  assert.throws(() => processCommandLine(1.5, 'win32', 'C:\\Windows'), /pid/)
 })
