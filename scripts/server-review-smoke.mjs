@@ -85,7 +85,14 @@ for (const dir of [serverHome, appHome, userData, data]) mkdirSync(dir, { recurs
 
 const repo = join(serverHome, 'repos', 'app')
 const worktree = `${repo}-feature-x`
-const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8' })
+// No global or system git config for the smoke's git or the server's: both then read a file the
+// same way. On Windows, Git's system config sets core.autocrlf=true, which the server (under its own
+// HOME, so with no global config) would apply to the worktree it checks out (a.txt with CRLF),
+// while the smoke's git, under the runner's global core.autocrlf=false, would commit that as a
+// change to every line of a.txt.
+// /dev/null on Windows too: Git for Windows reads it as NUL (server-promote does the same).
+const noGitConfig = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8', env: { ...process.env, ...noGitConfig } })
 git('init', '-q', '-b', 'main', repo)
 writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\n')
 git('-C', repo, 'add', '.')
@@ -160,7 +167,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
