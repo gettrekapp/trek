@@ -1,6 +1,6 @@
 // Tokens saved without a keyring (Linux without GNOME Keyring or KWallet): a one-time notice,
 // remembered in userData/keyring-notice.json, and the fact for Settings (app:secretStorage).
-import { app, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, type MessageBoxOptions } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { onUnencryptedSave, secretStorage, writeFileAtomic } from './secrets'
@@ -17,7 +17,7 @@ async function showOnce(): Promise<void> {
   showing = true
   try {
     await writeFileAtomic(markerPath(), JSON.stringify({ shownAt: new Date().toISOString() }))
-    await dialog.showMessageBox({
+    const options: MessageBoxOptions = {
       type: 'warning',
       message: 'Server tokens are stored unencrypted',
       detail:
@@ -26,7 +26,10 @@ async function showOnce(): Promise<void> {
         'Install and unlock GNOME Keyring (gnome-keyring) or KWallet, then restart Trek: tokens saved ' +
         'from then on are encrypted.',
       buttons: ['OK']
-    })
+    }
+    const parent = BrowserWindow.getFocusedWindow()
+    if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, options)
+    else await dialog.showMessageBox(options)
   } catch (err) {
     console.warn('trek: the keyring notice failed', err)
   } finally {
@@ -34,8 +37,12 @@ async function showOnce(): Promise<void> {
   }
 }
 
-/** After ready. */
+/**
+ * After ready. Linux only: the advice (GNOME Keyring, KWallet) is Linux's, so other OSes keep
+ * their behaviour (no notice, no Settings line) even when safeStorage is unavailable there.
+ */
 export function registerKeyringNotice(): void {
-  ipcMain.handle('app:secretStorage', (): SecretStorageKind => secretStorage())
-  onUnencryptedSave(() => void showOnce())
+  const linux = process.platform === 'linux'
+  ipcMain.handle('app:secretStorage', (): SecretStorageKind => (linux ? secretStorage() : 'encrypted'))
+  if (linux) onUnencryptedSave(() => void showOnce())
 }

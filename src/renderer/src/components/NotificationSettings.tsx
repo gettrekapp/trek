@@ -17,7 +17,12 @@ export function NotificationSettings({ afterNotifications }: { afterNotification
   const [storage, setStorage] = useState<'encrypted' | 'unencrypted' | null>(null)
   useEffect(() => {
     let live = true
-    window.api.secretStorage().then((kind) => live && setStorage(kind)).catch(() => undefined)
+    window.api
+      .secretStorage()
+      .then((kind) => {
+        if (live) setStorage(kind)
+      })
+      .catch(() => undefined)
     return () => {
       live = false
     }

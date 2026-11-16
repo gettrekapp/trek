@@ -18,12 +18,17 @@ export function secretStorage(): SecretStorageKind {
 }
 
 let onUnencrypted: (() => void) | null = null
-/** Called (not awaited) after a secret is saved while secretStorage() is 'unencrypted' (keyringNotice.ts). */
+/** Holds a single listener (a second call replaces it). Called (not awaited) after a secret is saved while secretStorage() is 'unencrypted' (keyringNotice.ts). */
 export function onUnencryptedSave(listener: () => void): void {
   onUnencrypted = listener
 }
 const savedOne = (): void => {
-  if (onUnencrypted && secretStorage() === 'unencrypted') onUnencrypted()
+  try {
+    if (onUnencrypted && secretStorage() === 'unencrypted') onUnencrypted()
+  } catch (err) {
+    // The secret is saved; the notice is best-effort.
+    console.warn('trek: the unencrypted-save hook failed', err)
+  }
 }
 
 /** A stored secret as read: none stored, stored but not decryptable here (safeStorage refused, an unreadable file), or its value. */
