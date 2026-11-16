@@ -194,7 +194,18 @@ try {
     }
     return outputs.get(id).text
   }
-  const argLines = (text) => text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('ARG['))
+  // The pty's raw output as lines. On Windows it comes through ConPTY, which renders the screen with
+  // VT sequences: its first lines arrive after a mode/clear/title preamble (\x1b[?9001h…\x1b]0;…\x07)
+  // and may be placed with cursor moves rather than CRLF. A cursor move starts a new line here; the
+  // rest of the sequences (CSI, OSC, the two-byte ones) are dropped.
+  const plainLines = (text) =>
+    text
+      .replace(/\x1b\[[0-9;?]*[Hf]/g, '\n')
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+      .replace(/\x1b[()][0-9A-Za-z]|\x1b[=>78DEM]/g, '')
+      .split(/\r?\n|\r/)
+  const argLines = (text) => plainLines(text).map((l) => l.trim()).filter((l) => l.startsWith('ARG['))
 
   /** The session's output once its agent printed `ready`, or what it printed by the timeout. */
   const launched = async (id) =>
@@ -231,6 +242,8 @@ try {
     const args = argLines(text)
     check(`${c.provider}: launched the configured fake command`, args.length > 0, text.slice(-300))
     for (const arg of c.args) check(`${c.provider}: argv has ${arg}`, args.some((l) => l.includes(arg)), args.join(' | '))
+    // The raw start of the output, should a line still be missed: what the pty sent, escapes and all.
+    if (!c.args.every((arg) => args.some((l) => l.includes(arg)))) console.log(`  raw output start: ${JSON.stringify(text.slice(0, 600))}`)
     if (c.provider === 'codex') {
       const at = args.findIndex((l) => l === 'ARG[--]')
       check('codex: -- directly precedes the first message', at >= 0 && args[at + 1] === 'ARG[--evil-flag hello]', args.join(' | '))
