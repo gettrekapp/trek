@@ -42,13 +42,14 @@
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
@@ -290,6 +291,21 @@ try {
   }
   const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
   check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  // Linux: none of the app's sockets or pipes (on macOS libuv's spawn hands the child only its stdio).
+  if (process.platform === 'linux') {
+    const fdDir = `/proc/${first.pid}/fd`
+    const held = readdirSync(fdDir).flatMap((fd) => {
+      try {
+        const link = readlinkSync(`${fdDir}/${fd}`)
+        return Number(fd) > 2 && isInheritedDescriptor(link, readFileSync(`/proc/${first.pid}/fdinfo/${fd}`, 'utf8')) ? [`${fd} ${link}`] : []
+      } catch {
+        return []
+      }
+    })
+    check("it keeps none of the app's sockets or pipes open (Linux)", held, [])
+    const note = readFileSync(logPath, 'utf8').split('\n').find((l) => l.startsWith('local: closed '))
+    console.log(`note: ${note ?? 'the server closed no inherited descriptor'}`)
+  } else console.log("SKIP it keeps none of the app's sockets or pipes open (Linux: macOS's spawn passes only stdio)")
   check('its output goes to server.log in the profile, 0600', [existsSync(logPath), statSync(logPath).mode & 0o777, spawnsInLog()], [true, 0o600, 1])
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------

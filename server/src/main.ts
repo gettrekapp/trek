@@ -32,6 +32,7 @@ import { pollMsFromEnv } from './prWatch/watcher'
 import { clockFromFile } from './automations/scheduler'
 import { pruneRecoveryFiles } from './promote/promoteHandlers'
 import { hardenWindowsEnv } from '../../src/host/commandPath.ts'
+import { closeInheritedDescriptors } from './inheritedDescriptors.ts'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -106,6 +107,12 @@ if (local) {
   // the app's dev server, and no agent should see it.
   delete process.env.ELECTRON_RUN_AS_NODE
   delete process.env.ELECTRON_RENDERER_URL
+  // Linux: the app's own sockets and pipes, which this process (and its agents) would keep open
+  // after the app quits (Node's own are close-on-exec, and stay).
+  if (args.command === 'start') {
+    const closed = closeInheritedDescriptors()
+    if (closed.length > 0) console.log(`local: closed ${closed.length} descriptor(s) inherited from the app: ${closed.join(', ')}`)
+  }
 }
 
 if (args.command === 'stop' && local) process.exit(stopLocal(local))
