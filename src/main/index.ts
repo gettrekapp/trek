@@ -76,6 +76,8 @@ if (!ownsInstance) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv, cwd) => {
+    // Quitting: a window opened now would miss the close handshake and the saved windows.
+    if (isQuitting()) return
     const files = trekprojArgs(argv, cwd, isFile)
     for (const path of files) openOrQueue(path)
     if (files.length > 0 || !opensReady) return
