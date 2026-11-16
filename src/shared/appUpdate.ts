@@ -38,14 +38,20 @@ export function releaseNotesUrl(version: string): string {
 }
 
 /**
- * How this OS takes an update: the Mac downloads and installs it (Squirrel.Mac); Linux (a .deb)
- * only offers the release page; anything else has no updater yet (null).
+ * How this OS takes an update: the Mac (Squirrel.Mac) and Windows (the NSIS installer) download
+ * and install it; Linux (a .deb) only offers the release page; anything else has no updater (null).
  */
-export type UpdatePlatform = 'darwin' | 'linux'
+export type UpdatePlatform = 'darwin' | 'linux' | 'win32'
 
 export function updatePlatform(platform: string): UpdatePlatform | null {
-  return platform === 'darwin' || platform === 'linux' ? platform : null
+  return platform === 'darwin' || platform === 'linux' || platform === 'win32' ? platform : null
 }
+
+/** Only the Mac's download waits for Squirrel.Mac to take the zip; Windows (NSIS) is ready once electron-updater has it. */
+export const waitsForSquirrel = (platform: UpdatePlatform): boolean => platform === 'darwin'
+
+/** Only the Mac installs a downloaded update on quit: on Windows the Local server must be stopped first, which only Restart to Update does. */
+export const installsOnQuit = (platform: UpdatePlatform): boolean => platform === 'darwin'
 
 /** No check yet, a day since the last one, or a last check in the future (the clock was set back). */
 export function checkDue(lastCheckAt: number | undefined, now: number): boolean {
@@ -132,7 +138,8 @@ export type UpdateAction = 'download' | 'notes' | 'later' | 'skip' | 'install' |
  * the dialog was opened for, `state` the one now. Release Notes opens the page of the version the
  * dialog named whatever happened since; the others act only while that same version is still
  * offered (Download, Later, Skip) or still ready (Restart to Update). Later on a downloaded
- * update and Close do nothing.
+ * update and Close do nothing: a downloaded update stays ready (on the Mac it also installs on
+ * quit; on Windows it waits for Restart to Update).
  */
 export function actionApplies(action: UpdateAction, at: AppUpdateState, state: AppUpdateState): boolean {
   if (at.kind === 'idle' || at.kind === 'checking') return false
@@ -163,7 +170,8 @@ export interface UpdatePrompt {
 
 /**
  * The dialog the indicator (or a manual check) opens for this state; null when there is none.
- * On Linux an available update offers the release page (no download); the Mac flow is the default.
+ * On Linux an available update offers the release page (no download); on Windows the flow is the
+ * Mac's, except that Restart to Update stops the Local server and nothing installs on quit.
  */
 export function promptFor(state: AppUpdateState, current: string, platform: UpdatePlatform = 'darwin'): UpdatePrompt | null {
   switch (state.kind) {
@@ -199,6 +207,18 @@ export function promptFor(state: AppUpdateState, current: string, platform: Upda
         cancelId: 0
       }
     case 'ready':
+      if (platform === 'win32') {
+        return {
+          message: `Trek ${state.version} is ready to install`,
+          detail:
+            'Trek restarts to finish, and stops the local server first so the update can replace it: its ' +
+            'terminals close, and agent sessions resume when you open their worktrees again.',
+          buttons: ['Restart to Update', 'Later'],
+          actions: ['install', 'later'],
+          defaultId: 0,
+          cancelId: 1
+        }
+      }
       return {
         message: `Trek ${state.version} is ready to install`,
         detail:
