@@ -197,7 +197,14 @@ function buildMenu(): void {
           accelerator: 'CmdOrCtrl+J',
           click: () => sendToFocused('menu:toggle-global-claude')
         },
-        ...(isMac ? [] : [{ type: 'separator' as const }, { role: 'quit' as const }])
+        ...(isMac
+          ? []
+          : [
+              { type: 'separator' as const },
+              { label: 'Check for Updates…', enabled: appUpdatesEnabled(), click: () => requestAppUpdateCheck(true) },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ])
       ]
     },
     { role: 'editMenu' },
