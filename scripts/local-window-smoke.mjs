@@ -47,7 +47,7 @@ import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -182,10 +182,11 @@ try {
     HOME: home,
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
-    SHELL: SMOKE_SHELL,
+    ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1'
   }
+  stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE

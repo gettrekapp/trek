@@ -97,7 +97,7 @@ dialog.showMessageBox = async (...args) => {
 `
 )
 
-const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_UPDATE_CHECK: '1' }
+const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}), TREK_NO_UPDATE_CHECK: '1' }
 delete env.TREK_NO_LOCAL_SERVER
 delete env.TREK_NO_WINDOW_RESTORE
 delete env.TREK_LOCAL_PROFILE

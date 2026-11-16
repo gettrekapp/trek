@@ -7,11 +7,19 @@
 // macOS: zsh, a Mac's login shell. Elsewhere: bash, Ubuntu's and Debian's (the ubuntu-22.04
 // runners have no zsh). TREK_SMOKE_SHELL picks another (say /bin/bash, to try the Linux leg's
 // setup on a Mac).
+//
+// Windows has no login shell: the server starts agents directly, not through `$SHELL -ilc`, and
+// fixPath returns on win32. So SMOKE_SHELL is undefined there (unless TREK_SMOKE_SHELL is set),
+// nothing checks that it exists, and writeShellRc writes nothing. A smoke leaves SHELL out of the
+// app's env when it is undefined, and puts its stub tools on PATH through the env instead
+// (stubsFirstOnPath), since no startup file is read.
 import { existsSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 
-export const SMOKE_SHELL = process.env.TREK_SMOKE_SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
-if (!existsSync(SMOKE_SHELL)) throw new Error(`smokeShell: the smokes' login shell ${SMOKE_SHELL} is not installed`)
+const WIN = process.platform === 'win32'
+
+export const SMOKE_SHELL = process.env.TREK_SMOKE_SHELL || (WIN ? undefined : process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
+if (SMOKE_SHELL && !existsSync(SMOKE_SHELL)) throw new Error(`smokeShell: the smokes' login shell ${SMOKE_SHELL} is not installed`)
 
 /** The file `$SHELL -ilc` reads in `home`: zsh's .zshrc (an interactive shell), bash's .bash_profile (a login one). */
 export function shellRc(home) {
@@ -21,5 +29,19 @@ export function shellRc(home) {
   throw new Error(`smokeShell: no startup file known for ${SMOKE_SHELL}`)
 }
 
-/** Writes `content` (a PATH export, or nothing) where the smoke's login shell reads it in `home`. */
-export const writeShellRc = (home, content = '') => writeFileSync(shellRc(home), content)
+/** Writes `content` (a PATH export, or nothing) where the smoke's login shell reads it in `home`. Nothing on Windows. */
+export const writeShellRc = (home, content = '') => {
+  if (WIN) return
+  writeFileSync(shellRc(home), content)
+}
+
+/**
+ * On Windows only: puts `dir` first on the PATH in `env` (a copy of process.env, whose PATH key is
+ * "Path" there), since no startup file does it. Elsewhere the shell's rc file does, so this is a no-op.
+ */
+export function stubsFirstOnPath(env, dir) {
+  if (!WIN) return env
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'Path'
+  env[key] = env[key] ? `${dir}${delimiter}${env[key]}` : dir
+  return env
+}

@@ -360,7 +360,7 @@ const env = {
   HOME: home,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: SMOKE_SHELL,
+  ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
   TREK_NO_UPDATE_CHECK: '1'
 }
 // Windows are restored: this run's userData is its own.
