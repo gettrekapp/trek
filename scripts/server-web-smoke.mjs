@@ -41,7 +41,7 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
@@ -50,6 +50,7 @@ import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
@@ -80,7 +81,7 @@ const until = async (fn, expected, ms = 15_000) => {
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(32).toString('base64url')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-web-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-web-smoke-')))
 const serverHome = join(work, 'server-home')
 const pageHome = join(work, 'page-home')
 const userData = join(work, 'user-data')

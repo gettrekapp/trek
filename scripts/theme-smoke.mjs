@@ -28,7 +28,7 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import electronPath from 'electron'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
@@ -37,6 +37,7 @@ import { buildExampleTheme } from '../plugins/example-theme/build.mjs'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 
 const WATCHDOG_MS = 180_000
 const DEFAULT_BG = '#111113'
@@ -65,7 +66,7 @@ const until = async (fn, expected, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-theme-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-theme-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 const profile = smokeLocalProfile(home, 'dev')

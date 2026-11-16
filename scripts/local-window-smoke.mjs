@@ -41,7 +41,7 @@ import './smokeGh.mjs'
 import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
@@ -49,6 +49,7 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
@@ -85,7 +86,7 @@ const first = async (fn, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 const profile = smokeLocalProfile(home, 'dev')

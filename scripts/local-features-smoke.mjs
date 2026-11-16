@@ -37,7 +37,7 @@ import './smokeGh.mjs'
 import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -50,6 +50,7 @@ import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -86,7 +87,7 @@ const first = async (fn, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 const profile = smokeLocalProfile(home, 'dev')

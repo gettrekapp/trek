@@ -24,7 +24,7 @@
 import './smokeGh.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -32,6 +32,7 @@ import { createRequire } from 'node:module'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { startApnsStub, testApnsKey } from './relayStubs.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 
 // The server's heartbeat drops a silent socket after about 45 s (section 6), so this runs ~70 s.
 const WATCHDOG_MS = 180_000
@@ -61,7 +62,7 @@ const WebSocket = createRequire(join(root, 'server', 'package.json'))('ws')
 const hashOf = (t) => createHash('sha256').update(t, 'utf8').digest('hex')
 const desktopToken = randomBytes(16).toString('base64url')
 const phoneToken = randomBytes(16).toString('base64url')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-push-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-push-smoke-')))
 const serverHome = join(work, 'server-home')
 const relayHome = join(work, 'relay-home')
 const data = join(work, 'data')

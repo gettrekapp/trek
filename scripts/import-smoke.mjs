@@ -34,7 +34,7 @@ import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -44,6 +44,7 @@ import { localProfilePath, parseLocalInfo } from '../src/shared/localServer.ts'
 import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
 import { encodeTokenRecord } from '../src/main/serverTokenRules.ts'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 300_000
@@ -94,7 +95,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 // is no symlink, so a symlink to the dir beside it stands in for /var (the file's paths through it
 // are not the realpaths, which the server stores).
 const made = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
-const real = realpathSync(made)
+const real = realPath(made)
 const work = made === real ? `${real}-var` : made
 if (work !== made) symlinkSync(real, work)
 const removeWork = () => {
@@ -285,14 +286,14 @@ const fakeAgent = writeFakeAgent(
   real,
   'fake-agent',
   [
-    "import { appendFileSync, existsSync, realpathSync } from 'node:fs'",
+    "import { appendFileSync, existsSync } from 'node:fs'",
     "import { homedir } from 'node:os'",
     "import { join } from 'node:path'",
     `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
     "const args = process.argv.slice(2)",
     "const at = args.lastIndexOf('--resume')",
     "const id = at >= 0 && at + 1 < args.length ? args[at + 1] : ''",
-    "const cwd = realpathSync(process.cwd())",
+    "const cwd = (process.platform === 'win32' ? realpathSync.native : realpathSync)(process.cwd())",
     "const dir = join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))",
     "const found = id !== '' && existsSync(join(dir, id + '.jsonl')) ? 'yes' : 'no'",
     `appendFileSync(${JSON.stringify(agentLog)}, cwd + '|' + id + '|' + found + '\\n')`,

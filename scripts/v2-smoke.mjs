@@ -68,13 +68,14 @@ import './smokeGh.mjs'
 import { openSettingsTab, settingsTabNames } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 360_000
@@ -119,8 +120,8 @@ const until = async (fn, expected, ms = 10_000) => {
 
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-v2-smoke-')))
-const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-v2-outside-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-v2-smoke-')))
+const outside = realPath(mkdtempSync(join(tmpdir(), 'trek-v2-outside-')))
 const repos = join(work, 'repos')
 mkdirSync(repos)
 const gitRepo = (path) => {

@@ -29,7 +29,7 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -37,6 +37,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 
 // Windows: trek-server has no environments or dev stacks there yet (welcomeCapabilities drops env and
 // stacks on win32, server/src/capabilities.ts), and this smoke is about them.
@@ -72,7 +73,7 @@ const until = async (fn, expected, ms = 15_000) => {
 const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-env-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-env-smoke-')))
 // The server's machine: its HOME holds the repositories (Colima mounts only $HOME) and the stacks' registry.
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')

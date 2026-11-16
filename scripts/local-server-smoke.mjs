@@ -18,7 +18,7 @@
 //   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app | Linux dir>]
 import './smokeGh.mjs'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -28,6 +28,7 @@ import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '.
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
@@ -90,7 +91,7 @@ const must = (cond, msg, detail = '') => {
 
 async function suite(rt) {
   console.log(`--- ${rt.name} (${rt.cmd}) ---`)
-  const work = realpathSync(mkdtempSync(join(tmpdir(), `trek-local-smoke-${rt.name}-`)))
+  const work = realPath(mkdtempSync(join(tmpdir(), `trek-local-smoke-${rt.name}-`)))
   const home = join(work, 'home')
   // The app's layout: out/server/trek-server.cjs, and node-pty in the app's node_modules.
   const app = join(work, 'app')

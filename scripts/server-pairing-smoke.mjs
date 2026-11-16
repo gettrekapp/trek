@@ -25,13 +25,14 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory, parsePairingLink, redeemPairingCode } from '../src/shared/client/index.ts'
 import { closeApp } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -59,7 +60,7 @@ const until = async (fn, expected, ms = 15_000) => {
 const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-pairing-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-pairing-smoke-')))
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')

@@ -24,13 +24,14 @@
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -54,7 +55,7 @@ const until = async (fn, ms = 15_000) => {
 }
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-providers-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-providers-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 const profile = smokeLocalProfile(home, 'dev')

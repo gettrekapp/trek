@@ -35,7 +35,7 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -43,6 +43,7 @@ import { delimiter, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
 
@@ -75,7 +76,7 @@ const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
 const LINEAR_KEY = `lin_api_${randomBytes(8).toString('hex')}`
 const VOICE_KEY = `sk_${randomBytes(8).toString('hex')}`
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-integrations-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-integrations-smoke-')))
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')

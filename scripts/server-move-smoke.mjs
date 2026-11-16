@@ -33,7 +33,7 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join } from 'node:path'
@@ -41,6 +41,7 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
@@ -69,7 +70,7 @@ const until = async (fn, expected, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
 for (const dir of [appHome, userData]) mkdirSync(dir, { recursive: true })

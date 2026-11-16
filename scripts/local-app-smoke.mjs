@@ -42,7 +42,7 @@
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, win32 } from 'node:path'
 import electronPath from 'electron'
@@ -53,6 +53,7 @@ import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
 import { closeApp, commandOf } from './smokeTeardown.mjs'
 import { windowsArgv } from '../src/shared/processCommand.ts'
 import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
@@ -92,7 +93,7 @@ if (packagedAt >= 0 && !packaged) {
 }
 const layout = packaged && packagedLayout(packaged)
 const bundled = JSON.parse(readFileSync(join(root, 'out', 'server', 'build.json'), 'utf8'))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 // An unpackaged app uses the dev profile, a packaged one the default (localProfileName).
