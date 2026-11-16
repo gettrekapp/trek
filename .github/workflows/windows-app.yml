@@ -15,6 +15,9 @@ name: Windows app
 on:
   workflow_call:
   workflow_dispatch:
+  # TEMP: a new workflow can't be run by hand until it is on main. Revert before merging.
+  push:
+    branches: [feature/windows-desktop]
 
 permissions:
   contents: read
