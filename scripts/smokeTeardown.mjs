@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import electronPath from 'electron'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { processCommandLine } from '../src/shared/processCommand.ts'
 
 export const APP_CLOSE_MS = 15_000
 const HARD_MS = 45_000
@@ -30,8 +31,17 @@ export const alive = (pid) => {
   }
 }
 
-/** The pid's command line (`ps -o command=`), or '' when ps cannot tell. */
-export const commandOf = (pid) => (spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 }).stdout ?? '').trim()
+/**
+ * The pid's command line, or '' when it cannot be read: `ps -ww -o command=` on macOS and Linux,
+ * Win32_Process's CommandLine on Windows (there is no ps; Git Bash's is not procps), as the app
+ * reads it (processCommandLine).
+ */
+export const commandOf = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return ''
+  const { file, args } = processCommandLine(pid)
+  // PowerShell takes a second or two to start.
+  return (spawnSync(file, args, { encoding: 'utf8', timeout: process.platform === 'win32' ? 30_000 : 5000, windowsHide: true }).stdout ?? '').trim()
+}
 
 /** SIGKILLs `pid` when it is alive and its command line passes `expected`; a reused pid is left alone. */
 export function killIfOurs(pid, expected, label) {

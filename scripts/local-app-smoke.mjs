@@ -44,18 +44,22 @@ import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import electronPath from 'electron'
 import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
-import { closeApp } from './smokeTeardown.mjs'
+import { closeApp, commandOf } from './smokeTeardown.mjs'
+import { windowsArgv } from '../src/shared/processCommand.ts'
 import { fileURLToPath } from 'node:url'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
 
+const WIN = process.platform === 'win32'
+/** A Windows path or argument, compared as Windows does: either slash, any case. */
+const winPath = (p) => win32.normalize(p).toLowerCase()
 const checks = []
 const failedChecks = []
 const check = (name, actual, expected) => {
@@ -276,12 +280,19 @@ try {
   if (!first) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
   check("with the bundle's version and build", [first.version, first.build], [bundled.version, bundled.build])
   if (packaged) {
-    const command = execFileSync('ps', ['-o', 'command=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
+    const command = commandOf(first.pid)
     // --import-env-from: the app's userData, whose environments the Local server takes over once (5a).
-    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${layout.executable} ${packagedServerBundle(layout)} start --local --import-env-from ${userData}`)
+    const want = [layout.executable, packagedServerBundle(layout), 'start', '--local', '--import-env-from', userData]
+    // Windows: the command line as CreateProcess got it (quoted where needed, backslashes), split
+    // as Windows splits it; the layout's paths are joined with /.
+    if (WIN) check("it runs the packaged app's binary on the bundle inside app.asar", windowsArgv(command).map(winPath), want.map(winPath))
+    else check("it runs the packaged app's binary on the bundle inside app.asar", command, want.join(' '))
   }
-  const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
-  check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  if (WIN) console.log('SKIP it runs detached, leading its own process group (setsid) (Windows has no process groups)')
+  else {
+    const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
+    check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  }
   // Linux: none of the app's sockets or pipes (on macOS libuv's spawn hands the child only its stdio).
   if (process.platform === 'linux') {
     const fdDir = `/proc/${first.pid}/fd`
