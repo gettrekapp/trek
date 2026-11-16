@@ -2,7 +2,7 @@
 // trek-server-<version>-<os>-<arch>.tar.gz (a .zip on Windows), run with a system Node >= 22.
 //
 //   npm run build:web && npm --prefix server run build     (server/dist: the .cjs, build.json, web-client)
-//   node scripts/package-server.mjs [--out <dir>] [--sign <identity>]   (default: dist-release/)
+//   node scripts/package-server.mjs [--out <dir>] [--sign <identity> | --sign-azure]   (default: dist-release/)
 //   node scripts/server-tarball-smoke.mjs <tarball>        (unpacks it and runs it)
 //
 // The tarball holds one folder, trek-server-<version>-<os>-<arch>/:
@@ -33,6 +33,15 @@
 // unpacked from a browser download) unless it is signed and notarized; the release workflow
 // notarizes the signed files after this (see docs/RELEASING.md). Unsigned, node-pty keeps the
 // ad-hoc signature its linker gave it, which runs only when not quarantined.
+//
+// --sign-azure (Windows): signs bin\trek-server.ps1 with Azure Trusted Signing before zipping, as
+// electron-builder signs the app (the TrustedSigning PowerShell module's Invoke-TrustedSigning,
+// SHA256, Microsoft's RFC 3161 timestamp), then checks Get-AuthenticodeSignature says Valid (and,
+// when AZURE_SIGNING_PUBLISHER is set, that the signer's subject names it). It reads the account
+// from AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT and AZURE_SIGNING_PROFILE, and the module signs
+// in with AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET. The .cmd launcher cannot carry
+// a signature, and node-pty's prebuilt .node, .dll and .exe files are left as
+// node-pty ships them.
 import { execFileSync } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -65,6 +74,13 @@ const out = resolve(outAt >= 0 ? (process.argv[outAt + 1] ?? fail('--out needs a
 const signAt = process.argv.indexOf('--sign')
 const signIdentity = signAt >= 0 ? (process.argv[signAt + 1] ?? fail('--sign needs a codesign identity')) : undefined
 if (signIdentity !== undefined && process.platform !== 'darwin') fail('--sign is for macOS only')
+const signAzure = process.argv.includes('--sign-azure')
+if (signAzure && process.platform !== 'win32') fail('--sign-azure is for Windows only')
+const AZURE_ENV = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE']
+if (signAzure) {
+  const missing = AZURE_ENV.filter(name => !process.env[name])
+  if (missing.length) fail(`--sign-azure needs ${missing.join(', ')}`)
+}
 
 const OS = { darwin: 'darwin', linux: 'linux', win32: 'win32' }[process.platform]
 const ARCH = { x64: 'x64', arm64: 'arm64' }[process.arch]
@@ -110,6 +126,7 @@ try {
   if (WINDOWS) {
     writeFileSync(join(dir, 'bin', 'trek-server.cmd'), WIN_LAUNCHER)
     writeFileSync(join(dir, 'bin', 'trek-server.ps1'), WIN_PS_LAUNCHER)
+    if (signAzure) signScript(join(dir, 'bin', 'trek-server.ps1'))
   }
   else writeFileSync(join(dir, 'bin', 'trek-server'), POSIX_LAUNCHER, { mode: 0o755 })
   writeFileSync(join(dir, 'README.md'), readme(name, version, build))
@@ -203,6 +220,31 @@ function sign(native, identity) {
   }
 }
 
+/**
+ * Invoke-TrustedSigning on one file, with the parameters electron-builder passes it
+ * (app-builder-lib's windowsSignAzureManager), then Get-AuthenticodeSignature on it. The values
+ * travel in the environment, so nothing is quoted into the command.
+ */
+function signScript(file) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    // As electron-builder: NuGet may already be there (the GitHub runners have it).
+    'try { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null } catch { }',
+    'Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser',
+    'Invoke-TrustedSigning -Endpoint $env:AZURE_SIGNING_ENDPOINT -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT -CertificateProfileName $env:AZURE_SIGNING_PROFILE -Files $env:TREK_SIGN_FILE -FileDigest SHA256 -TimestampRfc3161 http://timestamp.acs.microsoft.com -TimestampDigest SHA256',
+    '$sig = Get-AuthenticodeSignature -LiteralPath $env:TREK_SIGN_FILE',
+    '$subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "(none)" }',
+    'Write-Output "$($sig.Status) $env:TREK_SIGN_FILE [$subject]"',
+    'if ($sig.Status -ne "Valid") { Write-Error "not validly signed: $($sig.StatusMessage)" }',
+    'if ($env:AZURE_SIGNING_PUBLISHER -and -not $subject.Contains($env:AZURE_SIGNING_PUBLISHER)) { Write-Error "not signed by $env:AZURE_SIGNING_PUBLISHER" }'
+  ].join('\n')
+  try {
+    execFileSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, TREK_SIGN_FILE: file }, stdio: 'inherit' })
+  } catch {
+    fail(`signing ${file} failed (see above)`)
+  }
+}
+
 function removeTests(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
@@ -282,7 +324,9 @@ function windowsRun(name) {
     `powershell -NoProfile -ExecutionPolicy Bypass -File ${name}\\bin\\trek-server.ps1 start`,
     '```',
     '',
-    'Until the scripts are signed, Windows may refuse to run the .ps1 (an unsigned script from a download):',
+    signAzure
+      ? "The .ps1 is signed, but PowerShell's execution policy may still refuse a script from a download:"
+      : 'Until the scripts are signed, Windows may refuse to run the .ps1 (an unsigned script from a download):',
     'pass `-ExecutionPolicy Bypass` as above, or run `Get-ChildItem -Recurse <folder> | Unblock-File` once.',
     '',
     'The launchers run the `node` on PATH, and cmd looks in the current directory first: start',
