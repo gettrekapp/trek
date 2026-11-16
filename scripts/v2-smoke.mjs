@@ -827,10 +827,12 @@ try {
   check('the exit shows in the terminal', await until(() => term(s1).then((t) => t.includes('[process exited with code 3]')), true), true)
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
-  check('Restart runs the session again on the server', await until(async () => {
+  const restarted = await until(async () => {
     const text = await term(s1, 80)
     return text.includes('[restarted]') && text.split('FAKE_AGENT').length === 3
-  }, true), true)
+  }, true)
+  check('Restart runs the session again on the server', restarted, true)
+  if (!restarted) console.log(`  its terminal: ${JSON.stringify(await term(s1, 80))}`)
 
   // Queue a prompt, then send it: both go through the server.
   await detail.locator('.terminal-pane:visible .queue-toggle').click()

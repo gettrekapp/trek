@@ -227,6 +227,11 @@ try {
   const shown = (page, id) => page.evaluate((id) => window.__terminals.readTerminal(id, 50) ?? '', id)
   check("alpha's terminal shows alpha's agent, not beta's", await until(async () => { const t = await shown(a, sa); return t.includes(repos.alpha) && !t.includes(repos.beta) }, true), true)
   check("beta's terminal shows beta's agent, not alpha's", await until(async () => { const t = await shown(b, sb); return t.includes(repos.beta) && !t.includes(repos.alpha) }, true), true)
+  // What each showed, should either check fail.
+  for (const [name, page, id] of [['alpha', a, sa], ['beta', b, sb]]) {
+    const t = await shown(page, id)
+    if (!t.includes(repos[name])) console.log(`  ${name}'s terminal: ${JSON.stringify(t.slice(-600))} (looked for ${JSON.stringify(repos[name])})`)
+  }
 
   // ---- Each project's MCP token reaches its own project -------------------------------------------
 
