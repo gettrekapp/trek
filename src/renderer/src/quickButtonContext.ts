@@ -9,9 +9,15 @@ export function quickButtonContext(terminalId: string): BuiltinContext | null {
   const s = useAppStore.getState()
   const terminal = s.terminals[terminalId]
   if (!s.project || !terminal) return null
-  const repo =
-    terminal.worktreeId === GLOBAL_WORKTREE_ID ? undefined : repoOfWorktreeId(s.project, terminal.worktreeId)
-  const worktree = repo ? repoWorktrees(repo).find((w) => w.id === terminal.worktreeId) : undefined
+  // A Global session belongs to no worktree: its worktree built-ins come from the one open in this window.
+  const worktreeId =
+    terminal.worktreeId === GLOBAL_WORKTREE_ID
+      ? s.activeWorktreeId === GLOBAL_WORKTREE_ID
+        ? null
+        : s.activeWorktreeId
+      : terminal.worktreeId
+  const repo = worktreeId ? repoOfWorktreeId(s.project, worktreeId) : undefined
+  const worktree = repo ? repoWorktrees(repo).find((w) => w.id === worktreeId) : undefined
   // The primary tab's instance has no branch: git's live row for the main checkout does.
   const rows = repo ? (s.hostWorktrees[repoHostKey(repo.id)] ?? []) : []
   const row = worktree

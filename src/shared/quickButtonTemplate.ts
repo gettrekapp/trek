@@ -97,7 +97,7 @@ export interface BuiltinContext {
   project: Pick<ProjectFile, 'name' | 'worktreeTags' | 'customTags'>
   /** A ticket's link through the project's trackers (plugin system phase 2), or null */
   ticketUrl(ticketId: string): string | null
-  /** Undefined in the Global panel */
+  /** In the Global panel, the worktree open in the window (undefined when none is) */
   repo?: Pick<
     Repository,
     'name' | 'path' | 'branchTags' | 'branchCustomTags' | 'branchTickets' | 'branchPullRequests' | 'branchNotes'
