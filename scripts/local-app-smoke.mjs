@@ -31,13 +31,13 @@
 // loads its own hook), because the skew question comes as the app starts, before the smoke
 // could patch anything from app.evaluate.
 //
-// With --packaged <Trek.app> it launches that packaged app instead (its own binary, its main in
+// With --packaged <Trek.app, or the Linux install directory> it launches that packaged app instead (its own binary, its main in
 // app.asar), so its supervisor spawns the server from app.asar/out/server with its own binary.
 // A packaged app ignores `-r`, so there the same stub is installed with app.evaluate just after
 // launch, and the two scenarios whose dialog comes as the app starts (skew, Reset) are skipped:
 // they run the same main code as the dev run, which covers them.
 //
-//   node scripts/local-app-smoke.mjs [--packaged <Trek.app>]
+//   node scripts/local-app-smoke.mjs [--packaged <Trek.app | Linux dir>]
 // Prints LOCAL APP SMOKE PASS (n checks) or LOCAL APP SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
@@ -46,6 +46,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
+import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 
@@ -77,9 +78,10 @@ const root = new URL('..', import.meta.url).pathname
 const packagedAt = process.argv.indexOf('--packaged')
 const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
 if (packagedAt >= 0 && !packaged) {
-  console.error('usage: --packaged <path to Trek.app>')
+  console.error('usage: --packaged <Trek.app, or the Linux install directory>')
   process.exit(2)
 }
+const layout = packaged && packagedLayout(packaged)
 const bundled = JSON.parse(readFileSync(join(root, 'out', 'server', 'build.json'), 'utf8'))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
 const home = join(work, 'home')
@@ -165,7 +167,7 @@ const launch = async (answers = {}) => {
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch(
     packaged
-      ? { executablePath: join(packaged, 'Contents', 'MacOS', 'Trek'), args: ['-r', stub, `--user-data-dir=${userData}`], cwd: root, env }
+      ? { executablePath: layout.executable, args: ['-r', stub, `--user-data-dir=${userData}`], cwd: root, env }
       : { args: ['-r', stub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env }
   )
   app.on('window', watch)
@@ -282,7 +284,7 @@ try {
   if (packaged) {
     const command = execFileSync('ps', ['-o', 'command=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
     // --import-env-from: the app's userData, whose environments the Local server takes over once (5a).
-    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${join(packaged, 'Contents', 'MacOS', 'Trek')} ${join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')} start --local --import-env-from ${userData}`)
+    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${layout.executable} ${packagedServerBundle(layout)} start --local --import-env-from ${userData}`)
   }
   const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
   check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
