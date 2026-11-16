@@ -828,6 +828,11 @@ export async function stopLocalServerForInstall(): Promise<boolean> {
   if (!settled || busy) return false
   const target = current?.pid ?? readInfo()?.pid
   if (target === undefined || !pidAlive(target)) return true
+  // A pid the files still name after a hard exit may be another program's now: not ours, nothing of
+  // ours runs on Trek.exe (and stop --local is not run on it). Unreadable: not stopped, the safe answer.
+  const ours = await holderIsServer(target)
+  if (ours === false) return true
+  if (ours === undefined) return false
   const { code } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)])
   const until = Date.now() + 5000
   while (pidAlive(target) && Date.now() < until) await sleep(POLL_MS)
