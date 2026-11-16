@@ -46,7 +46,7 @@ then save the tokens again by editing each server and entering its token.
 ## Updating
 
 Updates are notify-only. Trek checks as it does on the Mac and shows "Update available" in the
-title bar. Its dialog offers Open Release Page, Later and Skip. Download the new `.deb` and install
+title bar. Its dialog offers Open Release Page, Later and Skip This Version. Download the new `.deb` and install
 it over the old one:
 
 ```sh
@@ -92,7 +92,7 @@ draft release's `.deb`.
 6. Add a remote server with a token, on a desktop with GNOME Keyring. No notice appears, and
    Settings has no "Saved tokens" section. In a session without a keyring, the notice shows once
    and Settings shows the section.
-7. With an older published version installed, Check for Updates finds the newer one, and Open
+7. With an older published version installed, File → Check for Updates… finds the newer one, and Open
    Release Page opens it in the browser.
 8. Upgrade to the next `.deb` while the Local server runs. Trek offers to restart it.
 9. Run `sudo apt remove trek`. The app is gone, and `~/.config/Trek Dev` and the Local profile
