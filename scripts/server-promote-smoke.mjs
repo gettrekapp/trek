@@ -124,12 +124,16 @@ writeFileSync(vmRunning, '')
 // rev-list): each status read takes a while, as on a loaded machine, so a promote's or demote's own
 // re-read (list applied, then statuses) always leaves a window where the project lists the rows
 // before the sessions have moved: the checks must wait for the outcome, not for the rows.
-const realGit = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-writeFileSync(
-  join(machineStubs, 'git'),
-  `#!/bin/sh\ncase "$*" in *'@{upstream}...HEAD'*) sleep 1.5 ;; esac\nexec '${realGit}' "$@"\n`,
-  { mode: 0o755 }
-)
+// Windows: no sh to write the wrapper in, and the server runs only a .exe or .com it finds on PATH
+// (commandPath), so git is the real one there, unslowed; the checks wait for outcomes either way.
+if (process.platform !== 'win32') {
+  const realGit = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+  writeFileSync(
+    join(machineStubs, 'git'),
+    `#!/bin/sh\ncase "$*" in *'@{upstream}...HEAD'*) sleep 1.5 ;; esac\nexec '${realGit}' "$@"\n`,
+    { mode: 0o755 }
+  )
+}
 writeFileSync(
   join(machineStubs, 'docker'),
   `#!/bin/sh\nif [ "$1" = --version ]; then echo "Docker version 0.0.0-stub"; exit 0; fi\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`,
