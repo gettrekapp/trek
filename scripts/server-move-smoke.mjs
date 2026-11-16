@@ -377,7 +377,8 @@ try {
 
   await modal.locator('button', { hasText: 'Move worktree' }).click()
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
-  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done', 'done'])
+  // Windows: no VM or stack, so the teardown step is skipped ("nothing to tear down", moveFlow.ts).
+  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', SERVER_HAS_ENVS ? 'done' : 'skipped', 'done'])
   if (SERVER_HAS_ENVS) {
     check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
     check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
@@ -395,7 +396,8 @@ try {
   const arrived = readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`))
   check("the session's history (over 16 MiB) is under the new path in B's HOME, byte for byte", [arrived.length > 16 * 1024 * 1024, createHash('sha256').update(arrived).digest('hex')], [true, historySha])
   check('nothing is left staged in either server\'s TMPDIR', readdirSync(serverTmp).filter((n) => n.startsWith('trek-move-')), [])
-  check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', 'PORT=4100\n'])
+  // A target without env (Windows) does not take the .env (src/shared/move.ts).
+  check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', SERVER_HAS_ENVS ? 'PORT=4100\n' : null])
   check("A's worktree is gone from disk and from A's project", [existsSync(sourcePath), (await a.project(pa)).repositories[0].worktrees.some((w) => w.id === worktreeId)], [false, false])
   check("and from A's window", await until(() => rows.filter({ hasText: 'feature-x' }).count(), 0), 0)
   await sleep(500)

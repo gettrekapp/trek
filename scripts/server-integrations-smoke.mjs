@@ -44,7 +44,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
-import { homeEnv } from './smokeShell.mjs'
+import { homeEnv, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
@@ -454,11 +454,16 @@ try {
 
   // ---- 7. The stack tools, on the server ------------------------------------------------------------
 
-  const got = await tool('get_stack', { worktree: 'feature-x' })
-  check('get_stack: the worktree has a stack, stopped', [got.isError, got.value.available, got.value.name, got.value.state], [false, true, 'trek-app-feature-x', 'stopped'])
-  check('start_stack starts stack.sh up on the server', [(await tool('start_stack', { worktree: 'feature-x' })).value.state, await until(() => (existsSync(stackCalls) ? readFileSync(stackCalls, 'utf8').trim() : ''), 'up')], ['starting', 'up'])
-  check('read_stack_log reads its output', await until(async () => (await tool('read_stack_log', { worktree: 'feature-x' })).value.output?.includes('stack step up') ?? false, true), true)
-  check('stop_stack Ctrl-Cs it and runs stack.sh down', [(await tool('stop_stack', { worktree: 'feature-x' })).value.state, readFileSync(stackCalls, 'utf8').trim().split('\n')], ['stopped', ['up', 'down']])
+  // Windows: no dev stacks on its server (NO_ENVS); the stack tools answer with an error there.
+  if (SERVER_HAS_ENVS) {
+    const got = await tool('get_stack', { worktree: 'feature-x' })
+    check('get_stack: the worktree has a stack, stopped', [got.isError, got.value.available, got.value.name, got.value.state], [false, true, 'trek-app-feature-x', 'stopped'])
+    check('start_stack starts stack.sh up on the server', [(await tool('start_stack', { worktree: 'feature-x' })).value.state, await until(() => (existsSync(stackCalls) ? readFileSync(stackCalls, 'utf8').trim() : ''), 'up')], ['starting', 'up'])
+    check('read_stack_log reads its output', await until(async () => (await tool('read_stack_log', { worktree: 'feature-x' })).value.output?.includes('stack step up') ?? false, true), true)
+    check('stop_stack Ctrl-Cs it and runs stack.sh down', [(await tool('stop_stack', { worktree: 'feature-x' })).value.state, readFileSync(stackCalls, 'utf8').trim().split('\n')], ['stopped', ['up', 'down']])
+  } else {
+    for (const name of ["get_stack: the worktree has a stack, stopped", "start_stack starts stack.sh up on the server", "read_stack_log reads its output", "stop_stack Ctrl-Cs it and runs stack.sh down"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
 
   // ---- 8. A key cleared by another client: the window follows (integrations.changed) ---------------
 

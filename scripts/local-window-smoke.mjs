@@ -504,11 +504,13 @@ try {
 
   // ---- 11. The Env panel ----------------------------------------------------------------------------------
 
-  await apiFeatureRow.click()
-  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
-  const envPanel = detail.locator('.env-panel:visible')
-  await envPanel.waitFor({ timeout: 10_000 })
-  check("the Env panel: its VM's three actions, and No services", [await until(() => envPanel.locator('.env-header .docker-actions button').count(), 3), await until(() => envPanel.locator('.muted', { hasText: 'No services' }).count(), 1)], [3, 1])
+  if (SERVER_HAS_ENVS) {
+    await apiFeatureRow.click()
+    await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
+    const envPanel = detail.locator('.env-panel:visible')
+    await envPanel.waitFor({ timeout: 10_000 })
+    check("the Env panel: its VM's three actions, and No services", [await until(() => envPanel.locator('.env-header .docker-actions button').count(), 3), await until(() => envPanel.locator('.muted', { hasText: 'No services' }).count(), 1)], [3, 1])
+  } else console.log(`SKIP the Env panel: its VM's three actions, and No services (${NO_ENVS})`)
 
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])
