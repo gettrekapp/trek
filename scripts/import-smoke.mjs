@@ -30,6 +30,7 @@
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
 import { SMOKE_SHELL } from './smokeShell.mjs'
+import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -407,7 +408,7 @@ const finish = async (reason) => {
   finished = true
   if (reason) console.error(reason)
   for (const sdk of sdks) sdk.close()
-  if (app) await app.close().catch(() => {})
+  await closeApp(app)
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
     env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
@@ -491,7 +492,7 @@ try {
   check('the .trekproj is byte-identical', sha(fileA), shaA)
   check('no console or page errors', pageErrors, [])
 
-  await app.close()
+  await closeApp(app)
   app = null
 
   // ---- Launch 2: no prompt; opening the file again opens it; File → Import -----------------------
@@ -558,7 +559,7 @@ try {
   check('File → Import: the same result, OK only, and no window', [menuResult?.buttons, app.windows().length], [['OK'], windowsBefore])
   check('the third and fourth files are byte-identical', [sha(fileC), sha(fileD)], [shaC, shaD])
   check('no console or page errors (launch 2)', pageErrors, [])
-  await app.close()
+  await closeApp(app)
   app = null
 
   // ---- Launch 3: a window left on a file never imported; the start screen imports it ---------------

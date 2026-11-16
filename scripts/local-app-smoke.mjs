@@ -50,6 +50,7 @@ import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
+import { closeApp } from './smokeTeardown.mjs'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
@@ -198,18 +199,7 @@ const launch = async (answers = {}) => {
 const quit = async () => {
   const a = app
   app = null
-  let timer
-  const closed = await Promise.race([
-    a.close().then(() => true, () => true),
-    new Promise((resolve) => (timer = setTimeout(() => resolve(false), APP_CLOSE_MS)))
-  ])
-  clearTimeout(timer)
-  if (!closed) {
-    console.error(`app.close() did not finish within ${APP_CLOSE_MS} ms; killing Electron`)
-    try {
-      a.process().kill('SIGKILL')
-    } catch {}
-  }
+  await closeApp(a, APP_CLOSE_MS)
 }
 const dialogs = () => app.evaluate(() => [...globalThis.__dialogs])
 /** Clicks File → … → the item; `times` clicks in one go, before anything can disable it. */

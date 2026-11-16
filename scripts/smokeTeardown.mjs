@@ -11,7 +11,7 @@
 //     only when their command line is the one expected (a reused pid is left alone);
 //   - the work dir is removed on exit too, so a throw while building the fixtures leaves nothing.
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
@@ -46,20 +46,59 @@ export function killIfOurs(pid, expected, label) {
   } catch {}
 }
 
-/** Closes the app; SIGKILLs its process when the close takes over APP_CLOSE_MS. */
-export async function closeApp(app) {
+/** Linux: the socket or pipe behind `pid`'s fd (`socket:[n]`), or null. */
+const linkOf = (pid, fd) => {
+  try {
+    return readlinkSync(`/proc/${pid}/fd/${fd}`)
+  } catch {
+    return null
+  }
+}
+
+/** Linux: every process but `except` that holds `link` open, as `<pid> <command>`. */
+function holdersOf(link, except) {
+  const holders = []
+  for (const pid of readdirSync('/proc').filter((n) => /^\d+$/.test(n) && Number(n) !== except)) {
+    let fds
+    try {
+      fds = readdirSync(`/proc/${pid}/fd`)
+    } catch {
+      continue
+    }
+    if (fds.some((fd) => linkOf(pid, fd) === link)) holders.push(`${pid} ${commandOf(Number(pid)).slice(0, 200)}`)
+  }
+  return holders
+}
+
+/**
+ * Closes the app; SIGKILLs its process when the close takes over `ms`, and says why it could not
+ * close: Playwright's close waits for Electron to exit and for its stdout and stderr to close, so
+ * an exited Electron whose stdout another process still holds never closes. On Linux that names them.
+ */
+export async function closeApp(app, ms = APP_CLOSE_MS) {
   if (!app) return
+  const pid = app.process().pid
+  const stdout = process.platform === 'linux' ? linkOf(pid, 1) : null
   let timer
   const closed = await Promise.race([
     app.close().then(
       () => true,
       () => true
     ),
-    new Promise((done) => (timer = setTimeout(() => done(false), APP_CLOSE_MS)))
+    new Promise((done) => (timer = setTimeout(() => done(false), ms)))
   ])
   clearTimeout(timer)
   if (closed) return
-  console.error(`[teardown] the app did not close in ${APP_CLOSE_MS} ms: SIGKILL`)
+  const exited = !alive(pid)
+  console.error(`[teardown] the app did not close in ${ms} ms: SIGKILL (Electron, pid ${pid}, ${exited ? 'had exited' : 'was still running'})`)
+  if (exited && stdout) {
+    try {
+      const holders = holdersOf(stdout, process.pid)
+      console.error(`[teardown] its stdout (${stdout}) is held by: ${holders.length ? holders.join(' | ') : 'nothing now'}`)
+    } catch (err) {
+      console.error(`[teardown] could not list who holds its stdout: ${err.message}`)
+    }
+  }
   try {
     app.process().kill('SIGKILL')
   } catch {}
