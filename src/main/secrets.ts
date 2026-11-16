@@ -1,12 +1,35 @@
 import { app, safeStorage } from 'electron'
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ownSecret } from './secretsRules'
+import { ownSecret, secretStorageKind, type SecretStorageKind } from './secretsRules'
 
 // When OS-level encryption is unavailable (e.g. Linux without a keyring,
 // headless test runs) secrets are stored obfuscated-only, marked with this
 // prefix so reads know how to decode them.
 const PLAIN_PREFIX = 'plain:'
+
+/** How saved secrets are kept here. After ready only: Linux's backend is unknown before. */
+export function secretStorage(): SecretStorageKind {
+  return secretStorageKind({
+    platform: process.platform,
+    available: safeStorage.isEncryptionAvailable(),
+    backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined
+  })
+}
+
+let onUnencrypted: (() => void) | null = null
+/** Holds a single listener (a second call replaces it). Called (not awaited) after a secret is saved while secretStorage() is 'unencrypted' (keyringNotice.ts). */
+export function onUnencryptedSave(listener: () => void): void {
+  onUnencrypted = listener
+}
+const savedOne = (): void => {
+  try {
+    if (onUnencrypted && secretStorage() === 'unencrypted') onUnencrypted()
+  } catch (err) {
+    // The secret is saved; the notice is best-effort.
+    console.warn('trek: the unencrypted-save hook failed', err)
+  }
+}
 
 /** A stored secret as read: none stored, stored but not decryptable here (safeStorage refused, an unreadable file), or its value. */
 export type SecretRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'value'; value: string }
@@ -118,6 +141,7 @@ export function createSecretStore(fileName: string): SecretStore {
           defineOwn(all, key, encode(value))
         }
         await writeFileAtomic(filePath(), JSON.stringify(all, null, 2))
+        if (value !== null) savedOne()
       })
     },
     setIfAbsent(key, value) {
@@ -126,6 +150,7 @@ export function createSecretStore(fileName: string): SecretStore {
         if (ownSecret(all, key) !== null) return false
         defineOwn(all, key, encode(value))
         await writeFileAtomic(filePath(), JSON.stringify(all, null, 2))
+        savedOne()
         return true
       })
     }

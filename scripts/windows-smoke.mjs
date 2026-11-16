@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -69,7 +70,7 @@ const agentPids = join(work, 'agent-pids')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
-writeFileSync(join(home, '.zshrc'), '')
+writeShellRc(home)
 const fakeAgent = join(work, 'fake-agent.sh')
 // Each agent records its pid and its worktree ("<pid> <path>"), so a session's process can be found.
 writeFileSync(fakeAgent, `#!/bin/sh\necho "$$ $TREK_WORKTREE_PATH" >> '${agentPids}'\necho "FAKE_AGENT $TREK_WORKTREE_PATH"\nwhile IFS= read -r line; do echo "GOT:$line"; done\n`, { mode: 0o755 })
@@ -96,7 +97,7 @@ dialog.showMessageBox = async (...args) => {
 `
 )
 
-const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh', TREK_NO_UPDATE_CHECK: '1' }
+const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_UPDATE_CHECK: '1' }
 delete env.TREK_NO_LOCAL_SERVER
 delete env.TREK_NO_WINDOW_RESTORE
 delete env.TREK_LOCAL_PROFILE

@@ -31,23 +31,26 @@
 // loads its own hook), because the skew question comes as the app starts, before the smoke
 // could patch anything from app.evaluate.
 //
-// With --packaged <Trek.app> it launches that packaged app instead (its own binary, its main in
+// With --packaged <Trek.app, or the Linux install directory> it launches that packaged app instead (its own binary, its main in
 // app.asar), so its supervisor spawns the server from app.asar/out/server with its own binary.
 // A packaged app ignores `-r`, so there the same stub is installed with app.evaluate just after
 // launch, and the two scenarios whose dialog comes as the app starts (skew, Reset) are skipped:
 // they run the same main code as the dev run, which covers them.
 //
-//   node scripts/local-app-smoke.mjs [--packaged <Trek.app>]
+//   node scripts/local-app-smoke.mjs [--packaged <Trek.app | Linux dir>]
 // Prints LOCAL APP SMOKE PASS (n checks) or LOCAL APP SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
+import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
+import { closeApp } from './smokeTeardown.mjs'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
@@ -77,9 +80,10 @@ const root = new URL('..', import.meta.url).pathname
 const packagedAt = process.argv.indexOf('--packaged')
 const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
 if (packagedAt >= 0 && !packaged) {
-  console.error('usage: --packaged <path to Trek.app>')
+  console.error('usage: --packaged <Trek.app, or the Linux install directory>')
   process.exit(2)
 }
+const layout = packaged && packagedLayout(packaged)
 const bundled = JSON.parse(readFileSync(join(root, 'out', 'server', 'build.json'), 'utf8'))
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
 const home = join(work, 'home')
@@ -156,6 +160,8 @@ const launch = async (answers = {}) => {
     TREK_NO_WINDOW_RESTORE: '1',
     // A packaged app would ask the release feed for an update: a smoke never contacts GitHub.
     TREK_NO_UPDATE_CHECK: '1',
+    // Linux without a keyring: the one-time notice is a native dialog that would race the stub below.
+    TREK_NO_KEYRING_NOTICE: '1',
     TREK_SMOKE_LEAK: 'leaked',
     SMOKE_ANSWERS: JSON.stringify(answers),
     SMOKE_PICK: repo
@@ -165,7 +171,7 @@ const launch = async (answers = {}) => {
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch(
     packaged
-      ? { executablePath: join(packaged, 'Contents', 'MacOS', 'Trek'), args: ['-r', stub, `--user-data-dir=${userData}`], cwd: root, env }
+      ? { executablePath: layout.executable, args: ['-r', stub, `--user-data-dir=${userData}`], cwd: root, env }
       : { args: ['-r', stub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env }
   )
   app.on('window', watch)
@@ -193,18 +199,7 @@ const launch = async (answers = {}) => {
 const quit = async () => {
   const a = app
   app = null
-  let timer
-  const closed = await Promise.race([
-    a.close().then(() => true, () => true),
-    new Promise((resolve) => (timer = setTimeout(() => resolve(false), APP_CLOSE_MS)))
-  ])
-  clearTimeout(timer)
-  if (!closed) {
-    console.error(`app.close() did not finish within ${APP_CLOSE_MS} ms; killing Electron`)
-    try {
-      a.process().kill('SIGKILL')
-    } catch {}
-  }
+  await closeApp(a, APP_CLOSE_MS)
 }
 const dialogs = () => app.evaluate(() => [...globalThis.__dialogs])
 /** Clicks File → … → the item; `times` clicks in one go, before anything can disable it. */
@@ -282,10 +277,25 @@ try {
   if (packaged) {
     const command = execFileSync('ps', ['-o', 'command=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
     // --import-env-from: the app's userData, whose environments the Local server takes over once (5a).
-    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${join(packaged, 'Contents', 'MacOS', 'Trek')} ${join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')} start --local --import-env-from ${userData}`)
+    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${layout.executable} ${packagedServerBundle(layout)} start --local --import-env-from ${userData}`)
   }
   const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
   check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  // Linux: none of the app's sockets or pipes (on macOS libuv's spawn hands the child only its stdio).
+  if (process.platform === 'linux') {
+    const fdDir = `/proc/${first.pid}/fd`
+    const held = readdirSync(fdDir).flatMap((fd) => {
+      try {
+        const link = readlinkSync(`${fdDir}/${fd}`)
+        return Number(fd) > 2 && isInheritedDescriptor(link, readFileSync(`/proc/${first.pid}/fdinfo/${fd}`, 'utf8')) ? [`${fd} ${link}`] : []
+      } catch {
+        return []
+      }
+    })
+    check("it keeps none of the app's sockets or pipes open (Linux)", held, [])
+    const note = readFileSync(logPath, 'utf8').split('\n').find((l) => l.startsWith('local: closed '))
+    console.log(`note: ${note ?? 'the server closed no inherited descriptor'}`)
+  } else console.log("SKIP it keeps none of the app's sockets or pipes open (Linux: macOS's spawn passes only stdio)")
   check('its output goes to server.log in the profile, 0600', [existsSync(logPath), statSync(logPath).mode & 0o777, spawnsInLog()], [true, 0o600, 1])
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------

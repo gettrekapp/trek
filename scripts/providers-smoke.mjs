@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 180_000
 
@@ -61,7 +62,7 @@ const agentPids = join(work, 'agent-pids')
 // An agent's command line names the work dir: its script, or the node it execs (given `work`).
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
-writeFileSync(join(home, '.zshrc'), '')
+writeShellRc(home)
 
 const repo = join(work, 'repos', 'app')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
@@ -126,8 +127,18 @@ const watchdog = setTimeout(() => void finish(`watchdog: the run took over ${WAT
 const filesUnder = (dir) =>
   existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)])) : []
 
+/**
+ * A process's argv then its environment, space-separated, as any process of this user can read
+ * them: macOS's `ps -E` (BSD only: procps has no -E); on Linux, /proc/<pid>/cmdline and environ.
+ */
+const argvAndEnvironment = (pid) => {
+  if (process.platform === 'darwin') return execSync(`ps -E -ww -p ${pid} -o command=`, { encoding: 'utf8' })
+  const words = (file) => readFileSync(`/proc/${pid}/${file}`, 'utf8').split('\0').filter(Boolean)
+  return `${[...words('cmdline'), ...words('environ')].join(' ')}\n`
+}
+
 try {
-  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
@@ -272,7 +283,7 @@ try {
     if (!pidMatch) {
       check('codex global: the agent printed its pid', false, text.slice(-300))
     } else {
-      const seen = execSync(`ps -E -ww -p ${Number(pidMatch[1])} -o command=`, { encoding: 'utf8' })
+      const seen = argvAndEnvironment(Number(pidMatch[1]))
       // The control: the environment ps shows is this session's (the server sets TREK_TERMINAL_ID to its id).
       check("codex global: ps -E shows its environment (its own TREK_TERMINAL_ID)", seen.includes(`TREK_TERMINAL_ID=${id} `) || seen.trimEnd().endsWith(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
       check('codex global: the token is not in its environment or argv (ps -E)', !!token && !seen.includes(token))

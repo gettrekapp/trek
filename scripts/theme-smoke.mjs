@@ -35,6 +35,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { sha256Hex } from '../src/renderer/src/plugins/installedLoader.ts'
 import { buildExampleTheme } from '../plugins/example-theme/build.mjs'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 180_000
 const DEFAULT_BG = '#111113'
@@ -115,7 +116,7 @@ const env = {
   HOME: home,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: '/bin/zsh',
+  SHELL: SMOKE_SHELL,
   TREK_NO_WINDOW_RESTORE: '1',
   TREK_NO_UPDATE_CHECK: '1'
 }

@@ -10,11 +10,12 @@
 // session resumed with --resume, a lock path that cannot be taken, and a named
 // profile (`--local-profile dev`, a dev build's) running beside the default one.
 //
-// With --packaged <Trek.app>, it runs the same checks on a packaged app instead: the app's own
-// binary with ELECTRON_RUN_AS_NODE=1, on Contents/Resources/app.asar/out/server/trek-server.cjs
-// (read from inside the asar), with node-pty and its spawn-helper from app.asar.unpacked.
+// With --packaged <Trek.app, or the Linux install directory>, it runs the same checks on a packaged
+// app instead: the app's own binary (Contents/MacOS/Trek, or <dir>/trek on Linux) with
+// ELECTRON_RUN_AS_NODE=1, on <resources>/app.asar/out/server/trek-server.cjs (Contents/Resources on
+// macOS, <dir>/resources on Linux; read from inside the asar), with node-pty and its spawn-helper from app.asar.unpacked.
 //
-//   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app>]
+//   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app | Linux dir>]
 import './smokeGh.mjs'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -22,6 +23,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
+import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
@@ -34,16 +36,17 @@ const built = JSON.parse(readFileSync(join(root, 'server', 'dist', 'build.json')
 const packagedAt = process.argv.indexOf('--packaged')
 const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
 if (packagedAt >= 0 && !packaged) {
-  console.error('usage: --packaged <path to Trek.app>')
+  console.error('usage: --packaged <Trek.app, or the Linux install directory>')
   process.exit(2)
 }
+const layout = packaged && packagedLayout(packaged)
 const runtimes = packaged
   ? [
       {
         name: 'packaged',
-        cmd: join(packaged, 'Contents', 'MacOS', 'Trek'),
+        cmd: layout.executable,
         env: { ELECTRON_RUN_AS_NODE: '1' },
-        cli: join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')
+        cli: packagedServerBundle(layout)
       }
     ]
   : [

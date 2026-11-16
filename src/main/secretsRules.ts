@@ -8,3 +8,17 @@ export function ownSecret(all: unknown, key: string): string | null {
   const value = (all as Record<string, unknown>)[key]
   return typeof value === 'string' && value ? value : null
 }
+
+/** How the secret store keeps what it saves on this machine. */
+export type SecretStorageKind = 'encrypted' | 'unencrypted'
+
+/**
+ * `available`: safeStorage.isEncryptionAvailable(). `backend`: on Linux,
+ * safeStorage.getSelectedStorageBackend() after ready; ignored elsewhere. Linux without GNOME
+ * Keyring or KWallet uses `basic_text`, a key fixed in Chromium: encrypted in name only.
+ */
+export function secretStorageKind(o: { platform: string; available: boolean; backend: string | undefined }): SecretStorageKind {
+  if (!o.available) return 'unencrypted'
+  if (o.platform !== 'linux') return 'encrypted'
+  return o.backend === 'gnome_libsecret' || (o.backend ?? '').startsWith('kwallet') ? 'encrypted' : 'unencrypted'
+}

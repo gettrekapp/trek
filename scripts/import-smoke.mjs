@@ -29,6 +29,8 @@
 //
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { SMOKE_SHELL } from './smokeShell.mjs'
+import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -86,9 +88,17 @@ const claudeDir = (cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA
 // ---- Fixtures --------------------------------------------------------------
 
 const root = new URL('..', import.meta.url).pathname
-// Not realpath'd: under /var/folders, whose realpath is /private/var/folders.
-const work = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
-const real = realpathSync(work)
+// Not realpath'd: macOS, under /var/folders, whose realpath is /private/var/folders. Linux's /tmp
+// is no symlink, so a symlink to the dir beside it stands in for /var (the file's paths through it
+// are not the realpaths, which the server stores).
+const made = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
+const real = realpathSync(made)
+const work = made === real ? `${real}-var` : made
+if (work !== made) symlinkSync(real, work)
+const removeWork = () => {
+  rmSync(real, { recursive: true, force: true })
+  if (work !== made) rmSync(work, { force: true })
+}
 const home = join(real, 'home')
 const remoteHome = join(real, 'remote-home')
 const userData = join(real, 'user-data')
@@ -250,7 +260,7 @@ const realHomeLeaks = () => {
   return leaks
 }
 if (realHome === home || realHome.startsWith(real)) {
-  rmSync(real, { recursive: true, force: true })
+  removeWork()
   throw new Error("the real HOME is the run's own: refusing to run")
 }
 
@@ -350,7 +360,7 @@ const env = {
   HOME: home,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: '/bin/zsh',
+  SHELL: SMOKE_SHELL,
   TREK_NO_UPDATE_CHECK: '1'
 }
 // Windows are restored: this run's userData is its own.
@@ -398,7 +408,7 @@ const finish = async (reason) => {
   finished = true
   if (reason) console.error(reason)
   for (const sdk of sdks) sdk.close()
-  if (app) await app.close().catch(() => {})
+  await closeApp(app)
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
     env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
@@ -413,7 +423,7 @@ const finish = async (reason) => {
       } catch {}
     }
   }
-  rmSync(real, { recursive: true, force: true })
+  removeWork()
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
   console.log(exitCode === 0 ? `IMPORT SMOKE PASS (${checks.length} checks)` : `IMPORT SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
   process.exit(exitCode)
@@ -482,7 +492,7 @@ try {
   check('the .trekproj is byte-identical', sha(fileA), shaA)
   check('no console or page errors', pageErrors, [])
 
-  await app.close()
+  await closeApp(app)
   app = null
 
   // ---- Launch 2: no prompt; opening the file again opens it; File → Import -----------------------
@@ -549,7 +559,7 @@ try {
   check('File → Import: the same result, OK only, and no window', [menuResult?.buttons, app.windows().length], [['OK'], windowsBefore])
   check('the third and fourth files are byte-identical', [sha(fileC), sha(fileD)], [shaC, shaD])
   check('no console or page errors (launch 2)', pageErrors, [])
-  await app.close()
+  await closeApp(app)
   app = null
 
   // ---- Launch 3: a window left on a file never imported; the start screen imports it ---------------

@@ -29,9 +29,10 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
 
 ## Install
 
-- **Desktop app**: download `Trek-<version>-arm64.dmg` from the
-  [latest release](https://github.com/gettrekapp/trek/releases/latest). It's signed and
-  notarized, for Apple Silicon Macs.
+- **Desktop app**: download it from the
+  [latest release](https://github.com/gettrekapp/trek/releases/latest). On a Mac with Apple
+  silicon, `Trek-<version>-arm64.dmg` (signed and notarized). On Linux (Ubuntu 22.04+ or
+  Debian 12+, x64 or arm64), `Trek-<version>-linux-<arch>.deb`: see [docs/LINUX.md](docs/LINUX.md).
 - **A remote server (optional)**: the same release has `trek-server` tarballs for macOS
   and Linux (x64 and arm64). Unpack one on the machine you want the agents to run on and
   start `bin/trek-server` with Node.js 22 or later. See [server/README.md](server/README.md).
@@ -40,10 +41,12 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
 
 Trek checks for a newer release when it starts and once a day, and shows "Update available" in the
 title bar. Nothing is downloaded or installed until you choose to: **Download**, then **Restart to
-Update**. **Trek → Check for Updates…** checks on demand. (Releases from before the updater was
-added don't have it: install a newer dmg by hand once.)
+Update**. **Trek → Check for Updates…** (File → Check for Updates… on Linux) checks on demand.
+(Releases from before the updater was added don't have it: install a newer dmg by hand once.) On
+Linux the update is notify-only: its dialog offers **Open Release Page**, and you install the new
+`.deb` yourself.
 
-**Status**: early and moving fast. The desktop app is macOS-only for now. A phone companion
+**Status**: early and moving fast. The desktop app runs on macOS (Apple silicon) and Linux (x64 and arm64, `.deb`). A phone companion
 (`apps/mobile`, iOS and Android) isn't in the stores yet, and Windows support is on the
 way. Issues and feedback are welcome.
 
@@ -213,7 +216,7 @@ other window on that project sees them live.
   that saw it update, or "Update failed: …" with the reason and the server as it was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
   shows the release without the button, and one that cannot restart itself asks you to
   restart it there to finish. The Local server has none of this: it is updated with Trek
-  (**Trek → Check for Updates…**). See
+  (**Trek → Check for Updates…**, File → Check for Updates… on Linux). See
   [Updating](server/README.md#updating) in the server README.
 - **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
   `app-server-tokens.json` in the user-data directory, owner-only. When no OS
@@ -660,6 +663,9 @@ one at a time:
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;
 - `npm run smoke:import`: importing a `.trekproj` onto Local and a test server;
+- `npm run smoke:packaged`: the Local server and app smokes on an unpackaged build of the
+  installed app (macOS: `dist/mac-arm64/Trek.app`; Linux: `dist/linux-unpacked` or
+  `dist/linux-arm64-unpacked`, under `xvfb-run -a` when there is no display);
 - `npm run smoke:local`, `npm run smoke:client` and `cd server && npm run smoke`: the
   server alone.
 
@@ -673,9 +679,10 @@ server's `project:<id>` topic (`src/renderer/src/v2/`).
 
 GitHub Actions runs CI on every push and pull request (Linux: typechecks, `npm test`, the
 build, the Node-only smokes and the phone app's export) and the Electron smokes nightly on
-macOS. A `vX.Y.Z` tag builds a signed, notarized `Trek-X.Y.Z-arm64.dmg`, trek-server tarballs for
-macOS and Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How
-to cut a release, the signing secrets and how to run the macOS smokes by hand:
+macOS and Linux (the Linux leg runs under xvfb). A `vX.Y.Z` tag builds a signed, notarized
+`Trek-X.Y.Z-arm64.dmg`, the Linux `.deb` for x64 and arm64, trek-server tarballs for macOS and
+Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How to cut a
+release, the signing secrets and how to run the Electron smokes by hand:
 [docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.
 
 ## Themes

@@ -4,7 +4,7 @@
 #
 #   version      the tag matches the three package.json versions
 #   ci           ci.yml (typecheck, unit tests, build, Node smokes, the phone's export)   ┐ gate
-#   macos-smokes macos-smokes.yml (the Electron smokes, one at a time)                    ┘
+#   macos-smokes macos-smokes.yml (the Electron smokes, macOS and Linux, one at a time)   ┘
 #   mac-app      Trek-X.Y.Z-arm64.dmg: the app signed (Developer ID), hardened runtime, notarized
 #                and stapled, and the dmg notarized and stapled too; verified, then the
 #                packaged-app smokes run against it. It and server-mac are the only jobs that use
@@ -13,6 +13,9 @@
 #                that signs SHA256SUMS.
 #                Also Trek-X.Y.Z-arm64.zip (+ .blockmap) and latest-mac.yml, the app updater's
 #                download and feed.
+#   linux-app    linux-app.yml: Trek-X.Y.Z-linux-<arch>.deb on a native runner per arch, verified,
+#                installed with apt and smoke-tested under xvfb; plus latest-linux.yml /
+#                latest-linux-arm64.yml
 #   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, and
 #                trek-server-X.Y.Z-win32-x64.zip on Windows (unsigned: nothing in it is an .exe
 #                SmartScreen checks), each unpacked and run (scripts/server-tarball-smoke.mjs)
@@ -76,7 +79,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   macos-smokes:
-    name: 'Gate: macOS smokes'
+    name: 'Gate: Electron smokes'
     needs: version
     permissions:
       contents: read
@@ -241,6 +244,13 @@ jobs:
           path: dist-release/*
           if-no-files-found: error
           retention-days: 14
+
+  linux-app:
+    name: Trek .deb
+    needs: version
+    uses: ./.github/workflows/linux-app.yml
+    permissions:
+      contents: read
 
   server:
     name: trek-server ${{ matrix.target }}
@@ -434,7 +444,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, ci, macos-smokes, mac-app, server, server-mac, relay]
+    needs: [version, ci, macos-smokes, mac-app, linux-app, server, server-mac, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The key that signs SHA256SUMS is the `release` environment's too (docs/RELEASING.md): only
@@ -466,6 +476,8 @@ jobs:
         working-directory: artifacts
         run: |
           expected=("Trek-$VERSION-arm64.dmg" "Trek-$VERSION-arm64.zip" "Trek-$VERSION-arm64.zip.blockmap" "latest-mac.yml" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
+          for a in x64 arm64; do expected+=("Trek-$VERSION-linux-$a.deb"); done
+          expected+=("latest-linux.yml" "latest-linux-arm64.yml")
           for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do expected+=("trek-server-$VERSION-$t.tar.gz"); done
           expected+=("trek-server-$VERSION-win32-x64.zip")
           for f in "${expected[@]}"; do [ -f "$f" ] || { echo "::error::missing artifact $f"; exit 1; }; done
@@ -491,6 +503,7 @@ jobs:
 
           - \`Trek-$VERSION-arm64.dmg\`: the desktop app for Apple silicon Macs (signed and notarized).
           - \`Trek-$VERSION-arm64.zip\`, its \`.blockmap\` and \`latest-mac.yml\`: what an installed Trek downloads to update itself (Trek → Check for Updates…). Not for installing by hand.
+          - \`Trek-$VERSION-linux-x64.deb\`, \`Trek-$VERSION-linux-arm64.deb\`: the desktop app for Ubuntu 22.04+ and Debian 12+. Install with \`sudo apt install ./Trek-$VERSION-linux-<arch>.deb\` (see docs/LINUX.md). \`latest-linux*.yml\` is what an installed Trek checks for a newer version.
           - \`trek-server-$VERSION-<os>-<arch>.tar.gz\`: trek-server for macOS and Linux (x64, arm64); needs Node.js 22 or later. Unpack it and run \`bin/trek-server\` (see its README.md).
           - \`trek-server-$VERSION-win32-x64.zip\`: trek-server for Windows (x64); needs Node.js 22 or later. Unzip it and run \`bin\\trek-server\` (see its README.md and docs/WINDOWS.md).
           - \`trek-relay-$VERSION.cjs\`: the push relay (\`node trek-relay-$VERSION.cjs start --config <file>\`); see relay/README.md.

@@ -136,6 +136,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     openInVSCode: refuse,
     revealInFinder: refuse,
     getAlertSound: async () => null,
+    secretStorage: async () => 'encrypted',
     // A pull request's head branch: the worktree falls back to pr/<n> (no gh in the browser).
     githubPrHeadBranch: async () => null,
     llmGetSettings: async () => llm,

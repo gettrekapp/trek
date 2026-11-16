@@ -1,5 +1,7 @@
 import { handOverIntegrationsToLocal } from './integrationsHandover'
 import { app, BrowserWindow, Menu, nativeImage } from 'electron'
+import { statSync } from 'node:fs'
+import { trekprojArgs } from './launchArgsRules'
 
 app.setName('Trek Dev')
 
@@ -9,6 +11,7 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
 import { registerAppIpc } from './appIpc'
+import { registerKeyringNotice } from './keyringNotice'
 import { registerGithubHandlers } from './github'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
@@ -44,16 +47,59 @@ import {
 } from './windows'
 
 /**
- * .trekproj files macOS asked to open (Finder, the Dock) before the windows were restored and the
- * launch's own opens were done: opened after, one at a time, before the empty-window check.
+ * .trekproj files the OS asked to open (Finder or the Dock on macOS; argv on Linux, of this launch
+ * or a second one) before the windows were restored and the launch's own opens were done: opened
+ * after, one at a time, before the empty-window check.
  */
 const pendingOpens: string[] = []
 let opensReady = false
+
+function openOrQueue(path: string): void {
+  if (opensReady) void openFromOs(path)
+  else pendingOpens.push(path)
+}
+
+const isFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+// One Trek per userData in a packaged build: on Linux every launch (the app grid, a
+// double-clicked .trekproj) is a new process, and two must not share userData. A dev build
+// shares "Trek Dev" with the installed app on purpose, so it takes no lock.
+// True in a dev build (no lock is taken); false only in a packaged second launch.
+const ownsInstance = !app.isPackaged || app.requestSingleInstanceLock()
+if (!ownsInstance) {
+  // exit, not quit: no quit handler may run here, or a second launch could save an empty window
+  // list or stop the Local server of the Trek that is running.
+  app.exit(0)
+} else {
+  app.on('second-instance', (_event, argv, cwd) => {
+    // Quitting: a window opened now would miss the close handshake and the saved windows.
+    if (isQuitting()) return
+    const files = trekprojArgs(argv, cwd, isFile)
+    for (const path of files) openOrQueue(path)
+    if (files.length > 0 || !opensReady) return
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    if (!win) {
+      createWindow()
+      return
+    }
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+  // This launch's own: Linux passes a double-clicked file in argv. macOS never does (open-file).
+  for (const path of trekprojArgs(process.argv, process.cwd(), isFile)) pendingOpens.push(path)
+}
+
 // Registered before ready: a file that launches the app arrives before it.
 app.on('open-file', (event, path) => {
   event.preventDefault()
-  if (opensReady) void openFromOs(path)
-  else pendingOpens.push(path)
+  openOrQueue(path)
 })
 
 function sendToFocused(channel: string): void {
@@ -153,7 +199,14 @@ function buildMenu(): void {
           accelerator: 'CmdOrCtrl+J',
           click: () => sendToFocused('menu:toggle-global-claude')
         },
-        ...(isMac ? [] : [{ type: 'separator' as const }, { role: 'quit' as const }])
+        ...(isMac
+          ? []
+          : [
+              { type: 'separator' as const },
+              { label: 'Check for Updates…', enabled: appUpdatesEnabled(), click: () => requestAppUpdateCheck(true) },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ])
       ]
     },
     { role: 'editMenu' },
@@ -200,11 +253,14 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
+  // A second packaged launch has handed over its argv and is quitting: it starts nothing.
+  if (!ownsInstance) return
   // Must complete before anything spawns child processes (the local server, code, gh).
   await fixPath()
   void removeStaleMcpConfigs()
   registerWindowHandlers()
   registerAppIpc()
+  registerKeyringNotice()
   registerImportHandlers()
   registerGithubHandlers()
   registerAppSettingsHandlers()
