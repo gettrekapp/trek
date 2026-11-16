@@ -7,7 +7,7 @@ Five GitHub Actions workflows live in `.github/workflows/`:
 | `ci.yml` (CI) | every pull request, every push to `main`, by hand (Run workflow); called by `release.yml` | Linux (ubuntu-latest, Node 22): `npm ci`, which runs `npm ci` in `server/` and `relay/` too (`scripts/postinstall.mjs`), so every lockfile is enforced; typecheck the app, trek-server and trek-relay; `npm test`; `npm run build` and `npm run build:relay`; the Node-only smokes (`server` smoke on the built bundle, `smoke:client`, `smoke:push`); the phone app's typecheck and `expo export` for iOS and Android. A newer push to the same PR cancels the older run (not on `main`). A push to any other branch runs nothing by itself (open a PR, or Run workflow), so a PR's branch is not tested twice per push. |
 | `macos-smokes.yml` (Electron smokes, macOS, Linux and Windows) | nightly at 07:17 UTC, by hand, and called by `release.yml` | A matrix of macOS arm64, Linux x64 and Windows x64 (windows-latest, run under Git Bash). Each leg: one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `server-update-app`, `import`). `npm test` runs on the macOS leg only (it includes the macOS-only sandbox tests), and `server-update-app` prints SKIP off macOS. The Linux leg runs each smoke under `xvfb-run -a` with `TREK_NO_KEYRING_NOTICE=1`. Each smoke runs even if an earlier one failed, so one run shows every failure. |
 | `linux-app.yml` (Linux app) | called by `release.yml`, and by hand | Builds the `.deb` on ubuntu-22.04 (x64) and ubuntu-22.04-arm (arm64), checks it (see the artifact table) and uploads it with its update feed. |
-| `windows-app.yml` (Windows app) | called by `release.yml` (as `windows-app`), and by hand | Builds `Trek-X.Y.Z-win-x64.exe` on windows-latest, checks it (see the artifact table) and uploads it with its update feed. On a `v*` tag the `signed` job runs, in the `release` environment, and refuses to run without the seven Azure signing secrets; on anything else the `unsigned` job runs, with the signature checks skipped. |
+| `windows-app.yml` (Windows app) | called by `release.yml` (as `windows-app`), and by hand | Builds `Trek-X.Y.Z-win-x64.exe` on windows-latest, checks it (see the artifact table) and uploads it with its update feed. On a `v*` tag the `signed` job runs, in the `release` environment: it signs only when all seven Azure signing secrets are set, builds unsigned with a warning when none are, and fails when only some are; on anything else the `unsigned` job runs, with the signature checks skipped. |
 | `release.yml` (Release) | a pushed tag `v*` | Checks the version (every other job waits for it, so a malformed tag stops there), runs CI and the Electron smokes as its gate, builds the `.deb`s (`linux-app.yml`), the Windows installer (`windows-app.yml`) and every other artifact and checks them, and creates a **draft** GitHub Release. |
 
 The phone app (`apps/mobile`) is not released here: EAS builds and submits it (see
@@ -68,14 +68,14 @@ left as they were. It refuses to touch a release that is already published.
 | `Trek-X.Y.Z-arm64.zip`, `Trek-X.Y.Z-arm64.zip.blockmap`, `latest-mac.yml` | macos-latest (arm64), the same build as the dmg | the built `dist/mac-arm64/Trek.app`: `Contents/Resources/app-update.yml` exists and names the repository; the zip and its block map exist; the app unzipped: `codesign --verify --deep --strict`, `stapler validate`, `spctl --assess`; `scripts/latest-mac-yml.mjs` drops the dmg's entry from `latest-mac.yml` and checks the zip's size and SHA-512 against it |
 | `Trek-X.Y.Z-linux-x64.deb`, `latest-linux.yml` | ubuntu-22.04 (`linux-app.yml`) | `dpkg-deb` checks (package name `trek`, version, architecture, the files, `pty.node` built for the architecture, no foreign prebuilds); `apt install` of the deb; then `local-server-smoke.mjs --packaged /opt/Trek` and `local-app-smoke.mjs --packaged /opt/Trek` under xvfb. `latest-linux.yml` is the update feed |
 | `Trek-X.Y.Z-linux-arm64.deb`, `latest-linux-arm64.yml` | ubuntu-22.04-arm (`linux-app.yml`) | 〃 |
-| `Trek-X.Y.Z-win-x64.exe` | windows-latest (`windows-app.yml`) | the installer, `latest.yml` and `Trek.exe` exist; node-pty's win32-x64 `conpty.node` is in the app and no other platform's prebuild; on a tag, the installer and every Trek-built `.exe`, `.dll` and `.node` carry a valid signature from `AZURE_SIGNING_PUBLISHER`, and any other `.exe`/`.dll`/`.node` a valid one; then the installer runs silently into `%LOCALAPPDATA%\Programs\Trek`, the installed files are checked again, `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` run on the installed app, and it is uninstalled silently |
+| `Trek-X.Y.Z-win-x64.exe` | windows-latest (`windows-app.yml`) | the installer, `latest.yml` and `Trek.exe` exist; node-pty's win32-x64 `conpty.node` is in the app and no other platform's prebuild; when signing is on (all seven secrets), the installer and every Trek-built `.exe`, `.dll` and `.node` carry a valid signature from `AZURE_SIGNING_PUBLISHER`, and any other `.exe`/`.dll`/`.node` a valid one; then the installer runs silently into `%LOCALAPPDATA%\Programs\Trek`, the installed files are checked again, `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` run on the installed app, and it is uninstalled silently |
 | `Trek-X.Y.Z-win-x64.exe.blockmap` | windows-latest, the same build | exists; a Trek that has updated before downloads only the blocks that changed |
 | `latest.yml` | windows-latest, the same build | exists and names the installer; the app's `app-update.yml` names the repository. It is the update feed |
 | `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `codesign` (in `package-server.mjs --sign`) and `notarytool` on node-pty's `pty.node` and `spawn-helper`; `scripts/server-tarball-smoke.mjs --notarized` (Developer ID, hardened runtime, timestamp; unpacked quarantined) |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
 | `trek-server-X.Y.Z-linux-arm64.tar.gz` | ubuntu-22.04-arm | 〃 |
-| `trek-server-X.Y.Z-win32-x64.zip` | windows-latest (the `server-win` job, in the `release` environment) | `bin\trek-server.ps1` signed with Azure Trusted Signing (`package-server.mjs --sign-azure`) and checked signed inside the zip; the zip unpacked and run. It refuses to run unsigned on a tag |
+| `trek-server-X.Y.Z-win32-x64.zip` | windows-latest (the `server-win` job, in the `release` environment) | `bin\trek-server.ps1` signed with Azure Trusted Signing (`package-server.mjs --sign-azure`) and checked signed inside the zip, when all seven Azure secrets are set; unsigned (with a warning) when none are, a failure when only some; the zip unpacked and run |
 | `trek-relay-X.Y.Z.cjs` and `.cjs.sha256` | ubuntu-latest | `node trek-relay-X.Y.Z.cjs version` |
 | `SHA256SUMS` | ubuntu-latest (the `release` job) | every file above |
 | `SHA256SUMS.sig` | ubuntu-latest (the `release` job) | `scripts/sign-sums.mjs sign`: signed with `UPDATE_SIGNING_KEY`, then verified against the public keys in `server/src/update/keys.ts`; a mismatch stops the release. Absent (with a warning on the run) until the key is set up; not listed in `SHA256SUMS` |
@@ -111,15 +111,19 @@ client, and SIGTERM. The Linux tarballs are built on Ubuntu 22.04 so they run on
 later.
 
 **The Windows installer** is built by `windows-app.yml` with `npm run dist:win` (NSIS, x64, one-click,
-per user, installed to `%LOCALAPPDATA%\Programs\Trek` without elevation). electron-builder signs it
-through Azure Trusted Signing (`azureSignOptions`, given on the command line from the
-`AZURE_SIGNING_*` secrets, so a local or branch build stays unsigned). electron-updater checks that
-an update is signed by the same publisher, `AZURE_SIGNING_PUBLISHER`. The Local server runs on
+per user, installed to `%LOCALAPPDATA%\Programs\Trek` without elevation). When all seven Azure secrets
+are set, electron-builder signs it through Azure Trusted Signing (`azureSignOptions`, given on the
+command line from the `AZURE_SIGNING_*` secrets, so a local, branch or secret-less build stays
+unsigned), and electron-updater checks that an update is signed by the same publisher,
+`AZURE_SIGNING_PUBLISHER`. Unsigned, there is no `publisherName` in `app-update.yml`, so the
+updater checks no signer. Until the secrets exist the release ships unsigned and SmartScreen asks
+once (docs/WINDOWS.md); the release notes' Windows line says so, and needs rewording when signing
+is switched on. The Local server runs on
 `Trek.exe`, so the installer must replace it: the app stops the server before it installs an
 update, and the installer and uninstaller close whatever still runs from the install folder.
 
 **The Windows trek-server zip** is built by the `server-win` job (in the `release` environment):
-`bin\trek-server.ps1` is signed so PowerShell's execution policy accepts it; `bin\trek-server.cmd`
+With all seven secrets, `bin\trek-server.ps1` is signed so PowerShell's execution policy accepts it; `bin\trek-server.cmd`
 cannot be signed.
 
 **The macOS tarballs** are built by the `server-mac` job, which runs in the `release` environment
@@ -324,7 +328,7 @@ them. A tag ruleset then limits who can create a `v*` tag.
 
 The release fails at its first step, naming what is missing, unless the certificate and one
 notarization method are set in the `release` environment; it never ships an unsigned app or
-macOS server tarball. `windows-app` and `server-win` likewise stop at their first step unless all seven `AZURE_*` secrets are set.
+macOS server tarball. Windows signing is optional: `windows-app` and `server-win` sign and verify only when all seven `AZURE_*` secrets are set, build unsigned with a warning when none are, and fail at their first step, naming the missing ones, when only some are.
 
 | Secret | What it is |
 | --- | --- |
@@ -399,7 +403,10 @@ submissions (empty is fine) instead of an authentication error.
    [developer.apple.com/account](https://developer.apple.com/account) (10 characters), and in
    the certificate's name: "Developer ID Application: Name (TEAMID)".
 
-### Azure Trusted Signing (the seven `AZURE_*` secrets)
+### Azure Trusted Signing (the seven `AZURE_*` secrets), to turn signing on
+
+Optional: the Windows installer and the trek-server zip ship unsigned until all seven secrets are
+in the `release` environment. Add all of them or none.
 
 Start early: identity validation for a Trusted Signing account can take days.
 
@@ -414,7 +421,7 @@ Start early: identity validation for a Trusted Signing account can take days.
 3. On the certificate profile (or the account), Access control (IAM) → add the role
    **Trusted Signing Certificate Profile Signer** for the app registration.
 
-The signature checks run only on a `v*` tag, so a bad setup shows up on the release run.
+The signature checks run only on a `v*` tag with all seven secrets, so a bad setup shows up on the release run.
 
 ## Running the Electron smokes by hand
 

@@ -16,7 +16,14 @@ Download `Trek-<version>-win-x64.exe` from the
 [latest release](https://github.com/gettrekapp/trek/releases/latest) and run it. It is a one-click
 NSIS installer that installs for your user only: no administrator rights and no UAC prompt. Trek
 goes to `%LOCALAPPDATA%\Programs\Trek`, with Start-menu and desktop shortcuts, and `.trekproj`
-files open in Trek. The installer is signed with Azure Trusted Signing, as is `Trek.exe`.
+files open in Trek.
+
+The installer is not code-signed yet. Windows SmartScreen shows "Windows protected your PC" with an
+unknown publisher: choose **More info** → **Run anyway**. Updates still install: electron-updater
+checks an update's signer only when the installed build carries a `publisherName` in its
+`resources/app-update.yml`, and only a signed build does (when signing is switched on, see
+docs/RELEASING.md). An unsigned build has none, so the updater verifies nothing beyond the SHA-512
+in `latest.yml`, which comes from the same GitHub release.
 
 The agent CLIs you use (`claude`, `codex`, `gemini`, `grok`) and Git for Windows must be installed
 and signed in as your user, as for trek-server below.
@@ -65,7 +72,7 @@ has environments and stacks.
 Run on a real Windows PC (x64), with the draft release's `Trek-<version>-win-x64.exe`.
 
 1. Install it from the draft and start it. No console window appears for the Local server. The
-   installer and `Trek.exe` show the signed publisher (Properties → Digital Signatures).
+   SmartScreen's More info → Run anyway starts the installer.
 2. A Claude session's terminal works (ConPTY).
 3. Quit Trek: the Local server keeps running. Start Trek again: it reconnects.
 4. Launch Trek a second time: the running Trek comes forward.
@@ -117,9 +124,9 @@ and the phone connect to.
   and spaces, and get a `-` after a device name (`CON`, `NUL`, `COM1`…). The branch keeps its name.
 - **Launchers.** The zip has `bin\trek-server.cmd` (what `trek-server` resolves to on PATH) and
   `bin\trek-server.ps1`. With the `.cmd`, cmd.exe may ask "Terminate batch job (Y/N)?" on Ctrl+C
-  (answer Y); the PowerShell one does not. The release zip's `.ps1` is signed (Azure Trusted Signing), so the
-  execution policy accepts it. For an unsigned build (one from source, or the artifact of ci.yml's
-  Windows job) Windows may refuse the `.ps1`: run
+  (answer Y); the PowerShell one does not. The release zip's `.ps1` is not signed (yet), so Windows may refuse it
+  under the default execution policy, as for any unsigned build (one from source, or the artifact of
+  ci.yml's Windows job): run
   `powershell -NoProfile -ExecutionPolicy Bypass -File bin\trek-server.ps1 start`, or
   `Get-ChildItem -Recurse <folder> | Unblock-File` once after unzipping.
   Both run the `node` found on PATH, and cmd.exe looks in the current directory before PATH: a

@@ -34,7 +34,7 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
   silicon, `Trek-<version>-arm64.dmg` (signed and notarized). On Linux (Ubuntu 22.04+ or
   Debian 12+, x64 or arm64), `Trek-<version>-linux-<arch>.deb`: see [docs/LINUX.md](docs/LINUX.md).
   On Windows 10 (1809+) or 11 (x64), `Trek-<version>-win-x64.exe`, a per-user installer that needs
-  no admin rights: see [docs/WINDOWS.md](docs/WINDOWS.md).
+  no admin rights (not code-signed yet; SmartScreen asks once): see [docs/WINDOWS.md](docs/WINDOWS.md).
 - **A remote server (optional)**: the same release has `trek-server` tarballs for macOS
   and Linux (x64 and arm64) and a zip for Windows (x64). Unpack one on the machine you want the agents to run on and
   start `bin/trek-server` with Node.js 22 or later. See [server/README.md](server/README.md).
@@ -686,8 +686,8 @@ server's `project:<id>` topic (`src/renderer/src/v2/`).
 GitHub Actions runs CI on every push and pull request (Linux: typechecks, `npm test`, the
 build, the Node-only smokes and the phone app's export) and the Electron smokes nightly on
 macOS, Linux and Windows (the Linux leg runs under xvfb). A `vX.Y.Z` tag builds a signed, notarized
-`Trek-X.Y.Z-arm64.dmg`, the Linux `.deb` for x64 and arm64, the signed Windows installer
-`Trek-X.Y.Z-win-x64.exe` (installed and smoke-tested on a Windows runner), trek-server tarballs
+`Trek-X.Y.Z-arm64.dmg`, the Linux `.deb` for x64 and arm64, the Windows installer
+`Trek-X.Y.Z-win-x64.exe` (not code-signed yet) (installed and smoke-tested on a Windows runner), trek-server tarballs
 for macOS and Linux (x64 and arm64), the trek-server Windows zip and the trek-relay bundle, and opens a draft GitHub Release. How to cut a
 release, the signing secrets and how to run the Electron smokes by hand:
 [docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.
