@@ -30,7 +30,8 @@ import { redeemPairingCode } from '../src/shared/client/pairing.ts'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
 import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
-import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
+import { killIfOurs } from './smokeTeardown.mjs'
 
 const WAIT_MS = 15000
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -114,7 +115,10 @@ async function suite(rt) {
   const lockPath = join(profile, 'local.lock')
 
   // A fake agent that prints its arguments and ELECTRON_RUN_AS_NODE, and lingers until it is killed.
-  const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ print: [`'FAKE_AGENT ' + ${ARGS}`, "'RUN_AS_NODE=' + (process.env.ELECTRON_RUN_AS_NODE ?? 'unset')"] }))
+  // Its pid is recorded, so the cleanup can end one a killed server left behind (on Windows a
+  // TerminateProcess'd server's ConPTY agents outlive it).
+  const agentPids = join(work, 'agent-pids')
+  const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: [`'FAKE_AGENT ' + ${ARGS}`, "'RUN_AS_NODE=' + (process.env.ELECTRON_RUN_AS_NODE ?? 'unset')"] }))
   mkdirSync(profile, { recursive: true })
   writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
   // A repo with no registered repo anywhere near it.
@@ -165,6 +169,7 @@ async function suite(rt) {
     for (const c of conns.splice(0)) c.close()
     for (const r of children) if (r.code === undefined) r.child.kill('SIGKILL')
     await Promise.all(children.map((r) => r.exited))
+    for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   }
 
   try {
@@ -325,16 +330,28 @@ async function suite(rt) {
     check(await waitFor(() => resumed.includes(`--resume ${agentSessionId}`)), 'the agent is resumed with --resume and its session id', JSON.stringify(resumed))
 
     for (const x of conns.splice(0)) x.close()
-    d.child.kill('SIGTERM')
-    await d.exited
-    check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
+    // Windows has no SIGTERM or SIGHUP for another process: child.kill() is TerminateProcess, which
+    // no cleanup survives (docs/WINDOWS.md: a stop by signal is not possible there). `stop --local`
+    // (checked above) is how it stops; here it ends d, so the next steps start from no server.
+    if (WIN) {
+      skip('SIGTERM again: exit 0, local.json and local.lock gone', 'Windows has no SIGTERM for another process')
+      const stopD = await runCli(['stop', '--local'])
+      await d.exited
+      must(stopD.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'stop --local ends it instead (Windows)', `${stopD.code} ${d.code} ${stopD.out} ${stopD.err}`)
+      skip('a start for SIGHUP writes local.json', 'Windows has no SIGHUP')
+      skip('SIGHUP: exit 0, local.json and local.lock gone', 'Windows has no SIGHUP')
+    } else {
+      d.child.kill('SIGTERM')
+      await d.exited
+      check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
 
-    // --- 10. SIGHUP (the terminal that ran it closed) cleans up too ---
-    const h = start()
-    must(await waitFor(() => info()?.pid === h.child.pid || h.code !== undefined), 'a start for SIGHUP writes local.json', `code ${h.code}, ${h.err}`)
-    h.child.kill('SIGHUP')
-    await h.exited
-    check(h.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGHUP: exit 0, local.json and local.lock gone', `${h.code} ${existsSync(infoPath)} ${existsSync(lockPath)}`)
+      // --- 10. SIGHUP (the terminal that ran it closed) cleans up too ---
+      const h = start()
+      must(await waitFor(() => info()?.pid === h.child.pid || h.code !== undefined), 'a start for SIGHUP writes local.json', `code ${h.code}, ${h.err}`)
+      h.child.kill('SIGHUP')
+      await h.exited
+      check(h.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGHUP: exit 0, local.json and local.lock gone', `${h.code} ${existsSync(infoPath)} ${existsSync(lockPath)}`)
+    }
 
     // --- 11. a lock path that cannot be taken is a clear error, not a stack trace ---
     mkdirSync(lockPath)
@@ -388,7 +405,8 @@ async function suite(rt) {
     for (const r of children) if (r.err) console.error(`[${rt.name} pid ${r.child.pid} stderr]\n${r.err}`)
   } finally {
     await stopAll()
-    rmSync(work, { recursive: true, force: true })
+    // Windows: a just-killed process's files and cwd stay busy for a moment.
+    rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
 
