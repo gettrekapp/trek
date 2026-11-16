@@ -734,18 +734,21 @@ const fireQuiet = (s) => {
 const statusOf = (s) => s.wx().sessions[0].status
 const attention = (s) => s.hub.subscribe('attention', { send() {} }).snapshot.entries
 
-test('output → working; quiet → done after a marker, idle after a repaint', (t) => {
+test('output → working; quiet → done after a marker, idle after a repaint', async (t) => {
   const s = setup(t)
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   const proc = s.spawned[0]
   proc.emit('Thinking… (esc to interrupt)')
+  await s.sessions.terminals.settledAll()
   assert.equal(statusOf(s), 'working')
   proc.emit('more')
+  await s.sessions.terminals.settledAll()
   assert.equal(quietJobs(s).length, 1, 'each chunk restarts the one quiet timer')
   fireQuiet(s)
   assert.equal(statusOf(s), 'done')
   assert.equal(attention(s)[0].status, 'done')
   proc.emit('repaint')
+  await s.sessions.terminals.settledAll()
   assert.equal(statusOf(s), 'working')
   assert.deepEqual(attention(s), [])
   fireQuiet(s)
@@ -812,11 +815,12 @@ test('after stopAll, output, bells and input schedule nothing and publish nothin
   s.spawned[0].exit(137)
 })
 
-test('status changes are not saved; seen and rename update the attention topic', (t) => {
+test('status changes are not saved; seen and rename update the attention topic', async (t) => {
   const s = setup(t)
   const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   const saves = s.saves.length
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   assert.equal(s.saves.length, saves, 'working/done are runtime-only')
   s.sessions.rename({ projectId: s.projectId, sessionId, title: 'Renamed' })
@@ -830,6 +834,7 @@ test('project.rename and project.updateSettings republish the attention topic wi
   const { call } = v2(s)
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   const before = attention(s)[0]
   assert.equal(before.audioAlerts, undefined)
@@ -847,6 +852,7 @@ test('a settings change that leaves audioAlerts alone sends no attention patch',
   const { call } = v2(s)
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   const sent = []
   s.hub.subscribe('attention', { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) })
@@ -858,15 +864,18 @@ test('exit, close and unload cancel the quiet timer and drop attention entries',
   const s = setup(t)
   const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   assert.equal(attention(s).length, 1)
   s.spawned[0].emit('x')
+  await s.sessions.terminals.settledAll()
   s.spawned[0].exit(0)
   assert.equal(quietJobs(s).length, 0)
   assert.equal(statusOf(s), 'exited')
   assert.deepEqual(attention(s), [])
   s.sessions.restart({ projectId: s.projectId, sessionId: one.sessionId, ...size })
   s.spawned[1].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
   assert.equal(quietJobs(s).length, 0)
 })
@@ -896,9 +905,11 @@ test('close and project.delete drop attention entries and cancel the quiet timer
   const { call } = v2(s)
   const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   assert.equal(attention(s).length, 1)
   s.spawned[0].emit('x')
+  await s.sessions.terminals.settledAll()
   s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
   assert.equal(quietJobs(s).length, 0)
   assert.deepEqual(attention(s), [])
@@ -1018,6 +1029,7 @@ test('attention entries are oldest first with their since; markComplete drops on
   // The later session in the list enters first, so the order is by since, not by position.
   const t0 = s.clock.t
   s.spawned[1].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   s.clock.t += 5000
   s.spawned[0].emit('\x07')
@@ -1055,6 +1067,7 @@ test('a decision on a done session: input clears it in one patch and keeps done 
   const s = setup(t)
   const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   s.spawned[0].emit('esc to interrupt')
+  await s.sessions.terminals.settledAll()
   fireQuiet(s)
   const doneSince = attention(s)[0].since
   s.clock.t += 7000

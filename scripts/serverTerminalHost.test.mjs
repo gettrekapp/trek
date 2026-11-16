@@ -439,12 +439,32 @@ test('onOutput sees live output, never replay; onBell fires for a real bell only
   const { host, spawned } = setup(t, { onOutput: (id, d) => outputs.push([id, d]), onBell: (id) => bells.push(id) })
   host.spawn('p1', opts)
   spawned[0].emit('hi')
+  await host.settled('p1')
   host.attach('p1', sink())
   assert.deepEqual(outputs, [['p1', 'hi']], 'attach replays without calling onOutput')
   spawned[0].emit('\x1b]0;title\x07')
   spawned[0].emit('ding\x07')
   await host.settled('p1')
   assert.deepEqual(bells, ['p1'])
+})
+
+test('onOutput says whether the output changed the text on screen: a repaint of the same text, a cursor move or a title does not', async (t) => {
+  const outputs = []
+  const { host, spawned } = setup(t, { onOutput: (id, d, changed) => outputs.push([d, changed]) })
+  host.spawn('p1', opts)
+  const emit = async (d) => {
+    spawned[0].emit(d)
+    await host.settled('p1')
+  }
+  await emit('> prompt')
+  await emit('\x1b[H\x1b[2K> prompt') // the same line drawn again
+  await emit('\x1b[5;10H') // the cursor moves
+  await emit('\x1b]0;title\x07') // the title
+  await emit('\x1b[?25l\x1b[?25h') // the cursor hidden and shown
+  await emit(' typed') // new text
+  await emit('\x1b[?1049h') // the alternate screen, blank
+  await emit('\x1b[?1049l') // back to the main screen
+  assert.deepEqual(outputs.map(([, c]) => c), [true, false, false, false, false, true, true, true])
 })
 
 test('a throwing onOutput or onBell never breaks streaming', async (t) => {

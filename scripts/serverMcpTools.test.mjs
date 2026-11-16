@@ -390,6 +390,7 @@ test('a client that disconnects stops the tool: nothing is sent', async (t) => {
   ac.abort()
   await assert.rejects(pending, /client disconnected/)
   proc.emit('ready')
+  await s.sessions.terminals.settledAll()
   s.fireQuiet()
   await delay(20)
   assert.deepEqual(proc.written, [])
@@ -397,6 +398,7 @@ test('a client that disconnects stops the tool: nothing is sent', async (t) => {
   const wac = new AbortController()
   const waiting = s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 600 }, wac.signal)
   proc.emit('more')
+  await s.sessions.terminals.settledAll()
   await delay(20)
   wac.abort()
   await assert.rejects(waiting, /client disconnected/)
@@ -437,7 +439,9 @@ test('wait_for_sessions: any, all with a timeout, and closed sessions', async (t
   const a = (await s.call('start_session', { worktree: 'main' })).terminalId
   const b = (await s.call('start_session', { worktree: 'main' })).terminalId
   s.spawned[0].emit('x')
+  await s.sessions.terminals.settledAll()
   s.spawned[1].emit('x')
+  await s.sessions.terminals.settledAll()
   s.fireQuiet() // the first quiet timer belongs to session a: a settles to idle, b stays working
   const any = await s.call('wait_for_sessions', { terminalIds: [a, b], until: 'any', timeoutSeconds: 1 })
   assert.equal(any.timedOut, false)
@@ -660,6 +664,7 @@ test('wait_for_sessions: dedupes ids, caps their number, refuses non-strings', a
   const s = await toolSetup(t)
   const a = (await s.call('start_session', { worktree: 'main' })).terminalId
   s.spawned.at(-1).emit('x')
+  await s.sessions.terminals.settledAll()
   s.fireQuiet()
   const r = await s.call('wait_for_sessions', { terminalIds: [a, a], timeoutSeconds: 1 })
   assert.deepEqual(r.sessions, [{ terminalId: a, status: 'idle' }])
@@ -692,6 +697,7 @@ test('wait_for_sessions reads one project snapshot per poll', async (t) => {
     ids.push((await s.call('start_session', { worktree: 'main' })).terminalId)
     s.spawned.at(-1).emit('x') // working
   }
+  await s.sessions.terminals.settledAll()
   const require = s.projects.require.bind(s.projects)
   let reads = 0
   s.projects.require = (id) => { reads++; return require(id) }

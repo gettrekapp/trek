@@ -167,7 +167,7 @@ export class SessionManager {
       spawner: deps.spawner,
       platform: deps.platform,
       onExit: (ptyId, code) => this.onExit(ptyId, code),
-      onOutput: (ptyId, data) => this.onPtyOutput(ptyId, data),
+      onOutput: (ptyId, data, changed) => this.onPtyOutput(ptyId, data, changed),
       onBell: (ptyId) => this.onPtyBell(ptyId)
     })
     this.publishAttention()
@@ -866,7 +866,7 @@ export class SessionManager {
 
   // ---- live status ----
 
-  private onPtyOutput(ptyId: string, data: string): void {
+  private onPtyOutput(ptyId: string, data: string, changed: boolean): void {
     if (this.stopped) return
     const owner = this.owners.get(ptyId)
     const session = owner && this.sessionOf(owner)
@@ -874,7 +874,7 @@ export class SessionManager {
     this.outputSeen.add(owner.sessionId)
     const markers = getProvider(session.llm.provider).statusMarkers
     const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
-    const r = onOutput(session.status, entry.activity, data, markers)
+    const r = onOutput(session.status, entry.activity, data, markers, changed)
     entry.activity = r.activity
     this.activity.set(owner.sessionId, entry)
     if (r.restartTimer) this.armQuiet(ptyId, entry)

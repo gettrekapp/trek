@@ -22,6 +22,16 @@ test('output leaves attention and exited alone, and is ignored while complete', 
   assert.equal(complete.activity.processingSeen, false)
 })
 
+test('output that leaves the screen as it was neither makes a session working nor extends its quiet timer', () => {
+  for (const status of ['idle', 'done', 'working']) {
+    const r = onOutput(status, newActivity(), '\x1b[H', markers, false)
+    assert.equal(r.status, status, status)
+    assert.equal(r.restartTimer, false, status)
+  }
+  // A marker in it is still seen, for when the session settles.
+  assert.equal(onOutput('working', newActivity(), 'esc to interrupt', markers, false).activity.processingSeen, true)
+})
+
 test('markers are found case-insensitively, even split across chunks', () => {
   let a = onOutput('idle', newActivity(), '… Esc to inte', markers).activity
   assert.equal(a.processingSeen, false)

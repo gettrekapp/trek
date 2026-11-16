@@ -17,12 +17,17 @@ export function newActivity(): Activity {
   return { processingSeen: false, scanTail: '' }
 }
 
-/** Live (never replayed) output. `restartTimer`: (re)start the quiet timer. */
+/**
+ * Live (never replayed) output. `restartTimer`: (re)start the quiet timer. `changed`: whether it
+ * changed the text on screen; a repaint that leaves it as it was (a status line or a TUI redrawing
+ * itself while it waits) is not the agent working.
+ */
 export function onOutput(
   status: SessionStatus,
   activity: Activity,
   data: string,
-  markers: readonly string[]
+  markers: readonly string[],
+  changed = true
 ): { status: SessionStatus; activity: Activity; restartTimer: boolean } {
   // Marked complete: the user opted out of tracking.
   if (status === 'complete') return { status, activity, restartTimer: false }
@@ -31,6 +36,7 @@ export function onOutput(
   const processingSeen = activity.processingSeen || markers.some((m) => lower.includes(m.toLowerCase()))
   const longest = Math.max(1, ...markers.map((m) => m.length))
   const next: Activity = { processingSeen, scanTail: window.slice(Math.max(0, window.length - longest + 1)) }
+  if (!changed) return { status, activity: next, restartTimer: false }
   // A bell means the agent waits on the user: redraws must not clear it.
   const nextStatus = status === 'attention' || status === 'exited' ? status : 'working'
   return { status: nextStatus, activity: next, restartTimer: true }

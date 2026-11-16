@@ -34,6 +34,16 @@ const PARSER_LOW_WATER = 2 * 1024 * 1024
 const KILL_TIMEOUT_MS = 3000
 const MAX_SCREEN_LINES = 10_000
 
+/** The text on the screen as shown, and which buffer shows it: no colours, cursor or title. */
+function visibleText(screen: HeadlessTerminal): string {
+  const buffer = screen.buffer.active
+  const lines: string[] = [buffer.type]
+  for (let y = buffer.baseY; y < buffer.baseY + screen.rows; y++) {
+    lines.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  }
+  return lines.join('\n')
+}
+
 /** The build number in os.release() on Windows (10.0.22631 → 22631); undefined if it has none. */
 export function windowsBuildNumber(osRelease: string): number | undefined {
   const build = Number(osRelease.split('.')[2])
@@ -111,8 +121,12 @@ export interface TerminalHostDeps {
   onExit: (ptyId: string, exitCode: number) => void
   /** How long after kill() a process that is still running gets SIGKILL (default 3000) */
   killTimeoutMs?: number
-  /** Live output (never replay), after the chunk is buffered and before clients get it */
-  onOutput?: (ptyId: string, data: string) => void
+  /**
+   * Live output (never replay), once the headless screen has parsed the chunk. `changed`: whether it
+   * changed the text on screen (a repaint of the same text, a cursor move or a title does not); true
+   * when the screen could not take it.
+   */
+  onOutput?: (ptyId: string, data: string, changed: boolean) => void
   /** The program rang the terminal bell (from the headless screen) */
   onBell?: (ptyId: string) => void
   /** Default process.platform; win32 changes how a pty is force-killed */
@@ -136,6 +150,8 @@ interface PtyRecord {
   parserPending: number
   /** A screen write failed; logged once, the raw stream carries on */
   screenFailed: boolean
+  /** The screen's text after the last parsed chunk, to tell a change from a repaint */
+  screenText: string
   seq: number
   buffer: string[]
   bufferedLength: number
@@ -252,6 +268,7 @@ export class TerminalHost {
       parsed: Promise.resolve(),
       parserPending: 0,
       screenFailed: false,
+      screenText: '',
       seq: 0,
       buffer: [],
       bufferedLength: 0,
@@ -481,6 +498,11 @@ export class TerminalHost {
     return this.require(ptyId).parsed
   }
 
+  /** Resolves once every live pty's screen has parsed what it was given. */
+  async settledAll(): Promise<void> {
+    await Promise.all([...this.records.values()].map((r) => r.parsed))
+  }
+
   /** Runs an owner hook; a throwing owner must never break streaming. */
   private safely(fn: () => void): void {
     try {
@@ -503,7 +525,6 @@ export class TerminalHost {
       record.bufferStartSeq += dropped.length
     }
     this.writeScreen(record, data)
-    this.safely(() => this.onOutputHook?.(record.ptyId, data))
     for (const sink of [...record.sinks]) {
       try {
         sink.send('pty.data', { ptyId: record.ptyId, seq, data })
@@ -523,6 +544,7 @@ export class TerminalHost {
     try {
       record.screen.write(data, () => {
         record.parserPending -= data.length
+        this.parsedOutput(record, data)
         resolve()
       })
       record.parsed = parsed
@@ -532,7 +554,22 @@ export class TerminalHost {
         record.screenFailed = true
         console.warn(`pty ${record.ptyId}: the headless screen dropped output`, err)
       }
+      this.output(record, data, true)
     }
+  }
+
+  /** A chunk the screen has parsed: tells the owner, with whether the text on screen changed. */
+  private parsedOutput(record: PtyRecord, data: string): void {
+    if (!this.onOutputHook) return
+    const text = visibleText(record.screen)
+    const changed = text !== record.screenText
+    record.screenText = text
+    this.output(record, data, changed)
+  }
+
+  private output(record: PtyRecord, data: string, changed: boolean): void {
+    if (this.records.get(record.ptyId) !== record) return
+    this.safely(() => this.onOutputHook?.(record.ptyId, data, changed))
   }
 
   /** A sink's unsent bytes; a sink that throws is dropped and counts as 0. */
