@@ -73,7 +73,9 @@ const isFile = (path: string): boolean => {
 // True in a dev build (no lock is taken); false only in a packaged second launch.
 const ownsInstance = !app.isPackaged || app.requestSingleInstanceLock()
 if (!ownsInstance) {
-  app.quit()
+  // exit, not quit: no quit handler may run here, or a second launch could save an empty window
+  // list or stop the Local server of the Trek that is running.
+  app.exit(0)
 } else {
   app.on('second-instance', (_event, argv, cwd) => {
     // Quitting: a window opened now would miss the close handshake and the saved windows.
