@@ -4,7 +4,7 @@
 #
 #   version      the tag matches the three package.json versions
 #   ci           ci.yml (typecheck, unit tests, build, Node smokes, the phone's export)   ┐ gate
-#   macos-smokes macos-smokes.yml (the Electron smokes, one at a time)                    ┘
+#   macos-smokes macos-smokes.yml (the Electron smokes, macOS and Linux, one at a time)   ┘
 #   mac-app      Trek-X.Y.Z-arm64.dmg: the app signed (Developer ID), hardened runtime, notarized
 #                and stapled, and the dmg notarized and stapled too; verified, then the
 #                packaged-app smokes run against it. It and server-mac are the only jobs that use
@@ -79,7 +79,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   macos-smokes:
-    name: 'Gate: macOS smokes'
+    name: 'Gate: Electron smokes'
     needs: version
     permissions:
       contents: read
