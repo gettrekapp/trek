@@ -1,13 +1,18 @@
 # The Windows desktop app: Trek-X.Y.Z-win-x64.exe, a per-user NSIS installer (no admin), with its
 # .blockmap and latest.yml, the feed an installed Trek checks for updates. Built on windows-latest,
-# signed with Azure Trusted Signing on a v* tag, verified, installed silently into
+# signed with Azure Trusted Signing on a v* tag when the release environment has all seven AZURE_*
+# secrets (then verified, down to every signature), installed silently into
 # %LOCALAPPDATA%\Programs\Trek, smoke-tested there (the packaged Local server and app smokes), and
-# uninstalled silently. Called by release.yml; also by hand (Run workflow) to try a branch, which
-# builds the same installer unsigned and uploads it to that run only.
+# uninstalled silently. Signing is optional: a tag with none of the secrets builds the installer
+# unsigned, with a warning; a tag with only some of them fails, naming the missing ones. Called by
+# release.yml; also by hand (Run workflow) to try a branch, which builds the same installer
+# unsigned and uploads it to that run only.
 #
 # Two jobs, one set of steps (the YAML anchor &steps): the signing secrets are the `release`
 # environment's, and that environment admits v* tags only, so a branch run cannot name it. `signed`
 # names it and runs on a tag; `unsigned` names none and runs otherwise; the other one is skipped.
+# The step "Decide whether to sign" sets SIGN (true only on a tag with all seven secrets), and the
+# signing flags and signature checks follow SIGN, not the tag.
 # A job of a reusable workflow that names an environment reads that environment's secrets itself
 # (a caller cannot pass them), and its tag rule is checked against the caller's ref.
 name: Windows app
@@ -47,9 +52,9 @@ jobs:
             package-lock.json
             server/package-lock.json
             relay/package-lock.json
-      # Signed now, or not at all: a release never ships an unsigned installer.
-      - name: Signing secrets are set
-        if: startsWith(github.ref, 'refs/tags/v')
+      # SIGN=true only on a tag with all seven secrets; none of them: unsigned, with a warning;
+      # some of them: a misconfiguration, and the release stops.
+      - name: Decide whether to sign
         env:
           HAS_TENANT: ${{ secrets.AZURE_TENANT_ID != '' }}
           HAS_CLIENT: ${{ secrets.AZURE_CLIENT_ID != '' }}
@@ -67,13 +72,18 @@ jobs:
           [ "$HAS_ACCOUNT" = true ] || missing+=("AZURE_SIGNING_ACCOUNT (the Trusted Signing account name)")
           [ "$HAS_PROFILE" = true ] || missing+=("AZURE_SIGNING_PROFILE (the certificate profile name)")
           [ "$HAS_PUBLISHER" = true ] || missing+=("AZURE_SIGNING_PUBLISHER (the certificate's CN, which the updater checks)")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error title=Release not signed::The release builds a signed Windows installer and refuses to ship an unsigned one. Missing secrets in the release environment: ${missing[*]}. See docs/RELEASING.md."
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "SIGN=false" >> "$GITHUB_ENV"
+            echo "::notice title=Unsigned build::Not a v* tag, so not signed (the release environment's secrets are for tags only); the signature checks are skipped."
+          elif [ ${#missing[@]} -eq 7 ]; then
+            echo "SIGN=false" >> "$GITHUB_ENV"
+            echo "::warning title=Windows installer UNSIGNED::Windows installer built UNSIGNED: no Azure signing secrets in the release environment (docs/RELEASING.md)"
+          elif [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Signing secrets incomplete::Some but not all of the Azure signing secrets are set in the release environment, so the installer is neither signed nor knowingly unsigned. Missing: ${missing[*]}. Set them all, or remove the rest. See docs/RELEASING.md."
             exit 1
+          else
+            echo "SIGN=true" >> "$GITHUB_ENV"
           fi
-      - name: Unsigned (not a v* tag)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: echo "::notice title=Unsigned build::Not a v* tag, so not signed (the release environment's secrets are for tags only); the signature checks are skipped."
       # node-pty comes from its own Windows prebuild (ConPTY), nothing is compiled.
       - run: npm ci --no-audit --no-fund
       - name: Version
@@ -85,10 +95,11 @@ jobs:
       # Invoke-TrustedSigning (it installs the TrustedSigning module itself; the AZURE_* credentials
       # are what the module's EnvironmentCredential reads). azureSignOptions is given here, not in
       # package.json, so a local or branch build stays unsigned without it; its publisherName also
-      # goes into resources/app-update.yml, where electron-updater checks a downloaded update's signer.
+      # goes into resources/app-update.yml, where electron-updater checks a downloaded update's signer
+      # (an unsigned build has no publisherName there, so the updater checks nothing).
       # dist/win-unpacked, which the nsis target builds on the way, is kept for the checks below.
       - name: Package and sign
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.SIGN == 'true'
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -104,12 +115,11 @@ jobs:
           -c.win.azureSignOptions.certificateProfileName="$AZURE_SIGNING_PROFILE"
           -c.win.azureSignOptions.publisherName="$AZURE_SIGNING_PUBLISHER"
       - name: Package (unsigned)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: env.SIGN != 'true'
         run: npx electron-builder --win nsis --x64 --publish never
       - name: Verify the installer, its feed, node-pty and the signatures
         shell: pwsh
         env:
-          SIGNED: ${{ startsWith(github.ref, 'refs/tags/v') }}
           AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -135,8 +145,8 @@ jobs:
           $others = @(Get-ChildItem -Directory -Path "$pty/prebuilds" | Where-Object { $_.Name -like 'darwin-*' -or $_.Name -eq 'win32-arm64' })
           if ($others.Count -gt 0) { Fail "node-pty prebuilds for other platforms shipped: $($others.Name -join ', ')" }
 
-          if ($env:SIGNED -ne 'true') {
-            Write-Output '::notice title=Unsigned build::Signature checks skipped (not a v* tag).'
+          if ($env:SIGN -ne 'true') {
+            Write-Output '::notice title=Unsigned build::Signature checks skipped (not signing this build).'
             exit 0
           }
           # What electron-builder signs carries Trek's certificate: the installer, and in the app
@@ -179,7 +189,7 @@ jobs:
           test -f "$dir/Uninstall Trek.exe" || { echo "::error::the installer did not put its uninstaller in $dir"; exit 1; }
           ls -l "$dir"
       - name: Verify the installed signatures
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.SIGN == 'true'
         shell: pwsh
         env:
           AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
