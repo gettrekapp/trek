@@ -49,6 +49,7 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -127,11 +128,18 @@ case " $* " in *" ps "*) echo "[]" ;; esac
 exit 0`)
 writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
 // The agent: "work" prints Claude's working marker, "bell" rings, anything else is echoed.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(
-  fakeAgent,
-  `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT ready"\nwhile IFS= read -r line; do\n  case "$line" in\n    work) echo "esc to interrupt" ;;\n    bell) printf '\\007' ;;\n    *) echo "GOT:$line" ;;\n  esac\ndone\n`,
-  { mode: 0o755 }
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "console.log('FAKE_AGENT ready')",
+    "createInterface({ input: process.stdin })",
+    "  .on('line', (line) => (line === 'work' ? console.log('esc to interrupt') : line === 'bell' ? process.stdout.write('\\x07') : console.log('GOT:' + line)))",
+    "  .on('close', () => process.exit(0))"
+  ].join('\n')
 )
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 

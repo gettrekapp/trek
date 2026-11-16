@@ -28,6 +28,7 @@ import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '.
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
 const WAIT_MS = 15000
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -108,8 +109,7 @@ async function suite(rt) {
   const lockPath = join(profile, 'local.lock')
 
   // A fake agent that prints its arguments and ELECTRON_RUN_AS_NODE, and lingers until it is killed.
-  const fakeAgent = join(work, 'fake-agent.sh')
-  writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\necho "RUN_AS_NODE=${ELECTRON_RUN_AS_NODE-unset}"\nexec sleep 300\n', { mode: 0o755 })
+  const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ print: [`'FAKE_AGENT ' + ${ARGS}`, "'RUN_AS_NODE=' + (process.env.ELECTRON_RUN_AS_NODE ?? 'unset')"] }))
   mkdirSync(profile, { recursive: true })
   writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
   // A repo with no registered repo anywhere near it.

@@ -39,6 +39,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -72,9 +73,18 @@ const agentPids = join(work, 'agent-pids')
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
 writeShellRc(home)
-const fakeAgent = join(work, 'fake-agent.sh')
 // Each agent records its pid and its worktree ("<pid> <path>"), so a session's process can be found.
-writeFileSync(fakeAgent, `#!/bin/sh\necho "$$ $TREK_WORKTREE_PATH" >> '${agentPids}'\necho "FAKE_AGENT $TREK_WORKTREE_PATH"\nwhile IFS= read -r line; do echo "GOT:$line"; done\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + ' ' + process.env.TREK_WORKTREE_PATH + '\\n')`,
+    "console.log('FAKE_AGENT ' + process.env.TREK_WORKTREE_PATH)",
+    "createInterface({ input: process.stdin }).on('line', (line) => console.log('GOT:' + line)).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 const makeRepo = (name) => {
   const repo = join(work, 'repos', name)

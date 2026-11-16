@@ -53,6 +53,7 @@ import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
 import { closeApp, commandOf } from './smokeTeardown.mjs'
 import { windowsArgv } from '../src/shared/processCommand.ts'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
@@ -104,10 +105,9 @@ const repo = join(work, 'repos', 'my-app')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, '-c', 'user.name=c', '-c', 'user.email=c@c', 'commit', '--allow-empty', '-q', '-m', 'init'])
 // A fake agent: its args, whether a variable from the app's env leaked to it, then it lingers.
-const fakeAgent = join(work, 'fake-agent.sh')
-// Each records its pid (the `sleep 300` it execs keeps it), so finish() can end any one left behind.
+// Each records its pid (it lingers 300 s), so finish() can end any one left behind.
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT $*"\necho "LEAK=\${TREK_SMOKE_LEAK-unset}"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: [`'FAKE_AGENT ' + ${ARGS}`, "'LEAK=' + (process.env.TREK_SMOKE_LEAK ?? 'unset')"] }))
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The dialog stub, loaded before the app's main script. Every message box is recorded; the
@@ -254,7 +254,7 @@ const finish = async (reason) => {
   })
   const left = info()
   if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
-  // The squatter, and any fake agent (its `sleep 300`) a killed server left behind.
+  // The squatter, and any fake agent a killed server left behind.
   const strays = [squatter?.pid, ...(existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : [])]
   for (const pid of strays) {
     if (Number.isInteger(pid) && pid > 0 && alive(pid)) {

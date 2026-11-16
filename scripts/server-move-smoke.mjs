@@ -41,6 +41,7 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -91,9 +92,8 @@ const stackCalls = join(work, 'stack-calls.log')
 
 const origin = join(work, 'origin.git')
 git('init', '-q', '--bare', origin)
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT'"] }))
 
 /** One server's files: its HOME (with its clone), config, token and data dir. */
 function serverFiles(name) {
@@ -200,7 +200,7 @@ const finish = async (reason) => {
     }
   }
   const pids = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').map(Number) : [])
-  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   for (const s of [A, B]) spawnSync('git', ['-C', s.repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''

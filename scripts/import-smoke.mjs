@@ -44,6 +44,7 @@ import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
 import { encodeTokenRecord } from '../src/main/serverTokenRules.ts'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 300_000
 const DAEMON_READY_MS = 15_000
@@ -279,19 +280,24 @@ writeFileSync(join(userData, 'app-servers.json'), JSON.stringify([{ id: 'decoy',
 // that id is where Claude would look (the cwd's project folder), then lingers.
 const agentLog = join(real, 'agent-log')
 const agentPids = join(real, 'agent-pids')
-const fakeAgent = join(real, 'fake-agent.sh')
-writeFileSync(
-  fakeAgent,
-  `#!/bin/sh
-echo $$ >> '${agentPids}'
-id=""; prev=""
-for a in "$@"; do [ "$prev" = "--resume" ] && id="$a"; prev="$a"; done
-dir="$HOME/.claude/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
-found=no; [ -n "$id" ] && [ -f "$dir/$id.jsonl" ] && found=yes
-echo "$(pwd -P)|$id|$found" >> '${agentLog}'
-exec sleep 300
-`,
-  { mode: 0o755 }
+// Claude's folder is under the home (os.homedir(): HOME, or USERPROFILE on Windows).
+const fakeAgent = writeFakeAgent(
+  real,
+  'fake-agent',
+  [
+    "import { appendFileSync, existsSync, realpathSync } from 'node:fs'",
+    "import { homedir } from 'node:os'",
+    "import { join } from 'node:path'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "const args = process.argv.slice(2)",
+    "const at = args.lastIndexOf('--resume')",
+    "const id = at >= 0 && at + 1 < args.length ? args[at + 1] : ''",
+    "const cwd = realpathSync(process.cwd())",
+    "const dir = join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))",
+    "const found = id !== '' && existsSync(join(dir, id + '.jsonl')) ? 'yes' : 'no'",
+    `appendFileSync(${JSON.stringify(agentLog)}, cwd + '|' + id + '|' + found + '\\n')`,
+    'setTimeout(() => {}, 300_000)'
+  ].join('\n')
 )
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 const remoteConfig = join(real, 'remote-config.json')

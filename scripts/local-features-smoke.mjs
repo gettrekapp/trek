@@ -50,6 +50,7 @@ import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 
@@ -165,9 +166,8 @@ stub('code', `echo "$(next_seq)#$*" >> '${calls('code')}'`)
 // fixPath reads PATH from the login shell ($SHELL -ilc: .zshrc, or bash's .bash_profile), and so do the server's agents.
 writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
 // The Local server's agent: it lingers, so the tty echoes what is typed into it.
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT ready"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT ready'"] }))
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The upgrade: what a pre-5a Trek left in userData. Its registry knew the feature branch's VM, and
@@ -285,7 +285,7 @@ const finish = async (reason) => {
   const left = info()
   if (left) killIfOurs(left.pid, (command) => isLocalServerCommand(command, 'dev'), 'the Local server')
   killIfOurs(legacyUp.pid, (command) => command === 'sleep 600', "the app's legacy up")
-  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''

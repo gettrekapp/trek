@@ -75,6 +75,7 @@ import { delimiter, join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { fileURLToPath } from 'node:url'
+import { writeFakeAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 360_000
 const DAEMON_READY_MS = 15_000
@@ -139,8 +140,15 @@ mkdirSync(machineStubs)
 const machineCalls = join(work, 'machine-calls')
 for (const tool of ['docker', 'colima']) writeFileSync(join(machineStubs, tool), `#!/bin/sh\necho "${tool} $*" >> '${machineCalls}'\nexit 0\n`, { mode: 0o755 })
 // A fake agent: prints its args, then echoes each line typed into it as GOT:<line>; "quit" exits 3.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nwhile IFS= read -r line; do\n  [ "$line" = quit ] && exit 3\n  echo "GOT:$line"\ndone\n', { mode: 0o755 })
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { createInterface } from 'node:readline'",
+    `console.log('FAKE_AGENT ' + ${ARGS})`,
+    "createInterface({ input: process.stdin }).on('line', (line) => (line === 'quit' ? process.exit(3) : console.log('GOT:' + line))).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ llm: { providers: { claude: { command: fakeAgent } } }, tokenHash, repos: [{ id: 'alpha', name: 'Alpha', path: repoA }] }))
 
