@@ -247,7 +247,9 @@ async function installFailed(version: string, err: unknown): Promise<void> {
       err,
       version,
       PLATFORM === 'win32'
-        ? `Trek will now quit. Download ${manualDownload(version)} from the release page and run it.`
+        ? // Not the installer by hand: it would meet the same running Local server.
+          'Trek will now quit. Open Trek and choose Restart to Update again (the download is kept), or stop the ' +
+            'local server first (File → Local Server → Stop Local Server), then try again.'
         : 'Trek will now quit. If macOS accepted the update, it is installed the next time Trek starts. ' +
             'Otherwise, download the dmg from the release page.'
     )

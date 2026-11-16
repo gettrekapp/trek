@@ -837,10 +837,10 @@ export async function stopLocalServerForInstall(): Promise<boolean> {
   const target = current?.pid ?? readInfo()?.pid
   if (target === undefined || !pidAlive(target)) return true
   // A pid the files still name after a hard exit may be another program's now: not ours, nothing of
-  // ours runs on Trek.exe (and stop --local is not run on it). Unreadable: not stopped, the safe answer.
-  const ours = await holderIsServer(target)
-  if (ours === false) return true
-  if (ours === undefined) return false
+  // ours runs on Trek.exe (and stop --local is not run on it). Unreadable (a slow or failed read):
+  // stop --local all the same, judged by what it does. Its graceful stop is a server.stop with the
+  // token, which a reused pid cannot take, and its forced ones check the command line themselves.
+  if ((await holderIsServer(target)) === false) return true
   // stop --local on Windows can take past STOP_TIMEOUT_MS: its 10 s wait, PowerShell's command-line
   // check (seconds when cold), then up to 5 s after taskkill. A timeout is a code null: refused below.
   const { code } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)], INSTALL_STOP_TIMEOUT_MS)

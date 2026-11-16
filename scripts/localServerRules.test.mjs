@@ -381,3 +381,17 @@ test('commandArgv: whitespace on POSIX (ps output), windowsArgv on Windows', () 
   assert.deepEqual(commandArgv('"C:\\a b\\x.exe" "c d"', 'win32'), ['C:\\a b\\x.exe', 'c d'])
 })
 
+test('isLocalServerCommand: flags in any order, and the trek-daemon alias, as the CLI parses them', () => {
+  const bundle = '/Applications/Trek.app/Contents/MacOS/Trek /Applications/Trek.app/Contents/Resources/app.asar/out/server/trek-server.cjs'
+  assert.equal(isLocalServerCommand(`${bundle} --local start`, undefined, 'darwin'), true)
+  assert.equal(isLocalServerCommand(`${bundle} start --import-env-from /x --local`, undefined, 'darwin'), true)
+  assert.equal(isLocalServerCommand(`${bundle} --local-profile dev --local start`, 'dev', 'darwin'), true)
+  assert.equal(isLocalServerCommand('node /usr/local/bin/trek-daemon start --local', undefined, 'linux'), true)
+  assert.equal(isLocalServerCommand('"C:\\npm\\node.exe" "C:\\npm\\node_modules\\trek-server\\dist\\trek-server.cjs" --local start', undefined, 'win32'), true)
+  // Still whole arguments, and still a bin argument.
+  assert.equal(isLocalServerCommand('/usr/bin/my-trek-server-wrapper start --local', undefined, 'linux'), false, 'not the bin')
+  assert.equal(isLocalServerCommand(`${bundle} start`, undefined, 'darwin'), false)
+  assert.equal(isLocalServerCommand(`${bundle} --local`, undefined, 'darwin'), false)
+  assert.equal(isLocalServerCommand('"C:\\Tool\\tool.exe" "C:\\x\\trek-server.cjs --local start"', undefined, 'win32'), false)
+})
+

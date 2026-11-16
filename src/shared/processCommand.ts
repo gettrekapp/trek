@@ -96,13 +96,17 @@ export function commandArgv(command: string, platform: string = process.platform
   return platform === 'win32' ? windowsArgv(command) : command.trim().split(/\s+/).filter((t) => t !== '')
 }
 
+/** The CLI's bin, by an argument's last path part: trek-server.cjs, trek-server, or its alias trek-daemon (server/package.json). */
+const BIN_RE = /^trek-(server|daemon)/
+
 /**
  * The command line (processCommandLine's: `ps -o command=`, or Win32_Process's CommandLine) is a
- * local server of `profile`, judged on whole arguments (commandArgv): one that mentions trek-server
- * (the bundle's trek-server.cjs, or an installed trek-server bin), followed somewhere by `start`
- * and `--local` as two adjacent arguments, and `--local-profile <profile>` after it for a named
- * profile or no `--local-profile` for the default one. So `trek-server start --local` inside some
- * other program's quoted argument is not a server (on Windows; ps cannot tell).
+ * local server of `profile`, judged on whole arguments (commandArgv), as loosely as the CLI parses
+ * them: a bin argument (its last path part starting with trek-server or trek-daemon), then
+ * somewhere after it `start` and `--local`, in any order and with other flags between, and
+ * `--local-profile <profile>` for a named profile or no `--local-profile` for the default one.
+ * Each is a whole argument, so `trek-server start --local` inside some other program's quoted
+ * argument is not a server (on Windows; ps output cannot tell).
  *
  * Errs towards "a server": a true lets a restart, an install's stop and `stop --local` signal or
  * end the pid (only while the lock and local.json both name it, too), and makes Reset refuse; a
@@ -110,10 +114,10 @@ export function commandArgv(command: string, platform: string = process.platform
  */
 export function isLocalServerCommand(command: string, profile: string | undefined, platform: string = process.platform): boolean {
   const argv = commandArgv(command, platform)
-  const bin = argv.findIndex((a) => a.includes('trek-server'))
+  const bin = argv.findIndex((a) => BIN_RE.test(a.split(/[\\/]/).pop() ?? ''))
   if (bin < 0) return false
   const rest = argv.slice(bin + 1)
-  if (!rest.some((a, i) => a === 'start' && rest[i + 1] === '--local')) return false
+  if (!rest.includes('start') || !rest.includes('--local')) return false
   const at = rest.indexOf('--local-profile')
   const named = at < 0 ? undefined : rest[at + 1]
   return named === profile
