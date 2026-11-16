@@ -1,11 +1,12 @@
 # Releasing Trek
 
-Three GitHub Actions workflows live in `.github/workflows/`:
+Four GitHub Actions workflows live in `.github/workflows/`:
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` (CI) | every pull request, every push to `main`, by hand (Run workflow); called by `release.yml` | Linux (ubuntu-latest, Node 22): `npm ci`, which runs `npm ci` in `server/` and `relay/` too (`scripts/postinstall.mjs`), so every lockfile is enforced; typecheck the app, trek-server and trek-relay; `npm test`; `npm run build` and `npm run build:relay`; the Node-only smokes (`server` smoke on the built bundle, `smoke:client`, `smoke:push`); the phone app's typecheck and `expo export` for iOS and Android. A newer push to the same PR cancels the older run (not on `main`). A push to any other branch runs nothing by itself (open a PR, or Run workflow), so a PR's branch is not tested twice per push. |
-| `macos-smokes.yml` (macOS smokes) | nightly at 07:17 UTC, by hand, and called by `release.yml` | macOS arm64: `npm test` (with the macOS-only sandbox tests), one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `server-update-app`, `import`). Each smoke runs even if an earlier one failed, so one run shows every failure. |
+| `macos-smokes.yml` (Electron smokes, macOS and Linux) | nightly at 07:17 UTC, by hand, and called by `release.yml` | A matrix of macOS arm64 and Linux x64. Each leg: `npm test` (the macOS leg includes the macOS-only sandbox tests), one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `server-update-app`, `import`). The Linux leg runs each smoke under `xvfb-run -a` with `TREK_NO_KEYRING_NOTICE=1`. Each smoke runs even if an earlier one failed, so one run shows every failure. |
+| `linux-app.yml` (Linux app) | called by `release.yml`, and by hand | Builds the `.deb` on ubuntu-22.04 (x64) and ubuntu-22.04-arm (arm64), checks it (see the artifact table) and uploads it with its update feed. |
 | `release.yml` (Release) | a pushed tag `v*` | Checks the version (every other job waits for it, so a malformed tag stops there), runs both workflows above as its gate, builds and checks every artifact, and creates a **draft** GitHub Release. |
 
 The phone app (`apps/mobile`) is not released here: EAS builds and submits it (see
@@ -36,7 +37,11 @@ version (0.2.0 today). A version with a prerelease part (`0.3.0-rc.1`) makes a p
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 
-3. Watch **Actions → Release**. It takes the longest of: the macOS smokes (about an hour), the
+3. Before the first Linux release, run the manual checklist in [LINUX.md](LINUX.md) on a real
+   Ubuntu desktop with the draft's `.deb`. (Windows server releases have their own, in
+   [WINDOWS.md](WINDOWS.md).)
+
+   Watch **Actions → Release**. It takes the longest of: the Electron smokes (about an hour), the
    signed app (notarization usually takes 5–15 minutes), the server tarballs.
    The `mac-app`, `server-mac` and `release` jobs run in the `release` environment: if you gave
    it a required reviewer, each waits for an approval (**Review deployments** on the run's page)
@@ -60,6 +65,8 @@ left as they were. It refuses to touch a release that is already published.
 | --- | --- | --- |
 | `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app, `stapler validate` on the notarized dmg and on the app inside it; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
 | `Trek-X.Y.Z-arm64.zip`, `Trek-X.Y.Z-arm64.zip.blockmap`, `latest-mac.yml` | macos-latest (arm64), the same build as the dmg | the built `dist/mac-arm64/Trek.app`: `Contents/Resources/app-update.yml` exists and names the repository; the zip and its block map exist; the app unzipped: `codesign --verify --deep --strict`, `stapler validate`, `spctl --assess`; `scripts/latest-mac-yml.mjs` drops the dmg's entry from `latest-mac.yml` and checks the zip's size and SHA-512 against it |
+| `Trek-X.Y.Z-linux-x64.deb`, `latest-linux.yml` | ubuntu-22.04 (`linux-app.yml`) | `dpkg-deb` checks (package name `trek`, version, architecture, the files, `pty.node` built for the architecture, no foreign prebuilds); `apt install` of the deb; then `local-server-smoke.mjs --packaged /opt/Trek` and `local-app-smoke.mjs --packaged /opt/Trek` under xvfb. `latest-linux.yml` is the update feed |
+| `Trek-X.Y.Z-linux-arm64.deb`, `latest-linux-arm64.yml` | ubuntu-22.04-arm (`linux-app.yml`) | 〃 |
 | `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `codesign` (in `package-server.mjs --sign`) and `notarytool` on node-pty's `pty.node` and `spawn-helper`; `scripts/server-tarball-smoke.mjs --notarized` (Developer ID, hardened runtime, timestamp; unpacked quarantined) |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
@@ -119,6 +126,10 @@ node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-<os>-<a
 ```
 
 ## App updates
+
+The text below is the macOS flow. On Linux, updates are notify-only: Trek checks the same way
+(from `latest-linux.yml` or `latest-linux-arm64.yml`), and its dialog offers Open Release Page,
+Later and Skip. The user installs the new `.deb` with apt (docs/LINUX.md → Updating).
 
 An installed Trek (the first release that includes the updater, and later ones) checks the latest
 **published** release ten seconds after it starts and once a day, and from **Trek → Check for
@@ -363,11 +374,11 @@ submissions (empty is fine) instead of an authentication error.
    [developer.apple.com/account](https://developer.apple.com/account) (10 characters), and in
    the certificate's name: "Developer ID Application: Name (TEAMID)".
 
-## Running the macOS smokes by hand
+## Running the Electron smokes by hand
 
-On GitHub: **Actions → macOS smokes → Run workflow** (any branch).
+On GitHub: **Actions → Electron smokes → Run workflow** (any branch).
 
-Locally, on a Mac with a logged-in GUI session, each smoke builds the app and uses its own temp
+Locally, on a Mac with a logged-in GUI session, or on Linux under `xvfb-run -a` (set `TREK_NO_KEYRING_NOTICE=1` there), each smoke builds the app and uses its own temp
 HOME and user-data directory, so it never touches your Trek or `~/.config/trek-server`. Run them
 one at a time (`npm run rebuild` first, once, for node-pty under Electron):
 
@@ -375,8 +386,9 @@ one at a time (`npm run rebuild` first, once, for node-pty under Electron):
 npm run smoke:v2            # or any other smoke:<name>; README.md → Development lists them
 ```
 
-`smoke:packaged` builds an unsigned `dist/mac-arm64/Trek.app` (`npm run dist:dir`) and runs the
-Local server and app smokes on it. Set `CSC_IDENTITY_AUTO_DISCOVERY=false` for `dist`/`dist:dir`
+`smoke:packaged` builds an unsigned `dist/mac-arm64/Trek.app` (`npm run dist:dir`) on a Mac, or
+`dist/linux-unpacked` / `dist/linux-arm64-unpacked` (`npm run dist:linux:dir`) on Linux, and runs
+the Local server and app smokes on it. `npm run dist:linux` builds the `.deb`. Set `CSC_IDENTITY_AUTO_DISCOVERY=false` for `dist`/`dist:dir`
 on a Mac whose keychain holds a signing identity you don't want used.
 
 ## What only GitHub can show
