@@ -288,7 +288,7 @@ const fakeAgent = writeFakeAgent(
   real,
   'fake-agent',
   [
-    "import { appendFileSync, existsSync } from 'node:fs'",
+    "import { appendFileSync, existsSync, realpathSync } from 'node:fs'",
     "import { homedir } from 'node:os'",
     "import { join } from 'node:path'",
     `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
