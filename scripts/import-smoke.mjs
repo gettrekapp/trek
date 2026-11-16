@@ -269,7 +269,9 @@ if (realHome === home || realHome.startsWith(real)) {
 
 // userData as an older Trek left it: the file in recents (by its /var spelling) and open at quit,
 // and the server's v1 token, bound to its origin ("plain:" is the secret store's unencrypted form).
-const bounds = { x: 120, y: 90, width: 1111, height: 777 }
+// Smaller than the smallest runner screen (Windows': 1024x768, and the OS shrinks a window that would
+// not fit its work area), and unlike the default 1400x900.
+const bounds = { x: 60, y: 40, width: 911, height: 577 }
 writeFileSync(join(userData, 'recent-projects.json'), JSON.stringify([join(work, 'files', 'Imported.trekproj')]))
 writeFileSync(join(userData, 'open-windows.json'), JSON.stringify([{ filePath: fileA, bounds }]))
 writeFileSync(join(userData, 'server-tokens.json'), JSON.stringify({ srv: `plain:${Buffer.from(encodeTokenRecord(token, remoteUrl)).toString('base64')}` }))
