@@ -86,16 +86,28 @@ const signedIn = join(work, 'gh-signed-in')
 const prJson = join(work, 'gh-pr.json')
 const ghCalls = join(work, 'gh-calls')
 // gh: `auth status` while the marker exists; `api graphql` answers with gh-pr.json (exit 1 when it is gone).
-writeFileSync(
-  join(stubs, 'gh'),
-  `#!/bin/bash
-echo "$*" >> '${ghCalls}'
-if [ "$1" = auth ]; then [ -e '${signedIn}' ] && exit 0; echo 'You are not logged into any GitHub hosts.' >&2; exit 1; fi
-if [ "$1" = api ] && [ "$2" = graphql ]; then [ -e '${prJson}' ] && exec cat '${prJson}'; echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
-exit 1
-`,
-  { mode: 0o755 }
+// A Node script (writeFakeAgent): its sh launcher is TREK_SERVER_GH on macOS and Linux; on Windows,
+// which runs no sh, the script itself is, and the server runs it with its own Node (gh.ts).
+const ghLauncher = writeFakeAgent(
+  stubs,
+  'gh',
+  [
+    "import { appendFileSync, existsSync, readFileSync } from 'node:fs'",
+    'const args = process.argv.slice(2)',
+    `appendFileSync(${JSON.stringify(ghCalls)}, args.join(' ') + '\\n')`,
+    'process.exitCode = 1',
+    "if (args[0] === 'auth') {",
+    `  if (existsSync(${JSON.stringify(signedIn)})) process.exitCode = 0`,
+    "  else process.stderr.write('You are not logged into any GitHub hosts.\\n')",
+    "} else if (args[0] === 'api' && args[1] === 'graphql') {",
+    `  if (existsSync(${JSON.stringify(prJson)})) {`,
+    `    process.stdout.write(readFileSync(${JSON.stringify(prJson)}))`,
+    '    process.exitCode = 0',
+    "  } else process.stderr.write('HTTP 401: Bad credentials\\n')",
+    '}'
+  ].join('\n')
 )
+const ghStub = process.platform === 'win32' ? join(stubs, 'gh.mjs') : ghLauncher
 writeFileSync(signedIn, '')
 // The answer to PR_QUERY, from the flat fields the steps vary.
 const pr = (overrides = {}) => {
@@ -207,7 +219,7 @@ try {
         XDG_STATE_HOME: join(serverHome, '.local', 'state'),
         SHELL: '/bin/sh',
         // This server's own stub, in place of the not-signed-in one smokeGh.mjs gives every smoke.
-        TREK_SERVER_GH: join(stubs, 'gh'),
+        TREK_SERVER_GH: ghStub,
         TREK_SERVER_PR_POLL_MS: '1000'
       },
       stdio: ['ignore', 'pipe', 'pipe']
