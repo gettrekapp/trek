@@ -69,7 +69,9 @@ const isFile = (path: string): boolean => {
 // One Trek per userData in a packaged build: on Linux every launch (the app grid, a
 // double-clicked .trekproj) is a new process, and two must not share userData. A dev build
 // shares "Trek Dev" with the installed app on purpose, so it takes no lock.
-if (app.isPackaged && !app.requestSingleInstanceLock()) {
+// True in a dev build (no lock is taken); false only in a packaged second launch.
+const ownsInstance = !app.isPackaged || app.requestSingleInstanceLock()
+if (!ownsInstance) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv, cwd) => {
@@ -239,6 +241,8 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
+  // A second packaged launch has handed over its argv and is quitting: it starts nothing.
+  if (!ownsInstance) return
   // Must complete before anything spawns child processes (the local server, code, gh).
   await fixPath()
   void removeStaleMcpConfigs()
