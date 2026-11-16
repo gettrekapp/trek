@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
@@ -218,7 +218,7 @@ try {
         HOME: serverHome,
         XDG_STATE_HOME: join(serverHome, '.local', 'state'),
         SHELL: '/bin/sh',
-        PATH: `${stubs}:${process.env.PATH}`,
+        PATH: `${stubs}${delimiter}${process.env.PATH}`,
         TREK_SERVER_LINEAR_URL: `${stubUrl}/graphql`,
         TREK_SERVER_ELEVENLABS_URL: `${stubUrl}/v1`
       },

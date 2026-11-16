@@ -27,7 +27,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { startApnsStub, testApnsKey } from './relayStubs.mjs'
@@ -191,7 +191,7 @@ try {
     'trek-server',
     ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data],
     join(root, 'server'),
-    { ...process.env, PATH: `${stubs}:${process.env.PATH}`, TMPDIR: serverTmp, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
+    { ...process.env, PATH: `${stubs}${delimiter}${process.env.PATH}`, TMPDIR: serverTmp, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
     /listening on ws:\/\//
   )
   const url = `ws://127.0.0.1:${port}`

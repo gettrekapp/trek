@@ -40,7 +40,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
@@ -320,7 +320,7 @@ try {
   await win.waitForLoadState('domcontentloaded')
   const local = (await until(() => !!info(), true, 20_000)) && info()
   if (!local) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
-  check("main's PATH has the stubs first (fixPath, through the HOME's shell startup file)", await app.evaluate(() => process.env.PATH.split(':')[0]), stubs)
+  check("main's PATH has the stubs first (fixPath, through the HOME's shell startup file)", await app.evaluate((_electron, sep) => process.env.PATH.split(sep)[0], delimiter), stubs)
 
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'local-features-smoke' })
   sdk.connect()
