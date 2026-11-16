@@ -7,12 +7,21 @@ import type { AppSettings } from '../../../shared/appSettings'
  *   sessions. The bell still lists them, and each project's audio alerts still sound.
  * - "Stop local server on quit". Off (the default): the Local server keeps running
  *   after Trek quits, and its sessions with it.
+ * - "Saved tokens", only when they are stored unencrypted (Linux without a keyring).
  *
  * `afterNotifications` is the project's own row under "Notifications" (its audio alerts).
  */
 export function NotificationSettings({ afterNotifications }: { afterNotifications?: React.ReactNode }): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [storage, setStorage] = useState<'encrypted' | 'unencrypted' | null>(null)
+  useEffect(() => {
+    let live = true
+    window.api.secretStorage().then((kind) => live && setStorage(kind)).catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
 
   useEffect(() => {
     let live = true
@@ -77,6 +86,16 @@ export function NotificationSettings({ afterNotifications }: { afterNotification
           </span>
         </span>
       </label>
+      {storage === 'unencrypted' && (
+        <>
+          <h3>Saved tokens</h3>
+          <p className="settings-desc settings-warn">
+            This computer has no keyring Trek can use, so server tokens are stored unencrypted in
+            Trek&apos;s settings folder (readable only by your user). Install and unlock GNOME Keyring or
+            KWallet, then restart Trek, to encrypt the tokens saved from then on.
+          </p>
+        </>
+      )}
       {error && <p className="settings-desc settings-warn">{error}</p>}
     </>
   )

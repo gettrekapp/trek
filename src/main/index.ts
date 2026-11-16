@@ -11,6 +11,7 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
 import { registerAppIpc } from './appIpc'
+import { registerKeyringNotice } from './keyringNotice'
 import { registerGithubHandlers } from './github'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
@@ -248,6 +249,7 @@ app.whenReady().then(async () => {
   void removeStaleMcpConfigs()
   registerWindowHandlers()
   registerAppIpc()
+  registerKeyringNotice()
   registerImportHandlers()
   registerGithubHandlers()
   registerAppSettingsHandlers()

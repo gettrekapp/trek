@@ -58,6 +58,8 @@ const api = {
   revealInFinder: (dirPath: string): Promise<void> =>
     ipcRenderer.invoke('app:revealInFinder', dirPath),
   getAlertSound: (): Promise<Uint8Array | null> => ipcRenderer.invoke('app:getAlertSound'),
+  /** How saved server tokens are kept on this computer: 'unencrypted' on Linux without a keyring. */
+  secretStorage: (): Promise<'encrypted' | 'unencrypted'> => ipcRenderer.invoke('app:secretStorage'),
 
   // GitHub metadata lookup — always resolved from the local machine
   githubPrHeadBranch: (owner: string, repo: string, number: number): Promise<string | null> =>
