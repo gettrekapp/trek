@@ -1,7 +1,7 @@
 // scripts/appIpcRules.test.mjs — the checks on what a renderer sends the app's own IPC.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText, trekprojPath } from '../src/main/appIpcRules.ts'
+import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText, trekprojPath, vscodeLaunch } from '../src/main/appIpcRules.ts'
 
 test('absolutePath takes an absolute path string only', () => {
   assert.equal(absolutePath('/Users/me/repo'), '/Users/me/repo')
@@ -49,4 +49,25 @@ test('dialogIdOf: a short string, from the options or alone; else none', () => {
   assert.equal(dialogIdOf({ dialogId: 'promote:r1' }), 'promote:r1')
   assert.equal(dialogIdOf('promote:r1'), 'promote:r1')
   for (const bad of [{}, { dialogId: 3 }, { dialogId: '' }, 'x'.repeat(201), null, undefined]) assert.equal(dialogIdOf(bad), undefined)
+})
+
+test("vscodeLaunch: what code.cmd runs, Code.exe as Node on its cli.js", () => {
+  const env = { PATH: 'C:\\x', ELECTRON_RUN_AS_NODE: undefined }
+  assert.deepEqual(vscodeLaunch('C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd', 'C:\\repo', env), {
+    file: 'C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe',
+    args: ['C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Microsoft VS Code\\resources\\app\\out\\cli.js', 'C:\\repo'],
+    env: { PATH: 'C:\\x', ELECTRON_RUN_AS_NODE: '1' }
+  })
+  assert.equal(env.ELECTRON_RUN_AS_NODE, undefined, 'the env given is not changed')
+  const insiders = vscodeLaunch('C:\\Program Files\\Microsoft VS Code Insiders\\bin\\CODE-INSIDERS.CMD', 'D:\\w', {})
+  assert.equal(insiders.file, 'C:\\Program Files\\Microsoft VS Code Insiders\\Code - Insiders.exe')
+  assert.deepEqual(insiders.args, ['C:\\Program Files\\Microsoft VS Code Insiders\\resources\\app\\out\\cli.js', 'D:\\w'])
+})
+
+test('vscodeLaunch: the cli.js code.cmd names, when it names one inside the install', () => {
+  const cmd = 'C:\\VS\\bin\\code.cmd'
+  const text = '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0..\\Code.exe" "%~dp0..\\abc123\\resources\\app\\out\\cli.js" %*\r\n'
+  assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, text).args, ['C:\\VS\\abc123\\resources\\app\\out\\cli.js', 'C:\\r'])
+  assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, '"%~dp0..\\..\\evil\\cli.js"').args, ['C:\\VS\\resources\\app\\out\\cli.js', 'C:\\r'], 'never outside the install')
+  assert.deepEqual(vscodeLaunch(cmd, 'C:\\r', {}, 'garbage').args, ['C:\\VS\\resources\\app\\out\\cli.js', 'C:\\r'])
 })
