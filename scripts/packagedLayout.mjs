@@ -1,6 +1,6 @@
 // scripts/packagedLayout.mjs — a packaged Trek's layout, for the smokes' --packaged: a .app on
 // macOS, electron-builder's install or unpacked directory on Linux (/opt/Trek, dist/linux-unpacked),
-// and the NSIS install or unpacked directory on Windows (%LOCALAPPDATA%\Programs\Trek, dist/win-unpacked).
+// and the NSIS install or unpacked directory on Windows (%LOCALAPPDATA%\Programs\trek, dist/win-unpacked).
 import { posix } from 'node:path'
 
 const { join } = posix

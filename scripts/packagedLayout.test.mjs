@@ -26,9 +26,9 @@ test("electron-builder's unpacked output directory", () => {
 })
 
 test('Windows: the install or unpacked directory, Trek.exe beside resources', () => {
-  assert.deepEqual(packagedLayout('C:/Users/me/AppData/Local/Programs/Trek', 'win32'), {
-    executable: 'C:/Users/me/AppData/Local/Programs/Trek/Trek.exe',
-    resources: 'C:/Users/me/AppData/Local/Programs/Trek/resources'
+  assert.deepEqual(packagedLayout('C:/Users/me/AppData/Local/Programs/trek', 'win32'), {
+    executable: 'C:/Users/me/AppData/Local/Programs/trek/Trek.exe',
+    resources: 'C:/Users/me/AppData/Local/Programs/trek/resources'
   })
 })
 

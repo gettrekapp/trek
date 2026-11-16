@@ -319,14 +319,14 @@ test('keepAfterFailure: a failed stop or restart keeps a server local.json still
 })
 
 test('isLocalServerCommand: a Windows command line, quoted executable and backslashes', () => {
-  const exe = '"C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\Trek.exe"'
-  const bundle = 'C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs'
+  const exe = '"C:\\Users\\me\\AppData\\Local\\Programs\\trek\\Trek.exe"'
+  const bundle = 'C:\\Users\\me\\AppData\\Local\\Programs\\trek\\resources\\app.asar\\out\\server\\trek-server.cjs'
   assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from C:\\Users\\me\\AppData\\Roaming\\Trek Dev`, undefined, 'win32'), true)
   assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, 'dev', 'win32'), true)
   assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, undefined, 'win32'), false)
   assert.equal(isLocalServerCommand(`${exe} --type=renderer`, undefined, 'win32'), false)
   // A quoted bundle path (a user folder with a space).
-  assert.equal(isLocalServerCommand(`${exe} "C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs" start --local`, undefined, 'win32'), true)
+  assert.equal(isLocalServerCommand(`${exe} "C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\trek\\resources\\app.asar\\out\\server\\trek-server.cjs" start --local`, undefined, 'win32'), true)
 })
 
 test('isLocalServerCommand: the line Node builds on Windows, a quoted --import-env-from beside --local-profile', () => {
@@ -416,7 +416,7 @@ function quoteCmdArg(arg) {
 }
 
 test("windowsArgv: reads back what libuv's quoting writes", () => {
-  const program = 'C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\Trek.exe'
+  const program = 'C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\trek\\Trek.exe'
   const cases = [
     ['C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek\\'],
     ['a"b', 'say "hi"', '\\"'],

@@ -15,7 +15,7 @@ The first part below is the desktop app; the second is trek-server.
 Download `Trek-<version>-win-x64.exe` from the
 [latest release](https://github.com/gettrekapp/trek/releases/latest) and run it. It is a one-click
 NSIS installer that installs for your user only: no administrator rights and no UAC prompt. Trek
-goes to `%LOCALAPPDATA%\Programs\Trek`, with Start-menu and desktop shortcuts, and `.trekproj`
+goes to `%LOCALAPPDATA%\Programs\trek`, with Start-menu and desktop shortcuts, and `.trekproj`
 files open in Trek.
 
 The installer is not code-signed yet. Windows SmartScreen shows "Windows protected your PC" with an
@@ -33,7 +33,7 @@ and signed in as your user, as for trek-server below.
 - `%APPDATA%\Trek Dev`: Trek's user data (windows, settings, saved tokens). The app's name is
   "Trek Dev".
 - `%APPDATA%\trek-server\local`: the Local server's profile.
-- `%LOCALAPPDATA%\Programs\Trek`: the app itself.
+- `%LOCALAPPDATA%\Programs\trek`: the app itself.
 
 ## The Local server
 

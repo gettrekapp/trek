@@ -2,7 +2,7 @@
 # .blockmap and latest.yml, the feed an installed Trek checks for updates. Built on windows-latest,
 # signed with Azure Trusted Signing on a v* tag when the release environment has all seven AZURE_*
 # secrets (then verified, down to every signature), installed silently into
-# %LOCALAPPDATA%\Programs\Trek, smoke-tested there (the packaged Local server and app smokes), and
+# %LOCALAPPDATA%\Programs\trek, smoke-tested there (the packaged Local server and app smokes), and
 # uninstalled silently. Signing is optional: a tag with none of the secrets builds the installer
 # unsigned, with a warning; a tag with only some of them fails, naming the missing ones. Called by
 # release.yml; also by hand (Run workflow) to try a branch, which builds the same installer
@@ -179,14 +179,32 @@ jobs:
           Write-Output "$($files.Count + 1) files signed"
       # The installer's /S past Git Bash's path conversion (MSYS_NO_PATHCONV), or a native program
       # gets it as a path. A silent install does not start the app; the waits are for the files.
+      # A per-user one-click install goes to %LOCALAPPDATA%\Programs\<package.json name> (trek),
+      # not the productName, so the folder is found (whichever folder under Programs has Trek.exe)
+      # rather than assumed, and the later steps read it from TREK_DIR. A folder other than trek
+      # is a warning: the docs name Programs\trek.
       - name: Install it silently
         run: |
           set -euo pipefail
           MSYS_NO_PATHCONV=1 "./dist/Trek-$VERSION-win-x64.exe" /S
-          dir="$(cygpath -u "$LOCALAPPDATA")/Programs/Trek"
-          for _ in $(seq 1 90); do [ -f "$dir/Trek.exe" ] && [ -f "$dir/Uninstall Trek.exe" ] && break; sleep 2; done
-          test -f "$dir/Trek.exe" || { echo "::error::the installer did not put Trek.exe in $dir"; exit 1; }
-          test -f "$dir/Uninstall Trek.exe" || { echo "::error::the installer did not put its uninstaller in $dir"; exit 1; }
+          programs="$(cygpath -u "$LOCALAPPDATA")/Programs"
+          dir=""
+          for _ in $(seq 1 90); do
+            for d in "$programs"/*/; do
+              d="${d%/}"
+              if [ -f "$d/Trek.exe" ] && [ -f "$d/Uninstall Trek.exe" ]; then dir="$d"; break; fi
+            done
+            [ -n "$dir" ] && break
+            sleep 2
+          done
+          if [ -z "$dir" ]; then
+            echo "::error::the installer did not put Trek.exe and its uninstaller in any folder under $programs"
+            ls -la "$programs" || true
+            for d in "$programs"/*/; do echo "== $d"; ls -la "$d" || true; done
+            exit 1
+          fi
+          [ "$(basename "$dir")" = trek ] || echo "::warning::Trek installed to $dir, not $programs/trek (the docs name Programs\\trek)"
+          echo "TREK_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
           ls -l "$dir"
       - name: Verify the installed signatures
         if: env.SIGN == 'true'
@@ -194,7 +212,7 @@ jobs:
         env:
           AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
         run: |
-          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Trek'
+          $dir = $env:TREK_DIR
           $bad = 0
           foreach ($name in @('Trek.exe', 'Uninstall Trek.exe')) {
             $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $dir $name)
@@ -207,7 +225,7 @@ jobs:
       - name: Packaged-app smokes (installed)
         run: |
           set -euo pipefail
-          dir="$(cygpath -m "$LOCALAPPDATA")/Programs/Trek"
+          dir="$(cygpath -m "$TREK_DIR")"
           node scripts/local-server-smoke.mjs --packaged "$dir"
           node scripts/local-app-smoke.mjs --packaged "$dir"
       # The uninstaller copies itself to a temp folder, starts that and returns: hence the wait.
@@ -215,7 +233,7 @@ jobs:
       - name: Uninstall it silently
         run: |
           set -euo pipefail
-          dir="$(cygpath -u "$LOCALAPPDATA")/Programs/Trek"
+          dir="$(cygpath -u "$TREK_DIR")"
           MSYS_NO_PATHCONV=1 "$dir/Uninstall Trek.exe" /S
           for _ in $(seq 1 90); do [ ! -f "$dir/Trek.exe" ] && [ ! -f "$dir/Uninstall Trek.exe" ] && break; sleep 2; done
           test ! -f "$dir/Trek.exe" || { echo "::error::Trek.exe is still in $dir after the uninstall"; exit 1; }
