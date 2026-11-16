@@ -86,7 +86,8 @@ draft release's `.deb`.
 4. Launch Trek a second time from the app grid. The running Trek's window comes forward, and
    `ps -C trek -o args= | grep -v -e --type= -e trek-server.cjs | wc -l` prints 1 (Electron's
    helper processes carry `--type=` and the Local server runs `trek-server.cjs`; a second app
-   would make it 2). Only one Trek shows in the dock.
+   would make it 2). Only one Trek shows in the dock, and `xprop WM_CLASS` (click the Trek window)
+   prints the same class as `StartupWMClass` in `/usr/share/applications/trek.desktop` (`trek`).
 5. Double-click a `.trekproj` in Files. The running Trek imports it.
 6. Add a remote server with a token, on a desktop with GNOME Keyring. No notice appears, and
    Settings has no "Saved tokens" section. In a session without a keyring, the notice shows once

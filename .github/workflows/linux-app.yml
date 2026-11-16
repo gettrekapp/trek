@@ -83,6 +83,7 @@ jobs:
           [ "$(cat "$x/opt/Trek/resources/package-type")" = deb ] || { echo "::error::package-type is not deb: the updater would not find the feed"; exit 1; }
           grep -q '^repo: trek$' "$x/opt/Trek/resources/app-update.yml" || { echo "::error::app-update.yml does not name the trek repository"; exit 1; }
           grep -q '^MimeType=.*application/x-trekproj' "$x/usr/share/applications/trek.desktop" || { echo "::error::the .desktop file does not open .trekproj"; exit 1; }
+          grep -qx 'StartupWMClass=trek' "$x/usr/share/applications/trek.desktop" || { echo "::error::the .desktop file's StartupWMClass is not trek, the class Electron gives the window from desktopName"; exit 1; }
           grep -q 'type="application/x-trekproj"' "$x/usr/share/mime/packages/trek.xml" || { echo "::error::the mime package does not define application/x-trekproj"; exit 1; }
           unpacked="$x/opt/Trek/resources/app.asar.unpacked"
           ptys=$(find "$unpacked" -name pty.node)

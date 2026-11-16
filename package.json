@@ -6,6 +6,7 @@
   "license": "MIT",
   "homepage": "https://github.com/gettrekapp/trek",
   "main": "out/main/index.js",
+  "desktopName": "trek.desktop",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
@@ -122,6 +123,11 @@
       "description": "Trek runs coding agents (Claude Code, Codex, Gemini, Grok) across git worktrees, on this computer or on a trek-server.",
       "maintainer": "Trek <gettrekapp@users.noreply.github.com>",
       "vendor": "Trek",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "trek"
+        }
+      },
       "files": [
         "!**/node_modules/node-pty/prebuilds/**"
       ]
