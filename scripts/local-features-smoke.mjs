@@ -51,7 +51,7 @@ import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
-import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
+import { writeFakeAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 
@@ -196,9 +196,20 @@ if (process.platform === 'win32') {
 }
 // fixPath reads PATH from the login shell ($SHELL -ilc: .zshrc, or bash's .bash_profile), and so do the server's agents.
 writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
-// The Local server's agent: it lingers, so the tty echoes what is typed into it.
+// The Local server's agent: it reads its input a line at a time, so what is typed into it shows in
+// its output: a POSIX tty echoes it anyway, but ConPTY (Windows) echoes only input a program reads.
 const agentPids = join(work, 'agent-pids')
-const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT ready'"] }))
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "console.log('FAKE_AGENT ready')",
+    "createInterface({ input: process.stdin }).on('line', (line) => console.log('GOT:' + line)).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The upgrade: what a pre-5a Trek left in userData. Its registry knew the feature branch's VM, and
