@@ -158,6 +158,8 @@ const launch = async (answers = {}) => {
     TREK_NO_WINDOW_RESTORE: '1',
     // A packaged app would ask the release feed for an update: a smoke never contacts GitHub.
     TREK_NO_UPDATE_CHECK: '1',
+    // Linux without a keyring: the one-time notice is a native dialog that would race the stub below.
+    TREK_NO_KEYRING_NOTICE: '1',
     TREK_SMOKE_LEAK: 'leaked',
     SMOKE_ANSWERS: JSON.stringify(answers),
     SMOKE_PICK: repo
