@@ -15,9 +15,11 @@ import {
   recordAttachFailure,
   terminalTargets,
   welcomeWindowsPty,
+  windowsPtyOptions,
   type AttachFailure,
   type Conversation,
-  type TermSize
+  type TermSize,
+  type XtermWindowsPty
 } from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
 import { tabView } from './globalTabs'
@@ -304,10 +306,17 @@ function cancelV2Sync(): void {
   v2SyncTimer = null
 }
 
+/** Sets xterm's `windowsPty` and what follows it (windowsPtyOptions: ED2 into the scrollback on Windows). */
+function setWindowsPty(term: Terminal, windowsPty: XtermWindowsPty): void {
+  const options = windowsPtyOptions(windowsPty)
+  term.options.windowsPty = options.windowsPty
+  term.options.scrollOnEraseInDisplay = options.scrollOnEraseInDisplay
+}
+
 /** A Windows server's ptys are ConPTY's: xterm reflows and wraps their output differently. */
 function applyServerPlatform(term: Terminal, ptys: PtyStream): void {
   const next = welcomeWindowsPty(term.options.windowsPty, ptys.welcome)
-  if (next) term.options.windowsPty = next
+  if (next) setWindowsPty(term, next)
 }
 
 function createV2Entry(id: string, ptys: PtyStream): Entry {
@@ -426,9 +435,9 @@ function applyAttachSize(id: string, entry: Entry, info: PtyInfo): void {
   // attach is the authority over the welcome's guess (applyServerPlatform): none means none.
   const now = entry.term.options.windowsPty
   if (info.windowsPty && (now?.backend !== info.windowsPty.backend || now?.buildNumber !== info.windowsPty.buildNumber)) {
-    entry.term.options.windowsPty = { backend: info.windowsPty.backend, buildNumber: info.windowsPty.buildNumber }
+    setWindowsPty(entry.term, { backend: info.windowsPty.backend, buildNumber: info.windowsPty.buildNumber })
   } else if (!info.windowsPty && (now?.backend !== undefined || now?.buildNumber !== undefined)) {
-    entry.term.options.windowsPty = {}
+    setWindowsPty(entry.term, {})
   }
   const link = entry.v2
   link.ptySize = { cols: info.cols, rows: info.rows }
