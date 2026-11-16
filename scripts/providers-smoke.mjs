@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 180_000
 
@@ -61,7 +62,7 @@ const agentPids = join(work, 'agent-pids')
 // An agent's command line names the work dir: its script, or the node it execs (given `work`).
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
-writeFileSync(join(home, '.zshrc'), '')
+writeShellRc(home)
 
 const repo = join(work, 'repos', 'app')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
@@ -127,7 +128,7 @@ const filesUnder = (dir) =>
   existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)])) : []
 
 try {
-  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE

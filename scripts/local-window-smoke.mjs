@@ -47,6 +47,7 @@ import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -123,7 +124,7 @@ exit 0`)
 stub('docker', `if [ "$1" = "--version" ]; then echo "Docker version 0.0.0-stub"; exit 0; fi
 case " $* " in *" ps "*) echo "[]" ;; esac
 exit 0`)
-writeFileSync(join(home, '.zshrc'), `export PATH='${stubs}':"$PATH"\n`)
+writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
 // The agent: "work" prints Claude's working marker, "bell" rings, anything else is echoed.
 const fakeAgent = join(work, 'fake-agent.sh')
 writeFileSync(
@@ -181,7 +182,7 @@ try {
     HOME: home,
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
-    SHELL: '/bin/zsh',
+    SHELL: SMOKE_SHELL,
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1'
   }

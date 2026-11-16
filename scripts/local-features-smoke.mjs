@@ -7,9 +7,9 @@
 // The built app is launched with a temp HOME (so its supervisor starts the run's own Local server,
 // in ~/.config/trek-server/local-dev) and a temp --user-data-dir. Stubs on PATH stand in for
 // colima, docker and code: each records how it was called, and colima lists a running VM for the
-// feature branch plus a crash leftover. The HOME's .zshrc puts them first, for main's fixPath (the
-// Local server it spawns inherits that PATH, and runs docker and colima since 5a) and for the
-// server's agents. The project is made on the Local server through the SDK: a repository with a
+// feature branch plus a crash leftover. The HOME's shell startup file (smokeShell.mjs) puts them
+// first, for main's fixPath (the Local server it spawns inherits that PATH, and runs docker and
+// colima since 5a) and for the server's agents. The project is made on the Local server through the SDK: a repository with a
 // docker/stack/stack.sh stub and a project skill, and a worktree on feature-x. Then the window opens
 // it, and through the DOM it checks:
 //   - main's row: Open in VS Code and Reveal call main with the repository's path; the Docker tab
@@ -46,6 +46,7 @@ import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 
@@ -160,8 +161,8 @@ echo "$(next_seq)#$PWD|$*" >> '${calls('docker')}'
 case " $* " in *" compose "*" ps "*) echo "[]" ;; esac
 exit 0`)
 stub('code', `echo "$(next_seq)#$*" >> '${calls('code')}'`)
-// fixPath reads PATH from the login shell (zsh -ilc), and so do the server's agents.
-writeFileSync(join(home, '.zshrc'), `export PATH='${stubs}':"$PATH"\n`)
+// fixPath reads PATH from the login shell ($SHELL -ilc: .zshrc, or bash's .bash_profile), and so do the server's agents.
+writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
 // The Local server's agent: it lingers, so the tty echoes what is typed into it.
 const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
@@ -301,7 +302,7 @@ try {
     HOME: home,
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
-    SHELL: '/bin/zsh',
+    SHELL: SMOKE_SHELL,
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1',
     TREK_SERVER_LINEAR_URL: `${servicesUrl}/graphql`,
@@ -317,7 +318,7 @@ try {
   await win.waitForLoadState('domcontentloaded')
   const local = (await until(() => !!info(), true, 20_000)) && info()
   if (!local) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
-  check("main's PATH has the stubs first (fixPath, through the HOME's .zshrc)", await app.evaluate(() => process.env.PATH.split(':')[0]), stubs)
+  check("main's PATH has the stubs first (fixPath, through the HOME's shell startup file)", await app.evaluate(() => process.env.PATH.split(':')[0]), stubs)
 
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'local-features-smoke' })
   sdk.connect()

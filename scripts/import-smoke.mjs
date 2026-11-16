@@ -29,6 +29,7 @@
 //
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { SMOKE_SHELL } from './smokeShell.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -350,7 +351,7 @@ const env = {
   HOME: home,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: '/bin/zsh',
+  SHELL: SMOKE_SHELL,
   TREK_NO_UPDATE_CHECK: '1'
 }
 // Windows are restored: this run's userData is its own.
