@@ -430,9 +430,11 @@ try {
     document.body.appendChild(backdrop)
     const { left, right, width } = modal.getBoundingClientRect()
     backdrop.remove()
-    return [Math.round(width), left >= 0 && right <= window.innerWidth]
+    return [Math.round(width), left >= 0 && right <= window.innerWidth, window.innerWidth]
   })
-  check('a modal is capped to the window (448 of 480 wide) and sits inside it', modalFits, [448, true])
+  // The cap is 32px under the page's width: 448 of a 480 window where the frame takes no width
+  // (macOS, Linux); on Windows the frame's borders take some of the 480 (innerWidth is less).
+  check('a modal is capped to the window (448 of 480 wide) and sits inside it', modalFits.slice(0, 2), [modalFits[2] - 32, true])
 
   // ---- The sidebar hides ----------------------------------------------------------------------------------------
 
