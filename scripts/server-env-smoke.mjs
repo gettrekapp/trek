@@ -38,6 +38,13 @@ import { deriveProfileName } from '../src/shared/environments.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
 
+// Windows: trek-server has no environments or dev stacks there yet (welcomeCapabilities drops env and
+// stacks on win32, server/src/capabilities.ts), and this smoke is about them.
+if (process.platform === 'win32') {
+  console.log('SERVER ENV SMOKE SKIP (trek-server on Windows has no environments or dev stacks yet)')
+  process.exit(0)
+}
+
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
 
