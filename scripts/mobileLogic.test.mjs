@@ -581,6 +581,10 @@ test('quick buttons: every built-in from the snapshot; ticket_url only with a li
     worktree_name: 'feat',
     worktree_path: '/r/trek-feat',
     branch: 'feat',
+    // In a worktree session, the worktree's open tab is the session itself.
+    worktree_terminal_id: 's1',
+    worktree_session_id: 'agent-1',
+    worktree_session_title: 'tab s1',
     repo_name: 'trek',
     repo_path: '/r/trek',
     project_name: 'App',
@@ -636,7 +640,7 @@ test('quick buttons: what has no value: an unknown agent id or label, a branch w
   const global = resolveBuiltins(quickButtonContext(project, 'g', 'Claude', qbNow))
   assert.equal(global.project_name, 'App')
   assert.equal(global.session_id, 'agent-g')
-  for (const name of ['worktree_id', 'worktree_name', 'worktree_path', 'branch', 'repo_name', 'repo_path', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(global[name], undefined, name)
+  for (const name of ['worktree_id', 'worktree_name', 'worktree_path', 'branch', 'worktree_terminal_id', 'worktree_session_id', 'worktree_session_title', 'repo_name', 'repo_path', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(global[name], undefined, name)
 
   assert.equal(quickButtonContext(project, 'nope', 'Claude', qbNow), null)
 })

@@ -21,6 +21,9 @@ export const BUILTINS: readonly BuiltinDef[] = [
   { name: 'worktree_name', description: 'Worktree display name', group: 'Worktree' },
   { name: 'worktree_path', description: 'Worktree path on its host', group: 'Worktree' },
   { name: 'branch', description: 'Current branch', group: 'Worktree' },
+  { name: 'worktree_terminal_id', description: "Trek terminal id of the worktree's open tab", group: 'Worktree' },
+  { name: 'worktree_session_id', description: "Agent's session id in the worktree's open tab", group: 'Worktree' },
+  { name: 'worktree_session_title', description: "Title of the worktree's open tab", group: 'Worktree' },
   { name: 'repo_name', description: 'Repository name', group: 'Repo & project' },
   { name: 'repo_path', description: 'Repository main checkout path', group: 'Repo & project' },
   { name: 'project_name', description: 'Project name', group: 'Repo & project' },
@@ -92,6 +95,13 @@ export function templateBuiltins(text: string): string[] {
   return uniqueNames(text, 'builtin')
 }
 
+export interface TerminalContext {
+  id: string
+  title: string
+  sessionId: string
+  sessionPending?: boolean
+}
+
 /** What the built-ins are resolved from; the renderer builds it from the store. */
 export interface BuiltinContext {
   project: Pick<ProjectFile, 'name' | 'worktreeTags' | 'customTags'>
@@ -104,7 +114,12 @@ export interface BuiltinContext {
   >
   worktree?: { id: string; name: string; path: string }
   branch?: string
-  terminal: { id: string; title: string; sessionId: string; sessionPending?: boolean }
+  terminal: TerminalContext
+  /**
+   * The tab showing in the worktree: in a worktree session, the clicked terminal itself; in the
+   * Global panel, the open worktree's active tab (undefined when none is).
+   */
+  worktreeTerminal?: TerminalContext
   /** Agent label, e.g. "Claude" */
   agent: string
   now: Date
@@ -124,7 +139,7 @@ function prNumber(url: string | undefined): string | undefined {
 
 /** Every built-in's value for this context; undefined = no value here. */
 export function resolveBuiltins(ctx: BuiltinContext): BuiltinValues {
-  const { project, repo, worktree, branch, terminal, now, ticketUrl } = ctx
+  const { project, repo, worktree, branch, terminal, worktreeTerminal, now, ticketUrl } = ctx
   const byBranch = <T>(map: Record<string, T> | undefined): T | undefined =>
     branch && map ? map[branch] : undefined
   const tagId = byBranch(repo?.branchTags)
@@ -136,6 +151,9 @@ export function resolveBuiltins(ctx: BuiltinContext): BuiltinValues {
     worktree_name: present(worktree?.name),
     worktree_path: present(worktree?.path),
     branch: present(branch),
+    worktree_terminal_id: present(worktreeTerminal?.id),
+    worktree_session_id: worktreeTerminal?.sessionPending ? undefined : present(worktreeTerminal?.sessionId),
+    worktree_session_title: present(worktreeTerminal?.title),
     repo_name: present(repo?.name),
     repo_path: present(repo?.path),
     project_name: present(project.name),

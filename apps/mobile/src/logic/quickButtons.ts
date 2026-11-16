@@ -48,6 +48,14 @@ export function quickButtonContext(
   // The template code reads the project file's per-field maps; the model keeps one record per branch.
   const forBranch = <T>(value: T | undefined): Record<string, T> | undefined =>
     branch && value !== undefined ? { [branch]: value } : undefined
+  // As a desktop server window names them: the terminal is the session, and the agent's own
+  // id is pending until the server has found it (Codex).
+  const terminal = {
+    id: session.id,
+    title: session.title,
+    sessionId: session.agentSessionId ?? session.id,
+    sessionPending: session.agentSessionId === undefined
+  }
   return {
     project: { name: project.name, worktreeTags: project.settings.worktreeTags, customTags: project.settings.customTags },
     ticketUrl,
@@ -62,14 +70,9 @@ export function quickButtonContext(
     },
     worktree: worktree && { id: worktree.id, name: worktree.name, path: worktree.path },
     branch,
-    // As a desktop server window names them: the terminal is the session, and the agent's own
-    // id is pending until the server has found it (Codex).
-    terminal: {
-      id: session.id,
-      title: session.title,
-      sessionId: session.agentSessionId ?? session.id,
-      sessionPending: session.agentSessionId === undefined
-    },
+    terminal,
+    // A worktree session is its worktree's open tab; the phone has no open worktree for a Global one.
+    worktreeTerminal: worktree && terminal,
     agent: agentLabel ?? '',
     now
   }

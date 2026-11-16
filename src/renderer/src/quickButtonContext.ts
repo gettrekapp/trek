@@ -1,7 +1,15 @@
-import { GLOBAL_WORKTREE_ID, isPrimaryWorktreeId, repoHostKey, repoOfWorktreeId, repoWorktrees, useAppStore } from './store'
+import {
+  GLOBAL_WORKTREE_ID,
+  isPrimaryWorktreeId,
+  repoHostKey,
+  repoOfWorktreeId,
+  repoWorktrees,
+  useAppStore,
+  type TerminalMeta
+} from './store'
 import { agentLabel } from './terminals'
 import { sameWorktree } from '../../shared/types'
-import type { BuiltinContext } from '../../shared/quickButtonTemplate.ts'
+import type { BuiltinContext, TerminalContext } from '../../shared/quickButtonTemplate.ts'
 import { currentTicketView } from './plugins/useTickets'
 
 /** The built-in context for a terminal, read from the store at click time. */
@@ -25,18 +33,27 @@ export function quickButtonContext(terminalId: string): BuiltinContext | null {
       ? rows.find((r) => r.isMain)
       : rows.find((r) => sameWorktree(r, worktree))
     : undefined
+  const termContext = (t: TerminalMeta): TerminalContext => ({
+    id: t.id,
+    title: t.title,
+    sessionId: t.sessionId,
+    sessionPending: t.sessionPending
+  })
+  // The tab showing in the worktree: the clicked one, or from Global, the open worktree's active tab.
+  const shown =
+    worktree && worktreeId === terminal.worktreeId
+      ? terminal
+      : worktree
+        ? s.terminals[s.activeTerminal[worktree.id] ?? '']
+        : undefined
   return {
     project: s.project,
     ticketUrl: (ticketId) => currentTicketView(ticketId).url,
     repo,
     worktree: worktree && { id: worktree.id, name: worktree.name, path: worktree.path },
     branch: worktree?.branch ?? row?.branch,
-    terminal: {
-      id: terminal.id,
-      title: terminal.title,
-      sessionId: terminal.sessionId,
-      sessionPending: terminal.sessionPending
-    },
+    terminal: termContext(terminal),
+    worktreeTerminal: shown && shown.worktreeId === worktree?.id ? termContext(shown) : undefined,
     agent: agentLabel(terminalId),
     now: new Date()
   }

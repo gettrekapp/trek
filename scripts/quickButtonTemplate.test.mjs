@@ -74,6 +74,7 @@ const ctx = (over = {}) => ({
   worktree: { id: 'wt1', name: 'feat', path: '/r/feat' },
   branch: 'feat',
   terminal: { id: 't1', title: 'Claude', sessionId: 's-1' },
+  worktreeTerminal: { id: 't2', title: 'Codex', sessionId: 's-2' },
   agent: 'Claude',
   now: new Date(2026, 10, 3, 9, 5),
   ...over
@@ -85,6 +86,9 @@ test('resolveBuiltins fills every built-in from the context', () => {
     worktree_name: 'feat',
     worktree_path: '/r/feat',
     branch: 'feat',
+    worktree_terminal_id: 't2',
+    worktree_session_id: 's-2',
+    worktree_session_title: 'Codex',
     repo_name: 'trek',
     repo_path: '/r/trek',
     project_name: 'Trek',
@@ -105,8 +109,8 @@ test('resolveBuiltins fills every built-in from the context', () => {
 })
 
 test('without a worktree (the Global panel) its built-ins are missing', () => {
-  const values = resolveBuiltins(ctx({ repo: undefined, worktree: undefined, branch: undefined }))
-  for (const name of ['worktree_id', 'branch', 'repo_name', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) {
+  const values = resolveBuiltins(ctx({ repo: undefined, worktree: undefined, branch: undefined, worktreeTerminal: undefined }))
+  for (const name of ['worktree_id', 'branch', 'worktree_terminal_id', 'worktree_session_id', 'worktree_session_title', 'repo_name', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) {
     assert.equal(values[name], undefined, name)
   }
   assert.equal(values.project_name, 'Trek')
@@ -117,10 +121,13 @@ test('empty values and a pending session id count as missing', () => {
   const values = resolveBuiltins({
     ...base,
     repo: { ...base.repo, branchNotes: { feat: '  ' } },
-    terminal: { ...base.terminal, sessionPending: true }
+    terminal: { ...base.terminal, sessionPending: true },
+    worktreeTerminal: { ...base.worktreeTerminal, sessionPending: true }
   })
   assert.equal(values.note, undefined)
   assert.equal(values.session_id, undefined)
+  assert.equal(values.worktree_session_id, undefined)
+  assert.equal(values.worktree_terminal_id, 't2')
 })
 
 test('ticket_url is missing when its tracker has no link for it; pr_number falls back to trailing digits', () => {
