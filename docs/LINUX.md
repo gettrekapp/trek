@@ -45,9 +45,10 @@ then save the tokens again by editing each server and entering its token.
 
 ## Updating
 
-Updates are notify-only. Trek checks as it does on the Mac and shows "Update available" in the
-title bar. Its dialog offers Open Release Page, Later and Skip This Version. Download the new `.deb` and install
-it over the old one:
+Updates are notify-only. Trek checks when it starts and once a day, as it does on the Mac, and
+shows "Update available" in the title bar; File → Check for Updates… checks on demand. Its dialog
+offers Open Release Page, Later and Skip This Version. Download the new `.deb` and install it over
+the old one:
 
 ```sh
 sudo apt install ./Trek-<version>-linux-<arch>.deb

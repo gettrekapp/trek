@@ -41,9 +41,10 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
 
 Trek checks for a newer release when it starts and once a day, and shows "Update available" in the
 title bar. Nothing is downloaded or installed until you choose to: **Download**, then **Restart to
-Update**. **Trek → Check for Updates…** checks on demand. (Releases from before the updater was
-added don't have it: install a newer dmg by hand once.) On Linux the update is notify-only:
-Trek opens the release page and you install the new `.deb` yourself.
+Update**. **Trek → Check for Updates…** (File → Check for Updates… on Linux) checks on demand.
+(Releases from before the updater was added don't have it: install a newer dmg by hand once.) On
+Linux the update is notify-only: its dialog offers **Open Release Page**, and you install the new
+`.deb` yourself.
 
 **Status**: early and moving fast. The desktop app runs on macOS (Apple silicon) and Linux (x64 and arm64, `.deb`). A phone companion
 (`apps/mobile`, iOS and Android) isn't in the stores yet, and Windows support is on the
@@ -215,7 +216,7 @@ other window on that project sees them live.
   that saw it update, or "Update failed: …" with the reason and the server as it was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
   shows the release without the button, and one that cannot restart itself asks you to
   restart it there to finish. The Local server has none of this: it is updated with Trek
-  (**Trek → Check for Updates…**). See
+  (**Trek → Check for Updates…**, File → Check for Updates… on Linux). See
   [Updating](server/README.md#updating) in the server README.
 - **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
   `app-server-tokens.json` in the user-data directory, owner-only. When no OS
