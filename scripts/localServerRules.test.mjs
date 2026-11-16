@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
+import { commandArgv, windowsArgv } from '../src/shared/processCommand.ts'
 import {
   DEV_LOCAL_PROFILE,
   LOCAL_ENTRY_ID,
@@ -75,24 +76,24 @@ test('TREK_LOCAL_PROFILE: a dev build takes a valid name, an invalid one is dev;
 
 test('isLocalServerCommand: trek-server, start --local, and this profile\'s --local-profile', () => {
   const bundle = '/Users/u/Trek.app/Contents/MacOS/Trek /Users/u/Trek.app/Contents/Resources/app.asar/out/server/trek-server.cjs'
-  assert.equal(isLocalServerCommand(`${bundle} start --local`, undefined), true)
-  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, 'dev'), true)
-  assert.equal(isLocalServerCommand('node /usr/local/bin/trek-server start --local', undefined), true, 'an installed CLI')
-  assert.equal(isLocalServerCommand(`${bundle} start --local`, 'dev'), false, 'the default profile is not dev')
-  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, undefined), false, 'dev is not the default profile')
-  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev-wt2`, 'dev'), false, 'another named profile')
-  assert.equal(isLocalServerCommand(`${bundle} stop --local`, undefined), false, 'a stop')
-  assert.equal(isLocalServerCommand(`${bundle} start`, undefined), false, 'a remote server')
-  assert.equal(isLocalServerCommand(`${bundle} start --localx`, undefined), false)
-  assert.equal(isLocalServerCommand('sleep 300', undefined), false)
-  assert.equal(isLocalServerCommand('/bin/zsh -c start --local', undefined), false, 'no trek-server')
+  assert.equal(isLocalServerCommand(`${bundle} start --local`, undefined, 'darwin'), true)
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, 'dev', 'darwin'), true)
+  assert.equal(isLocalServerCommand('node /usr/local/bin/trek-server start --local', undefined, 'darwin'), true, 'an installed CLI')
+  assert.equal(isLocalServerCommand(`${bundle} start --local`, 'dev', 'darwin'), false, 'the default profile is not dev')
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, undefined, 'darwin'), false, 'dev is not the default profile')
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev-wt2`, 'dev', 'darwin'), false, 'another named profile')
+  assert.equal(isLocalServerCommand(`${bundle} stop --local`, undefined, 'darwin'), false, 'a stop')
+  assert.equal(isLocalServerCommand(`${bundle} start`, undefined, 'darwin'), false, 'a remote server')
+  assert.equal(isLocalServerCommand(`${bundle} start --localx`, undefined, 'darwin'), false)
+  assert.equal(isLocalServerCommand('sleep 300', undefined, 'darwin'), false)
+  assert.equal(isLocalServerCommand('/bin/zsh -c start --local', undefined, 'darwin'), false, 'no trek-server')
   // 5a: main appends --import-env-from <userData> after the profile; ps prints it unquoted, spaces and all.
   const userData = '/Users/u/Library/Application Support/Trek Dev'
   for (const dir of [userData, `'${userData}'`]) {
-    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, undefined), true, dir)
-    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, 'dev'), false, dir)
-    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, 'dev'), true, dir)
-    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, undefined), false, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, undefined, 'darwin'), true, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, 'dev', 'darwin'), false, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, 'dev', 'darwin'), true, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, undefined, 'darwin'), false, dir)
   }
 })
 
@@ -320,12 +321,12 @@ test('keepAfterFailure: a failed stop or restart keeps a server local.json still
 test('isLocalServerCommand: a Windows command line, quoted executable and backslashes', () => {
   const exe = '"C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\Trek.exe"'
   const bundle = 'C:\\Users\\me\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs'
-  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from C:\\Users\\me\\AppData\\Roaming\\Trek Dev`, undefined), true)
-  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, 'dev'), true)
-  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, undefined), false)
-  assert.equal(isLocalServerCommand(`${exe} --type=renderer`, undefined), false)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from C:\\Users\\me\\AppData\\Roaming\\Trek Dev`, undefined, 'win32'), true)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, 'dev', 'win32'), true)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --local-profile dev`, undefined, 'win32'), false)
+  assert.equal(isLocalServerCommand(`${exe} --type=renderer`, undefined, 'win32'), false)
   // A quoted bundle path (a user folder with a space).
-  assert.equal(isLocalServerCommand(`${exe} "C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs" start --local`, undefined), true)
+  assert.equal(isLocalServerCommand(`${exe} "C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\Trek\\resources\\app.asar\\out\\server\\trek-server.cjs" start --local`, undefined, 'win32'), true)
 })
 
 test('isLocalServerCommand: the line Node builds on Windows, a quoted --import-env-from beside --local-profile', () => {
@@ -333,11 +334,11 @@ test('isLocalServerCommand: the line Node builds on Windows, a quoted --import-e
   const exe = '"C:\\Users\\Jo Smith\\repo\\node_modules\\electron\\dist\\electron.exe"'
   const bundle = '"C:\\Users\\Jo Smith\\repo\\out\\server\\trek-server.cjs"'
   const line = `${exe} ${bundle} start --local --local-profile dev-wt2 --import-env-from "C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek Dev"`
-  assert.equal(isLocalServerCommand(line, 'dev-wt2'), true)
-  assert.equal(isLocalServerCommand(line, 'dev'), false)
-  assert.equal(isLocalServerCommand(line, undefined), false)
+  assert.equal(isLocalServerCommand(line, 'dev-wt2', 'win32'), true)
+  assert.equal(isLocalServerCommand(line, 'dev', 'win32'), false)
+  assert.equal(isLocalServerCommand(line, undefined, 'win32'), false)
   // The default profile: no --local-profile, a quoted import path last.
-  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from "C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek"`, undefined), true)
+  assert.equal(isLocalServerCommand(`${exe} ${bundle} start --local --import-env-from "C:\\Users\\Jo Smith\\AppData\\Roaming\\Trek"`, undefined, 'win32'), true)
 })
 
 test('processCommandLine: ps elsewhere, PowerShell from System32 on Windows', () => {
@@ -348,3 +349,30 @@ test('processCommandLine: ps elsewhere, PowerShell from System32 on Windows', ()
   assert.deepEqual(win.args, ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter 'ProcessId=42').CommandLine"])
   assert.throws(() => processCommandLine(1.5, 'win32', 'C:\\Windows'), /pid/)
 })
+
+test('isLocalServerCommand: start --local inside another program\'s quoted argument is not a server (Windows)', () => {
+  const line = '"C:\\Program Files\\Tool\\tool.exe" "--run=C:\\x\\trek-server.cjs start --local"'
+  assert.equal(isLocalServerCommand(line, undefined, 'win32'), false)
+  assert.equal(isLocalServerCommand('"C:\\Tool\\tool.exe" C:\\x\\trek-server.cjs "start --local"', undefined, 'win32'), false, 'start --local as one argument')
+  assert.equal(isLocalServerCommand('C:\\x\\trek-server.exe --local-profile dev start --local', 'dev', 'win32'), true, 'a --local-profile before start --local counts')
+  assert.equal(isLocalServerCommand('"C:\\Trek\\Trek.exe" C:\\x\\trek-server.cjs start --local --local-profile', undefined, 'win32'), true, 'no value: the default profile')
+})
+
+test('windowsArgv: CommandLineToArgvW rules', () => {
+  assert.deepEqual(windowsArgv('"C:\\Program Files\\a.exe" b "c d" e'), ['C:\\Program Files\\a.exe', 'b', 'c d', 'e'])
+  // The program name has no escapes; a backslash before its closing quote stays.
+  assert.deepEqual(windowsArgv('"C:\\dir\\" x'), ['C:\\dir\\', 'x'])
+  assert.deepEqual(windowsArgv('a.exe "C:\\dir\\\\" x'), ['a.exe', 'C:\\dir\\', 'x'], '2n backslashes before a quote are n')
+  assert.deepEqual(windowsArgv('a.exe a\\"b c'), ['a.exe', 'a"b', 'c'], '2n+1 are n and a literal quote')
+  assert.deepEqual(windowsArgv('a.exe C:\\a\\b'), ['a.exe', 'C:\\a\\b'], 'other backslashes are literal')
+  assert.deepEqual(windowsArgv('a.exe "x""y"'), ['a.exe', 'x"y'], '"" inside quotes')
+  assert.deepEqual(windowsArgv('a.exe ab"c d"e'), ['a.exe', 'abc de'])
+  assert.deepEqual(windowsArgv('  a.exe\t\tb  '), ['a.exe', 'b'])
+  assert.deepEqual(windowsArgv(''), [])
+})
+
+test('commandArgv: whitespace on POSIX (ps output), windowsArgv on Windows', () => {
+  assert.deepEqual(commandArgv('  /bin/node  /a b/trek-server.cjs start ', 'darwin'), ['/bin/node', '/a', 'b/trek-server.cjs', 'start'])
+  assert.deepEqual(commandArgv('"C:\\a b\\x.exe" "c d"', 'win32'), ['C:\\a b\\x.exe', 'c d'])
+})
+

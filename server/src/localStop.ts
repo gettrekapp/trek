@@ -127,7 +127,7 @@ export function stopLocal(profile: LocalProfile, options: StopOptions = {}): num
     forceKill = (pid) => killTreeSync(pid, { platform: 'win32' }),
     isServer = (pid) => {
       const line = readCommandLineSync(pid, platform)
-      return line === undefined ? undefined : isLocalServerCommand(line, profile.name)
+      return line === undefined ? undefined : isLocalServerCommand(line, profile.name, platform)
     },
     log = console.log,
     error = console.error

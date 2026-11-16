@@ -21,16 +21,93 @@ export function processCommandLine(
 }
 
 /**
- * The command line (processCommandLine's: `ps -o command=`, or Win32_Process's CommandLine) is a
- * local server of `profile`: it mentions trek-server (the bundle's trek-server.cjs, or an installed
- * trek-server bin), has `start --local`, and has `--local-profile <profile>` for a named profile or
- * no `--local-profile` for the default one. Read with its `"` removed: Windows quotes the
- * executable, and any argument with a space (a user folder, `Trek Dev`). Errs towards "a server":
- * that only ever refuses a Reset or a SIGKILL.
+ * A Windows command line split as CommandLineToArgvW (and the C runtime) splits it: the program
+ * name runs to the next space, or within quotes to the closing quote, with no escapes; after it,
+ * spaces and tabs separate arguments outside quotes, `"` toggles quoting, 2n backslashes before a
+ * `"` are n backslashes (and the quote still toggles), 2n+1 are n and a literal `"`, and other
+ * backslashes are literal. Inside quotes, `""` is a literal `"`.
  */
-export function isLocalServerCommand(command: string, profile: string | undefined): boolean {
-  const line = command.replaceAll('"', '')
-  if (!line.includes('trek-server') || !/(^|\s)start\s+--local(\s|$)/.test(line)) return false
-  const named = /(^|\s)--local-profile\s+(\S+)/.exec(line)?.[2]
+export function windowsArgv(line: string): string[] {
+  const argv: string[] = []
+  let i = 0
+  const n = line.length
+  const space = (c: string | undefined): boolean => c === ' ' || c === '\t'
+  while (i < n && space(line[i])) i++
+  if (i >= n) return argv
+  // The program name.
+  let program = ''
+  if (line[i] === '"') {
+    i++
+    while (i < n && line[i] !== '"') program += line[i++]
+    if (i < n) i++
+  } else {
+    while (i < n && !space(line[i])) program += line[i++]
+  }
+  argv.push(program)
+  for (;;) {
+    while (i < n && space(line[i])) i++
+    if (i >= n) return argv
+    let arg = ''
+    let quoted = false
+    while (i < n && (quoted || !space(line[i]))) {
+      const c = line[i]
+      if (c === '\\') {
+        let slashes = 0
+        while (line[i] === '\\') {
+          slashes++
+          i++
+        }
+        if (line[i] === '"') {
+          arg += '\\'.repeat(Math.floor(slashes / 2))
+          if (slashes % 2 === 1) {
+            arg += '"'
+            i++
+          }
+        } else arg += '\\'.repeat(slashes)
+      } else if (c === '"') {
+        if (quoted && line[i + 1] === '"') {
+          arg += '"'
+          i += 2
+        } else {
+          quoted = !quoted
+          i++
+        }
+      } else {
+        arg += c
+        i++
+      }
+    }
+    argv.push(arg)
+  }
+}
+
+/**
+ * processCommandLine's output as argv: windowsArgv on Windows; elsewhere `ps` has joined the
+ * arguments with spaces, so it is split on whitespace (an argument with a space is two tokens).
+ */
+export function commandArgv(command: string, platform: string = process.platform): string[] {
+  return platform === 'win32' ? windowsArgv(command) : command.trim().split(/\s+/).filter((t) => t !== '')
+}
+
+/**
+ * The command line (processCommandLine's: `ps -o command=`, or Win32_Process's CommandLine) is a
+ * local server of `profile`, judged on whole arguments (commandArgv): one that mentions trek-server
+ * (the bundle's trek-server.cjs, or an installed trek-server bin), followed somewhere by `start`
+ * and `--local` as two adjacent arguments, and `--local-profile <profile>` after it for a named
+ * profile or no `--local-profile` for the default one. So `trek-server start --local` inside some
+ * other program's quoted argument is not a server (on Windows; ps cannot tell).
+ *
+ * Errs towards "a server": a true lets a restart, an install's stop and `stop --local` signal or
+ * end the pid (only while the lock and local.json both name it, too), and makes Reset refuse; a
+ * false lets Reset delete the lock, and an install treat the pid as not ours.
+ */
+export function isLocalServerCommand(command: string, profile: string | undefined, platform: string = process.platform): boolean {
+  const argv = commandArgv(command, platform)
+  const bin = argv.findIndex((a) => a.includes('trek-server'))
+  if (bin < 0) return false
+  const rest = argv.slice(bin + 1)
+  if (!rest.some((a, i) => a === 'start' && rest[i + 1] === '--local')) return false
+  const at = rest.indexOf('--local-profile')
+  const named = at < 0 ? undefined : rest[at + 1]
   return named === profile
 }
