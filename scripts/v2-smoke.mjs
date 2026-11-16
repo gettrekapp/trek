@@ -1147,13 +1147,19 @@ try {
   // ---- 7c. Attention across windows (3d): main's list in another project's bell, one OS
   // notification raised by main and none by a window, a click focuses the project's window and
   // selects the session, a dismiss goes through main; a click on a project with no window opens
-  // one, which selects the session once loaded. main's Notification is recorded, not shown.
-  await app.evaluate(({ Notification }) => {
+  // one, which selects the session once loaded. main's Notification is recorded, not shown, and
+  // counts as supported: main raises none where Notification.isSupported() is false, as on the
+  // Linux CI runner (Electron finds no libnotify there, which a desktop with the .deb has).
+  const notificationsSupported = await app.evaluate(({ Notification }) => {
+    const supported = Notification.isSupported()
     globalThis.__notes = []
+    Notification.isSupported = () => true
     Notification.prototype.show = function () {
       globalThis.__notes.push({ title: this.title, body: this.body })
     }
+    return supported
   })
+  if (!notificationsSupported) console.log("note: Notification.isSupported() is false here: main's notifications are recorded as if supported")
   const osNotes = () => app.evaluate(() => globalThis.__notes)
   /** Records any notification a window would raise itself (a web Notification). */
   const stubWebNotifications = (page) =>
