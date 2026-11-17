@@ -845,6 +845,13 @@ try {
   const exitedOverlay = detail.locator('.terminal-pane:visible .exited-overlay')
   await exitedOverlay.waitFor({ timeout: 10_000 })
   check('the exit shows in the terminal', await until(() => term(s1).then((t) => t.includes('[process exited with code 3]')), true), true)
+  // The exited pane keeps its quick buttons bar above the overlay, so buttons are still managed there.
+  check('the exited pane keeps its quick buttons bar', await bar.locator('.quick-btn-add').isVisible(), true)
+  check('without the Queue chip', await bar.locator('.queue-toggle').count(), 0)
+  await bar.locator('.quick-btn-add').click()
+  await createModal.waitFor({ timeout: 5000 })
+  await createModal.locator('button', { hasText: 'Cancel' }).click()
+  await createModal.waitFor({ state: 'detached', timeout: 5000 })
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
   const restarted = await until(async () => {
