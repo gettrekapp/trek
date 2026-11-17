@@ -35,6 +35,9 @@ export const MOBILE_ENTRIES = [
   'src/shared/plugins/manifest.ts',
   'src/shared/plugins/tickets.ts',
   'src/shared/tickets.ts',
+  // The Global agent a new Global session gets (the server's own rule, for its label).
+  'src/shared/providers/selection.ts',
+  'src/shared/providers/types.ts',
   'plugins/linear/manifest.ts',
   'plugins/linear/shared/ticket.ts',
   'plugins/azure-devops/manifest.ts',
