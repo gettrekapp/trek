@@ -9,6 +9,7 @@ import { useServers } from '../src/state/ServersProvider.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
 import { ago, attentionMark, attentionText, notificationRoute, type AttentionItem } from '../src/logic/attention.ts'
 import { noticeDismissal } from '../src/logic/prWatch.ts'
+import { Button } from '../src/ui/Button.tsx'
 import { DecisionActions } from '../src/ui/DecisionActions.tsx'
 import { DismissNotice } from '../src/ui/PrNotice.tsx'
 import { StateMark } from '../src/ui/StateMark.tsx'
@@ -16,7 +17,7 @@ import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
 
 export default function AttentionScreen(): React.JSX.Element {
-  const { ready, servers, attention } = useServers()
+  const { ready, servers, attention, addDemo } = useServers()
   const { ensureRegistered } = usePush()
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -52,6 +53,11 @@ export default function AttentionScreen(): React.JSX.Element {
           <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
             Add server
           </Link>
+          <Text style={[ui.muted, { marginTop: 16 }]}>No server yet? Try Trek with a built-in sample project.</Text>
+          <Button
+            label="Try the demo"
+            onPress={() => void addDemo().then((where) => router.push({ pathname: '/project/[serverId]/[projectId]', params: where }))}
+          />
         </View>
       ) : (
         <FlatList

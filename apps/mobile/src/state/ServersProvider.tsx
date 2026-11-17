@@ -8,6 +8,7 @@ import * as Notifications from 'expo-notifications'
 import { ServerRegistry, globalSocketFactory, type ConnectionStatus, type RegisteredServer, type AttentionEntry } from '../shared.ts'
 import { bumpGenerations, type Generations } from '../logic/generations.ts'
 import { attentionKey, mergeAttention, newItems, notificationContent, type AttentionItem } from '../logic/attention.ts'
+import { createDemoSocketFactory, DemoServer, DEMO_ENTRY, DEMO_PROJECT_ID, DEMO_SERVER_ID, DEMO_TOKEN, isDemoUrl } from '../demo/index.ts'
 import { forgetServer, loadServers, loadToken, saveServer, type SavedServer } from './storage.ts'
 
 /** How long the connections stay up after the app leaves the foreground (iOS suspends it soon after anyway). */
@@ -17,6 +18,8 @@ export interface ServerView extends SavedServer {
   status: ConnectionStatus | 'no-token'
   message: string
   capabilities: string[]
+  /** The in-app demo server */
+  demo: boolean
 }
 
 interface ServersValue {
@@ -29,6 +32,8 @@ interface ServersValue {
   generationOf(id: string): number
   add(server: SavedServer, token: string): Promise<void>
   remove(id: string): Promise<void>
+  /** Adds the in-app demo server (fresh, not saved: gone after a relaunch); answers where to open it */
+  addDemo(): Promise<{ serverId: string; projectId: string }>
 }
 
 const ServersContext = createContext<ServersValue | null>(null)
@@ -40,7 +45,16 @@ export function useServers(): ServersValue {
 }
 
 export function ServersProvider({ children }: { children: ReactNode }): React.JSX.Element {
-  const registry = useMemo(() => new ServerRegistry({ createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.1.0' }), [])
+  // The demo server lives as long as its entry: reconnects (background and back) reach the same one.
+  const demoRef = useRef<DemoServer | null>(null)
+  const demoServer = useCallback((): DemoServer => {
+    if (!demoRef.current) demoRef.current = new DemoServer()
+    return demoRef.current
+  }, [])
+  const registry = useMemo(
+    () => new ServerRegistry({ createSocket: createDemoSocketFactory(globalSocketFactory, demoServer), client: 'trek-mobile', clientVersion: '0.1.0' }),
+    [demoServer]
+  )
   const [saved, setSaved] = useState<SavedServer[]>([])
   const [ready, setReady] = useState(false)
   const [generations, setGenerations] = useState<Generations>({})
@@ -68,7 +82,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   const connect = useCallback(
     async (server: SavedServer): Promise<boolean> => {
       if (registry.get(server.id)) return false
-      const token = await loadToken(server.id)
+      const token = isDemoUrl(server.url) ? DEMO_TOKEN : await loadToken(server.id)
       if (registry.get(server.id)) return false
       if (!token) {
         setStatuses((s) => ({ ...s, [server.id]: { status: 'no-token', message: 'This phone has no token for it', capabilities: [] } }))
@@ -148,7 +162,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
 
   const servers: ServerView[] = saved.map((s) => {
     const st = statuses[s.id]
-    return { ...s, status: st?.status ?? 'connecting', message: st?.message ?? '', capabilities: st?.capabilities ?? [] }
+    return { ...s, status: st?.status ?? 'connecting', message: st?.message ?? '', capabilities: st?.capabilities ?? [], demo: s.id === DEMO_SERVER_ID }
   })
 
   const attention = useMemo(
@@ -185,10 +199,31 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
     [connect, disconnect, bump]
   )
 
+  const addDemo = useCallback(async () => {
+    const where = { serverId: DEMO_SERVER_ID, projectId: DEMO_PROJECT_ID }
+    if (savedRef.current.some((s) => s.id === DEMO_SERVER_ID)) return where
+    // A live demo connection means its server is the current one: never dispose that.
+    if (!registry.get(DEMO_SERVER_ID)) {
+      demoRef.current?.dispose()
+      demoRef.current = new DemoServer()
+    }
+    const list = [...savedRef.current, DEMO_ENTRY]
+    savedRef.current = list
+    setSaved(list)
+    await connect(DEMO_ENTRY)
+    bump([DEMO_SERVER_ID])
+    return where
+  }, [registry, connect, bump])
+
   const remove = useCallback(
     async (id: string) => {
+      // The connection is closed first (the SDK then doesn't retry); only then is the demo server
+      // disposed, which would end any connection left with `removed`. Nothing awaits in between.
       if (disconnect(id)) bump([id])
-      await forgetServer(id)
+      if (id === DEMO_SERVER_ID) {
+        demoRef.current?.dispose()
+        demoRef.current = null
+      } else await forgetServer(id)
       const list = savedRef.current.filter((s) => s.id !== id)
       savedRef.current = list
       setSaved(list)
@@ -204,7 +239,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
     [disconnect, bump]
   )
 
-  const value: ServersValue = { ready, servers, attention, get: (id) => registry.get(id), generationOf: (id) => generations[id] ?? 0, add, remove }
+  const value: ServersValue = { ready, servers, attention, get: (id) => registry.get(id), generationOf: (id) => generations[id] ?? 0, add, remove, addDemo }
   return <ServersContext.Provider value={value}>{children}</ServersContext.Provider>
 }
 

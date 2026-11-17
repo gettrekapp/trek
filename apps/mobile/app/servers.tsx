@@ -1,7 +1,7 @@
 // The paired servers and their connection state (6a). Removing one forgets its token on this
 // phone only: it stays valid on the server until revoked there.
 import { Alert, FlatList, Switch, Text, View } from 'react-native'
-import { Link } from 'expo-router'
+import { Link, router } from 'expo-router'
 import { statusLabel, useServers, type ServerView } from '../src/state/ServersProvider.tsx'
 import { Button } from '../src/ui/Button.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
@@ -11,7 +11,7 @@ import { colors, ui } from '../src/ui/theme.ts'
 const needsPairing = (status: ServerView['status']): boolean => status === 'needs-auth' || status === 'no-token'
 
 export default function ServersScreen(): React.JSX.Element {
-  const { servers, remove } = useServers()
+  const { servers, remove, addDemo } = useServers()
   const push = usePush()
   const confirmRemove = (id: string, name: string): void => {
     Alert.alert(
@@ -25,6 +25,16 @@ export default function ServersScreen(): React.JSX.Element {
       ]
     )
   }
+  const hasDemo = servers.some((s) => s.demo)
+  const openDemo = (): void => {
+    void addDemo().then((where) => router.push({ pathname: '/project/[serverId]/[projectId]', params: where }))
+  }
+  const confirmRemoveDemo = (id: string): void => {
+    Alert.alert('Remove the demo?', 'What you changed in it is discarded. You can try it again any time.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => void remove(id) }
+    ])
+  }
   return (
     <View style={ui.screen}>
       <FlatList
@@ -32,7 +42,7 @@ export default function ServersScreen(): React.JSX.Element {
         contentContainerStyle={ui.pad}
         data={servers}
         keyExtractor={(s) => s.id}
-        ListEmptyComponent={<Text style={ui.muted}>No servers yet.</Text>}
+        ListEmptyComponent={<Text style={ui.muted}>No servers yet. Pair one, or try the demo.</Text>}
         ListHeaderComponent={
           push.enabled ? (
             <View style={[ui.card, ui.row, { justifyContent: 'space-between', marginBottom: 4 }]}>
@@ -52,8 +62,13 @@ export default function ServersScreen(): React.JSX.Element {
         }
         renderItem={({ item }) => (
           <View style={ui.card}>
-            <Text style={ui.title}>{item.name}</Text>
-            <Text style={ui.muted}>{item.url}</Text>
+            <View style={[ui.row, { gap: 8 }]}>
+              <Text style={ui.title}>{item.name}</Text>
+              {item.demo ? (
+                <Text style={{ color: colors.accent, borderColor: colors.accent, borderWidth: 1, borderRadius: 4, paddingHorizontal: 6, fontSize: 12 }}>Demo</Text>
+              ) : null}
+            </View>
+            <Text style={ui.muted}>{item.demo ? 'Built-in sample server: nothing leaves this phone' : item.url}</Text>
             <Text style={item.status === 'connected' ? { color: colors.ok } : needsPairing(item.status) ? ui.warn : ui.muted}>
               {statusLabel(item.status)}
               {item.message && item.status !== 'connected' ? ` · ${item.message}` : ''}
@@ -70,14 +85,17 @@ export default function ServersScreen(): React.JSX.Element {
                   Push…
                 </Link>
               ) : null}
-              <Button ghost danger label="Remove" onPress={() => confirmRemove(item.id, item.name)} />
+              <Button ghost danger label="Remove" onPress={() => (item.demo ? confirmRemoveDemo(item.id) : confirmRemove(item.id, item.name))} />
             </View>
           </View>
         )}
         ListFooterComponent={
-          <Link href="/add-server" style={{ color: colors.accent, fontSize: 16, marginTop: 12 }}>
-            Add server
-          </Link>
+          <View style={{ gap: 8, marginTop: 12 }}>
+            <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
+              Add server
+            </Link>
+            <Button ghost label={hasDemo ? 'Open the demo' : 'Try the demo'} onPress={openDemo} />
+          </View>
         }
       />
       <TabBar active="servers" />
