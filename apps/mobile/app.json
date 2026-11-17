@@ -27,6 +27,14 @@
       "package": "app.gettrek.mobile"
     },
     "scheme": "trek",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/eec5cb93-eaae-4e47-840b-eea9e1b97198",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0
+    },
     "plugins": [
       "expo-router",
       "expo-secure-store",
