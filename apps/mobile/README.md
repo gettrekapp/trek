@@ -131,6 +131,34 @@ npx expo run:android   # or an Android emulator
 Nothing in the repo's checks runs these: they need Xcode or the Android SDK, and a device
 or simulator.
 
+## Store review
+
+Reviewers have no Trek server, so the app has a built-in demo: **Try the demo** on the first
+screen (and on Servers) adds a "Demo server" that runs inside the app
+(`src/demo/`), with a sample project (`acme-web`): worktrees, sessions with terminal output, a
+decision to answer, a pull request notice, a draft review, automations and branch history.
+Nothing leaves the phone. It isn't saved: it's gone after a relaunch, and every Try the demo
+starts it fresh.
+
+Review notes (App Store Connect → App Review Information → Notes, and Google Play → App
+content → App access → "All or some functionality is restricted" → instructions):
+
+> Trek is the phone companion to the Trek desktop app and server, which run AI coding agents
+> on the user's own computer. To review the app without a server, tap **Try the demo** on the
+> first screen: it opens a built-in sample server inside the app (no account, no network).
+> Everything in the app works against it. To pair a real server, the desktop app shows a QR
+> code under Servers → Pair a phone…
+>
+> The sample pull request links to a placeholder address on github.com
+> (github.com/example/acme-web), which doesn't exist.
+
+Attach a short screen recording of pairing a real server to the review notes.
+
+What the demo leaves out: push notifications, dev stacks and Docker environments, promote, and
+creating automations (`src/demo/demoHandlers.ts`' `NOT_IN_DEMO`). Every request the phone
+sends is either answered by the demo or listed there: `scripts/mobileDemo.test.mjs` fails
+otherwise.
+
 ## Manual checklist (iOS simulator)
 
 Against a trek-server reachable from the simulator. The simulator shares the Mac's
@@ -570,6 +598,25 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
       many times it is asked); with the session already shown, nothing moves.
     - On the Servers or Projects screen only (no project open), both tools say no client has
       the project open.
+18. **The demo** (no server needed; with no servers paired first):
+    - The home screen shows **Try the demo**; tapping it opens the `acme-web` project, and
+      Servers lists "Demo server" as Connected with a **Demo** badge.
+    - Needs you lists the decision on *Fix login timeout*, the PR #42 notice, *Redesign
+      checkout summary* finished and the nightly run finished. **Send answer** "1" on the
+      decision: the reply plays in its terminal, then the session is finished.
+    - *Add timeout tests* prints a line every few seconds, then finishes.
+    - Changes on `feature/checkout-redesign`: three files, two draft comments on their lines.
+      Add one, **Send to…** the Claude session: the review is in its queue.
+    - Branch details: change the tag, custom tags, note, ticket and pull request (to another
+      link: the watch stops); each shows in History.
+    - **Add worktree** `feature/saved-carts`, start a Codex session in it, send a prompt, then
+      remove the worktree.
+    - Automations: **Run now** on *Weekly changelog*; **Done** with **Run** on the nightly's
+      missed run. In a fresh demo, turning the nightly off before that asks "Its 1 missed run
+      is discarded." first.
+    - Background the app for 30 s and come back: the changes are still there.
+    - Servers: **Open the demo** goes to the project; **Remove** asks, then the row goes.
+      **Try the demo** again starts it fresh. Relaunch the app: no demo row.
 
 The repo's checks use no real push service (APNs, FCM, Expo): `npm run smoke:push` runs
 against a local APNs stub.
