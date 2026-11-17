@@ -20,9 +20,6 @@ name: Windows app
 on:
   workflow_call:
   workflow_dispatch:
-  # TEMP: a new workflow can't be run by hand until it is on main. Revert before merging.
-  push:
-    branches: [feature/windows-desktop]
 
 permissions:
   contents: read
@@ -203,7 +200,7 @@ jobs:
             for d in "$programs"/*/; do echo "== $d"; ls -la "$d" || true; done
             exit 1
           fi
-          [ "$(basename "$dir")" = trek ] || echo "::warning::Trek installed to $dir, not $programs/trek (the docs name Programs\\trek)"
+          [ "$(basename "$dir")" = trek ] || echo "::warning::Trek installed to $dir, not $programs/trek (the docs name Programs/trek)"
           echo "TREK_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
           ls -l "$dir"
       - name: Verify the installed signatures
