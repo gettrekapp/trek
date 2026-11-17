@@ -19,7 +19,7 @@ Notifications.setNotificationHandler({
 
 // Attention is under every other screen, also when the app is started by a link (trek://pair)
 // or a notification: Back from there leads home.
-export const unstable_settings = { initialRouteName: 'index' }
+export const unstable_settings = { anchor: 'index' }
 
 /**
  * Tapping a notification opens its session (or worktree): while running, and on a cold start. A

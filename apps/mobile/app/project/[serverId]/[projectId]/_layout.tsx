@@ -11,7 +11,7 @@ import { ProjectSidebar } from '../../../../src/ui/ProjectSidebar.tsx'
 import { colors } from '../../../../src/ui/theme.ts'
 
 // A project's screen opened from outside (Needs you, a notification) has the project's list beneath it.
-export const unstable_settings = { initialRouteName: 'index' }
+export const unstable_settings = { anchor: 'index' }
 
 export default function ProjectLayout(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
