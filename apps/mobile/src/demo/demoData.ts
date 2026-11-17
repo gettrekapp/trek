@@ -371,7 +371,7 @@ export function initialDemoState(now: number): DemoState {
     changes,
     history,
     branches: ['main', 'feature/checkout-redesign', 'fix/login-timeout', 'feature/saved-carts', 'chore/upgrade-vite', 'release/2026.11'],
-    since: { [checkoutClaude.id]: ago(50 * MIN), [loginClaude.id]: ago(6 * MIN), [nightly.id]: ago(DAY - 20 * MIN) },
+    since: { [checkoutClaude.id]: ago(50 * MIN), [loginClaude.id]: ago(6 * MIN), [nightly.id]: ranLatest + 5 * MIN },
     scrollback: { ...SCROLLBACK },
     ticking: { [loginCodex.id]: [...CODEX_TICKS] }
   }

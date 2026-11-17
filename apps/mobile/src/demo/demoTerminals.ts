@@ -32,7 +32,7 @@ const REPLAY_CHUNK = 16_384
 /** What a terminal shows for typed input: printable text as is, Enter as a new line, Backspace erasing one; escape sequences (arrow keys) dropped */
 export function echo(data: string): string {
   let out = ''
-  for (const ch of data.replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./g, '')) {
+  for (const ch of data.replace(/\r\n/g, '\n').replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./g, '')) {
     if (ch === '\r' || ch === '\n') out += '\r\n'
     else if (ch === '\u007f' || ch === '\b') out += '\b \b'
     else if (ch >= ' ') out += ch

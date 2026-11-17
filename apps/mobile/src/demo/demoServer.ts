@@ -2,7 +2,7 @@
 // protocol v2 frames over a DemoSocket, so the real client SDK and every screen run against it
 // unchanged. Its state is in memory only, fresh from demoData on every new DemoServer; it lives as
 // long as the phone's demo entry, so reconnects (the app going to the background) keep it.
-import { CAPABILITY, parseTopic, projectTopic, type Topic } from '../shared.ts'
+import { CAPABILITY, parseTopic, projectTopic, realTimers, type SocketCloseEvent, type Topic } from '../shared.ts'
 import { DEMO_PROJECT_ID, DEMO_PROJECT_NAME, DEMO_REPO_ID, DEMO_ROOT, initialDemoState, type DemoState } from './demoData.ts'
 import { DemoError, notInDemo } from './demoError.ts'
 import { DEMO_HANDLERS, type DemoHandler } from './demoHandlers.ts'
@@ -25,6 +25,9 @@ export const DEMO_CAPABILITIES: string[] = [
   CAPABILITY.automations
 ]
 
+/** How the demo's sockets close when it is disposed: `removed` stops the client retrying */
+const DEMO_ENDED: SocketCloseEvent = { code: 1001, reason: 'The demo ended', removed: true }
+
 export interface DemoClock {
   now(): number
   setTimeout(fn: () => void, ms: number): unknown
@@ -33,8 +36,8 @@ export interface DemoClock {
 
 export const realClock: DemoClock = {
   now: () => Date.now(),
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>)
+  setTimeout: realTimers.setTimeout,
+  clearTimeout: realTimers.clearTimeout
 }
 
 export interface DemoOptions {
@@ -67,10 +70,19 @@ class Connection implements DemoConnection, DemoPeer {
   open = true
   private readonly server: DemoServer
   private readonly sendFrame: (frame: object) => void
+  private readonly closeSocket: (event: SocketCloseEvent) => void
 
-  constructor(server: DemoServer, sendFrame: (frame: object) => void) {
+  constructor(server: DemoServer, sendFrame: (frame: object) => void, closeSocket: (event: SocketCloseEvent) => void) {
     this.server = server
     this.sendFrame = sendFrame
+    this.closeSocket = closeSocket
+  }
+
+  /** The server ends this connection: its socket closes */
+  end(event: SocketCloseEvent): void {
+    if (!this.open) return
+    this.open = false
+    this.closeSocket(event)
   }
 
   send(frame: object): void {
@@ -114,14 +126,14 @@ export class DemoServer {
       session.ptyId = this.terminals.open(this.state.scrollback[session.id] ?? '', worktree?.path ?? DEMO_ROOT)
       delete this.state.scrollback[session.id]
     }
-    this.lastAttention = JSON.stringify(attentionOf(this.state))
-    this.scheduleTick()
+    this.lastAttention = JSON.stringify(attentionOf(this.state, this.clock.now()))
+    this.ensureTick()
   }
 
-  /** A new connection; `sendFrame` gets each frame for it */
-  connect(sendFrame: (frame: object) => void): DemoPeer {
-    const connection = new Connection(this, sendFrame)
-    if (this.disposed) connection.open = false
+  /** A new connection; `sendFrame` gets each frame for it, `close` is called when the server ends it (disposed, even before it connected) */
+  connect(sendFrame: (frame: object) => void, close: (event: SocketCloseEvent) => void): DemoPeer {
+    const connection = new Connection(this, sendFrame, close)
+    if (this.disposed) connection.end(DEMO_ENDED)
     else this.connections.add(connection)
     return connection
   }
@@ -132,8 +144,13 @@ export class DemoServer {
     if (this.tickTimer !== null) this.clock.clearTimeout(this.tickTimer)
     this.tickTimer = null
     this.terminals.dispose()
-    for (const c of this.connections) c.open = false
+    for (const c of [...this.connections]) c.end(DEMO_ENDED)
     this.connections.clear()
+  }
+
+  /** The topics every open connection is subscribed to (for tests) */
+  connectionTopics(): Topic[] {
+    return [...this.connections].flatMap((c) => [...c.topics])
   }
 
   /** A fresh id with this prefix */
@@ -144,7 +161,7 @@ export class DemoServer {
   /** Call after any change to the project: subscribers get the new tree, and the attention list when it changed */
   changed(): void {
     this.publish(projectTopic(DEMO_PROJECT_ID), this.state.project)
-    const entries = attentionOf(this.state)
+    const entries = attentionOf(this.state, this.clock.now())
     const json = JSON.stringify(entries)
     if (json === this.lastAttention) return
     this.lastAttention = json
@@ -221,7 +238,7 @@ export class DemoServer {
         repos: [{ id: DEMO_REPO_ID, name: 'acme-web', path: DEMO_ROOT }]
       }
     }
-    if (topic === 'attention') return { entries: attentionOf(this.state) }
+    if (topic === 'attention') return { entries: attentionOf(this.state, this.clock.now()) }
     if (topic === projectTopic(DEMO_PROJECT_ID)) return this.state.project
     throw new DemoError('NOT_FOUND', 'No such project')
   }
@@ -238,11 +255,13 @@ export class DemoServer {
     }
   }
 
-  private scheduleTick(): void {
-    if (this.disposed) return
+  /** Starts the tick if it is not running and a session has lines left; it stops itself when none has */
+  ensureTick(): void {
+    if (this.disposed || this.tickTimer !== null || Object.keys(this.state.ticking).length === 0) return
     this.tickTimer = this.clock.setTimeout(() => {
+      this.tickTimer = null
       this.tick()
-      this.scheduleTick()
+      this.ensureTick()
     }, this.tickMs)
   }
 

@@ -62,15 +62,18 @@ export function tidyBranchData(repo: Repository, branch: string): void {
   if (data && Object.keys(data).length === 0) delete repo.branchData[branch]
 }
 
-/** What the `attention` topic lists: sessions in attention or done, open decisions, PR notices; newest first */
-export function attentionOf(state: DemoState): AttentionEntry[] {
+/**
+ * What the `attention` topic lists: sessions in attention or done, open decisions, PR notices; oldest first (as the real server
+ * does). A flagged session with no `since` yet gets `now`, kept in `state.since`. `audioAlerts` is never set: the demo project has none.
+ */
+export function attentionOf(state: DemoState, now: number): AttentionEntry[] {
   const project = state.project
   const out: AttentionEntry[] = []
   for (const { session, worktree } of allSessions(project)) {
     if (worktree && !worktree.loaded) continue
     const waiting = session.status === 'attention' || session.status === 'done'
     if (!waiting && !session.decision) continue
-    const since = waiting ? (state.since[session.id] ?? session.decision?.at ?? 0) : (session.decision?.at ?? 0)
+    const since = waiting ? (state.since[session.id] ??= now) : session.decision!.at
     out.push({
       projectId: project.id,
       worktreeId: worktree?.id ?? null,
@@ -98,5 +101,5 @@ export function attentionOf(state: DemoState): AttentionEntry[] {
       })
     }
   }
-  return out.sort((a, b) => b.since - a.since)
+  return out.sort((a, b) => a.since - b.since)
 }

@@ -18,5 +18,9 @@ export const isDemoUrl = (url: string): boolean => url === DEMO_URL
 
 /** `demo:` to the demo server `demo()` answers, any other URL to `fallback` */
 export function createDemoSocketFactory(fallback: SocketFactory, demo: () => DemoServer): SocketFactory {
-  return (url) => (isDemoUrl(url) ? new DemoSocket(demo()) : fallback(url))
+  return (url) => {
+    if (!isDemoUrl(url)) return fallback(url)
+    const server = demo()
+    return new DemoSocket(server, server.clock)
+  }
 }

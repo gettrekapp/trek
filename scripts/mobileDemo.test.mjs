@@ -104,7 +104,7 @@ test('demo: the server, attention and project topics', async () => {
     const entries = attention.snapshot.entries
     assert.ok(entries.some((e) => e.sessionId === 's-login-claude' && e.decision))
     assert.ok(entries.some((e) => e.pullRequest && e.worktreeId === 'wt-checkout'))
-    // Every loaded session has a terminal
+    // Every session in a loaded worktree has a terminal
     for (const w of project.snapshot.repositories[0].worktrees) for (const s of w.sessions) assert.ok(s.ptyId, s.id)
   } finally {
     h.close()
@@ -132,6 +132,75 @@ test('demo: a terminal replays its scrollback and echoes what is typed', async (
     assert.ok(out.includes('Waiting for you'))
     await h.reg.ptys.write(ptyId, 'hi\r')
     await until(() => out.endsWith('hi\r\n'))
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: disposing the server closes its connections for good', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    h.server.dispose()
+    await until(() => h.conn.status !== 'connected' && h.conn.status !== 'connecting')
+    assert.equal(h.conn.removed, true)
+    await new Promise((r) => setTimeout(r, 50))
+    assert.notEqual(h.conn.status, 'connecting')
+    assert.notEqual(h.conn.status, 'connected')
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a reconnect resubscribes and a terminal re-attach replays', async () => {
+  const h = harness()
+  try {
+    const project = watch(h.reg, `project:${DEMO_PROJECT_ID}`)
+    await until(() => project.snapshot)
+    const ptyId = project.snapshot.repositories[0].worktrees[2].sessions[0].ptyId
+    let out = ''
+    await h.reg.ptys.attach(ptyId, { onData: (d) => (out += d), onExit() {} })
+    assert.ok(out.includes('Waiting for you'))
+    project.snapshot = null
+    h.conn.reconnect()
+    await until(() => project.snapshot)
+    await until(() => h.conn.status === 'connected')
+    assert.ok(project.snapshot.repositories[0].worktrees.length === 3)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a change reaches the mirror, and an unsubscribed topic gets nothing', async () => {
+  const h = harness()
+  try {
+    const topic = `project:${DEMO_PROJECT_ID}`
+    const project = watch(h.reg, topic)
+    await until(() => project.snapshot)
+    h.server.state.project.repositories[0].branchData['main'] = { note: 'hello' }
+    h.server.changed()
+    await until(() => project.snapshot.repositories[0].branchData.main?.note === 'hello')
+    project.off()
+    await until(() => ![...h.server.connectionTopics()].some((t) => t === topic))
+    h.server.state.project.repositories[0].branchData['main'] = { note: 'again' }
+    h.server.changed()
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(project.snapshot.repositories[0].branchData.main.note, 'hello')
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: closing a terminal ends an attached handler', async () => {
+  const h = harness()
+  try {
+    const project = watch(h.reg, `project:${DEMO_PROJECT_ID}`)
+    await until(() => project.snapshot)
+    const ptyId = project.snapshot.repositories[0].worktrees[2].sessions[0].ptyId
+    let exited = false
+    await h.reg.ptys.attach(ptyId, { onData() {}, onExit: () => (exited = true) })
+    h.server.terminals.close(ptyId)
+    await until(() => exited)
   } finally {
     h.close()
   }
