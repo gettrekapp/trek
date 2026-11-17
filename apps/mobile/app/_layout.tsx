@@ -11,6 +11,7 @@ import { leavesProject } from '../src/logic/routes.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
 import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
 import { colors } from '../src/ui/theme.ts'
+import { UpdateBanner } from '../src/ui/UpdateBanner.tsx'
 
 // A notification that arrives while the app is open is shown as a banner, without sound.
 Notifications.setNotificationHandler({
@@ -131,6 +132,7 @@ export default function RootLayout(): React.JSX.Element {
         {/* The project's own stack draws its headers (app/project/[serverId]/[projectId]/_layout.tsx). */}
         <Stack.Screen name="project/[serverId]/[projectId]" options={{ headerShown: false }} />
       </Stack>
+      <UpdateBanner />
       </PushProvider>
     </ServersProvider>
   )

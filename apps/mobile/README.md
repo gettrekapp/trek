@@ -148,6 +148,44 @@ npx expo run:android   # or an Android emulator
 Nothing in the repo's checks runs these: they need Xcode or the Android SDK, and a device
 or simulator.
 
+## Over-the-air updates
+
+Builds 11 and later take JS-only updates through EAS Update. The preview and production build
+profiles each have their own channel. The `development` channel is there for completeness: dev
+builds never check (`__DEV__`), and a dev client picks updates itself.
+
+The runtime version is the native fingerprint (`@expo/fingerprint`): an update reaches only
+builds whose fingerprint matches the tree it was published from. Besides native modules, the
+fingerprint covers all of `app.json` and `app.config.js`'s resolved config (plugins and their
+props, `extra`), the icons, and `package.json`'s scripts. A change to any of those needs a new
+store build before updates reach it. Compare a tree against a build with
+`npx eas-cli@27.10.0 fingerprint:compare`.
+
+Publish from `apps/mobile`:
+
+```bash
+npm run update:production -- --message "What changed"
+npm run update:preview -- --message "What changed"
+```
+
+`scripts/publish-update.mjs` resolves the config the way the EAS builds do, so the fingerprints
+match:
+
+- It sets `TREK_APNS_MODE=production`, because `eas update` doesn't read a build profile's `env`.
+- It passes `--environment`, so the EAS environment's variables (relay URL and key) are used.
+  Keep them plain-text or sensitive. A secret variable can't be read locally, and it would
+  change `extra`.
+- It refuses to publish when a local `google-services.json`, or `GOOGLE_SERVICES_JSON` /
+  `TREK_RELAY_*` in the shell, would give the update a config no build has. If
+  `GOOGLE_SERVICES_JSON` ever becomes an EAS file variable, check with `fingerprint:compare`
+  that the update still matches.
+
+The phone checks on launch and when it comes back to the foreground (at most every 15 minutes,
+`src/logic/updates.ts`), downloads the update, and shows **Update ready** with Restart and
+Later. A downloaded update also loads on the next cold start. Rollbacks
+(`npx eas-cli@27.10.0 update:rollback`, either to an earlier update or to the build's own
+bundle) arrive the same way.
+
 ## Store review
 
 Reviewers have no Trek server, so the app has a built-in demo: **Try the demo** on the first

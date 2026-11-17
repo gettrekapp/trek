@@ -11,6 +11,7 @@
       "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "android": {
         "buildType": "apk"
       }
@@ -24,6 +25,7 @@
     "preview": {
       "extends": "base",
       "distribution": "internal",
+      "channel": "preview",
       "env": {
         "TREK_APNS_MODE": "production"
       },
@@ -34,6 +36,7 @@
     "production": {
       "extends": "base",
       "autoIncrement": true,
+      "channel": "production",
       "env": {
         "TREK_APNS_MODE": "production"
       }

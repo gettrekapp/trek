@@ -14,7 +14,7 @@
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
 // tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
 // and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus),
-// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label).
+// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label), and over-the-air updates (when the phone checks, when the restart banner shows).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -1949,6 +1949,7 @@ import { MAX_AUTOMATION_NAME as SERVER_MAX_AUTOMATION_NAME, MAX_AUTOMATION_PROMP
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { historyHandlers } from '../server/src/history/historyHandlers.ts'
 import { HISTORY_KINDS } from '../src/shared/model/history.ts'
+import { FOREGROUND_CHECK_INTERVAL_MS, bannerVisible, pendingKey, shouldCheck, shouldFetch } from '../apps/mobile/src/logic/updates.ts'
 
 /** Monday 2026-01-05 12:00 UTC: 07:00 in New York, 21:00 in Tokyo. */
 const A_NOW = Date.UTC(2026, 0, 5, 12, 0)
@@ -2963,4 +2964,40 @@ test('tag filter: ids of deleted tags drop out, picking toggles, and the label',
   assert.deepEqual(tagFilterLabel(settings, ['wip']), { text: 'Tag: WIP', colors: ['#111'] })
   assert.deepEqual(tagFilterLabel(settings, [UNTAGGED]), { text: 'Tag: Untagged', colors: [] })
   assert.deepEqual(tagFilterLabel(settings, ['wip', 'fe', UNTAGGED]), { text: 'Tag: 3 tags', colors: ['#111', '#222'] })
+})
+
+test('updates: when the phone checks for an over-the-air update', () => {
+  const base = { enabled: true, isDev: false, inFlight: false, lastCheckAt: null, now: 1_000_000 }
+  assert.equal(FOREGROUND_CHECK_INTERVAL_MS, 15 * 60 * 1000)
+  assert.equal(shouldCheck({ ...base, reason: 'launch' }), true)
+  assert.equal(shouldCheck({ ...base, reason: 'foreground' }), true, 'never checked yet')
+  // Off: a build without updates, a dev build, or a check already running.
+  assert.equal(shouldCheck({ ...base, enabled: false, reason: 'launch' }), false)
+  assert.equal(shouldCheck({ ...base, isDev: true, reason: 'launch' }), false)
+  assert.equal(shouldCheck({ ...base, inFlight: true, reason: 'launch' }), false)
+  assert.equal(shouldCheck({ ...base, inFlight: true, reason: 'foreground' }), false)
+  // Back in the foreground: at most once per interval.
+  const now = base.now
+  assert.equal(shouldCheck({ ...base, reason: 'foreground', lastCheckAt: now - FOREGROUND_CHECK_INTERVAL_MS + 1 }), false)
+  assert.equal(shouldCheck({ ...base, reason: 'foreground', lastCheckAt: now - FOREGROUND_CHECK_INTERVAL_MS }), true)
+  // A launch checks whatever the last check was.
+  assert.equal(shouldCheck({ ...base, reason: 'launch', lastCheckAt: now - 1 }), true)
+})
+
+test('updates: the restart banner shows for a downloaded update not put off', () => {
+  assert.equal(bannerVisible({ pendingUpdateId: null, dismissedUpdateId: null }), false, 'nothing downloaded')
+  assert.equal(bannerVisible({ pendingUpdateId: 'u1', dismissedUpdateId: null }), true)
+  assert.equal(bannerVisible({ pendingUpdateId: 'u1', dismissedUpdateId: 'u1' }), false, 'Later')
+  assert.equal(bannerVisible({ pendingUpdateId: 'u2', dismissedUpdateId: 'u1' }), true, 'a newer update shows again')
+})
+
+test('updates: what a check downloads, and what Later is keyed on', () => {
+  assert.equal(shouldFetch({ isAvailable: true }), true)
+  assert.equal(shouldFetch({ isAvailable: false }), false)
+  assert.equal(shouldFetch({ isAvailable: false, isRollBackToEmbedded: true }), true, 'a rollback to the built-in bundle')
+  assert.equal(shouldFetch({ isAvailable: false, isRollBackToEmbedded: false }), false)
+  assert.equal(pendingKey({ isUpdatePending: false, updateId: 'u1' }), null, 'nothing waiting')
+  assert.equal(pendingKey({ isUpdatePending: true, updateId: 'u1', createdAt: new Date(5) }), 'u1')
+  assert.equal(pendingKey({ isUpdatePending: true, updateId: undefined, createdAt: new Date(5) }), 'rollback:5', 'a rollback has no id')
+  assert.equal(pendingKey({ isUpdatePending: true }), 'rollback:0')
 })
