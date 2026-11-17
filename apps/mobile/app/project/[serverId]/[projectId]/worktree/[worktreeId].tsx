@@ -9,24 +9,25 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
-import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
-import { branchParts, type BranchPart } from '../../../../src/logic/worktreeList.ts'
-import { rowGit, sessionMark } from '../../../../src/logic/worktreeRow.ts'
-import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../src/logic/worktrees.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { useServers } from '../../../../src/state/ServersProvider.tsx'
-import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../src/state/teardown.ts'
-import { confirmAlert } from '../../../../src/ui/alerts.ts'
-import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { PrNotice } from '../../../../src/ui/PrNotice.tsx'
-import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
-import { DecisionActions } from '../../../../src/ui/DecisionActions.tsx'
-import { StateMark } from '../../../../src/ui/StateMark.tsx'
-import { STATUS_TEXT } from '../../../../src/ui/status.ts'
-import { colors, ui } from '../../../../src/ui/theme.ts'
-import { knownPtySize } from '../../../../src/state/ptySizes.ts'
+import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../../src/shared.ts'
+import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
+import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
+import { rowGit, sessionMark } from '../../../../../src/logic/worktreeRow.ts'
+import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../../src/state/teardown.ts'
+import { confirmAlert } from '../../../../../src/ui/alerts.ts'
+import { BranchDetails } from '../../../../../src/ui/BranchDetails.tsx'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { PrNotice } from '../../../../../src/ui/PrNotice.tsx'
+import { useUiSelection } from '../../../../../src/ui/useUiSelection.ts'
+import { DecisionActions } from '../../../../../src/ui/DecisionActions.tsx'
+import { StateMark } from '../../../../../src/ui/StateMark.tsx'
+import { STATUS_TEXT } from '../../../../../src/ui/status.ts'
+import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { knownPtySize } from '../../../../../src/state/ptySizes.ts'
+import { changesRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 
 /**
  * A new session's size: session.start and session.restart need one, and the phone never resizes
@@ -129,7 +130,7 @@ export default function WorktreeScreen(): React.JSX.Element {
         ...(choice.type ? { sessionTypeId: choice.type.id } : {})
       })
     )) as { sessionId: string } | undefined
-    if (started) router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: started.sessionId } })
+    if (started) router.push(sessionRoute(serverId, projectId, started.sessionId))
   }
 
   const confirmClose = (sessionId: string, title: string): void => {
@@ -275,7 +276,7 @@ export default function WorktreeScreen(): React.JSX.Element {
                       accessibilityRole="button"
                       accessibilityLabel={`${s.title}, ${STATUS_TEXT[s.status]}${s.decision ? `, decision: ${s.decision.question}` : ''}`}
                       style={{ flexDirection: 'row', gap: 12 }}
-                      onPress={() => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: s.id } })}
+                      onPress={() => router.push(sessionRoute(serverId, projectId, s.id))}
                     >
                       <StateMark mark={mark} />
                       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -327,7 +328,7 @@ export default function WorktreeScreen(): React.JSX.Element {
             <View style={ui.section}>
               <Text style={ui.sectionText}>Worktree</Text>
             </View>
-            <Pressable accessibilityRole="button" style={listRow} onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })}>
+            <Pressable accessibilityRole="button" style={listRow} onPress={() => router.push(changesRoute(serverId, projectId, worktreeId))}>
               <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>Changes</Text>
               <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
             </Pressable>

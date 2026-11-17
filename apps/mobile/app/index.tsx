@@ -15,6 +15,7 @@ import { DismissNotice } from '../src/ui/PrNotice.tsx'
 import { StateMark } from '../src/ui/StateMark.tsx'
 import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
+import { projectRoute } from '../src/logic/routes.ts'
 
 export default function AttentionScreen(): React.JSX.Element {
   const { ready, servers, attention, addDemo } = useServers()
@@ -42,7 +43,7 @@ export default function AttentionScreen(): React.JSX.Element {
 
   const open = (item: AttentionItem): void => {
     const route = notificationRoute(item)
-    if (route) router.push(route)
+    if (route) router.push(route, { withAnchor: true })
   }
 
   return (
@@ -62,7 +63,7 @@ export default function AttentionScreen(): React.JSX.Element {
               if (demoBusy) return
               setDemoBusy(true)
               void addDemo()
-                .then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
+                .then((where) => router.navigate(projectRoute(where.serverId, where.projectId)))
                 .finally(() => setDemoBusy(false))
             }}
           />

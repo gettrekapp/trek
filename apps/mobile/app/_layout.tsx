@@ -46,7 +46,7 @@ function NotificationRouting(): null {
           // Not available (no native module).
         }
       }
-      if (route) router.push(route)
+      if (route) router.push(route, { withAnchor: true })
     }
     pending.current = still
   }
@@ -104,6 +104,8 @@ export default function RootLayout(): React.JSX.Element {
         <Stack.Screen name="pair" options={{ title: 'Add server' }} />
         <Stack.Screen name="projects" options={{ title: 'Projects', animation: 'none', headerBackVisible: false }} />
         <Stack.Screen name="push/[serverId]" options={{ title: 'Push notifications' }} />
+        {/* The project's own stack draws its headers (app/project/[serverId]/[projectId]/_layout.tsx). */}
+        <Stack.Screen name="project/[serverId]/[projectId]" options={{ headerShown: false }} />
       </Stack>
       </PushProvider>
     </ServersProvider>

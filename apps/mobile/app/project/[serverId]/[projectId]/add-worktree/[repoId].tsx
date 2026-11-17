@@ -5,12 +5,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { branchSuggestions, parsePullRequestUrl, prBranch } from '../../../../src/logic/worktrees.ts'
-import { repoFolder, worktreeOnBranch } from '../../../../src/logic/worktreeList.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { noticeAlert } from '../../../../src/ui/alerts.ts'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { colors, ui } from '../../../../src/ui/theme.ts'
+import { branchSuggestions, parsePullRequestUrl, prBranch } from '../../../../../src/logic/worktrees.ts'
+import { repoFolder, worktreeOnBranch } from '../../../../../src/logic/worktreeList.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { noticeAlert } from '../../../../../src/ui/alerts.ts'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { worktreeRoute } from '../../../../../src/logic/routes.ts'
 
 export default function AddWorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, repoId } = useLocalSearchParams<{ serverId: string; projectId: string; repoId: string }>()
@@ -95,7 +96,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   /** The worktree's screen instead of this one, after any link warnings are read. */
   const open = async (worktreeId: string, linkWarnings?: string[]): Promise<void> => {
     await warn(linkWarnings)
-    if (shown.current) router.replace({ pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })
+    if (shown.current) router.replace(worktreeRoute(serverId, projectId, worktreeId))
   }
 
   const create = (): void => {

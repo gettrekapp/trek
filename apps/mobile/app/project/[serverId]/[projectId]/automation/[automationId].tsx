@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { CAPABILITY, type AgentInfo, type Automation, type ServerConnection } from '../../../../src/shared.ts'
+import { CAPABILITY, type AgentInfo, type Automation, type ServerConnection } from '../../../../../src/shared.ts'
 import {
   AUTOMATION_CHANGED,
   AUTOMATION_GONE,
@@ -27,12 +27,13 @@ import {
   turnOffQuestion,
   turnOffStillMatches,
   type AutomationEdit
-} from '../../../../src/logic/automations.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { useServers } from '../../../../src/state/ServersProvider.tsx'
-import { confirmAlert } from '../../../../src/ui/alerts.ts'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { colors, ui } from '../../../../src/ui/theme.ts'
+} from '../../../../../src/logic/automations.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { confirmAlert } from '../../../../../src/ui/alerts.ts'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { sessionRoute } from '../../../../../src/logic/routes.ts'
 
 /** What a request was for: its error shows under that part of the screen. */
 type Action = 'save' | 'toggle' | 'run'
@@ -126,7 +127,7 @@ export default function AutomationScreen(): React.JSX.Element {
     }
   }
 
-  const openSession = (sessionId: string): void => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId } })
+  const openSession = (sessionId: string): void => router.push(sessionRoute(serverId, projectId, sessionId))
 
   const beginEdit = (): void => {
     if (!automation) return

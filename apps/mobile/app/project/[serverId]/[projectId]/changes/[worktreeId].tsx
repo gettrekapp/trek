@@ -25,10 +25,10 @@ import {
   type ServerConnection,
   type Worktree,
   type WorktreeChanges
-} from '../../../../src/shared.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { useServers } from '../../../../src/state/ServersProvider.tsx'
-import { classifyDiff } from '../../../../src/logic/diff.ts'
+} from '../../../../../src/shared.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { classifyDiff } from '../../../../../src/logic/diff.ts'
 import {
   barText,
   boxAfter,
@@ -49,13 +49,13 @@ import {
   writingOn,
   type CommentEditor,
   type ReviewAction
-} from '../../../../src/logic/review.ts'
-import { confirmAlert } from '../../../../src/ui/alerts.ts'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../src/ui/CommentBox.tsx'
-import { FileDiff } from '../../../../src/ui/FileDiff.tsx'
-import { ReviewBar } from '../../../../src/ui/ReviewBar.tsx'
-import { colors, ui } from '../../../../src/ui/theme.ts'
+} from '../../../../../src/logic/review.ts'
+import { confirmAlert } from '../../../../../src/ui/alerts.ts'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../../src/ui/CommentBox.tsx'
+import { FileDiff } from '../../../../../src/ui/FileDiff.tsx'
+import { ReviewBar } from '../../../../../src/ui/ReviewBar.tsx'
+import { colors, ui } from '../../../../../src/ui/theme.ts'
 
 interface Params {
   serverId: string

@@ -7,19 +7,22 @@
 // the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
 import { useRef } from 'react'
 import { ScrollView, Pressable, Text, View } from 'react-native'
-import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { CAPABILITY } from '../../../src/shared.ts'
-import { automationsRow } from '../../../src/logic/automations.ts'
-import { activeTicketProviders } from '../../../src/logic/tickets.ts'
-import { branchParts } from '../../../src/logic/worktreeList.ts'
-import { rowGit, rowLabel, rowMark, rowReason, rowSaved } from '../../../src/logic/worktreeRow.ts'
-import { useConnectionNotice, useServer, useTopic } from '../../../src/state/hooks.ts'
-import { PromotePrompt } from '../../../src/ui/PromotePrompt.tsx'
-import { useUiSelection } from '../../../src/ui/useUiSelection.ts'
-import { StateMark } from '../../../src/ui/StateMark.tsx'
-import { colors, ui } from '../../../src/ui/theme.ts'
+import { router, Stack, useLocalSearchParams, useNavigation } from 'expo-router'
+import { CAPABILITY } from '../../../../src/shared.ts'
+import { automationsRow } from '../../../../src/logic/automations.ts'
+import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
+import { branchParts } from '../../../../src/logic/worktreeList.ts'
+import { rowGit, rowLabel, rowMark, rowReason, rowSaved } from '../../../../src/logic/worktreeRow.ts'
+import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
+import { PromotePrompt } from '../../../../src/ui/PromotePrompt.tsx'
+import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
+import { HeaderBack } from '../../../../src/ui/HeaderBack.tsx'
+import { StateMark } from '../../../../src/ui/StateMark.tsx'
+import { colors, ui } from '../../../../src/ui/theme.ts'
+import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 
 export default function ProjectScreen(): React.JSX.Element {
+  const navigation = useNavigation()
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
   const topic = useTopic(serverId, `project:${projectId}`)
   useUiSelection(serverId, projectId, { worktreeId: null, sessionId: null })
@@ -35,7 +38,12 @@ export default function ProjectScreen(): React.JSX.Element {
   const automations = topic.state === 'ready' && hasAutomations.current ? automationsRow(topic.snapshot.automations) : null
   return (
     <ScrollView style={ui.screen} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
-      <Stack.Screen options={{ title: topic.state === 'ready' ? topic.snapshot.name : 'Project' }} />
+      <Stack.Screen
+        options={{
+          title: topic.state === 'ready' ? topic.snapshot.name : 'Project',
+          headerLeft: () => <HeaderBack onPress={() => navigation.getParent()?.goBack()} />
+        }}
+      />
       <PromotePrompt serverId={serverId} projectId={projectId} project={topic.state === 'ready' ? topic.snapshot : null} />
       {notice || topic.state !== 'ready' ? (
         <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
@@ -52,7 +60,7 @@ export default function ProjectScreen(): React.JSX.Element {
                   accessibilityRole="button"
                   accessibilityLabel={`Add worktree to ${repo.name}`}
                   hitSlop={10}
-                  onPress={() => router.push({ pathname: '/add-worktree/[serverId]/[projectId]/[repoId]', params: { serverId, projectId, repoId: repo.id } })}
+                  onPress={() => router.push(addWorktreeRoute(serverId, projectId, repo.id))}
                 >
                   <Text style={{ color: colors.accent, fontSize: 13 }}>Add worktree</Text>
                 </Pressable>
@@ -74,7 +82,7 @@ export default function ProjectScreen(): React.JSX.Element {
                     accessibilityRole="button"
                     accessibilityLabel={rowLabel({ name, isMain: wt.isMain, mark, saved, git, line })}
                     style={({ pressed }) => [ui.listRow, pressed ? { backgroundColor: colors.panel } : null]}
-                    onPress={() => router.push({ pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId: wt.id } })}
+                    onPress={() => router.push(worktreeRoute(serverId, projectId, wt.id))}
                   >
                     <StateMark mark={mark} />
                     <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -118,7 +126,7 @@ export default function ProjectScreen(): React.JSX.Element {
             accessibilityLabel={automations.missed ? `${automations.text}, missed runs` : automations.text}
             accessibilityHint="Opens the project's automations"
             style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
-            onPress={() => router.push({ pathname: '/automations/[serverId]/[projectId]', params: { serverId, projectId } })}
+            onPress={() => router.push(automationsRoute(serverId, projectId))}
           >
             <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{automations.text}</Text>
             {automations.missed ? <Text style={{ color: colors.attention, fontSize: 13 }}>missed runs</Text> : null}
