@@ -11,7 +11,7 @@ import { colors, ui } from '../src/ui/theme.ts'
 const needsPairing = (status: ServerView['status']): boolean => status === 'needs-auth' || status === 'no-token'
 
 export default function ServersScreen(): React.JSX.Element {
-  const { servers, remove, addDemo } = useServers()
+  const { ready, servers, remove, addDemo } = useServers()
   const push = usePush()
   const confirmRemove = (id: string, name: string): void => {
     Alert.alert(
@@ -27,7 +27,7 @@ export default function ServersScreen(): React.JSX.Element {
   }
   const hasDemo = servers.some((s) => s.demo)
   const openDemo = (): void => {
-    void addDemo().then((where) => router.push({ pathname: '/project/[serverId]/[projectId]', params: where }))
+    void addDemo().then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
   }
   const confirmRemoveDemo = (id: string): void => {
     Alert.alert('Remove the demo?', 'What you changed in it is discarded. You can try it again any time.', [
@@ -94,7 +94,7 @@ export default function ServersScreen(): React.JSX.Element {
             <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
               Add server
             </Link>
-            <Button ghost label={hasDemo ? 'Open the demo' : 'Try the demo'} onPress={openDemo} />
+            <Button ghost disabled={!ready} label={hasDemo ? 'Open the demo' : 'Try the demo'} onPress={openDemo} />
           </View>
         }
       />

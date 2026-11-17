@@ -129,7 +129,9 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   }, [disconnect, bump])
 
   useEffect(() => {
-    void loadServers().then((list) => {
+    void loadServers().then((loaded) => {
+      // Entries added while loading (the demo, tapped early) are kept.
+      const list = [...loaded, ...savedRef.current.filter((s) => !loaded.some((l) => l.id === s.id))]
       setSaved(list)
       savedRef.current = list
       setReady(true)
@@ -180,6 +182,8 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
     for (const item of attention) notified.current.add(item.key)
     if (appState.current === 'active') return
     for (const item of fresh) {
+      // The demo is gone after a relaunch: a notification for it would lead nowhere.
+      if (item.serverId === DEMO_SERVER_ID) continue
       const { title, body, data } = notificationContent(item)
       void Notifications.scheduleNotificationAsync({ content: { title, body, data: { ...data } }, trigger: null }).catch(() => {})
     }

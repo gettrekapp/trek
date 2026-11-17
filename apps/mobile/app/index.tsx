@@ -53,10 +53,10 @@ export default function AttentionScreen(): React.JSX.Element {
           <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
             Add server
           </Link>
-          <Text style={[ui.muted, { marginTop: 16 }]}>No server yet? Try Trek with a built-in sample project.</Text>
+          <Text style={[ui.muted, { marginTop: 16 }]}>Or try Trek with a built-in sample project.</Text>
           <Button
             label="Try the demo"
-            onPress={() => void addDemo().then((where) => router.push({ pathname: '/project/[serverId]/[projectId]', params: where }))}
+            onPress={() => void addDemo().then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))}
           />
         </View>
       ) : (
