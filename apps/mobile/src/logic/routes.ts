@@ -12,6 +12,7 @@ export const sessionRoute = (serverId: string, projectId: string, sessionId: str
 export const changesRoute = (serverId: string, projectId: string, worktreeId: string) => ({ pathname: `${P}/changes/[worktreeId]` as const, params: { serverId, projectId, worktreeId } })
 export const historyRoute = (serverId: string, projectId: string, repoId: string, branch: string) => ({ pathname: `${P}/history/[repoId]` as const, params: { serverId, projectId, repoId, branch: branchParam(branch) } })
 export const addWorktreeRoute = (serverId: string, projectId: string, repoId: string) => ({ pathname: `${P}/add-worktree/[repoId]` as const, params: { serverId, projectId, repoId } })
+export const globalRoute = (serverId: string, projectId: string) => ({ pathname: `${P}/global` as const, params: { serverId, projectId } as Base })
 export const automationsRoute = (serverId: string, projectId: string) => ({ pathname: `${P}/automations` as const, params: { serverId, projectId } as Base })
 export const automationRoute = (serverId: string, projectId: string, automationId: string) => ({ pathname: `${P}/automation/[automationId]` as const, params: { serverId, projectId, automationId } })
 

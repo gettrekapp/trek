@@ -32,6 +32,7 @@ import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/te
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
+import { globalAgentLabel, globalGroupOpen, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
 import {
@@ -208,6 +209,9 @@ test("the session placeholder: a cold start's not-connected topic is Connecting�
   assert.equal(sessionPlaceholder({ hasSession: false, topic: 'ready', status: 'connected' }), 'This session is gone.')
   assert.equal(sessionPlaceholder({ hasSession: false, topic: 'loading', status: 'connecting' }), 'Loading…')
   assert.match(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), /^Not running/)
+  assert.equal(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the worktree, or load the worktree.')
+  // A Global session has no worktree to load: it is restarted from the Global screen.
+  assert.equal(sessionPlaceholder({ hasSession: true, global: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the Global screen: ⋯, then Restart.')
 })
 
 test('generations are per server: bumping one leaves the others', () => {
@@ -2767,6 +2771,7 @@ test('tablet layout: the sidebar selection comes from the route', () => {
   // History names a repository and a branch (history.ts' branchParam encoding).
   assert.deepEqual(sidebarSelection([...base, 'history', '[repoId]'], { repoId: 'r1', branch: 'feature~002fx' }, project), { worktreeId: 'w2', sessionId: null, screen: 'history' })
   assert.deepEqual(sidebarSelection([...base, 'automations'], {}, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'global'], {}, project), { worktreeId: null, sessionId: null, screen: 'global' })
   assert.deepEqual(sidebarSelection([...base, 'automation', '[automationId]'], { automationId: 'a' }, project), { worktreeId: null, sessionId: null, screen: 'automations' })
   assert.deepEqual(sidebarSelection([...base, 'add-worktree', '[repoId]'], { repoId: 'r1' }, project), { worktreeId: null, sessionId: null, screen: null })
   // An unknown worktree id selects nothing.
@@ -2834,4 +2839,67 @@ test("layout: a project's stack found in the root state; the screens right above
   assert.deepEqual([...aboveIndex(pane)], ['w'])
   assert.deepEqual([...aboveIndex([{ key: 'i', name: 'index' }])], [])
   assert.deepEqual([...aboveIndex([{ key: 's', name: 'session/[sessionId]' }])], [])
+})
+
+test('global sessions: automation run tabs are not normal Global sessions', () => {
+  const run = { id: 'g-run', status: 'done', context: { kind: 'automation', automationId: 'a1' } }
+  const a = { id: 'g1', status: 'idle' }
+  const b = { id: 'g2', status: 'working', context: undefined }
+  assert.deepEqual(normalGlobalSessions([a, run, b]).map((s) => s.id), ['g1', 'g2'])
+  assert.deepEqual(normalGlobalSessions(undefined), [])
+})
+
+test('global sessions: the project row', () => {
+  const repo = { id: 'r1' }
+  const s = (id, extra = {}) => ({ id, status: 'idle', ...extra })
+  const run = s('g-run', { status: 'attention', decision: { question: 'q', at: 1 }, context: { kind: 'automation', automationId: 'a' } })
+  // No repositories: the server refuses a Global session, so there is no row.
+  assert.equal(globalRow({ repositories: [], globalSessions: [] }), null)
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [] }), { text: 'Global · no sessions', mark: null })
+  // A run tab is neither counted nor marked.
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [run] }), { text: 'Global · no sessions', mark: null })
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [s('g1')] }), { text: 'Global · 1 session', mark: null })
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [s('g1'), s('g2', { status: 'attention' })] }), { text: 'Global · 2 sessions', mark: 'attention' })
+  // A decision outranks a bell.
+  assert.deepEqual(
+    globalRow({ repositories: [repo], globalSessions: [s('g1', { status: 'attention' }), s('g2', { decision: { question: 'q', at: 1 } })] }),
+    { text: 'Global · 2 sessions', mark: 'decision' }
+  )
+})
+
+test('global sessions: the Global agent label', () => {
+  const agents = [
+    { provider: 'claude', label: 'Claude', installed: true },
+    { provider: 'codex', label: 'Codex', installed: true },
+    { provider: 'grok', label: 'Grok', installed: true }
+  ]
+  const claude = { provider: 'claude' }
+  // Not known before server.agents answers.
+  assert.equal(globalAgentLabel({}, undefined, agents), null)
+  // The project's Global agent, else its default, else the server's.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'codex' } }, claude, agents), 'Codex')
+  assert.equal(globalAgentLabel({ llmDefault: { provider: 'codex' } }, claude, agents), 'Codex')
+  assert.equal(globalAgentLabel({}, { provider: 'codex' }, agents), 'Codex')
+  // An agent without Trek's tools (Grok) is passed over, as the server does.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'grok' } }, claude, agents), 'Claude')
+  // A provider the list does not name: its id.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'gemini' } }, claude, agents), 'gemini')
+})
+
+test('global sessions: the sidebar group opens for the Global screen and its sessions', () => {
+  const sessions = [{ id: 'g1' }, { id: 'g-run', context: { kind: 'automation', automationId: 'a' } }]
+  assert.equal(globalGroupOpen({ screen: 'global', sessionId: null }, sessions), true)
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g1' }, sessions), true)
+  // A run tab belongs to Automations.
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g-run' }, sessions), false)
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 's1' }, sessions), false)
+  assert.equal(globalGroupOpen({ screen: null, sessionId: null }, sessions), false)
+})
+
+test('routes: the Global screen', () => {
+  const r = routes.globalRoute('srv', 'p1')
+  assert.deepEqual(r, { pathname: '/project/[serverId]/[projectId]/global', params: { serverId: 'srv', projectId: 'p1' } })
+  const base = ['project', '[serverId]', '[projectId]']
+  assert.equal(routes.showsRoute([...base, 'global'], { serverId: 'srv', projectId: 'p1' }, r), true)
+  assert.equal(routes.showsRoute([...base, 'automations'], { serverId: 'srv', projectId: 'p1' }, r), false)
 })

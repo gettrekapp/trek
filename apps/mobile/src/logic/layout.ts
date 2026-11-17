@@ -22,7 +22,7 @@ export function shouldLockPortrait(deviceType: number | null): boolean {
 export interface SidebarSelection {
   worktreeId: string | null
   sessionId: string | null
-  screen: 'worktree' | 'session' | 'changes' | 'history' | 'automations' | null
+  screen: 'worktree' | 'session' | 'changes' | 'history' | 'automations' | 'global' | null
 }
 
 interface SelectionProject {
@@ -40,7 +40,8 @@ function hasWorktree(project: SelectionProject | null, id: string): boolean {
 /**
  * The selection for a route under app/project/[serverId]/[projectId]: `segments` as expo-router's
  * useSegments gives them, `params` as useGlobalSearchParams does. A Global session, an unknown id or
- * a project not loaded yet selects no worktree.
+ * a project not loaded yet selects no worktree (ui/ProjectSidebar.tsx opens its Global group for a
+ * Global session: logic/globalSessions.ts' globalGroupOpen).
  */
 export function sidebarSelection(segments: readonly string[], params: Params, project: SelectionProject | null): SidebarSelection {
   const kind = segments[3]
@@ -59,6 +60,7 @@ export function sidebarSelection(segments: readonly string[], params: Params, pr
     const worktree = repo ? worktreeOnBranch(repo as { worktrees: readonly { branch: string; missing: boolean; id: string }[] }, branchFromParam(params.branch)) : undefined
     return { worktreeId: worktree?.id ?? null, sessionId: null, screen: 'history' }
   }
+  if (kind === 'global') return { worktreeId: null, sessionId: null, screen: 'global' }
   if (kind === 'automations' || kind === 'automation') return { worktreeId: null, sessionId: null, screen: 'automations' }
   return { worktreeId: null, sessionId: null, screen: null }
 }

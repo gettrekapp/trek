@@ -1,18 +1,18 @@
 // A worktree (6a): its branch's tag, ticket, pull request and git state on one line; its pull
-// request's notice (ui/PrNotice.tsx); its sessions first, each a row with its state mark, a
-// decision answered in place, and Restart and Close behind its ⋯; New session (agent and session
-// type); then a short list: Changes (its review), Branch details (ui/BranchDetails.tsx: tag,
-// custom tags, note, ticket, pull request and its watch), Load or Unload sessions, and Remove
+// request's notice (ui/PrNotice.tsx); its sessions first (ui/SessionList.tsx), each a row with its
+// state mark, a decision answered in place, and Restart and Close behind its ⋯; New session (agent
+// and session type); then a short list: Changes (its review), Branch details (ui/BranchDetails.tsx:
+// tag, custom tags, note, ticket, pull request and its watch), Load or Unload sessions, and Remove
 // worktree (not for the main checkout; with its dev stack or Docker VM running, only the desktop
 // can). Its path is at the bottom.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../../src/shared.ts'
 import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
-import { rowGit, sessionMark } from '../../../../../src/logic/worktreeRow.ts'
+import { rowGit } from '../../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
 import { changesRoute, projectRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
@@ -22,12 +22,9 @@ import { confirmAlert } from '../../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../../src/ui/Button.tsx'
 import { PrNotice } from '../../../../../src/ui/PrNotice.tsx'
+import { SessionList } from '../../../../../src/ui/SessionList.tsx'
 import { useUiSelection } from '../../../../../src/ui/useUiSelection.ts'
-import { DecisionActions } from '../../../../../src/ui/DecisionActions.tsx'
-import { StateMark } from '../../../../../src/ui/StateMark.tsx'
-import { STATUS_TEXT } from '../../../../../src/ui/status.ts'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
-import { knownPtySize } from '../../../../../src/state/ptySizes.ts'
 
 /**
  * A new session's size: session.start and session.restart need one, and the phone never resizes
@@ -35,9 +32,6 @@ import { knownPtySize } from '../../../../../src/state/ptySizes.ts'
  * attaches and sizes it to its window.
  */
 const START_SIZE = { cols: 80, rows: 24 }
-
-/** A restart keeps the size the phone last saw the session's pty at (else START_SIZE, as for a new one). */
-const restartSize = (serverId: string, sessionId: string): { cols: number; rows: number } => knownPtySize(serverId, sessionId) ?? START_SIZE
 
 /** Said when a removal that did not happen leaves the worktree unloaded (logic/worktrees.ts' reloadFailed). */
 const RELOAD_FAILED = 'It was unloaded and could not be loaded again: use Load.'
@@ -133,13 +127,6 @@ export default function WorktreeScreen(): React.JSX.Element {
     if (started) router.push(sessionRoute(serverId, projectId, started.sessionId))
   }
 
-  const confirmClose = (sessionId: string, title: string): void => {
-    Alert.alert(`Close ${title}?`, 'The session stops. Its history stays on the server.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Close', style: 'destructive', onPress: () => void run(() => req!.request('session.close', { projectId, sessionId })) }
-    ])
-  }
-
   // The desktop's order (backendV2.ts' worktree remove) without what only it can do: with the dev
   // stack or VM running, nothing is done here. Then the question, that check again, the unload,
   // the removal, and the discard question when git refuses for changes (logic/worktrees.ts).
@@ -212,15 +199,6 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
   }
 
-  // Restart and Close are behind a session's ⋯, so a row is one tap target and they are not hit by mistake.
-  const sessionMenu = (sessionId: string, title: string): void => {
-    Alert.alert(title, undefined, [
-      { text: 'Restart', onPress: () => void run(() => req!.request('session.restart', { projectId, sessionId, ...restartSize(serverId, sessionId) })) },
-      { text: 'Close…', style: 'destructive', onPress: () => confirmClose(sessionId, title) },
-      { text: 'Cancel', style: 'cancel' }
-    ])
-  }
-
   const trackers = project ? activeTicketProviders(server?.connection.welcome, project.settings) : []
   const facts = project && found ? branchParts(project.settings, found.repo, found.worktree.branch, trackers) : []
   const git = worktree ? rowGit(worktree) : null
@@ -268,41 +246,15 @@ export default function WorktreeScreen(): React.JSX.Element {
               {worktree.loaded ? null : <Text style={{ color: colors.muted, fontSize: 12 }}>saved, not running</Text>}
             </View>
             {worktree.sessions.length === 0 ? <Text style={[ui.muted, { paddingHorizontal: 16, paddingVertical: 8 }]}>No sessions.</Text> : null}
-            {worktree.sessions.map((s) => {
-              const mark = worktree.loaded ? sessionMark(s) : 'none'
-              const wants = mark === 'attention' || mark === 'done'
-              return (
-                <View key={s.id} style={[ui.listRow, { paddingVertical: 0, paddingRight: 0 }]}>
-                  <View style={{ flex: 1, minWidth: 0, paddingVertical: 12 }}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`${s.title}, ${STATUS_TEXT[s.status]}${s.decision ? `, decision: ${s.decision.question}` : ''}`}
-                      style={{ flexDirection: 'row', gap: 12 }}
-                      onPress={() => router.push(sessionRoute(serverId, projectId, s.id))}
-                    >
-                      <StateMark mark={mark} />
-                      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                        <Text numberOfLines={1} style={{ fontSize: 15, fontWeight: wants ? '600' : '500', color: colors.text }}>
-                          {s.title}
-                        </Text>
-                        <Text numberOfLines={2} style={{ fontSize: 13, color: s.decision ? colors.attention : colors.muted }}>
-                          {s.decision ? `Decision: ${s.decision.question}` : STATUS_TEXT[s.status]}
-                          {s.queue.length ? ` · ${s.queue.length} queued` : ''}
-                        </Text>
-                      </View>
-                    </Pressable>
-                    {s.decision ? (
-                      <View style={{ paddingLeft: 28 }}>
-                        <DecisionActions serverId={serverId} projectId={projectId} sessionId={s.id} />
-                      </View>
-                    ) : null}
-                  </View>
-                  <Pressable accessibilityRole="button" accessibilityLabel={`${s.title}: restart or close`} disabled={off} onPress={() => sessionMenu(s.id, s.title)} style={{ paddingHorizontal: 16, paddingVertical: 12, opacity: off ? 0.4 : 1 }}>
-                    <Text style={{ color: colors.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
-                  </Pressable>
-                </View>
-              )
-            })}
+            <SessionList
+              serverId={serverId}
+              projectId={projectId}
+              sessions={worktree.sessions}
+              running={worktree.loaded}
+              disabled={off}
+              run={run}
+              request={(method, params) => req!.request(method, params)}
+            />
             <View style={{ paddingHorizontal: 16, paddingTop: 14, gap: 8 }}>
               <Button label={picking ? 'Cancel' : 'New session'} ghost={picking} disabled={off} onPress={() => setPicking((p) => !p)} />
             </View>

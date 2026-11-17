@@ -54,6 +54,13 @@ export const SCROLLBACK: Record<string, string> = {
     '• Created src/auth/session.test.ts',
     '• Running vitest --run src/auth'
   ),
+  's-global-claude': lines(
+    dim('claude · Global'),
+    '',
+    `${bold('>')} Which branches have open pull requests?`,
+    '',
+    'Two: feature/checkout-redesign (#42, checks passing) and fix/login-timeout (#44, waiting on a decision).'
+  ),
   's-nightly': lines(
     dim('claude · Automation · Nightly dependency check'),
     '',

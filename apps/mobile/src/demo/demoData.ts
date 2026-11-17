@@ -166,6 +166,7 @@ export function initialDemoState(now: number): DemoState {
     decision: { question: 'Raise the idle timeout to 30 minutes, or refresh the session on activity?', at: ago(6 * MIN) }
   }
   const loginCodex: Session = { id: 's-login-codex', title: 'Add timeout tests', llm: { provider: 'codex' }, queue: [], status: 'working' }
+  const globalClaude: Session = { id: 's-global-claude', title: 'Claude', llm: claude, queue: [], status: 'idle' }
   const nightly: Session = {
     id: 's-nightly',
     title: 'Nightly dependency check',
@@ -301,7 +302,7 @@ export function initialDemoState(now: number): DemoState {
       globalTerminalButtons: [{ id: 'qb-standup', label: 'Standup', text: 'Summarise what changed on every branch since yesterday.' }]
     },
     repositories: [repo],
-    globalSessions: [nightly],
+    globalSessions: [globalClaude, nightly],
     automations
   }
 
