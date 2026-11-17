@@ -25,7 +25,7 @@ import {
 } from '../terminals'
 import { getBackend } from '../backend'
 import { QueueChip, QueuePanel } from './QueuePanel'
-import { moreLabel, overflowCount, splitOverflow } from '../quickButtonRow'
+import { moreLabel, moveButton, overflowCount, splitOverflow } from '../quickButtonRow'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus } from '../../../shared/client/connection.ts'
 
@@ -108,11 +108,45 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     if (hidden === 0 || !visible) setMoreOpen(false)
   }, [hidden, visible])
   const overflow = splitOverflow(buttons, hidden)
+  // Drag to sort: on the row (left/right halves) and in the More menu (top/bottom halves).
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; side: 'before' | 'after' } | null>(null)
+  const endDrag = (): void => {
+    setDragId(null)
+    setDropTarget(null)
+  }
+  const dragProps = (id: string, axis: 'x' | 'y'): React.HTMLAttributes<HTMLDivElement> & { draggable: boolean } => ({
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('application/x-trek-quick-button', id)
+      setDragId(id)
+    },
+    onDragOver: (e) => {
+      if (!dragId) return
+      e.preventDefault()
+      const rect = e.currentTarget.getBoundingClientRect()
+      const after = axis === 'x' ? e.clientX > rect.left + rect.width / 2 : e.clientY > rect.top + rect.height / 2
+      const side = after ? 'after' : 'before'
+      if (dropTarget?.id !== id || dropTarget.side !== side) setDropTarget({ id, side })
+    },
+    onDrop: (e) => {
+      e.preventDefault()
+      if (dragId && dropTarget?.id === id) {
+        const next = moveButton(buttons, dragId, id, dropTarget.side)
+        if (next !== buttons) setButtons(next)
+      }
+      endDrag()
+    },
+    onDragEnd: endDrag
+  })
+  const dragClass = (id: string): string =>
+    `${dragId === id ? ' dragging' : ''}${dropTarget?.id === id && dragId !== id ? ` drop-${dropTarget.side}` : ''}`
   /** One button in the More menu: run it, or edit it. */
   const moreRow = (btn: TerminalQuickButton): React.JSX.Element => {
     const label = btn.label.trim() || btn.text
     return (
-      <div key={btn.id} className="quick-more-item">
+      <div key={btn.id} className={`quick-more-item${dragClass(btn.id)}`} {...dragProps(btn.id, 'y')}>
         <button
           className="quick-more-run"
           title={btn.text}
@@ -170,6 +204,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     if (!visible) {
       setEditing(null)
       setRunning(null)
+      endDrag()
     }
   }, [visible])
 
@@ -214,10 +249,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
                 {buttons.map((btn) => {
                   const label = btn.label.trim() || btn.text
                   return (
-                    <div key={btn.id} className="quick-btn">
+                    <div key={btn.id} className={`quick-btn${dragClass(btn.id)}`} {...dragProps(btn.id, 'x')}>
                       <button
                         className="quick-btn-main"
-                        title={`${btn.text}\n\nRight-click to edit`}
+                        title={`${btn.text}\n\nDrag to sort · right-click to edit`}
                         onClick={() => run(btn)}
                         onContextMenu={(e) => {
                           e.preventDefault()
@@ -230,6 +265,15 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
                             …
                           </span>
                         )}
+                      </button>
+                      <button
+                        className="quick-btn-edit"
+                        title="Edit"
+                        aria-label={`Edit ${label}`}
+                        draggable={false}
+                        onClick={() => setEditing(btn)}
+                      >
+                        ✎
                       </button>
                     </div>
                   )
