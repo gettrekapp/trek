@@ -26,3 +26,18 @@ export function moreLabel(hidden: number): string {
 export function queueLabel(queued: number): string {
   return queued > 0 ? `Queue · ${queued}` : 'Queue'
 }
+
+/** The list with `fromId` moved to just before or after `toId`; unchanged if either is missing or they are the same. */
+export function moveButton<T extends { id: string }>(
+  list: T[],
+  fromId: string,
+  toId: string,
+  side: 'before' | 'after'
+): T[] {
+  if (fromId === toId) return list
+  const moving = list.find((b) => b.id === fromId)
+  if (!moving || !list.some((b) => b.id === toId)) return list
+  const rest = list.filter((b) => b.id !== fromId)
+  const at = rest.findIndex((b) => b.id === toId) + (side === 'after' ? 1 : 0)
+  return [...rest.slice(0, at), moving, ...rest.slice(at)]
+}
