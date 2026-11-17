@@ -4,11 +4,15 @@
 // demo or listed as not in it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { initialDemoState, DEMO_PROJECT_ID, DEMO_REPO_ID } from '../apps/mobile/src/demo/demoData.ts'
 import { parseCron, slotsBetween } from '../src/shared/cron.ts'
 import { numberedLines, patchBody } from '../src/shared/changes.ts'
 import { ServerRegistry, globalSocketFactory } from '../src/shared/client/index.ts'
 import { DemoServer, DEMO_URL, createDemoSocketFactory } from '../apps/mobile/src/demo/index.ts'
+import { DEMO_METHODS, NOT_IN_DEMO } from '../apps/mobile/src/demo/demoHandlers.ts'
 
 test('demo data: a project with three worktrees, sessions, automations and history', () => {
   const state = initialDemoState(1_000_000_000_000)
@@ -546,4 +550,34 @@ test('demo: typing in a terminal answers its decision', async () => {
   } finally {
     h.close()
   }
+})
+
+/** Protocol namespaces the phone's requests use; other dotted strings in its code are events, routes or keys */
+const REQUEST_NAMESPACES = new Set(['automation', 'branch', 'env', 'history', 'promote', 'prWatch', 'pty', 'push', 'repo', 'review', 'server', 'session', 'stack', 'ui', 'worktree'])
+/** Events (not requests) the phone listens for, in those namespaces */
+const PHONE_EVENTS = new Set(['pty.data', 'pty.exit', 'pty.resized', 'history.added', 'promote.request', 'promote.settled', 'ui.focus'])
+
+function sourceFiles(dir) {
+  const out = []
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    if (statSync(path).isDirectory()) {
+      if (name !== 'demo' && name !== 'node_modules') out.push(...sourceFiles(path))
+    } else if (/\.(ts|tsx)$/.test(name) && !name.endsWith('.generated.ts')) out.push(path)
+  }
+  return out
+}
+
+test('demo: every request the phone sends is answered by the demo or listed as not in it', () => {
+  const root = fileURLToPath(new URL('../apps/mobile/', import.meta.url))
+  const seen = new Set()
+  for (const file of [...sourceFiles(join(root, 'app')), ...sourceFiles(join(root, 'src'))]) {
+    for (const m of readFileSync(file, 'utf8').matchAll(/['"]([a-z][A-Za-z]*)\.([a-z][A-Za-z]*)['"]/g)) {
+      if (REQUEST_NAMESPACES.has(m[1])) seen.add(`${m[1]}.${m[2]}`)
+    }
+  }
+  const missing = [...seen].filter((method) => !PHONE_EVENTS.has(method) && !DEMO_METHODS.includes(method) && !(method in NOT_IN_DEMO))
+  assert.deepEqual(missing, [], 'handle these in apps/mobile/src/demo, or list them in NOT_IN_DEMO with why')
+  // And nothing is both
+  assert.deepEqual(DEMO_METHODS.filter((m) => m in NOT_IN_DEMO), [])
 })
