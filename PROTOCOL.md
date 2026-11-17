@@ -124,6 +124,7 @@ new optional field needs no capability: its absence says enough.
 | `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
 | `ui` | Clients say what they show (see [What a client shows](#what-a-client-shows)): `ui.report`, the event `ui.focus`, and the MCP tools `get_selected_worktree` and `focus_session` |
+| `mcpTools` | `mcpTools.list`: the MCP tools a session can call, Trek's and the other servers' configured for Claude Code on the server's machine (see [MCP tools a session can call](#mcp-tools-a-session-can-call)) |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server; a phone reaches the local one only through its phone listener (`phoneAccess`) |
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
 | `pluginInstall` | The server takes `plugins.install` and `plugins.remove` from a client (see [Installed plugins](#installed-plugins)). Not listed when its config has `"plugins": {"remoteInstall": false}`; the local server lists it too. Read from the config as each welcome is sent |
@@ -1541,6 +1542,34 @@ the worktree is stopped by the promote, so its call drops; when the request sett
 saying how it went (`The promote you asked for (promote_to_primary) went through: …` or `… failed:
 …`, a claimant's own error cut to 500 characters) is queued on the asking session
 (`terminalId`), wherever it now is, and never sent by itself.
+
+## MCP tools a session can call
+
+With the capability `mcpTools`, the server lists the MCP tools its agent sessions can call, for the
+quick button editor's reference list.
+
+| Method | Params | Result |
+|---|---|---|
+| `mcpTools.list` | `{projectId, refresh?, servers?}` | `McpToolCatalog` (`src/shared/mcpTools.ts`): `trek`, Trek's own tools (trek-dev's core tools and the project's enabled plugins'), and `servers`, every other configured MCP server with its `tools` or the `error` that kept them from being listed, and `checkedAt` |
+
+The other servers are the ones Claude Code would load for the project's repositories (each one's
+main checkout) on the server's machine: the user's (`mcpServers` of `~/.claude.json`, or
+`$CLAUDE_CONFIG_DIR/.claude.json`), each path's local ones (`projects[path].mcpServers`), and each
+repository's `.mcp.json`; local over project over user by name, `trek-dev` left out. A `.mcp.json`
+server is started only once the user approved it for Claude Code (`enabledMcpjsonServers` or
+`enableAllProjectMcpServers` in `~/.claude.json`'s project entry, `~/.claude/settings.json` or the
+repository's `.claude/settings.local.json`, and not in `disabledMcpjsonServers`); the committed
+`.claude/settings.json` is not read, so a repository cannot approve its own servers. The others are
+listed with an error and never run.
+
+Each server is asked for its tools (`initialize`, `tools/list` page by page) over stdio (started in
+its project path, as its own process group, and ended with it) or streamable HTTP (the config's
+headers; a JSON or SSE reply). It has 20 s; at most 6 are asked at once. The legacy SSE transport
+and OAuth sign-ins are not spoken: such a server comes back with an `error`. The answer is kept
+per set of project paths until a call with `refresh: true`; concurrent calls share one ask.
+`servers: false` returns Trek's tools alone at once (`servers` empty, `checkedAt` 0), for the
+client to show while the other servers are asked. Plugin-provided MCP servers of Claude Code
+and claude.ai connectors are not listed.
 
 ## What a client shows
 

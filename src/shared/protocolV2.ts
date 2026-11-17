@@ -19,6 +19,7 @@ import type { PluginPresence } from './plugins/manifest.ts'
 import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type { UiFocusEvent, UiReportParams } from './ui.ts'
+import type { McpToolCatalog } from './mcpTools.ts'
 import type {
   ComposeAction,
   ContainerAction,
@@ -259,6 +260,8 @@ export const CAPABILITY = {
   history: 'history',
   /** Clients say what they show (`ui.report`) and can be asked to show a session (`ui.focus`): the MCP tools get_selected_worktree and focus_session */
   ui: 'ui',
+  /** `mcpTools.list`: Trek's MCP tools and the other servers' configured for Claude Code on the server's machine */
+  mcpTools: 'mcpTools',
   /**
    * Phone pairing (6a): `pairing.create` gives a signed-in client a one-time code (5 minutes) that
    * a phone redeems once at hello (`pairingCode`) for its own named token (`welcome.pairedToken`)
@@ -479,6 +482,7 @@ export interface MethodParamsV2 {
   /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked github.com PR */
   'branch.setPrWatch': BranchRef & { watch: boolean }
   'history.list': BranchRef & { before?: string; limit?: number }
+  'mcpTools.list': { projectId: string; refresh?: boolean; servers?: boolean }
   /** Clears the worktree's pull request notice */
   'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
@@ -695,6 +699,7 @@ export interface MethodResultsV2 {
   'branch.setPr': null
   'branch.setPrWatch': null
   'history.list': HistoryPage
+  'mcpTools.list': McpToolCatalog
   'prWatch.dismiss': null
   'branch.setEnv': null
   'review.add': { commentId: string }

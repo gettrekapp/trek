@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { TerminalQuickButton } from '../../../shared/types'
 import { TemplateEditor } from './TemplateEditor'
+import { McpToolList } from './McpToolList'
+import { useFeatures } from '../useFeatures'
 
 interface Props {
   /** The button being edited; undefined creates a new one */
@@ -13,6 +15,7 @@ interface Props {
 export function QuickButtonModal({ button, onSave, onDelete, onClose }: Props): React.JSX.Element {
   const [label, setLabel] = useState(button?.label ?? '')
   const [text, setText] = useState(button?.text ?? '')
+  const { mcpTools } = useFeatures()
   const save = (): void => {
     if (!text.trim()) return
     onSave({ id: button?.id ?? crypto.randomUUID(), label: label.trim(), text })
@@ -48,6 +51,7 @@ export function QuickButtonModal({ button, onSave, onDelete, onClose }: Props): 
           <span>Text sent to the terminal</span>
           <TemplateEditor value={text} onChange={setText} placeholder="e.g. Review {AREA} on [branch]" />
         </div>
+        {mcpTools && <McpToolList />}
         <div className="modal-footer quick-btn-modal-footer">
           {onDelete && (
             <button

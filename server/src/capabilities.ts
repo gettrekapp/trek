@@ -13,7 +13,8 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
  * `push.status`, a phone's relay grant for background push. `automations`: `automation.*` and `Project.automations`.
  * `history`: `history.list` and the
  * `history.added` event, the worktree history. `ui`: `ui.report` and the `ui.focus` event, what
- * each client shows, for the MCP tools get_selected_worktree and focus_session.
+ * each client shows, for the MCP tools get_selected_worktree and focus_session. `mcpTools`:
+ * `mcpTools.list`, the tools a session can call (Trek's and the other configured MCP servers').
  */
 export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.topicEnd,
@@ -30,7 +31,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.push,
   CAPABILITY.automations,
   CAPABILITY.history,
-  CAPABILITY.ui
+  CAPABILITY.ui,
+  CAPABILITY.mcpTools
 ]
 
 /**

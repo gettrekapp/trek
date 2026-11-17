@@ -16,6 +16,7 @@ export type FeatureName =
   | 'ui'
   | 'automations'
   | 'history'
+  | 'mcpTools'
   | 'settingsEdit'
   | 'globalPanel'
 
@@ -36,6 +37,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'ui',
   'automations',
   'history',
+  'mcpTools',
   'settingsEdit',
   'globalPanel'
 ]
@@ -54,6 +56,7 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  *   `ui.focus`), need `ui`: nothing is sent to an older server.
  * - Automations need `automations`: an older server has no `automation.*`.
  * - The History tab needs `history`: an older server records nothing.
+ * - The quick button editor's MCP tool list needs `mcpTools`: an older server has no `mcpTools.list`.
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
@@ -85,6 +88,7 @@ export const V2_FEATURES: BackendFeatures = {
   ui: true,
   automations: true,
   history: true,
+  mcpTools: true,
   settingsEdit: true,
   globalPanel: true
 }
@@ -108,7 +112,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   promote: 'promote',
   ui: 'ui',
   automations: 'automations',
-  history: 'history'
+  history: 'history',
+  mcpTools: 'mcpTools'
 }
 
 /**

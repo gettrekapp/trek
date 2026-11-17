@@ -49,6 +49,7 @@ import { AutomationScheduler } from './automations/scheduler.ts'
 import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests.ts'
 import { UiSelections } from './ui/selections.ts'
+import { ToolCatalog } from './mcp/toolCatalog.ts'
 import type { UiClientKind } from '../../src/shared/ui.ts'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth.ts'
 import { createWebHandler } from './web/http.ts'
@@ -249,6 +250,7 @@ export function startServer(
   const promoteRequests = new PromoteRequests(hub)
   // What each client shows (`ui.report`), for get_selected_worktree and focus_session.
   const selections = new UiSelections(hub)
+  const toolCatalog = new ToolCatalog({ coreTools: MCP_TOOLS })
 
   // Background push (6b). A token counts as connected while one of its phone sockets (hello
   // `client: 'trek-mobile'`) is open: the phone already shows what would be pushed. A desktop window
@@ -703,6 +705,7 @@ export function startServer(
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         selections,
+        toolCatalog,
         clientKind,
         pairing,
         phoneAccess,

@@ -5807,6 +5807,108 @@ body.resizing-row {
   gap: 8px;
 }
 
+/* The MCP tool reference under the text: Trek's tools, then the other servers', a name a click copies */
+.quick-btn-edit-modal:has(.mcp-tool-list) {
+  width: 680px;
+}
+
+.mcp-tool-list {
+  margin-bottom: 12px;
+  border: 1px solid var(--surface);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.mcp-tool-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid var(--surface);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mcp-tool-list-head .spacer {
+  flex: 1;
+}
+
+.mcp-tool-list-hint {
+  font-size: 11px;
+}
+
+.mcp-tool-list-body {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 10px 8px;
+}
+
+.mcp-tool-list-body h3 {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.mcp-tool-names {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* Columns, not a grid: the sorted names read down each column */
+  columns: 200px;
+  column-gap: 12px;
+}
+
+.mcp-tool-names.wide {
+  columns: auto;
+}
+
+.mcp-tool-names button {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.mcp-tool-names button:hover {
+  background: var(--surface);
+}
+
+.mcp-tool-list-empty,
+.mcp-tool-list-error {
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.mcp-tool-list-error {
+  color: var(--danger);
+}
+
+.mcp-tool-list-failed {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.mcp-tool-list-failed .mcp-tool-server {
+  font-family: var(--mono);
+  color: var(--attention);
+}
+
 .quick-btn-modal-footer .spacer {
   flex: 1;
 }

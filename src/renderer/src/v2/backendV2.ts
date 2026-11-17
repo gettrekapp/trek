@@ -832,6 +832,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           if (event.projectId === projectId) listener(event.event)
         })
     },
+    mcpTools: {
+      // Starting the other servers can take a while: their own timeout is 20 s each.
+      list: async (refresh) => request('mcpTools.list', { projectId, ...(refresh ? { refresh: true } : {}) }, { timeoutMs: 90_000 }),
+      trek: async () => request('mcpTools.list', { projectId, servers: false })
+    },
     repos: {
       // repo.add only takes a path the server has registered, so register it first.
       add: async () => {
