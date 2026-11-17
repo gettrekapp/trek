@@ -32,6 +32,7 @@ import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/te
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
+import { globalAgentLabel, globalGroupOpen, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
 import {
@@ -2834,4 +2835,59 @@ test("layout: a project's stack found in the root state; the screens right above
   assert.deepEqual([...aboveIndex(pane)], ['w'])
   assert.deepEqual([...aboveIndex([{ key: 'i', name: 'index' }])], [])
   assert.deepEqual([...aboveIndex([{ key: 's', name: 'session/[sessionId]' }])], [])
+})
+
+test('global sessions: automation run tabs are not normal Global sessions', () => {
+  const run = { id: 'g-run', status: 'done', context: { kind: 'automation', automationId: 'a1' } }
+  const a = { id: 'g1', status: 'idle' }
+  const b = { id: 'g2', status: 'working', context: undefined }
+  assert.deepEqual(normalGlobalSessions([a, run, b]).map((s) => s.id), ['g1', 'g2'])
+  assert.deepEqual(normalGlobalSessions(undefined), [])
+})
+
+test('global sessions: the project row', () => {
+  const repo = { id: 'r1' }
+  const s = (id, extra = {}) => ({ id, status: 'idle', ...extra })
+  const run = s('g-run', { status: 'attention', decision: { question: 'q', at: 1 }, context: { kind: 'automation', automationId: 'a' } })
+  // No repositories: the server refuses a Global session, so there is no row.
+  assert.equal(globalRow({ repositories: [], globalSessions: [] }), null)
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [] }), { text: 'Global · no sessions', mark: null })
+  // A run tab is neither counted nor marked.
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [run] }), { text: 'Global · no sessions', mark: null })
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [s('g1')] }), { text: 'Global · 1 session', mark: null })
+  assert.deepEqual(globalRow({ repositories: [repo], globalSessions: [s('g1'), s('g2', { status: 'attention' })] }), { text: 'Global · 2 sessions', mark: 'attention' })
+  // A decision outranks a bell.
+  assert.deepEqual(
+    globalRow({ repositories: [repo], globalSessions: [s('g1', { status: 'attention' }), s('g2', { decision: { question: 'q', at: 1 } })] }),
+    { text: 'Global · 2 sessions', mark: 'decision' }
+  )
+})
+
+test('global sessions: the Global agent label', () => {
+  const agents = [
+    { provider: 'claude', label: 'Claude', installed: true },
+    { provider: 'codex', label: 'Codex', installed: true },
+    { provider: 'grok', label: 'Grok', installed: true }
+  ]
+  const claude = { provider: 'claude' }
+  // Not known before server.agents answers.
+  assert.equal(globalAgentLabel({}, undefined, agents), null)
+  // The project's Global agent, else its default, else the server's.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'codex' } }, claude, agents), 'Codex')
+  assert.equal(globalAgentLabel({ llmDefault: { provider: 'codex' } }, claude, agents), 'Codex')
+  assert.equal(globalAgentLabel({}, { provider: 'codex' }, agents), 'Codex')
+  // An agent without Trek's tools (Grok) is passed over, as the server does.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'grok' } }, claude, agents), 'Claude')
+  // A provider the list does not name: its id.
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'gemini' } }, claude, agents), 'gemini')
+})
+
+test('global sessions: the sidebar group opens for the Global screen and its sessions', () => {
+  const sessions = [{ id: 'g1' }, { id: 'g-run', context: { kind: 'automation', automationId: 'a' } }]
+  assert.equal(globalGroupOpen({ screen: 'global', sessionId: null }, sessions), true)
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g1' }, sessions), true)
+  // A run tab belongs to Automations.
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g-run' }, sessions), false)
+  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 's1' }, sessions), false)
+  assert.equal(globalGroupOpen({ screen: null, sessionId: null }, sessions), false)
 })
