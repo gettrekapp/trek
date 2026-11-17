@@ -148,7 +148,7 @@ export class DemoServer {
     this.connections.clear()
   }
 
-  /** The topics every open connection is subscribed to (for tests) */
+  /** The topics every open connection is subscribed to (for tests only) */
   connectionTopics(): Topic[] {
     return [...this.connections].flatMap((c) => [...c.topics])
   }

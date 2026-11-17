@@ -1,10 +1,14 @@
 // The demo's branch data, history and draft review (apps/mobile/src/demo): branch.*, prWatch.dismiss,
-// history.list and review.add/edit/remove/clear, as the real server answers them.
-import { DEFAULT_WORKTREE_TAGS, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
+// history.list and review.add/edit/remove/clear, as the real server answers them. Differences: input
+// checking is lighter than the real server's (custom tags are not deduplicated, the history limit is
+// clamped, not refused, a pull request link is not checked as watchable, review path and line are not
+// checked), and note edits are not folded into one history entry within 5 minutes (the real server's
+// NOTE_COALESCE_MS): every edit adds an entry.
+import { DEFAULT_WORKTREE_TAGS, type BranchData, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
 import { DEMO_PROJECT_ID } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
-import { branchData, checkProject, findRepo, findWorktree, tidyBranchData } from '../demoProject.ts'
+import { checkProject, findRepo, findWorktree } from '../demoProject.ts'
 import type { DemoContext } from '../demoServer.ts'
 
 /** Adds a history entry (newest first) and tells the project's subscribers (`history.added`) */
@@ -29,16 +33,29 @@ function tagValue(tags: readonly WorktreeTag[], id: string | undefined): History
   return tag ? { id, text: tag.name, color: tag.color } : { id, text: id }
 }
 
+/** The branch's data to change: a copy, so a failed or no-op request leaves nothing behind; `save` stores it (or drops it when empty) */
 function branchRef(ctx: DemoContext, p: { projectId: string; repoId: string; branch: string }) {
   checkProject(p.projectId)
   const repo = findRepo(ctx.server.state.project, p.repoId)
   if (typeof p.branch !== 'string' || !p.branch) throw new DemoError('BAD_REQUEST', 'A branch is required')
-  return { repo, data: branchData(repo, p.branch) }
+  const data: BranchData = { ...(repo.branchData[p.branch] ?? {}) }
+  const save = (): void => {
+    if (Object.keys(data).length === 0) delete repo.branchData[p.branch]
+    else repo.branchData[p.branch] = data
+  }
+  return { repo, data, save }
+}
+
+/** Blank counts as none, like the real server's clearableString */
+const clearable = (v: string | null | undefined): string | undefined => v || undefined
+
+function checkBody(body: unknown): void {
+  if (typeof body !== 'string' || !body.trim()) throw new DemoError('BAD_REQUEST', 'The comment is empty')
 }
 
 /** The draft after a change: the worktree's revision goes up by one; an empty draft is dropped */
 function bumpReview(worktree: Worktree, draft: ReviewDraft | undefined): void {
-  const revision = (worktree.reviewRevision ?? 0) + 1
+  const revision = Math.max(worktree.reviewRevision ?? 0, worktree.review?.revision ?? 0) + 1
   worktree.reviewRevision = revision
   if (draft && draft.comments.length > 0) worktree.review = { revision, comments: draft.comments }
   else delete worktree.review
@@ -65,81 +82,88 @@ type BranchMethods =
 
 export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
   'branch.setTag': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
+    const { repo, data, save } = branchRef(ctx, p)
     const tags = ctx.server.state.project.settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS
     const from = data.tag
-    const to = p.tag ?? undefined
+    const to = clearable(p.tag)
     if (from === to) return null
     if (to) data.tag = to
     else delete data.tag
-    tidyBranchData(repo, p.branch)
+    save()
     record(ctx, repo.id, p.branch, 'status', tagValue(tags, from), tagValue(tags, to))
     ctx.server.changed()
     return null
   },
   'branch.setCustomTags': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
+    const { repo, data, save } = branchRef(ctx, p)
     const tags = ctx.server.state.project.settings.customTags ?? []
     const before = data.customTags ?? []
     const after = p.customTags ?? []
     if (after.length > 0) data.customTags = [...after]
     else delete data.customTags
-    tidyBranchData(repo, p.branch)
+    save()
     for (const id of after) if (!before.includes(id)) record(ctx, repo.id, p.branch, 'label.added', undefined, tagValue(tags, id))
     for (const id of before) if (!after.includes(id)) record(ctx, repo.id, p.branch, 'label.removed', tagValue(tags, id))
     ctx.server.changed()
     return null
   },
   'branch.setNote': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
+    const { repo, data, save } = branchRef(ctx, p)
     const current = data.note ?? null
     if (p.expected !== undefined && p.expected !== current) throw new DemoError('CONFLICT', 'The note changed since you opened it')
     const next = p.note ? p.note : null
     if (next === current) return null
     if (next) data.note = next
     else delete data.note
-    tidyBranchData(repo, p.branch)
+    save()
     record(ctx, repo.id, p.branch, 'note', undefined, { text: next === null ? 'cleared' : current === null ? 'added' : 'edited' })
     ctx.server.changed()
     return null
   },
   'branch.setTicket': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
+    const { repo, data, save } = branchRef(ctx, p)
     const from = data.ticket
-    const to = p.ticket ?? undefined
+    const to = clearable(p.ticket)
     if (from === to) return null
     if (to) data.ticket = to
     else delete data.ticket
-    tidyBranchData(repo, p.branch)
+    save()
     record(ctx, repo.id, p.branch, 'ticket', from ? { text: from } : undefined, to ? { text: to } : undefined)
     ctx.server.changed()
     return null
   },
   'branch.setPr': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
-    const to = p.pr ?? undefined
-    if (data.pr === to) return null
+    const { repo, data, save } = branchRef(ctx, p)
+    const from = data.pr
+    const to = clearable(p.pr)
+    if (from === to) return null
     if (to) data.pr = to
     else {
       delete data.pr
-      delete data.prWatch
+      // The demo has no watcher to clear it on its next round
       for (const w of repo.worktrees) if (w.branch === p.branch) delete w.prNotice
     }
-    tidyBranchData(repo, p.branch)
-    record(ctx, repo.id, p.branch, 'pr', undefined, to ? { text: to } : undefined)
+    // A different pull request (or none) ends the watch: it watched the old one
+    const ended = data.prWatch !== undefined
+    delete data.prWatch
+    save()
+    record(ctx, repo.id, p.branch, 'pr', from ? { text: from } : undefined, to ? { text: to } : undefined)
+    if (ended) record(ctx, repo.id, p.branch, 'prWatch.off')
     ctx.server.changed()
     return null
   },
   'branch.setPrWatch': (ctx, p) => {
-    const { repo, data } = branchRef(ctx, p)
+    const { repo, data, save } = branchRef(ctx, p)
     if (p.watch) {
       if (!data.pr) throw new DemoError('BAD_REQUEST', 'Link a pull request first')
       if (data.prWatch) return null
       data.prWatch = {}
+      save()
       record(ctx, repo.id, p.branch, 'prWatch.on')
     } else {
       if (!data.prWatch) return null
       delete data.prWatch
+      save()
       record(ctx, repo.id, p.branch, 'prWatch.off')
     }
     ctx.server.changed()
@@ -165,7 +189,7 @@ export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
   },
   'review.add': (ctx, p) => {
     const worktree = reviewWorktree(ctx, p)
-    if (!p.body || !p.body.trim()) throw new DemoError('BAD_REQUEST', 'The comment is empty')
+    checkBody(p.body)
     const commentId = ctx.server.newId('rc')
     const comments = [...(worktree.review?.comments ?? [])]
     comments.push({ id: commentId, source: p.source, path: p.path, side: p.side, line: p.line, lineText: p.lineText, body: p.body, at: ctx.server.clock.now() })
@@ -178,6 +202,8 @@ export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
     const comment = worktree.review?.comments.find((c) => c.id === p.commentId)
     if (!comment) throw new DemoError('NOT_FOUND', 'No such comment')
     if (p.expected !== undefined && comment.body !== p.expected) throw new DemoError('CONFLICT', 'The comment changed since you opened it')
+    checkBody(p.body)
+    if (comment.body === p.body) return null
     comment.body = p.body
     comment.at = ctx.server.clock.now()
     bumpReview(worktree, worktree.review)
@@ -195,7 +221,11 @@ export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
   'review.clear': (ctx, p) => {
     const worktree = reviewWorktree(ctx, p)
     if ((worktree.review?.revision ?? 0) !== p.revision) throw new DemoError('CONFLICT', 'The review changed since you opened it')
-    bumpReview(worktree, undefined)
+    // The draft goes, the worktree keeps the last revision handed out, like the real server's dropDraft
+    if (worktree.review) {
+      worktree.reviewRevision = Math.max(worktree.reviewRevision ?? 0, worktree.review.revision)
+      delete worktree.review
+    }
     ctx.server.changed()
     return null
   }

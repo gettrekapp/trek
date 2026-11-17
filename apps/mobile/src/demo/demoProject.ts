@@ -1,5 +1,5 @@
-// Finding things in the demo's project, and its attention list (apps/mobile/src/demo). Pure: the
-// handlers change what these return.
+// Finding things in the demo's project, and its attention list (apps/mobile/src/demo). Pure, except
+// attentionOf, which keeps `state.since` (the handlers change what these return).
 import type { AttentionEntry, Automation, BranchData, Project, Repository, Session, Worktree } from '../shared.ts'
 import { DEMO_PROJECT_ID, type DemoState } from './demoData.ts'
 import { DemoError } from './demoError.ts'
@@ -72,6 +72,8 @@ export function attentionOf(state: DemoState, now: number): AttentionEntry[] {
   for (const { session, worktree } of allSessions(project)) {
     if (worktree && !worktree.loaded) continue
     const waiting = session.status === 'attention' || session.status === 'done'
+    // Leaving attention/done forgets its `since`, as the real server does: a new wait is a new time
+    if (!waiting) delete state.since[session.id]
     if (!waiting && !session.decision) continue
     const since = waiting ? (state.since[session.id] ??= now) : session.decision!.at
     out.push({

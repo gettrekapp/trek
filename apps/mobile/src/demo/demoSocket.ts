@@ -1,7 +1,7 @@
 // A socket to the demo server (apps/mobile/src/demo): the SocketLike the client SDK needs. Every
 // frame, each way, is delivered on a later tick and in order: each direction is one FIFO queue
 // drained by one scheduled callback, so order holds by construction, as on a network.
-import { OPEN, type SocketCloseEvent, type SocketLike } from '../shared.ts'
+import { OPEN, realTimers, type SocketCloseEvent, type SocketLike } from '../shared.ts'
 import type { DemoPeer, DemoServer } from './demoServer.ts'
 
 const CONNECTING = 0
@@ -13,11 +13,6 @@ type Listener = (event: unknown) => void
 export interface SocketClock {
   setTimeout(fn: () => void, ms: number): unknown
   clearTimeout(handle: unknown): void
-}
-
-const realSocketClock: SocketClock = {
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>)
 }
 
 /** Items handed on, in order, on a later tick */
@@ -58,7 +53,7 @@ export class DemoSocket implements SocketLike {
   private readonly toClient: Lane<string>
   private readonly closes: Lane<SocketCloseEvent>
 
-  constructor(server: DemoServer, clock: SocketClock = realSocketClock) {
+  constructor(server: DemoServer, clock: SocketClock = realTimers) {
     this.clock = clock
     this.toServer = new Lane(clock, (data) => this.peer?.receive(data))
     this.toClient = new Lane(clock, (data) => {
@@ -70,7 +65,7 @@ export class DemoSocket implements SocketLike {
     })
     this.clock.setTimeout(() => {
       if (this.readyState !== CONNECTING) return
-      this.peer = server.connect(
+      const peer = server.connect(
         // Serialised now: the state may change before the frame is delivered
         (frame) => {
           if (this.readyState === OPEN) this.toClient.push(JSON.stringify(frame))
@@ -80,6 +75,7 @@ export class DemoSocket implements SocketLike {
       )
       // A disposed server closes the socket during connect()
       if (this.readyState !== CONNECTING) return
+      this.peer = peer
       this.readyState = OPEN
       for (const l of this.listeners.open) l(undefined)
     }, 0)

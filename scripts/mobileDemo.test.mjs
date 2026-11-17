@@ -159,13 +159,15 @@ test('demo: a reconnect resubscribes and a terminal re-attach replays', async ()
     await until(() => project.snapshot)
     const ptyId = project.snapshot.repositories[0].worktrees[2].sessions[0].ptyId
     let out = ''
-    await h.reg.ptys.attach(ptyId, { onData: (d) => (out += d), onExit() {} })
+    let reattached = false
+    await h.reg.ptys.attach(ptyId, { onData: (d) => (out += d), onExit() {}, onReset() { out = '' }, onReattach() { reattached = true } })
     assert.ok(out.includes('Waiting for you'))
     project.snapshot = null
     h.conn.reconnect()
     await until(() => project.snapshot)
     await until(() => h.conn.status === 'connected')
     assert.ok(project.snapshot.repositories[0].worktrees.length === 3)
+    await until(() => reattached && out.includes('Waiting for you'))
   } finally {
     h.close()
   }
@@ -250,12 +252,12 @@ test('demo: custom tags, ticket, PR and its watch', async () => {
     await assert.rejects(h.conn.request('branch.setPrWatch', { ...REPO, branch, watch: true }), { code: 'BAD_REQUEST' })
     await h.conn.request('branch.setPr', { ...REPO, branch, pr: 'https://github.com/example/acme-web/pull/43' })
     await h.conn.request('branch.setPrWatch', { ...REPO, branch, watch: true })
-    const data = h.server.state.project.repositories[0].branchData[branch]
-    assert.deepEqual(data.customTags, ['needs-design'])
-    assert.equal(data.ticket, 'ACME-120')
-    assert.deepEqual(data.prWatch, {})
+    const data = () => h.server.state.project.repositories[0].branchData[branch]
+    assert.deepEqual(data().customTags, ['needs-design'])
+    assert.equal(data().ticket, 'ACME-120')
+    assert.deepEqual(data().prWatch, {})
     await h.conn.request('branch.setPr', { ...REPO, branch, pr: null })
-    assert.equal(data.prWatch, undefined)
+    assert.equal(data().prWatch, undefined)
     await h.conn.request('prWatch.dismiss', { projectId: DEMO_PROJECT_ID, worktreeId: 'wt-checkout' })
     assert.equal(h.server.state.project.repositories[0].worktrees[1].prNotice, undefined)
   } finally {
@@ -280,7 +282,48 @@ test('demo: review comments are added, edited and removed, with the revision goi
     await assert.rejects(h.conn.request('review.clear', { ...ref, revision: 1 }), { code: 'CONFLICT' })
     await h.conn.request('review.clear', { ...ref, revision: wt().review.revision })
     assert.equal(wt().review, undefined)
-    assert.equal(wt().reviewRevision, 6)
+    assert.equal(wt().reviewRevision, 5)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a different pull request ends the watch, and a failed or no-op edit leaves no empty branch data', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const branch = 'feature/checkout-redesign'
+    const repo = h.server.state.project.repositories[0]
+    assert.ok(repo.branchData[branch].prWatch)
+    const before = repo.branchData[branch].pr
+    await h.conn.request('branch.setPr', { ...REPO, branch, pr: 'https://github.com/example/acme-web/pull/99' })
+    assert.equal(repo.branchData[branch].prWatch, undefined)
+    const events = h.server.state.history.filter((e) => e.branch === branch).slice(0, 2)
+    assert.deepEqual(events.map((e) => e.kind), ['prWatch.off', 'pr'])
+    assert.equal(events[1].from.text, before)
+    await h.conn.request('branch.setTag', { ...REPO, branch: 'nothing/here', tag: '' })
+    await assert.rejects(h.conn.request('branch.setPrWatch', { ...REPO, branch: 'nothing/here', watch: true }), { code: 'BAD_REQUEST' })
+    assert.equal(repo.branchData['nothing/here'], undefined)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a session that leaves done and returns gets a new since', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const session = h.server.state.project.repositories[0].worktrees[2].sessions[0]
+    const sinceKey = session.id
+    assert.ok(h.server.state.since[sinceKey] !== undefined)
+    const oldSession = session.status
+    session.status = 'working'
+    h.server.changed()
+    assert.equal(h.server.state.since[sinceKey], undefined)
+    const t = Date.now()
+    session.status = oldSession
+    h.server.changed()
+    assert.ok(h.server.state.since[sinceKey] >= t)
   } finally {
     h.close()
   }
