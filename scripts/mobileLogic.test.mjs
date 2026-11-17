@@ -2768,6 +2768,7 @@ test('tablet layout: the sidebar selection comes from the route', () => {
   // History names a repository and a branch (history.ts' branchParam encoding).
   assert.deepEqual(sidebarSelection([...base, 'history', '[repoId]'], { repoId: 'r1', branch: 'feature~002fx' }, project), { worktreeId: 'w2', sessionId: null, screen: 'history' })
   assert.deepEqual(sidebarSelection([...base, 'automations'], {}, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'global'], {}, project), { worktreeId: null, sessionId: null, screen: 'global' })
   assert.deepEqual(sidebarSelection([...base, 'automation', '[automationId]'], { automationId: 'a' }, project), { worktreeId: null, sessionId: null, screen: 'automations' })
   assert.deepEqual(sidebarSelection([...base, 'add-worktree', '[repoId]'], { repoId: 'r1' }, project), { worktreeId: null, sessionId: null, screen: null })
   // An unknown worktree id selects nothing.
@@ -2890,4 +2891,12 @@ test('global sessions: the sidebar group opens for the Global screen and its ses
   assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g-run' }, sessions), false)
   assert.equal(globalGroupOpen({ screen: 'session', sessionId: 's1' }, sessions), false)
   assert.equal(globalGroupOpen({ screen: null, sessionId: null }, sessions), false)
+})
+
+test('routes: the Global screen', () => {
+  const r = routes.globalRoute('srv', 'p1')
+  assert.deepEqual(r, { pathname: '/project/[serverId]/[projectId]/global', params: { serverId: 'srv', projectId: 'p1' } })
+  const base = ['project', '[serverId]', '[projectId]']
+  assert.equal(routes.showsRoute([...base, 'global'], { serverId: 'srv', projectId: 'p1' }, r), true)
+  assert.equal(routes.showsRoute([...base, 'automations'], { serverId: 'srv', projectId: 'p1' }, r), false)
 })
