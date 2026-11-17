@@ -18,6 +18,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
 import { WIDE_MIN, isWide, shouldLockPortrait, sidebarSelection } from '../apps/mobile/src/logic/layout.ts'
+import * as routes from '../apps/mobile/src/logic/routes.ts'
 import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
@@ -151,8 +152,8 @@ test("a notification never shows a decision's question, and routes to its sessio
   assert.deepEqual([pr.title, pr.body, pr.data.sessionId], ['App', 'Checks failed', undefined])
   assert.equal(notificationContent({ ...base, status: 'done' }).body, 'Finished')
 
-  assert.deepEqual(notificationRoute(decision.data), { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: 'a', projectId: 'p', sessionId: 's1' } })
-  assert.deepEqual(notificationRoute(pr.data), { pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId: 'a', projectId: 'p', worktreeId: 'w' } })
+  assert.deepEqual(notificationRoute(decision.data), routes.sessionRoute('a', 'p', 's1'))
+  assert.deepEqual(notificationRoute(pr.data), routes.worktreeRoute('a', 'p', 'w'))
   for (const bad of [null, undefined, 'x', {}, { serverId: 'a' }, { serverId: 'a', projectId: 'p' }, { serverId: 'a', projectId: 'p', sessionId: 3 }, { serverId: '', projectId: 'p', sessionId: 's' }]) {
     assert.equal(notificationRoute(bad), null, JSON.stringify(bad))
   }
@@ -512,7 +513,7 @@ test('push: a tap waits until the phone has loaded its servers, then is routed o
   const routeData = (d) => pushRouteData(d, (id) => (id === 'srv-1' ? 'entry-1' : undefined))
   const tap = { kind: 'session-stopped', serverId: 'srv-1', projectId: 'p', sessionId: 's' }
   assert.equal(routeTap(tap, false, routeData, notificationRoute), 'wait')
-  assert.deepEqual(routeTap(tap, true, routeData, notificationRoute), { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: 'entry-1', projectId: 'p', sessionId: 's' } })
+  assert.deepEqual(routeTap(tap, true, routeData, notificationRoute), routes.sessionRoute('entry-1', 'p', 's'))
   assert.equal(routeTap({ ...tap, serverId: 'gone' }, true, routeData, notificationRoute), null)
   assert.equal(routeTap({ kind: 'decision', serverId: 'srv-1', projectId: 'p' }, true, routeData, notificationRoute), null, 'no session or worktree: nothing to open')
 })
@@ -2637,10 +2638,7 @@ test('ui selection: a report goes only to a server with the ui capability, and o
 })
 
 test('ui.focus: the session screen to open, as the worktree screen pushes it', () => {
-  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), {
-    pathname: '/session/[serverId]/[projectId]/[sessionId]',
-    params: { serverId: 'srv', projectId: 'p', sessionId: 's1' }
-  })
+  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), routes.sessionRoute('srv', 'p', 's1'))
 })
 
 test('ui.focus: followed for this project, unless its session is already the one shown', () => {
@@ -2775,4 +2773,16 @@ test('tablet layout: the sidebar selection comes from the route', () => {
   assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: 'gone' }, project), none)
   // Array params (expo-router can give arrays) take the first.
   assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: ['w1'] }, project), { worktreeId: 'w1', sessionId: null, screen: 'worktree' })
+})
+
+test('routes: every project screen lives under the project', () => {
+  const p = { serverId: 'a', projectId: 'p' }
+  assert.deepEqual(routes.projectRoute('a', 'p'), { pathname: '/project/[serverId]/[projectId]', params: p })
+  assert.deepEqual(routes.worktreeRoute('a', 'p', 'w'), { pathname: '/project/[serverId]/[projectId]/worktree/[worktreeId]', params: { ...p, worktreeId: 'w' } })
+  assert.deepEqual(routes.sessionRoute('a', 'p', 's'), { pathname: '/project/[serverId]/[projectId]/session/[sessionId]', params: { ...p, sessionId: 's' } })
+  assert.deepEqual(routes.changesRoute('a', 'p', 'w'), { pathname: '/project/[serverId]/[projectId]/changes/[worktreeId]', params: { ...p, worktreeId: 'w' } })
+  assert.deepEqual(routes.historyRoute('a', 'p', 'r', 'feature/x'), { pathname: '/project/[serverId]/[projectId]/history/[repoId]', params: { ...p, repoId: 'r', branch: 'feature~002fx' } })
+  assert.deepEqual(routes.addWorktreeRoute('a', 'p', 'r'), { pathname: '/project/[serverId]/[projectId]/add-worktree/[repoId]', params: { ...p, repoId: 'r' } })
+  assert.deepEqual(routes.automationsRoute('a', 'p'), { pathname: '/project/[serverId]/[projectId]/automations', params: p })
+  assert.deepEqual(routes.automationRoute('a', 'p', 'x'), { pathname: '/project/[serverId]/[projectId]/automation/[automationId]', params: { ...p, automationId: 'x' } })
 })
