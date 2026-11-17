@@ -1,10 +1,11 @@
 // Over-the-air updates: checks on launch and when the app returns to the foreground (the rules
 // in logic/updates.ts), downloads a new bundle, and says when the "Update ready" banner shows.
-// A failed check or download is logged and otherwise ignored: the phone keeps running what it has.
+// A failed check or download is logged and otherwise ignored: the phone keeps running what it has,
+// and (as a check counts from when it starts) tries again on a launch or after the interval.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppState } from 'react-native'
 import * as Updates from 'expo-updates'
-import { bannerVisible, shouldCheck, type CheckReason } from '../logic/updates.ts'
+import { bannerVisible, pendingKey, shouldCheck, shouldFetch, type CheckReason } from '../logic/updates.ts'
 
 export function useOtaUpdate(): { visible: boolean; restart: () => void; dismiss: () => void } {
   const { isUpdatePending, downloadedUpdate } = Updates.useUpdates()
@@ -19,7 +20,7 @@ export function useOtaUpdate(): { visible: boolean; restart: () => void; dismiss
     inFlight.current = true
     try {
       const result = await Updates.checkForUpdateAsync()
-      if (result.isAvailable) await Updates.fetchUpdateAsync()
+      if (shouldFetch(result)) await Updates.fetchUpdateAsync()
     } catch (err) {
       console.warn('[updates] check or download failed', err)
     } finally {
@@ -35,7 +36,7 @@ export function useOtaUpdate(): { visible: boolean; restart: () => void; dismiss
     return () => sub.remove()
   }, [check])
 
-  const pendingUpdateId = isUpdatePending ? (downloadedUpdate?.updateId ?? null) : null
+  const pendingUpdateId = pendingKey({ isUpdatePending, updateId: downloadedUpdate?.updateId, createdAt: downloadedUpdate?.createdAt })
   const restart = useCallback(() => {
     Updates.reloadAsync().catch((err: unknown) => console.warn('[updates] restart failed', err))
   }, [])

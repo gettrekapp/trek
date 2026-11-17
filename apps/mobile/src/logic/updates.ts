@@ -23,3 +23,20 @@ export function shouldCheck(o: { enabled: boolean; isDev: boolean; inFlight: boo
 export function bannerVisible(o: { pendingUpdateId: string | null; dismissedUpdateId: string | null }): boolean {
   return o.pendingUpdateId !== null && o.pendingUpdateId !== o.dismissedUpdateId
 }
+
+/**
+ * Whether a check's result has something to download: a new update, or the server's directive to
+ * roll back to the bundle the build shipped with (`isAvailable` is false for that one).
+ */
+export function shouldFetch(result: { isAvailable: boolean; isRollBackToEmbedded?: boolean }): boolean {
+  return result.isAvailable || result.isRollBackToEmbedded === true
+}
+
+/**
+ * What the banner keys Later on: the downloaded update's id, or for a rollback (which has none)
+ * its time; null while nothing is downloaded and waiting.
+ */
+export function pendingKey(o: { isUpdatePending: boolean; updateId?: string; createdAt?: Date }): string | null {
+  if (!o.isUpdatePending) return null
+  return o.updateId ?? `rollback:${o.createdAt?.getTime() ?? 0}`
+}

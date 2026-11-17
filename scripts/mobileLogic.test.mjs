@@ -1949,7 +1949,7 @@ import { MAX_AUTOMATION_NAME as SERVER_MAX_AUTOMATION_NAME, MAX_AUTOMATION_PROMP
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { historyHandlers } from '../server/src/history/historyHandlers.ts'
 import { HISTORY_KINDS } from '../src/shared/model/history.ts'
-import { FOREGROUND_CHECK_INTERVAL_MS, bannerVisible, shouldCheck } from '../apps/mobile/src/logic/updates.ts'
+import { FOREGROUND_CHECK_INTERVAL_MS, bannerVisible, pendingKey, shouldCheck, shouldFetch } from '../apps/mobile/src/logic/updates.ts'
 
 /** Monday 2026-01-05 12:00 UTC: 07:00 in New York, 21:00 in Tokyo. */
 const A_NOW = Date.UTC(2026, 0, 5, 12, 0)
@@ -2989,4 +2989,15 @@ test('updates: the restart banner shows for a downloaded update not put off', ()
   assert.equal(bannerVisible({ pendingUpdateId: 'u1', dismissedUpdateId: null }), true)
   assert.equal(bannerVisible({ pendingUpdateId: 'u1', dismissedUpdateId: 'u1' }), false, 'Later')
   assert.equal(bannerVisible({ pendingUpdateId: 'u2', dismissedUpdateId: 'u1' }), true, 'a newer update shows again')
+})
+
+test('updates: what a check downloads, and what Later is keyed on', () => {
+  assert.equal(shouldFetch({ isAvailable: true }), true)
+  assert.equal(shouldFetch({ isAvailable: false }), false)
+  assert.equal(shouldFetch({ isAvailable: false, isRollBackToEmbedded: true }), true, 'a rollback to the built-in bundle')
+  assert.equal(shouldFetch({ isAvailable: false, isRollBackToEmbedded: false }), false)
+  assert.equal(pendingKey({ isUpdatePending: false, updateId: 'u1' }), null, 'nothing waiting')
+  assert.equal(pendingKey({ isUpdatePending: true, updateId: 'u1', createdAt: new Date(5) }), 'u1')
+  assert.equal(pendingKey({ isUpdatePending: true, updateId: undefined, createdAt: new Date(5) }), 'rollback:5', 'a rollback has no id')
+  assert.equal(pendingKey({ isUpdatePending: true }), 'rollback:0')
 })
