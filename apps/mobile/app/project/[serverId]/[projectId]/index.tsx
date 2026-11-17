@@ -1,8 +1,9 @@
 // A project (6a): its repositories and worktrees as rows, like the desktop's sidebar: one mark for
 // the worktree's sessions, its branch and git marks, then its branch's tag, custom tags, ticket and
 // pull request on a line — or the reason it wants you (missing, a decision, its pull request's
-// notice). Add worktree beside each repository's name. Under them, on a server with automations,
-// a row that opens the project's automations.
+// notice). Add worktree beside each repository's name. Under them, a Project section: Global (the
+// project's Global sessions) and, on a server with automations, a row that opens the project's
+// automations.
 // While it is open, the phone also answers promote_to_primary's confirmations for it. While it is
 // the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
 // On a wide window the sidebar is the list, and this is a placeholder under the screen it opened.
@@ -11,9 +12,10 @@ import { ScrollView, Pressable, Text, View, useWindowDimensions } from 'react-na
 import { router, Stack, useNavigation } from 'expo-router'
 import { CAPABILITY } from '../../../../src/shared.ts'
 import { automationsRow } from '../../../../src/logic/automations.ts'
+import { globalRow } from '../../../../src/logic/globalSessions.ts'
 import { isWide } from '../../../../src/logic/layout.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
-import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
+import { addWorktreeRoute, automationsRoute, globalRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { PromotePrompt } from '../../../../src/ui/PromotePrompt.tsx'
 import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
@@ -37,6 +39,7 @@ export default function ProjectScreen(): React.JSX.Element {
   const hasAutomations = useRef(false)
   if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
   const automations = topic.state === 'ready' && hasAutomations.current ? automationsRow(topic.snapshot.automations) : null
+  const global = topic.state === 'ready' ? globalRow(topic.snapshot) : null
   const wide = isWide(useWindowDimensions().width)
   // After every hook, so their order never changes when the window crosses the breakpoint.
   if (wide) {
@@ -90,22 +93,37 @@ export default function ProjectScreen(): React.JSX.Element {
             </View>
           ))
         : null}
-      {automations ? (
+      {global || automations ? (
         <View>
           <View style={ui.section}>
             <Text style={ui.sectionText}>Project</Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={automations.missed ? `${automations.text}, missed runs` : automations.text}
-            accessibilityHint="Opens the project's automations"
-            style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
-            onPress={() => router.push(automationsRoute(serverId, projectId))}
-          >
-            <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{automations.text}</Text>
-            {automations.missed ? <Text style={{ color: colors.attention, fontSize: 13 }}>missed runs</Text> : null}
-            <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
-          </Pressable>
+          {global ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={global.mark ? `${global.text}, ${global.mark === 'decision' ? 'decision' : 'needs you'}` : global.text}
+              accessibilityHint="Opens the project's Global sessions"
+              style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
+              onPress={() => router.push(globalRoute(serverId, projectId))}
+            >
+              <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{global.text}</Text>
+              {global.mark ? <Text style={{ color: colors.attention, fontSize: 13 }}>{global.mark === 'decision' ? 'decision' : 'needs you'}</Text> : null}
+              <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
+            </Pressable>
+          ) : null}
+          {automations ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={automations.missed ? `${automations.text}, missed runs` : automations.text}
+              accessibilityHint="Opens the project's automations"
+              style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
+              onPress={() => router.push(automationsRoute(serverId, projectId))}
+            >
+              <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{automations.text}</Text>
+              {automations.missed ? <Text style={{ color: colors.attention, fontSize: 13 }}>missed runs</Text> : null}
+              <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
     </ScrollView>
