@@ -382,6 +382,25 @@ test('demo: start, queue, dequeue, dismiss and close a session', async () => {
   }
 })
 
+test('demo: a Global session starts with the Global agent, and the seed has one', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const seeded = h.server.state.project.globalSessions.filter((s) => s.context?.kind !== 'automation')
+    assert.deepEqual(seeded.map((s) => s.id), ['s-global-claude'])
+    assert.ok(seeded[0].ptyId, 'the seeded Global session has a terminal')
+    h.server.state.project.settings.globalLlm = { provider: 'codex' }
+    const { sessionId } = await h.conn.request('session.start', { projectId: DEMO_PROJECT_ID, worktreeId: null, cols: 80, rows: 24 })
+    assert.equal(sessionIn(h, sessionId).llm.provider, 'codex')
+    // Grok has no Trek tools: passed over for Claude, as the real server does.
+    h.server.state.project.settings.globalLlm = { provider: 'grok' }
+    const second = await h.conn.request('session.start', { projectId: DEMO_PROJECT_ID, worktreeId: null, cols: 80, rows: 24 })
+    assert.equal(sessionIn(h, second.sessionId).llm.provider, 'claude')
+  } finally {
+    h.close()
+  }
+})
+
 test('demo: an answer typed into a terminal and sent with Enter gets the reply', async () => {
   const h = harness()
   try {

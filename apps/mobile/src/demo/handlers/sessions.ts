@@ -1,6 +1,6 @@
 // The demo's sessions and terminals (apps/mobile/src/demo): session.*, review.send and pty.*. A
 // prompt is typed into the session's terminal and gets a canned reply; then the session is done.
-import { reviewPrompt, type Session, type Worktree } from '../../shared.ts'
+import { resolveGlobalLlm, reviewPrompt, type Session, type Worktree } from '../../shared.ts'
 import { DEMO_ROOT } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
@@ -81,7 +81,9 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
   'session.start': (ctx, p) => {
     checkProject(p.projectId)
     const project = ctx.server.state.project
-    const llm: Session['llm'] = p.llm ?? project.settings.llmDefault ?? { provider: 'claude' }
+    // As the real server: a Global session gets the project's Global agent (sessions/manager.ts).
+    const llm: Session['llm'] =
+      p.llm ?? (p.worktreeId === null ? resolveGlobalLlm(project.settings.globalLlm, project.settings.llmDefault ?? { provider: 'claude' }) : project.settings.llmDefault ?? { provider: 'claude' })
     const label = agentLabel(llm.provider)
     let found: { list: Session[]; worktree?: Worktree }
     if (p.worktreeId === null) found = { list: project.globalSessions }
