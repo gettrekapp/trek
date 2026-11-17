@@ -17,6 +17,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
+import { WIDE_MIN, isWide, shouldLockPortrait, sidebarSelection } from '../apps/mobile/src/logic/layout.ts'
 import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
@@ -2728,4 +2729,50 @@ test('attentionMark: blue for a finished session, amber for anything that waits 
   assert.equal(attentionMark({ status: 'attention' }), 'attention')
   assert.equal(attentionMark({ status: 'done', decision: { question: 'Q?', at: 1 } }), 'attention')
   assert.equal(attentionMark({ pullRequest: { text: 'Checks failed' } }), 'attention')
+})
+
+test('tablet layout: the split starts at 700pt', () => {
+  assert.equal(WIDE_MIN, 700)
+  assert.equal(isWide(699), false)
+  assert.equal(isWide(700), true)
+  assert.equal(isWide(1366), true)
+})
+
+test('tablet layout: only phones are locked to portrait', () => {
+  // expo-device's DeviceType: UNKNOWN 0, PHONE 1, TABLET 2, DESKTOP 3, TV 4
+  assert.equal(shouldLockPortrait(1), true)
+  assert.equal(shouldLockPortrait(2), false)
+  assert.equal(shouldLockPortrait(0), false)
+  assert.equal(shouldLockPortrait(null), false)
+})
+
+test('tablet layout: the sidebar selection comes from the route', () => {
+  const project = {
+    globalSessions: [{ id: 'g1' }],
+    repositories: [
+      { id: 'r1', worktrees: [
+        { id: 'w1', branch: 'main', missing: false, sessions: [{ id: 's1' }] },
+        { id: 'w2', branch: 'feature/x', missing: false, sessions: [{ id: 's2' }, { id: 's3' }] }
+      ] }
+    ]
+  }
+  const base = ['project', '[serverId]', '[projectId]']
+  const none = { worktreeId: null, sessionId: null, screen: null }
+  assert.deepEqual(sidebarSelection(base, {}, project), none)
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: 'w2' }, project), { worktreeId: 'w2', sessionId: null, screen: 'worktree' })
+  assert.deepEqual(sidebarSelection([...base, 'changes', '[worktreeId]'], { worktreeId: 'w1' }, project), { worktreeId: 'w1', sessionId: null, screen: 'changes' })
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 's3' }, project), { worktreeId: 'w2', sessionId: 's3', screen: 'session' })
+  // A Global session (an automation's run) selects no worktree.
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 'g1' }, project), { worktreeId: null, sessionId: 'g1', screen: 'session' })
+  // The project not loaded yet: the session is known, its worktree is not.
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 's3' }, null), { worktreeId: null, sessionId: 's3', screen: 'session' })
+  // History names a repository and a branch (history.ts' branchParam encoding).
+  assert.deepEqual(sidebarSelection([...base, 'history', '[repoId]'], { repoId: 'r1', branch: 'feature~002fx' }, project), { worktreeId: 'w2', sessionId: null, screen: 'history' })
+  assert.deepEqual(sidebarSelection([...base, 'automations'], {}, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'automation', '[automationId]'], { automationId: 'a' }, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'add-worktree', '[repoId]'], { repoId: 'r1' }, project), { worktreeId: null, sessionId: null, screen: null })
+  // An unknown worktree id selects nothing.
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: 'gone' }, project), none)
+  // Array params (expo-router can give arrays) take the first.
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: ['w1'] }, project), { worktreeId: 'w1', sessionId: null, screen: 'worktree' })
 })
