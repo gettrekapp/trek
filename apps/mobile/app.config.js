@@ -6,8 +6,24 @@
 //   app.json's extra.relayUrl / extra.relayKey.
 // - TREK_APNS_MODE=production: the iOS push entitlement for TestFlight and App Store builds
 //   (the expo-notifications plugin's `mode`; development builds use the APNs sandbox).
+// - The manifest says the portrait screen is optional. expo-camera brings ML Kit's scanner
+//   activities, which are locked to portrait, so Google Play would otherwise infer
+//   android.hardware.screen.portrait as required and hide the app from landscape-only devices.
 const fs = require('node:fs')
 const path = require('node:path')
+const { withAndroidManifest } = require('expo/config-plugins')
+
+const PORTRAIT = 'android.hardware.screen.portrait'
+
+function withOptionalPortraitScreen(config) {
+  return withAndroidManifest(config, (c) => {
+    const manifest = c.modResults.manifest
+    const features = (manifest['uses-feature'] ?? []).filter((f) => f.$['android:name'] !== PORTRAIT)
+    features.push({ $: { 'android:name': PORTRAIT, 'android:required': 'false' } })
+    manifest['uses-feature'] = features
+    return c
+  })
+}
 
 module.exports = ({ config }) => {
   const googleServices = process.env.GOOGLE_SERVICES_JSON || './google-services.json'
@@ -28,5 +44,5 @@ module.exports = ({ config }) => {
     return [name, { ...props, mode }]
   })
 
-  return { ...config, android, extra, plugins }
+  return withOptionalPortraitScreen({ ...config, android, extra, plugins })
 }
