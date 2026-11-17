@@ -25,7 +25,7 @@ import {
 } from '../terminals'
 import { getBackend } from '../backend'
 import { QueueChip, QueuePanel } from './QueuePanel'
-import { moreLabel, overflowCount, splitOverflow } from '../quickButtonRow'
+import { moreLabel, moveButton, overflowCount, splitOverflow } from '../quickButtonRow'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus } from '../../../shared/client/connection.ts'
 
@@ -52,6 +52,8 @@ interface Props {
   readOnly?: string
 }
 
+const QUICK_BUTTON_MIME = 'application/x-trek-quick-button'
+
 export function TerminalPane({ terminalId, visible, global = false, readOnly }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
@@ -77,7 +79,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     // After the key event that sent it (a modal's Enter), or xterm gets that Enter too
     requestAnimationFrame(() => focusTerminal(terminalId))
   }
+  // An exited session keeps its bar so the buttons can still be edited, deleted and sorted; they don't run.
+  const exited = status === 'exited'
   const run = (button: TerminalQuickButton): void => {
+    if (exited) return
     const ctx = quickButtonContext(terminalId)
     const builtins = ctx ? resolveBuiltins(ctx) : {}
     const plan = planQuickButton(button.text, builtins)
@@ -108,11 +113,50 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     if (hidden === 0 || !visible) setMoreOpen(false)
   }, [hidden, visible])
   const overflow = splitOverflow(buttons, hidden)
+  // Drag to sort: on the row (left/right halves) and in the More menu (top/bottom halves).
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; side: 'before' | 'after' } | null>(null)
+  const endDrag = (): void => {
+    setDragId(null)
+    setDropTarget(null)
+  }
+  // The pointer left the row or menu: no stale drop indicator.
+  const leaveDrop = (e: React.DragEvent<HTMLElement>): void => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null)
+  }
+  const dragProps = (id: string, axis: 'x' | 'y'): React.HTMLAttributes<HTMLDivElement> & { draggable: boolean } => ({
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData(QUICK_BUTTON_MIME, id)
+      setDragId(id)
+    },
+    onDragOver: (e) => {
+      if (!dragId || !e.dataTransfer.types.includes(QUICK_BUTTON_MIME)) return
+      e.preventDefault()
+      const rect = e.currentTarget.getBoundingClientRect()
+      const after = axis === 'x' ? e.clientX > rect.left + rect.width / 2 : e.clientY > rect.top + rect.height / 2
+      const side = after ? 'after' : 'before'
+      if (dropTarget?.id !== id || dropTarget.side !== side) setDropTarget({ id, side })
+    },
+    onDrop: (e) => {
+      if (!e.dataTransfer.types.includes(QUICK_BUTTON_MIME)) return
+      e.preventDefault()
+      if (dragId && dropTarget?.id === id) {
+        const next = moveButton(buttons, dragId, id, dropTarget.side)
+        if (next !== buttons) setButtons(next)
+      }
+      endDrag()
+    },
+    onDragEnd: endDrag
+  })
+  const dragClass = (id: string): string =>
+    `${dragId === id ? ' dragging' : ''}${dropTarget?.id === id && dragId !== id ? ` drop-${dropTarget.side}` : ''}`
   /** One button in the More menu: run it, or edit it. */
   const moreRow = (btn: TerminalQuickButton): React.JSX.Element => {
     const label = btn.label.trim() || btn.text
     return (
-      <div key={btn.id} className="quick-more-item">
+      <div key={btn.id} className={`quick-more-item${dragClass(btn.id)}`} {...dragProps(btn.id, 'y')}>
         <button
           className="quick-more-run"
           title={btn.text}
@@ -170,6 +214,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     if (!visible) {
       setEditing(null)
       setRunning(null)
+      endDrag()
     }
   }, [visible])
 
@@ -207,80 +252,89 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
             </div>
           )}
           <div ref={ref} className="terminal-host" />
-          {status !== 'exited' && (
-            <div className="quick-buttons">
-              {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}
-              <div className="quick-btn-list" ref={listRef}>
-                {buttons.map((btn) => {
-                  const label = btn.label.trim() || btn.text
-                  return (
-                    <div key={btn.id} className="quick-btn">
-                      <button
-                        className="quick-btn-main"
-                        title={`${btn.text}\n\nRight-click to edit`}
-                        onClick={() => run(btn)}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          setEditing(btn)
-                        }}
-                      >
-                        <span className="quick-btn-label">{label}</span>
-                        {templateInputs(btn.text).length > 0 && (
-                          <span className="quick-btn-input-icon" title="Asks for input">
-                            …
-                          </span>
-                        )}
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-              {hidden > 0 && (
-                <div className="quick-more">
-                  <button
-                    className="quick-more-btn"
-                    title="The quick buttons that do not fit on the row"
-                    aria-expanded={moreOpen}
-                    onClick={() => setMoreOpen((v) => !v)}
-                  >
-                    {moreLabel(hidden)} <span className="chip-caret">▴</span>
-                  </button>
-                  {moreOpen && (
-                    <>
-                      <div className="detail-menu-backdrop" onClick={() => setMoreOpen(false)} />
-                      <div className="quick-more-menu">
-                        {overflow.more.map(moreRow)}
-                        {overflow.shown.length > 0 && (
-                          <>
-                            <div className="detail-menu-divider" />
-                            <div className="quick-more-heading">On the row</div>
-                            {overflow.shown.map(moreRow)}
-                          </>
-                        )}
-                        <div className="detail-menu-divider" />
-                        <div className="quick-more-item">
-                          <button
-                            className="quick-more-run quiet"
-                            onClick={() => {
-                              setMoreOpen(false)
-                              setEditing('new')
-                            }}
-                          >
-                            New quick button…
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-              <button className="quick-btn-add" title="Add quick button" onClick={() => setEditing('new')}>
-                {buttons.length === 0 ? 'Add a quick button' : '+'}
-              </button>
-              <span className="quick-buttons-spacer" />
-              <QueueChip terminalId={terminalId} global={global} />
+          {/* Over the exited overlay (not the offline one): editing needs no live session */}
+          <div className={`quick-buttons${exited && !offline ? ' exited' : ''}`}>
+            {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}
+            <div className="quick-btn-list" ref={listRef} onDragLeave={leaveDrop}>
+              {buttons.map((btn) => {
+                const label = btn.label.trim() || btn.text
+                return (
+                  <div key={btn.id} className={`quick-btn${dragClass(btn.id)}`} {...dragProps(btn.id, 'x')}>
+                    <button
+                      className="quick-btn-main"
+                      title={`${btn.text}\n\n${exited ? 'The session has exited: ' : ''}Drag to sort · right-click to edit`}
+                      onClick={() => run(btn)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setEditing(btn)
+                      }}
+                    >
+                      <span className="quick-btn-label">{label}</span>
+                      {templateInputs(btn.text).length > 0 && (
+                        <span className="quick-btn-input-icon" title="Asks for input">
+                          …
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="quick-btn-edit"
+                      title="Edit"
+                      aria-label={`Edit ${label}`}
+                      // a drag that starts on the pencil does not move the button
+                      draggable={false}
+                      onClick={() => setEditing(btn)}
+                    >
+                      ✎
+                    </button>
+                  </div>
+                )
+              })}
             </div>
-          )}
+            {hidden > 0 && (
+              <div className="quick-more">
+                <button
+                  className="quick-more-btn"
+                  title="The quick buttons that do not fit on the row"
+                  aria-expanded={moreOpen}
+                  onClick={() => setMoreOpen((v) => !v)}
+                >
+                  {moreLabel(hidden)} <span className="chip-caret">▴</span>
+                </button>
+                {moreOpen && (
+                  <>
+                    <div className="detail-menu-backdrop" onClick={() => setMoreOpen(false)} />
+                    <div className="quick-more-menu" onDragLeave={leaveDrop}>
+                      {overflow.more.map(moreRow)}
+                      {overflow.shown.length > 0 && (
+                        <>
+                          <div className="detail-menu-divider" />
+                          <div className="quick-more-heading">On the row</div>
+                          {overflow.shown.map(moreRow)}
+                        </>
+                      )}
+                      <div className="detail-menu-divider" />
+                      <div className="quick-more-item">
+                        <button
+                          className="quick-more-run quiet"
+                          onClick={() => {
+                            setMoreOpen(false)
+                            setEditing('new')
+                          }}
+                        >
+                          New quick button…
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <button className="quick-btn-add" title="Add quick button" onClick={() => setEditing('new')}>
+              {buttons.length === 0 ? 'Add a quick button' : '+'}
+            </button>
+            <span className="quick-buttons-spacer" />
+            {!exited && <QueueChip terminalId={terminalId} global={global} />}
+          </div>
         </div>
         {status !== 'exited' && <QueuePanel terminalId={terminalId} global={global} />}
         {offline && (

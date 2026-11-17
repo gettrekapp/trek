@@ -1935,6 +1935,7 @@ button:disabled {
 }
 
 .quick-btn {
+  position: relative;
   display: inline-flex;
   align-items: stretch;
   height: 24px;
@@ -1963,7 +1964,9 @@ button:disabled {
 .quick-btn-main {
   display: inline-flex;
   align-items: center;
-  min-width: 0;
+  justify-content: center;
+  /* Constant, so the pencil never covers most of a short label */
+  min-width: 44px;
   padding: 3px 10px;
 }
 
@@ -1975,6 +1978,74 @@ button:disabled {
 
 .quick-btn-main:hover {
   color: var(--text);
+}
+
+/* Overlays the button's right end, so hovering never changes the row's width (and what overflows) */
+.quick-btn-edit {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12)), var(--bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.quick-btn:hover .quick-btn-edit,
+.quick-btn:has(:focus-visible) .quick-btn-edit {
+  opacity: 1;
+}
+
+.quick-btn-edit:hover {
+  color: var(--text);
+}
+
+.quick-btn-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.quick-btn.dragging .quick-btn-edit {
+  opacity: 0;
+}
+
+.quick-btn.dragging,
+.quick-more-item.dragging {
+  opacity: 0.4;
+}
+
+.quick-btn.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.quick-btn.drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.quick-more-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.quick-more-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* An exited session's bar sits over the Process exited overlay: still edits and sorts, doesn't run */
+.quick-buttons.exited {
+  position: relative;
+  z-index: 1;
+}
+
+.quick-buttons.exited .quick-btn-main,
+.quick-buttons.exited .quick-more-run:not(.quiet) {
+  cursor: default;
+  opacity: 0.55;
 }
 
 /* Add, and the count of what does not fit: quieter than the buttons themselves */
@@ -2254,7 +2325,7 @@ button:disabled {
   cursor: default;
 }
 
-/* Settings editor for the quick buttons */
+/* Settings row editors (session types, worktree tags, agent commands) */
 .quick-btn-row {
   display: flex;
   align-items: flex-start;

@@ -765,6 +765,26 @@ try {
   await runModal.locator('input[aria-label="AREA"]').press('Enter')
   await runModal.waitFor({ state: 'detached', timeout: 5000 })
   check('the filled text reaches the agent', await until(async () => (await term(s1)).includes('GOT:Check smoke on smoke-wt'), true), true)
+  // A second button drags to the front of the row; its hover ✎ edits it, and Delete there removes it.
+  await bar.locator('.quick-btn-add').click()
+  await createModal.waitFor({ timeout: 5000 })
+  await createModal.locator('input[placeholder="Label"]').fill('Second')
+  await createModal.locator('.tpl-textarea').fill('second')
+  await createModal.locator('button', { hasText: 'Save' }).click()
+  await createModal.waitFor({ state: 'detached', timeout: 5000 })
+  const secondBtn = bar.locator('.quick-btn', { hasText: 'Second' })
+  await secondBtn.waitFor({ timeout: 5000 })
+  await secondBtn.dragTo(made, { targetPosition: { x: 4, y: 12 } })
+  check('dragging a quick button reorders it on the server', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => b.label), ['Second', 'Check area']), ['Second', 'Check area'])
+  check('and on the bar', await until(async () => bar.locator('.quick-btn-label').allTextContents(), ['Second', 'Check area']), ['Second', 'Check area'])
+  await secondBtn.hover()
+  await secondBtn.locator('.quick-btn-edit').click()
+  const pencilModal = w1.locator('.modal', { hasText: 'Edit quick button' })
+  await pencilModal.waitFor({ timeout: 5000 })
+  check('the ✎ opens the edit modal with Delete', await pencilModal.locator('button', { hasText: 'Delete' }).count(), 1)
+  await pencilModal.locator('button', { hasText: 'Delete' }).click()
+  check('deleting from the ✎ modal leaves the other button', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => b.label), ['Check area']), ['Check area'])
+  await secondBtn.waitFor({ state: 'detached', timeout: 5000 })
   // A right-click on a quick button edits it.
   await made.locator('.quick-btn-main').click({ button: 'right' })
   const editModal = w1.locator('.modal', { hasText: 'Edit quick button' })
@@ -825,6 +845,13 @@ try {
   const exitedOverlay = detail.locator('.terminal-pane:visible .exited-overlay')
   await exitedOverlay.waitFor({ timeout: 10_000 })
   check('the exit shows in the terminal', await until(() => term(s1).then((t) => t.includes('[process exited with code 3]')), true), true)
+  // The exited pane keeps its quick buttons bar above the overlay, so buttons are still managed there.
+  check('the exited pane keeps its quick buttons bar', await bar.locator('.quick-btn-add').isVisible(), true)
+  check('without the Queue chip', await bar.locator('.queue-toggle').count(), 0)
+  await bar.locator('.quick-btn-add').click()
+  await createModal.waitFor({ timeout: 5000 })
+  await createModal.locator('button', { hasText: 'Cancel' }).click()
+  await createModal.waitFor({ state: 'detached', timeout: 5000 })
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
   const restarted = await until(async () => {
@@ -1021,7 +1048,7 @@ try {
   if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
   check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await tabHeadings('Plugins'), await tabHeadings('General')], [
     ['Agents', 'Session types'],
-    ['Session system prompt', 'Terminal quick buttons', 'Global system prompt', 'Global quick buttons'],
+    ['Session system prompt', 'Global system prompt', 'Quick buttons'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
     ['Plugins', 'Voice summaries', 'Linear'],
