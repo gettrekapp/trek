@@ -71,10 +71,10 @@ export const SCROLLBACK: Record<string, string> = {
 
 /** What the working Codex session prints, one entry every few seconds; after the last it is done */
 export const CODEX_TICKS: string[] = [
-  lines(green('  ✓ a session idle for 29 minutes is still valid')),
+  lines(green('  ✓ a session idle for 9 minutes is still valid')),
   lines(green('  ✓ activity resets the idle clock')),
-  lines('• Checking the 30 minute boundary'),
-  lines(green('  ✓ a session idle for exactly 30 minutes has expired')),
+  lines('• Checking the 10 minute boundary'),
+  lines(green('  ✓ a session idle for 11 minutes has expired')),
   lines('', 'Added 3 tests in src/auth/session.test.ts. All pass.')
 ]
 
@@ -89,8 +89,8 @@ export const NIGHTLY_RUN: string[] = [
 
 /** One line of at most `max` characters, control characters removed */
 export function oneLine(text: string, max = 300): string {
-  const flat = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+  const flat = Array.from(text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim())
+  return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('')
 }
 
 /** A prompt as the terminal shows it being typed in */

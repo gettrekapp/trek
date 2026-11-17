@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { initialDemoState, DEMO_PROJECT_ID, DEMO_REPO_ID } from '../apps/mobile/src/demo/demoData.ts'
+import { parseCron, slotsBetween } from '../src/shared/cron.ts'
 import { numberedLines, patchBody } from '../src/shared/changes.ts'
 
 test('demo data: a project with three worktrees, sessions, automations and history', () => {
@@ -18,6 +19,16 @@ test('demo data: a project with three worktrees, sessions, automations and histo
   assert.ok(state.history.length >= 10)
   // Newest first
   for (let i = 1; i < state.history.length; i++) assert.ok(state.history[i - 1].at >= state.history[i].at)
+  // Automation times fall on their cron slots
+  for (const auto of project.automations) {
+    const spec = parseCron(auto.schedule.cron)
+    const onSlot = (t) => slotsBetween(spec, auto.schedule.tz, t - 1, t).length === 1
+    assert.ok(onSlot(auto.lastSlot), `${auto.name}: lastSlot`)
+    for (const h of auto.history) if (h.slot !== undefined) assert.ok(onSlot(h.slot), `${auto.name}: history slot`)
+  }
+  const nightly = project.automations.find((a) => a.enabled)
+  assert.equal(new Date(nightly.lastSlot).getUTCHours(), 2)
+  assert.equal(nightly.missed.since, nightly.lastSlot)
 })
 
 test('demo data: each review comment sits on the line it quotes', () => {

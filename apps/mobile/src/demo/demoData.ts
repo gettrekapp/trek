@@ -1,6 +1,7 @@
 // The demo server's sample project (apps/mobile/src/demo): what someone sees after Try the demo. A
 // fresh copy on every call, its times relative to `now` ("2 hours ago" stays true). Pure.
 import type { Automation, ChangedFile, CommitInfo, HistoryEvent, Project, Repository, ReviewComment, Session, Worktree } from '../shared.ts'
+import { parseCron, slotsBetween } from '../shared.ts'
 import { CODEX_TICKS, SCROLLBACK } from './demoScripts.ts'
 
 export const DEMO_PROJECT_ID = 'demo-acme-web'
@@ -8,6 +9,7 @@ export const DEMO_PROJECT_NAME = 'acme-web'
 export const DEMO_REPO_ID = 'demo-repo'
 export const DEMO_ROOT = '/home/demo/code/acme-web'
 export const DEMO_NIGHTLY_ID = 'auto-nightly'
+const CHECKOUT_HEAD = '7b2e9d4c1a8f3e6b0d5c2a9f8e7d6c5b4a3f2e1d'
 const PR_URL = 'https://github.com/example/acme-web/pull/42'
 
 const MIN = 60_000
@@ -34,7 +36,7 @@ export interface DemoState {
   branches: string[]
   /** By session id: when it entered attention or done (the attention list's `since`) */
   since: Record<string, number>
-  /** By session id: the terminal text of a session with no terminal (unloaded); handed to its terminal when it opens */
+  /** By session id: terminal text not yet handed to a terminal; given to it when one opens */
   scrollback: Record<string, string>
   /** By session id: the lines a working session still has to print (one per tick) */
   ticking: Record<string, string[]>
@@ -111,8 +113,7 @@ const SESSION_TS = patch(
   '@@ -8,7 +8,11 @@ export interface SessionOptions {',
   ' }',
   ' ',
-  '-const IDLE_TIMEOUT_MS = 10 * 60 * 1000',
-  '+const IDLE_TIMEOUT_MS = 30 * 60 * 1000',
+  ' const IDLE_TIMEOUT_MS = 10 * 60 * 1000',
   ' ',
   ' export function isExpired(session: Session, now = Date.now()): boolean {',
   '-  return now - session.lastSeen > IDLE_TIMEOUT_MS',
@@ -130,18 +131,22 @@ const SESSION_TEST = patch(
   'index 0000000..77aa11b',
   '--- /dev/null',
   '+++ b/src/auth/session.test.ts',
-  '@@ -0,0 +1,12 @@',
+  '@@ -0,0 +1,16 @@',
   "+import { test, expect } from 'vitest'",
   "+import { isExpired, touch } from './session'",
   '+',
   "+const base = { id: 's1', userId: 'u1', lastActivity: 0 }",
   '+',
-  "+test('a session idle for 29 minutes is still valid', () => {",
-  '+  expect(isExpired(base, 29 * 60 * 1000)).toBe(false)',
+  "+test('a session idle for 9 minutes is still valid', () => {",
+  '+  expect(isExpired(base, 9 * 60 * 1000)).toBe(false)',
   '+})',
   '+',
   "+test('activity resets the idle clock', () => {",
-  '+  expect(isExpired(touch(base, 25 * 60 * 1000), 50 * 60 * 1000)).toBe(false)',
+  '+  expect(isExpired(touch(base, 8 * 60 * 1000), 15 * 60 * 1000)).toBe(false)',
+  '+})',
+  '+',
+  "+test('a session idle for 11 minutes has expired', () => {",
+  '+  expect(isExpired(base, 11 * 60 * 1000)).toBe(true)',
   '+})'
 )
 
@@ -189,7 +194,7 @@ export function initialDemoState(now: number): DemoState {
       line: 13,
       lineText: '        <dt>Shipping</dt><dd>{cart.shipping === 0 ? <Badge>Free</Badge> : formatPrice(cart.shipping)}</dd>',
       body: 'Free shipping now shows a badge: worth a snapshot test.',
-      at: ago(35 * MIN),
+      at: ago(52 * MIN),
       by: { kind: 'mcp', sessionTitle: 'Redesign checkout summary' }
     }
   ]
@@ -200,14 +205,14 @@ export function initialDemoState(now: number): DemoState {
     name: 'feature/checkout-redesign',
     path: `${DEMO_ROOT}-feature-checkout-redesign`,
     branch: 'feature/checkout-redesign',
-    head: '7b2e9d4c1a8f3e6b0d5c2a9f8e7d6c5b4a3f2e1d',
+    head: CHECKOUT_HEAD,
     isMain: false,
     dirty: true,
     ahead: 2,
     behind: 0,
     loaded: true,
     sessions: [checkoutClaude],
-    prNotice: { title: 'PR #42', text: 'Checks passed', url: PR_URL, at: ago(25 * MIN) },
+    prNotice: { title: 'PR #42', text: 'Checks passed — no agent session to send it to', url: PR_URL, at: ago(25 * MIN) },
     review: { revision: 2, comments },
     reviewRevision: 2
   }
@@ -235,7 +240,7 @@ export function initialDemoState(now: number): DemoState {
         customTags: ['frontend'],
         note: 'Waiting on design sign-off for the mobile layout.',
         pr: PR_URL,
-        prWatch: { seen: { checks: '7b2e9d4 SUCCESS', conflict: false } }
+        prWatch: { seen: { checks: `${CHECKOUT_HEAD} passing`, conflict: false } }
       },
       'fix/login-timeout': {
         tag: 'In Progress',
@@ -246,6 +251,13 @@ export function initialDemoState(now: number): DemoState {
     worktrees: [main, checkout, login]
   }
 
+  const nightlySpec = parseCron('0 2 * * *')
+  const nightlySlots = slotsBetween(nightlySpec, 'UTC', now - 10 * DAY, now)
+  const lastNightly = nightlySlots[nightlySlots.length - 1]
+  const [ranLatest, ranBefore] = [nightlySlots[nightlySlots.length - 2], nightlySlots[nightlySlots.length - 3]]
+  const changelogCreated = ago(20 * DAY)
+  const changelogSlots = slotsBetween(parseCron('0 9 * * 1'), 'UTC', changelogCreated, now)
+
   const automations: Automation[] = [
     {
       id: DEMO_NIGHTLY_ID,
@@ -254,11 +266,11 @@ export function initialDemoState(now: number): DemoState {
       schedule: { cron: '0 2 * * *', tz: 'UTC' },
       enabled: true,
       createdAt: ago(20 * DAY),
-      lastSlot: ago(DAY),
-      missed: { since: ago(2 * DAY), count: 1 },
+      lastSlot: lastNightly,
+      missed: { since: lastNightly, count: 1 },
       history: [
-        { at: ago(DAY), slot: ago(DAY), trigger: 'schedule', outcome: 'ran', sessionId: nightly.id },
-        { at: ago(3 * DAY), slot: ago(3 * DAY), trigger: 'schedule', outcome: 'ran', sessionId: nightly.id }
+        { at: ranLatest + MIN, slot: ranLatest, trigger: 'schedule', outcome: 'ran', sessionId: nightly.id },
+        { at: ranBefore + MIN, slot: ranBefore, trigger: 'schedule', outcome: 'ran', sessionId: nightly.id }
       ]
     },
     {
@@ -267,8 +279,8 @@ export function initialDemoState(now: number): DemoState {
       prompt: "Summarise the week's merged pull requests into CHANGELOG.md.",
       schedule: { cron: '0 9 * * 1', tz: 'UTC' },
       enabled: false,
-      createdAt: ago(10 * DAY),
-      lastSlot: ago(10 * DAY),
+      createdAt: changelogCreated,
+      lastSlot: changelogSlots[changelogSlots.length - 1] ?? changelogCreated,
       history: []
     }
   ]
@@ -322,15 +334,14 @@ export function initialDemoState(now: number): DemoState {
     ev(ago(4 * HOUR), 'fix/login-timeout', 'note', { to: { text: 'added' } })
   ].sort((a, b) => b.at - a.at)
 
-  const sha = (seed: string): string => seed.repeat(40).slice(0, 40)
   const changes: Record<string, DemoChanges> = {
     'wt-main': {
       files: [],
       uncommitted: [],
       commits: [
-        { info: { sha: sha('e4c1a9f2'), subject: 'Merge pull request #41 from example/fix/cart-rounding', author: 'Sam Rivera', at: ago(2 * DAY) }, paths: [] },
-        { info: { sha: sha('a17d3b90'), subject: 'Round cart prices half-up', author: 'Sam Rivera', at: ago(2 * DAY + HOUR) }, paths: [] },
-        { info: { sha: sha('5be02c61'), subject: 'Release 2026.11', author: 'Alex Chen', at: ago(6 * DAY) }, paths: [] }
+        { info: { sha: 'e4c1a9f2b7d3c8e1f0a2b4c6d8e0f1a3b5c7d9e2', subject: 'Merge pull request #41 from example/fix/cart-rounding', author: 'Sam Rivera', at: ago(2 * DAY) }, paths: [] },
+        { info: { sha: 'a17d3b90c4e25f6718293a4b5c6d7e8f90a1b2c3', subject: 'Round cart prices half-up', author: 'Sam Rivera', at: ago(2 * DAY + HOUR) }, paths: [] },
+        { info: { sha: '5be02c61d9f3a7b8c0e1d2f3a4b5c6d7e8f9a0b1', subject: 'Release 2026.11', author: 'Alex Chen', at: ago(6 * DAY) }, paths: [] }
       ]
     },
     'wt-checkout': {
@@ -341,17 +352,17 @@ export function initialDemoState(now: number): DemoState {
       ],
       uncommitted: ['src/checkout/order-summary.css'],
       commits: [
-        { info: { sha: sha('7b2e9d4c'), subject: 'Show free shipping as a badge', author: 'Claude', at: ago(DAY + 3 * HOUR) }, paths: ['src/checkout/OrderSummary.tsx', 'src/ui/Badge.tsx'] },
-        { info: { sha: sha('2f8c6a1e'), subject: 'Split the order total into subtotal, shipping and total', author: 'Claude', at: ago(DAY + 4 * HOUR) }, paths: ['src/checkout/OrderSummary.tsx'] }
+        { info: { sha: CHECKOUT_HEAD, subject: 'Show free shipping as a badge', author: 'Claude', at: ago(DAY + 3 * HOUR) }, paths: ['src/checkout/OrderSummary.tsx', 'src/ui/Badge.tsx'] },
+        { info: { sha: '2f8c6a1e5d7b9c3a0e4f6b8d1a3c5e7f9b0d2a4c', subject: 'Split the order total into subtotal, shipping and total', author: 'Claude', at: ago(DAY + 4 * HOUR) }, paths: ['src/checkout/OrderSummary.tsx'] }
       ]
     },
     'wt-login': {
       files: [
-        { file: file('src/auth/session.ts', 'modified', 6, 2), patch: SESSION_TS },
-        { file: file('src/auth/session.test.ts', 'added', 12, 0), patch: SESSION_TEST }
+        { file: file('src/auth/session.ts', 'modified', 5, 1), patch: SESSION_TS },
+        { file: file('src/auth/session.test.ts', 'added', 16, 0), patch: SESSION_TEST }
       ],
       uncommitted: ['src/auth/session.test.ts'],
-      commits: [{ info: { sha: sha('3c9a1e7f'), subject: 'Raise the idle timeout to 30 minutes', author: 'Claude', at: ago(3 * HOUR) }, paths: ['src/auth/session.ts'] }]
+      commits: [{ info: { sha: '3c9a1e7f5b2d8c4a6e0f9b3d7c1a5e8f2b6d0c4a', subject: 'Track last activity instead of last request', author: 'Claude', at: ago(3 * HOUR) }, paths: ['src/auth/session.ts'] }]
     }
   }
 
