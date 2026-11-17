@@ -105,3 +105,10 @@ export function attentionOf(state: DemoState, now: number): AttentionEntry[] {
   }
   return out.sort((a, b) => a.since - b.since)
 }
+
+/** The one place a session's status changes: waiting (attention, done) records since, anything else forgets it */
+export function setStatus(state: DemoState, session: Session, status: Session['status'], now: number): void {
+  session.status = status
+  if (status === 'attention' || status === 'done') state.since[session.id] = now
+  else delete state.since[session.id]
+}

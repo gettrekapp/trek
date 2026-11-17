@@ -15,35 +15,35 @@ function runTab(ctx: DemoContext, automation: Automation): Session | undefined {
 
 const SKIPPED = 'previous run still working'
 
-/** Starts a run in the automation's run tab (made the first time); answers its session id. A tab still busy skips the run, as the real server does (CONFLICT). */
-function runAutomation(ctx: DemoContext, automation: Automation, trigger: AutomationRun['trigger']): string {
+/** The result of starting a run, like the real scheduler's: the run tab's session id, or why it was skipped */
+type RunResult = { sessionId: string } | { error: string }
+
+/** Starts a run in the automation's run tab (made the first time). A tab still busy skips the run. */
+function runAutomation(ctx: DemoContext, automation: Automation, trigger: AutomationRun['trigger']): RunResult {
   const project = ctx.server.state.project
+  const at = ctx.server.clock.now()
   let session = runTab(ctx, automation)
   if (session && (session.status === 'working' || session.status === 'attention' || (session.decision && session.status !== 'exited'))) {
-    automation.history.unshift({ at: ctx.server.clock.now(), trigger, outcome: 'skipped', error: SKIPPED })
+    automation.history.unshift({ at, trigger, outcome: 'skipped', error: SKIPPED })
     automation.history.splice(20)
     ctx.server.changed()
-    throw new DemoError('CONFLICT', `${automation.name}: ${SKIPPED}`)
+    return { error: SKIPPED }
   }
   if (!session) {
-    session = {
-      id: ctx.server.newId('s'),
-      title: automation.name,
-      llm: automation.llm ?? { provider: 'claude' },
-      queue: [],
-      status: 'idle',
-      context: { kind: 'automation', automationId: automation.id }
-    }
+    session = { id: ctx.server.newId('s'), title: automation.name, llm: automation.llm ?? { provider: 'claude' }, queue: [], status: 'idle', context: { kind: 'automation', automationId: automation.id } }
     project.globalSessions.push(session)
   }
   if (session.ptyId) ctx.server.terminals.close(session.ptyId)
+  // A renewed tab: its queue is emptied and its agent is the automation's current one
   session.title = automation.name
+  session.queue = []
+  session.llm = automation.llm ?? { provider: 'claude' }
   session.ptyId = ctx.server.terminals.open(sessionBanner(agentLabel(session.llm.provider), `Automation · ${automation.name}`), DEMO_ROOT)
-  automation.history.unshift({ at: ctx.server.clock.now(), trigger, outcome: 'ran', sessionId: session.id })
+  automation.history.unshift({ at, trigger, outcome: 'ran', sessionId: session.id })
   automation.history.splice(20)
   const reply = automation.id === DEMO_NIGHTLY_ID ? NIGHTLY_RUN : replyFor(automation.prompt)
   runPrompt(ctx, { session, list: project.globalSessions }, automation.prompt, reply)
-  return session.id
+  return { sessionId: session.id }
 }
 
 export const AUTOMATION_HANDLERS: DemoHandlers<'automation.save' | 'automation.runNow' | 'automation.resolveMissed'> = {
@@ -54,42 +54,42 @@ export const AUTOMATION_HANDLERS: DemoHandlers<'automation.save' | 'automation.r
     if (!input.id) throw notInDemo()
     const automation = findAutomation(ctx.server.state.project.automations, input.id)
     if (!input.name.trim() || !input.prompt.trim()) throw new DemoError('BAD_REQUEST', 'A name and a prompt are needed')
+    // A schedule change or a re-enable restarts the clock: nothing counts as missed; off, nothing is missed (automations/model.ts)
+    const restart = automation.schedule.cron !== input.schedule.cron || automation.schedule.tz !== input.schedule.tz || (!automation.enabled && input.enabled)
     automation.name = input.name.trim()
     automation.prompt = input.prompt
     automation.schedule = input.schedule
     automation.enabled = input.enabled
+    if (restart) {
+      automation.lastSlot = ctx.server.clock.now()
+      delete automation.missed
+    }
+    if (!input.enabled) delete automation.missed
     if (input.llm === null) delete automation.llm
     else if (input.llm) automation.llm = input.llm
-    const tab = runTab(ctx, automation)
-    if (tab) tab.title = automation.name
     ctx.server.changed()
     return { id: automation.id }
   },
   'automation.runNow': (ctx, p) => {
     checkProject(p.projectId)
     const automation = findAutomation(ctx.server.state.project.automations, p.automationId)
-    return { sessionId: runAutomation(ctx, automation, 'manual') }
+    const run = runAutomation(ctx, automation, 'manual')
+    if ('error' in run) throw new DemoError('CONFLICT', `${automation.name}: ${run.error}`)
+    return { sessionId: run.sessionId }
   },
   'automation.resolveMissed': (ctx, p) => {
     checkProject(p.projectId)
     const automations = ctx.server.state.project.automations
     const started: { automationId: string; sessionId?: string; error?: string }[] = []
-    for (const id of p.run) {
-      const automation = automations.find((a) => a.id === id)
-      if (!automation?.missed) {
-        started.push({ automationId: id, error: 'Nothing was missed' })
-        continue
-      }
-      delete automation.missed
-      try {
-        started.push({ automationId: id, sessionId: runAutomation(ctx, automation, 'missed') })
-      } catch (err) {
-        started.push({ automationId: id, error: err instanceof Error ? err.message : String(err) })
-      }
-    }
-    for (const id of p.dismiss) {
+    const run = [...new Set(p.run)].filter((id) => automations.some((a) => a.id === id && a.missed))
+    // Cleared first, as the real server does, so a run that is skipped doesn't leave its missed slot behind
+    for (const id of [...run, ...p.dismiss]) {
       const automation = automations.find((a) => a.id === id)
       if (automation) delete automation.missed
+    }
+    for (const id of run) {
+      const result = runAutomation(ctx, findAutomation(automations, id), 'missed')
+      started.push('error' in result ? { automationId: id, error: result.error } : { automationId: id, sessionId: result.sessionId })
     }
     ctx.server.changed()
     return { started }

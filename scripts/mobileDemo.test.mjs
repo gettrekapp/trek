@@ -458,7 +458,9 @@ test('demo: automations run now, resolve missed runs and save edits', async () =
     await h.conn.request('automation.save', { ...ref, automation: { id: a.id, name: 'Weekly notes', prompt: a.prompt, schedule: a.schedule, enabled: true } })
     assert.equal(a.name, 'Weekly notes')
     assert.equal(a.enabled, true)
+    await h.conn.request('automation.runNow', { ...ref, automationId: a.id })
     assert.equal(run.title, 'Weekly notes')
+    await until(() => run.status === 'done')
     await assert.rejects(h.conn.request('automation.save', { ...ref, automation: { name: 'New', prompt: 'p', schedule: a.schedule, enabled: true } }), { message: 'Not available in the demo' })
   } finally {
     h.close()
@@ -491,6 +493,56 @@ test('demo: state survives a reconnect; a new demo starts fresh', async () => {
     } finally {
       fresh.dispose()
     }
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a prompt past the queue end and an empty review are BAD_REQUEST; a send keeps the revision', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID }
+    await assert.rejects(h.conn.request('session.dequeue', { ...ref, sessionId: 's-checkout-claude', index: 5 }), { code: 'BAD_REQUEST' })
+    const wt = h.server.state.project.repositories[0].worktrees[1]
+    const revision = wt.review.revision
+    await h.conn.request('review.send', { ...ref, worktreeId: wt.id, sessionId: 's-checkout-claude', revision })
+    assert.ok(wt.reviewRevision >= revision)
+    await assert.rejects(h.conn.request('review.send', { ...ref, worktreeId: wt.id, sessionId: 's-checkout-claude', revision: 0 }), { code: 'BAD_REQUEST' })
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: a busy run tab skips a run; turning an automation off forgets its missed runs', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID }
+    const [nightly, changelog] = h.server.state.project.automations
+    await h.conn.request('automation.runNow', { ...ref, automationId: changelog.id })
+    await assert.rejects(h.conn.request('automation.runNow', { ...ref, automationId: changelog.id }), { code: 'CONFLICT', message: `${changelog.name}: previous run still working` })
+    assert.equal(changelog.history[0].outcome, 'skipped')
+    const nightlyTab = sessionIn(h, 's-nightly')
+    nightlyTab.status = 'working'
+    const { started } = await h.conn.request('automation.resolveMissed', { ...ref, run: [nightly.id, nightly.id, changelog.id], dismiss: [] })
+    assert.deepEqual(started, [{ automationId: nightly.id, error: 'previous run still working' }])
+    nightly.missed = nightly.missed ?? { since: 1, count: 1 }
+    await h.conn.request('automation.save', { ...ref, automation: { id: nightly.id, name: nightly.name, prompt: nightly.prompt, schedule: nightly.schedule, enabled: false } })
+    assert.equal(nightly.missed, undefined)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: typing in a terminal answers its decision', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const session = sessionIn(h, 's-login-claude')
+    assert.ok(session.decision)
+    await h.conn.request('pty.write', { ptyId: session.ptyId, data: '1' })
+    assert.equal(session.decision, undefined)
   } finally {
     h.close()
   }

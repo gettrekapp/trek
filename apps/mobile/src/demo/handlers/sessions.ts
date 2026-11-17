@@ -4,7 +4,7 @@ import { reviewPrompt, type Session, type Worktree } from '../../shared.ts'
 import { DEMO_ROOT } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
-import { checkProject, findSession, findWorktree, type FoundSession } from '../demoProject.ts'
+import { allSessions, checkProject, findSession, findWorktree, setStatus, type FoundSession } from '../demoProject.ts'
 import { promptEcho, replyFor, RESUMED, sessionBanner } from '../demoScripts.ts'
 import type { DemoContext } from '../demoServer.ts'
 
@@ -13,12 +13,6 @@ export const agentLabel = (provider: string): string => AGENT_LABELS[provider] ?
 
 /** Where a session runs, for its banner */
 const whereOf = (found: { worktree?: Worktree }): string => found.worktree?.branch ?? found.worktree?.name ?? 'Global'
-
-export function setStatus(ctx: DemoContext, session: Session, status: Session['status']): void {
-  session.status = status
-  if (status === 'attention' || status === 'done') ctx.server.state.since[session.id] = ctx.server.clock.now()
-  else delete ctx.server.state.since[session.id]
-}
 
 function ptyOf(ctx: DemoContext, found: FoundSession): string {
   const id = found.session.ptyId
@@ -32,11 +26,11 @@ export function runPrompt(ctx: DemoContext, found: FoundSession, text: string, r
   const { session } = found
   delete session.decision
   delete ctx.server.state.ticking[session.id]
-  setStatus(ctx, session, 'working')
+  setStatus(ctx.server.state, session, 'working', ctx.server.clock.now())
   ctx.server.changed()
   ctx.server.terminals.print(ptyId, promptEcho(text))
   ctx.server.terminals.play(ptyId, reply, () => {
-    setStatus(ctx, session, 'done')
+    setStatus(ctx.server.state, session, 'done', ctx.server.clock.now())
     ctx.server.changed()
   })
 }
@@ -48,7 +42,7 @@ export function loadWorktree(ctx: DemoContext, worktree: Worktree): void {
   for (const session of worktree.sessions) {
     session.ptyId = ctx.server.terminals.open(`${ctx.server.state.scrollback[session.id] ?? ''}${RESUMED}`, worktree.path)
     delete ctx.server.state.scrollback[session.id]
-    setStatus(ctx, session, 'idle')
+    setStatus(ctx.server.state, session, 'idle', ctx.server.clock.now())
   }
 }
 
@@ -60,7 +54,7 @@ export function unloadWorktree(ctx: DemoContext, worktree: Worktree): void {
     delete session.ptyId
     delete session.decision
     delete ctx.server.state.ticking[session.id]
-    setStatus(ctx, session, 'idle')
+    setStatus(ctx.server.state, session, 'idle', ctx.server.clock.now())
   }
   worktree.loaded = false
 }
@@ -102,13 +96,14 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
   'session.restart': (ctx, p) => {
     checkProject(p.projectId)
     const found = findSession(ctx.server.state.project, p.sessionId)
+    // The demo restarts a running session too (the real server refuses with BAD_REQUEST): friendlier for a demo
     if (found.worktree && !found.worktree.loaded) throw new DemoError('BAD_REQUEST', "Load the worktree's sessions first")
     const { session } = found
     if (session.ptyId) ctx.server.terminals.close(session.ptyId)
     session.ptyId = ctx.server.terminals.open(sessionBanner(agentLabel(session.llm.provider), whereOf(found)), found.worktree?.path ?? DEMO_ROOT)
     delete session.decision
     delete ctx.server.state.ticking[session.id]
-    setStatus(ctx, session, 'idle')
+    setStatus(ctx.server.state, session, 'idle', ctx.server.clock.now())
     ctx.server.changed()
     return { ptyId: session.ptyId }
   },
@@ -176,6 +171,12 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
   },
   'pty.write': (ctx, p) => {
     ctx.server.terminals.write(p.ptyId, p.data)
+    // Typing answers an open decision, as the real server's onUserInput does
+    const owner = allSessions(ctx.server.state.project).find((f) => f.session.ptyId === p.ptyId)
+    if (owner?.session.decision) {
+      delete owner.session.decision
+      ctx.server.changed()
+    }
     return null
   },
   'pty.resize': (ctx, p) => {

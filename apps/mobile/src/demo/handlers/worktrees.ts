@@ -62,7 +62,7 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
       sessions: []
     }
     repo.worktrees.push(worktree)
-    record(ctx, repo.id, branch, 'created')
+    record(ctx, repo.id, branch, 'created', undefined, { text: worktree.path })
     ctx.server.changed()
     return { worktreeId: worktree.id }
   },
@@ -77,7 +77,7 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
       delete ctx.server.state.scrollback[s.id]
     }
     delete ctx.server.state.changes[worktree.id]
-    if (worktree.branch) record(ctx, repo.id, worktree.branch, 'removed')
+    if (worktree.branch) record(ctx, repo.id, worktree.branch, 'removed', { text: worktree.path })
     ctx.server.changed()
     return null
   },

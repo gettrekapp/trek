@@ -6,7 +6,7 @@ import { CAPABILITY, parseTopic, projectTopic, realTimers, type SocketCloseEvent
 import { DEMO_PROJECT_ID, DEMO_PROJECT_NAME, DEMO_REPO_ID, DEMO_ROOT, initialDemoState, type DemoState } from './demoData.ts'
 import { DemoError, notInDemo } from './demoError.ts'
 import { DEMO_HANDLERS, type DemoHandler } from './demoHandlers.ts'
-import { allSessions, attentionOf } from './demoProject.ts'
+import { allSessions, attentionOf, setStatus } from './demoProject.ts'
 import { DemoTerminals, type PtyListener } from './demoTerminals.ts'
 
 export const DEMO_SERVER_UUID = '6f1d2c3b-0000-4000-8000-000000000de0'
@@ -280,8 +280,7 @@ export class DemoServer {
       if (next !== undefined) this.terminals.print(session.ptyId, next)
       if (left.length === 0) {
         delete this.state.ticking[sessionId]
-        session.status = 'done'
-        this.state.since[sessionId] = this.clock.now()
+        setStatus(this.state, session, 'done', this.clock.now())
         changed = true
       }
     }
