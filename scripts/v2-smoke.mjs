@@ -173,7 +173,8 @@ const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', join(work, 'data')], {
       cwd: fileURLToPath(new URL('../server/', import.meta.url)),
-      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}` },
+      // An empty Claude config: the quick button editor's mcpTools.list would start this machine's MCP servers.
+      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: join(work, 'claude-config') },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -750,7 +751,7 @@ try {
   await createModal.locator('input[placeholder="Label"]').fill('Check area')
   await createModal.locator('.tpl-textarea').fill('Check {AREA} on [branch]')
   check('the editor highlights the input and the built-in', await createModal.locator('.tpl-layer .tpl-input, .tpl-layer .tpl-builtin').allTextContents(), ['{AREA}', '[branch]'])
-  await createModal.locator('button', { hasText: 'Save' }).click()
+  await createModal.locator('.modal-footer button', { hasText: 'Save' }).click()
   await createModal.waitFor({ state: 'detached', timeout: 5000 })
   check('a button made from the console is saved on the server', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => [b.label, b.text]), [['Check area', 'Check {AREA} on [branch]']]), [['Check area', 'Check {AREA} on [branch]']])
   const made = bar.locator('.quick-btn', { hasText: 'Check area' })
@@ -770,7 +771,7 @@ try {
   await createModal.waitFor({ timeout: 5000 })
   await createModal.locator('input[placeholder="Label"]').fill('Second')
   await createModal.locator('.tpl-textarea').fill('second')
-  await createModal.locator('button', { hasText: 'Save' }).click()
+  await createModal.locator('.modal-footer button', { hasText: 'Save' }).click()
   await createModal.waitFor({ state: 'detached', timeout: 5000 })
   const secondBtn = bar.locator('.quick-btn', { hasText: 'Second' })
   await secondBtn.waitFor({ timeout: 5000 })
@@ -781,14 +782,21 @@ try {
   await secondBtn.locator('.quick-btn-edit').click()
   const pencilModal = w1.locator('.modal', { hasText: 'Edit quick button' })
   await pencilModal.waitFor({ timeout: 5000 })
-  check('the ✎ opens the edit modal with Delete', await pencilModal.locator('button', { hasText: 'Delete' }).count(), 1)
-  await pencilModal.locator('button', { hasText: 'Delete' }).click()
+  check('the ✎ opens the edit modal with Delete', await pencilModal.locator('.modal-footer button', { hasText: 'Delete' }).count(), 1)
+  // The MCP tool reference: Trek's tools sorted, then the other servers' (none in the smoke's empty Claude config).
+  const toolList = pencilModal.locator('.mcp-tool-list')
+  await toolList.locator('.mcp-tool-names button', { hasText: 'list_worktrees' }).waitFor({ timeout: 10000 })
+  const trekNames = await toolList.locator('.mcp-tool-names').first().locator('button').allTextContents()
+  check('the edit modal lists Trek\'s MCP tools, sorted', trekNames.length > 30 && trekNames.join() === [...trekNames].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })).join(), true)
+  check('and says there are no other tools', await until(async () => toolList.locator('.mcp-tool-list-empty').textContent(), 'No other MCP tools found.'), 'No other MCP tools found.')
+  if (process.env.SHOT_DIR) await w1.screenshot({ path: join(process.env.SHOT_DIR, 'quick-button-mcp-tools.png') })
+  await pencilModal.locator('.modal-footer button', { hasText: 'Delete' }).click()
   check('deleting from the ✎ modal leaves the other button', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => b.label), ['Check area']), ['Check area'])
   await secondBtn.waitFor({ state: 'detached', timeout: 5000 })
   // A right-click on a quick button edits it.
   await made.locator('.quick-btn-main').click({ button: 'right' })
   const editModal = w1.locator('.modal', { hasText: 'Edit quick button' })
-  await editModal.locator('button', { hasText: 'Delete' }).click()
+  await editModal.locator('.modal-footer button', { hasText: 'Delete' }).click()
   check('deleting it from the edit modal clears it on the server', await until(async () => (await projectNow()).settings.terminalButtons ?? [], []), [])
   await made.waitFor({ state: 'detached', timeout: 5000 })
   // The bar keeps its height with only + left, so the terminal is not refitted (and the pty size
@@ -850,7 +858,7 @@ try {
   check('without the Queue chip', await bar.locator('.queue-toggle').count(), 0)
   await bar.locator('.quick-btn-add').click()
   await createModal.waitFor({ timeout: 5000 })
-  await createModal.locator('button', { hasText: 'Cancel' }).click()
+  await createModal.locator('.modal-footer button', { hasText: 'Cancel' }).click()
   await createModal.waitFor({ state: 'detached', timeout: 5000 })
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })

@@ -4,7 +4,8 @@
 // Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
 // moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts),
-// and the server's own update (update/updateHandlers.ts).
+// and the server's own update (update/updateHandlers.ts), and the MCP tools a session can call
+// (mcp/toolCatalog.ts).
 import type { PairingCodes } from './pairing'
 import type { PhoneAccessControl } from './phoneAccess'
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
@@ -32,6 +33,7 @@ import { historyHandlers } from './history/historyHandlers.ts'
 import type { HistoryStore } from './history/store.ts'
 import { updateHandlers } from './update/updateHandlers.ts'
 import { pluginInstallHandlers } from './plugins/installHandlers.ts'
+import { toolCatalogHandlers, type ToolCatalog } from './mcp/toolCatalog.ts'
 import type { InstalledPlugins } from './plugins/installed.ts'
 import type { UpdateService } from './update/service.ts'
 import { branchChanges, change, recordHistory, tagValue, type Attribution } from './history/record.ts'
@@ -92,6 +94,8 @@ export interface V2Context {
   promoteRequests?: PromoteRequests
   /** What each client shows (`ui.report`), for get_selected_worktree and focus_session */
   selections?: UiSelections
+  /** The other MCP servers' tools (`mcpTools.list`); without it only Trek's are listed */
+  toolCatalog?: ToolCatalog
   /** This connection's kind of client, as the hello told (absent: a desktop window) */
   clientKind?: UiClientKind
   /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
@@ -423,6 +427,7 @@ const handlers: Record<string, Handler> = {
   ...historyHandlers,
   ...updateHandlers,
   ...pluginInstallHandlers,
+  ...toolCatalogHandlers,
 
   // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
   // ask (a web session or a paired phone included): a token already holds shell-level power on

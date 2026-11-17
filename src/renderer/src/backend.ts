@@ -42,6 +42,7 @@ import type { PluginWelcome } from './plugins/presence'
 import type { AutomationInput, ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
 import type { HistoryEvent, HistoryPage } from '../../shared/model/history'
+import type { McpToolCatalog } from '../../shared/mcpTools'
 import type { PromoteAsked } from './v2/promoteFlow'
 
 /** What `review.add` takes: a comment before the server gives it an id and a time. */
@@ -228,6 +229,13 @@ export interface WindowBackend {
     /** Each new entry of the window's project (or a newer version of one, same id); returns the unsubscribe */
     onRecorded(listener: (event: HistoryEvent) => void): () => void
   }
+  /** The MCP tools a session can call (the `mcpTools` feature): Trek's and the other configured servers' */
+  readonly mcpTools: {
+    /** Cached on the server; `refresh` asks the other servers again */
+    list(refresh?: boolean): Promise<McpToolCatalog>
+    /** Trek's own tools alone, without waiting for the other servers (its `servers` is empty) */
+    trek(): Promise<McpToolCatalog>
+  }
   /** Both report a failure in their own dialog and resolve. */
   readonly repos: {
     /** Asks the user which repository to add */
@@ -342,6 +350,7 @@ export const idleBackend: WindowBackend = {
   },
   automations: { save: noProject, remove: noProject, runNow: noProject, resolveMissed: noProject },
   history: { list: noProject, onRecorded: () => () => {} },
+  mcpTools: { list: noProject, trek: noProject },
   repos: { add: noProject, remove: noProject },
   errors: {
     show: (title, message) => void window.api.showError(title, message),
