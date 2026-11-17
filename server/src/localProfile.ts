@@ -23,6 +23,8 @@ export interface LocalProfile {
   lockPath: string
   /** <dataDir>/local (or local-<name>): the local server's projects and MCP files */
   dataDir: string
+  /** The `--local-profile` name; absent for the default profile */
+  name?: string
 }
 
 /**
@@ -43,7 +45,8 @@ export function localProfile(
     configPath: join(dir, LOCAL_CONFIG_FILE),
     infoPath: join(dir, LOCAL_INFO_FILE),
     lockPath: join(dir, LOCAL_LOCK_FILE),
-    dataDir: join(dataDir, localProfileSegment(name))
+    dataDir: join(dataDir, localProfileSegment(name)),
+    ...(name === undefined ? {} : { name })
   }
 }
 

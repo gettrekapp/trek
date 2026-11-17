@@ -14,8 +14,10 @@ import {
   promptFor,
   releaseNotesUrl,
   shouldOffer,
+  installsOnQuit,
   updateCheckDisabled,
-  updatePlatform
+  updatePlatform,
+  waitsForSquirrel
 } from '../src/shared/appUpdate.ts'
 
 const NOW = 1_800_000_000_000
@@ -76,7 +78,7 @@ test("a dialog's answer acts only while the state is still the one the dialog wa
   assert.equal(actionApplies('install', ready, { kind: 'ready', version: '0.4.1' }), true)
   assert.equal(actionApplies('install', ready, { kind: 'ready', version: '0.4.2' }), false, 'another version is ready by now')
   assert.equal(actionApplies('install', ready, available), false, 'macOS gave the update up: it is back to the download')
-  assert.equal(actionApplies('later', ready, ready), false, 'Later on a downloaded update changes nothing: it installs on quit')
+  assert.equal(actionApplies('later', ready, ready), false, 'Later on a downloaded update changes nothing: it stays ready')
   // Release Notes opens the page of the version the dialog named, whatever happened since.
   assert.equal(actionApplies('notes', available, available), true)
   assert.equal(actionApplies('notes', available, { kind: 'idle' }), true)
@@ -182,10 +184,10 @@ test('the release notes link names the tag; a download percent is a whole number
   assert.equal(clampPercent(NaN), 0)
 })
 
-test('updatePlatform: the Mac installs updates, Linux only offers the release page, Windows has no updater yet', () => {
+test('updatePlatform: the Mac and Windows install updates, Linux only offers the release page', () => {
   assert.equal(updatePlatform('darwin'), 'darwin')
   assert.equal(updatePlatform('linux'), 'linux')
-  assert.equal(updatePlatform('win32'), null)
+  assert.equal(updatePlatform('win32'), 'win32')
   assert.equal(updatePlatform('freebsd'), null)
 })
 
@@ -202,4 +204,23 @@ test('on Linux an available update offers the release page, never a download', (
 test('promptFor defaults to the Mac flow', () => {
   assert.deepEqual(promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0'), promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'darwin'))
   assert.equal(promptFor({ kind: 'available', version: '0.7.0' }, '0.6.0', 'darwin').actions[0], 'download')
+})
+
+test('Windows offers Download, as the Mac does', () => {
+  assert.deepEqual(promptFor({ kind: 'available', version: '0.8.0' }, '0.7.0', 'win32').actions, ['download', 'notes', 'later', 'skip'])
+})
+
+test("Windows' ready prompt says the Local server stops and its terminals close", () => {
+  const p = promptFor({ kind: 'ready', version: '0.8.0' }, '0.7.0', 'win32')
+  assert.deepEqual(p.actions, ['install', 'later'])
+  assert.match(p.detail, /stops the local server/i)
+  assert.doesNotMatch(p.detail, /installs when you quit/i)
+})
+
+test('only the Mac waits for Squirrel, and only the Mac installs on quit', () => {
+  assert.equal(waitsForSquirrel('darwin'), true)
+  assert.equal(waitsForSquirrel('win32'), false)
+  assert.equal(installsOnQuit('darwin'), true)
+  assert.equal(installsOnQuit('win32'), false)
+  assert.equal(installsOnQuit('linux'), false)
 })

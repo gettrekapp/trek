@@ -35,19 +35,27 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
 
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -67,12 +75,12 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
 const LINEAR_KEY = `lin_api_${randomBytes(8).toString('hex')}`
 const VOICE_KEY = `sk_${randomBytes(8).toString('hex')}`
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-integrations-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-integrations-smoke-')))
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
@@ -104,9 +112,8 @@ git('-C', repo, 'add', '.')
 git('-C', repo, '-c', 'user.name=c', '-c', 'user.email=c@c', 'commit', '-q', '-m', 'init')
 
 // The server's agent: it echoes its arguments (the voice prompt among them) and lingers.
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT $*"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: [`'FAKE_AGENT ' + ${ARGS}`] }))
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [{ id: 'app', name: 'app', path: repo }], llm: { providers: { claude: { command: fakeAgent } } } }))
 
@@ -195,7 +202,7 @@ const finish = async (reason) => {
   stubHttp.close()
   const pids = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').map(Number) : [])
   for (const pid of pids(upPids)) killIfOurs(pid, (command) => command === 'sleep 60', "a stack's up")
-  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -214,10 +221,10 @@ try {
       cwd: join(root, 'server'),
       env: {
         ...process.env,
-        HOME: serverHome,
+        ...homeEnv(serverHome),
         XDG_STATE_HOME: join(serverHome, '.local', 'state'),
         SHELL: '/bin/sh',
-        PATH: `${stubs}:${process.env.PATH}`,
+        PATH: `${stubs}${delimiter}${process.env.PATH}`,
         TREK_SERVER_LINEAR_URL: `${stubUrl}/graphql`,
         TREK_SERVER_ELEVENLABS_URL: `${stubUrl}/v1`
       },
@@ -266,7 +273,7 @@ try {
 
   // ---- 2. The app, with the server saved, and the project's window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.TREK_SERVER_LINEAR_URL
   delete env.TREK_SERVER_ELEVENLABS_URL
@@ -321,7 +328,7 @@ try {
   check('a good key connects, as its Linear user', await until(() => linearSection.locator('.settings-desc', { hasText: 'Connected' }).textContent().catch(() => null), 'Connected as Ada Lovelace'), 'Connected as Ada Lovelace')
   const secrets = join(work, 'secrets.json')
   check('every connection hears the key changed, subscribed to nothing or not', await until(() => sdkChanges.filter((c) => c.linear).length > 0, true), true)
-  check("the key is in the server's secrets file, beside its config, owner-only", [existsSync(secrets) ? JSON.parse(readFileSync(secrets, 'utf8')).linear === LINEAR_KEY : false, existsSync(secrets) ? statSync(secrets).mode & 0o777 : null], [true, 0o600])
+  check("the key is in the server's secrets file, beside its config, owner-only", [existsSync(secrets) ? JSON.parse(readFileSync(secrets, 'utf8')).linear === LINEAR_KEY : false, existsSync(secrets) ? modeOf(secrets) : null], [true, mode(0o600)])
   check("the branch's ticket chip shows the issue, looked up by the server", await until(() => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null), 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
   check('every Linear request carried the key the user typed, from the server', [...new Set(linearRequests.map((r) => r.auth))], ['lin_api_wrong', LINEAR_KEY])
 
@@ -447,11 +454,16 @@ try {
 
   // ---- 7. The stack tools, on the server ------------------------------------------------------------
 
-  const got = await tool('get_stack', { worktree: 'feature-x' })
-  check('get_stack: the worktree has a stack, stopped', [got.isError, got.value.available, got.value.name, got.value.state], [false, true, 'trek-app-feature-x', 'stopped'])
-  check('start_stack starts stack.sh up on the server', [(await tool('start_stack', { worktree: 'feature-x' })).value.state, await until(() => (existsSync(stackCalls) ? readFileSync(stackCalls, 'utf8').trim() : ''), 'up')], ['starting', 'up'])
-  check('read_stack_log reads its output', await until(async () => (await tool('read_stack_log', { worktree: 'feature-x' })).value.output?.includes('stack step up') ?? false, true), true)
-  check('stop_stack Ctrl-Cs it and runs stack.sh down', [(await tool('stop_stack', { worktree: 'feature-x' })).value.state, readFileSync(stackCalls, 'utf8').trim().split('\n')], ['stopped', ['up', 'down']])
+  // Windows: no dev stacks on its server (NO_ENVS); the stack tools answer with an error there.
+  if (SERVER_HAS_ENVS) {
+    const got = await tool('get_stack', { worktree: 'feature-x' })
+    check('get_stack: the worktree has a stack, stopped', [got.isError, got.value.available, got.value.name, got.value.state], [false, true, 'trek-app-feature-x', 'stopped'])
+    check('start_stack starts stack.sh up on the server', [(await tool('start_stack', { worktree: 'feature-x' })).value.state, await until(() => (existsSync(stackCalls) ? readFileSync(stackCalls, 'utf8').trim() : ''), 'up')], ['starting', 'up'])
+    check('read_stack_log reads its output', await until(async () => (await tool('read_stack_log', { worktree: 'feature-x' })).value.output?.includes('stack step up') ?? false, true), true)
+    check('stop_stack Ctrl-Cs it and runs stack.sh down', [(await tool('stop_stack', { worktree: 'feature-x' })).value.state, readFileSync(stackCalls, 'utf8').trim().split('\n')], ['stopped', ['up', 'down']])
+  } else {
+    for (const name of ["get_stack: the worktree has a stack, stopped", "start_stack starts stack.sh up on the server", "read_stack_log reads its output", "stop_stack Ctrl-Cs it and runs stack.sh down"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
 
   // ---- 8. A key cleared by another client: the window follows (integrations.changed) ---------------
 

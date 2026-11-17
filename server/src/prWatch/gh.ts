@@ -28,26 +28,45 @@ export function ghBinary(value: string | undefined): string | null {
 
 const NO_GH = 'gh is not installed on the server'
 
+/**
+ * How a gh call runs: through this process's own binary (`viaNode`) or as the program itself, its
+ * arguments and its environment. Windows: a test stub given as a Node script
+ * (TREK_SERVER_GH=/…/gh.mjs) runs with this process's binary, as Windows can't run a sh stub and
+ * execFile can't start a batch file without a shell. That binary is Trek.exe when the app runs this
+ * server (with ELECTRON_RUN_AS_NODE, which the Local server then removes from its own env for its
+ * sessions), so the child gets ELECTRON_RUN_AS_NODE=1 again: without it Trek.exe starts the Trek
+ * app instead of running the script (plain Node ignores the variable). Elsewhere, and for any other
+ * value, TREK_SERVER_GH runs as it is (found on PATH on Windows). Never a prompt, a pager or an
+ * update check: the server has no terminal for them.
+ */
+export function ghCommand(
+  binary: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): { viaNode: boolean; args: string[]; env: NodeJS.ProcessEnv } {
+  const quiet = { GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
+  if (platform === 'win32' && /\.m?js$/i.test(binary)) return { viaNode: true, args: [binary, ...args], env: { ...env, ...quiet, ELECTRON_RUN_AS_NODE: '1' } }
+  return { viaNode: false, args, env: { ...env, ...quiet } }
+}
+
 /** A runner for `binary`; for null, one that always fails as though gh were not installed. */
 export const ghRunner = (binary: string | null, platform: NodeJS.Platform = process.platform): GhRunner => {
   if (binary === null) return () => Promise.reject(new Error(`${NO_GH} (TREK_SERVER_GH is not an absolute path)`))
-  // Windows: a test stub given as a Node script (TREK_SERVER_GH=/…/gh.mjs) runs with this Node,
-  // as Windows can't run a sh stub and execFile can't start a batch file without a shell.
-  // Elsewhere TREK_SERVER_GH runs as it is.
-  const viaNode = platform === 'win32' && /\.m?js$/i.test(binary)
   return (args, signal) =>
     new Promise((resolve, reject) => {
       try {
+        const command = ghCommand(binary, args, platform)
+        const viaNode = command.viaNode
         // On Windows gh is found on PATH, never in the current directory of the server.
         execFile(
           viaNode ? process.execPath : commandPath(binary, { platform }),
-          viaNode ? [binary, ...args] : args,
+          command.args,
           hidden({
             timeout: GH_TIMEOUT_MS,
             maxBuffer: GH_MAX_OUTPUT,
             signal,
-            // Never a prompt, a pager or an update check: the server has no terminal for them.
-            env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
+            env: command.env
           }),
           (err, stdout, stderr) => {
             if (err) {

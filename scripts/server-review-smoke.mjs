@@ -37,13 +37,17 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { reviewPrompt } from '../src/shared/review.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -69,10 +73,10 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-review-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-review-smoke-')))
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
@@ -81,15 +85,21 @@ for (const dir of [serverHome, appHome, userData, data]) mkdirSync(dir, { recurs
 
 const repo = join(serverHome, 'repos', 'app')
 const worktree = `${repo}-feature-x`
-const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8' })
+// No global or system git config for the smoke's git or the server's: both then read a file the
+// same way. On Windows, Git's system config sets core.autocrlf=true, which the server (under its own
+// HOME, so with no global config) would apply to the worktree it checks out (a.txt with CRLF),
+// while the smoke's git, under the runner's global core.autocrlf=false, would commit that as a
+// change to every line of a.txt.
+// /dev/null on Windows too: Git for Windows reads it as NUL (server-promote does the same).
+const noGitConfig = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8', env: { ...process.env, ...noGitConfig } })
 git('init', '-q', '-b', 'main', repo)
 writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\n')
 git('-C', repo, 'add', '.')
 git('-C', repo, 'commit', '-q', '-m', 'init')
 
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT'"] }))
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [{ id: 'app', name: 'app', path: repo }], llm: { providers: { claude: { command: fakeAgent } } } }))
 
@@ -140,7 +150,7 @@ const finish = async (reason) => {
     await Promise.race([new Promise((r) => daemon.once('exit', r)), sleep(5000).then(() => daemon.kill('SIGKILL'))])
   }
   const pids = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').map(Number) : [])
-  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -157,7 +167,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -207,7 +217,7 @@ try {
 
   // ---- 2. The app, with the server saved, and the project's window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)
@@ -244,7 +254,13 @@ try {
   check('the commit list: newest first, with subjects', await commitSelect.locator('option').allTextContents(), [`${newestSha.slice(0, 7)} shout two`, `${olderSha.slice(0, 7)} add b`, `${shaOf('main').slice(0, 7)} init`])
   check("the newest commit's files", await until(shownFiles, ['a.txt']), ['a.txt'])
   await commitSelect.selectOption(olderSha)
-  check("another commit's files", await until(shownFiles, ['b.txt']), ['b.txt'])
+  const olderFiles = await until(shownFiles, ['b.txt'])
+  check("another commit's files", olderFiles, ['b.txt'])
+  // Should it fail: what the server answers for that commit, beside what the panel shows.
+  if (JSON.stringify(olderFiles) !== JSON.stringify(['b.txt'])) {
+    const answer = await sdk.request('worktree.changes', { projectId, worktreeId: featureId, source: { kind: 'commit', sha: olderSha } }).catch((err) => ({ error: String(err) }))
+    console.log(`  the server's worktree.changes for ${olderSha}: ${JSON.stringify(answer)}; picked ${JSON.stringify(await commitSelect.inputValue().catch(() => null))}`)
+  }
   await commitSelect.selectOption(newestSha)
   await until(shownFiles, ['a.txt'])
   // Another worktree selected and back: the tab shows the branch again.

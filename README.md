@@ -12,7 +12,7 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
 ## Why Trek
 
 - **Sessions outlive the window.** Every project lives on a server: the one built into the
-  app, or `trek-server` on another Mac or Linux box (a desktop, a VPS, over Tailscale).
+  app, or `trek-server` on another Mac, Linux or Windows box (a desktop, a VPS, over Tailscale).
   Close the window or the laptop and the agents keep working, and every window open on
   that project sees the same thing live.
 - **Agents that drive agents.** Each session gets the `trek-dev` MCP tools, so one agent
@@ -33,22 +33,27 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
   [latest release](https://github.com/gettrekapp/trek/releases/latest). On a Mac with Apple
   silicon, `Trek-<version>-arm64.dmg` (signed and notarized). On Linux (Ubuntu 22.04+ or
   Debian 12+, x64 or arm64), `Trek-<version>-linux-<arch>.deb`: see [docs/LINUX.md](docs/LINUX.md).
+  On Windows 10 (1809+) or 11 (x64), `Trek-<version>-win-x64.exe`, a per-user installer that needs
+  no admin rights (not code-signed yet; SmartScreen asks once): see [docs/WINDOWS.md](docs/WINDOWS.md).
 - **A remote server (optional)**: the same release has `trek-server` tarballs for macOS
-  and Linux (x64 and arm64). Unpack one on the machine you want the agents to run on and
+  and Linux (x64 and arm64) and a zip for Windows (x64). Unpack one on the machine you want the agents to run on and
   start `bin/trek-server` with Node.js 22 or later. See [server/README.md](server/README.md).
 - **Agents**: install and sign in to the CLIs you want (`claude`, `codex`, `gemini`,
   `grok`) as the user the server runs as. The server's config picks the default agent.
 
 Trek checks for a newer release when it starts and once a day, and shows "Update available" in the
 title bar. Nothing is downloaded or installed until you choose to: **Download**, then **Restart to
-Update**. **Trek → Check for Updates…** (File → Check for Updates… on Linux) checks on demand.
+Update**. **Trek → Check for Updates…** (File → Check for Updates… on Windows and Linux) checks
+on demand. Windows updates like the Mac; Trek stops the Local server first, since the installer
+replaces `Trek.exe`.
 (Releases from before the updater was added don't have it: install a newer dmg by hand once.) On
 Linux the update is notify-only: its dialog offers **Open Release Page**, and you install the new
 `.deb` yourself.
 
-**Status**: early and moving fast. The desktop app runs on macOS (Apple silicon) and Linux (x64 and arm64, `.deb`). A phone companion
-(`apps/mobile`, iOS and Android) isn't in the stores yet, and Windows support is on the
-way. Issues and feedback are welcome.
+**Status**: early and moving fast. The desktop app runs on macOS (Apple silicon), Linux (x64 and arm64, `.deb`: see
+[docs/LINUX.md](docs/LINUX.md)) and Windows (x64, installer: see [docs/WINDOWS.md](docs/WINDOWS.md)).
+Environments, dev stacks and the project bot are not on Windows yet. A phone companion
+(`apps/mobile`, iOS and Android) isn't in the stores yet. Issues and feedback are welcome.
 
 Trek is [MIT licensed](LICENSE).
 
@@ -216,7 +221,7 @@ other window on that project sees them live.
   that saw it update, or "Update failed: …" with the reason and the server as it was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
   shows the release without the button, and one that cannot restart itself asks you to
   restart it there to finish. The Local server has none of this: it is updated with Trek
-  (**Trek → Check for Updates…**, File → Check for Updates… on Linux). See
+  (**Trek → Check for Updates…**, File → Check for Updates… on Windows and Linux). See
   [Updating](server/README.md#updating) in the server README.
 - **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
   `app-server-tokens.json` in the user-data directory, owner-only. When no OS
@@ -665,7 +670,8 @@ one at a time:
 - `npm run smoke:import`: importing a `.trekproj` onto Local and a test server;
 - `npm run smoke:packaged`: the Local server and app smokes on an unpackaged build of the
   installed app (macOS: `dist/mac-arm64/Trek.app`; Linux: `dist/linux-unpacked` or
-  `dist/linux-arm64-unpacked`, under `xvfb-run -a` when there is no display);
+  `dist/linux-arm64-unpacked`, under `xvfb-run -a` when there is no display; Windows:
+  `dist/win-unpacked`, built by `npm run dist:win:dir`);
 - `npm run smoke:local`, `npm run smoke:client` and `cd server && npm run smoke`: the
   server alone.
 
@@ -679,9 +685,10 @@ server's `project:<id>` topic (`src/renderer/src/v2/`).
 
 GitHub Actions runs CI on every push and pull request (Linux: typechecks, `npm test`, the
 build, the Node-only smokes and the phone app's export) and the Electron smokes nightly on
-macOS and Linux (the Linux leg runs under xvfb). A `vX.Y.Z` tag builds a signed, notarized
-`Trek-X.Y.Z-arm64.dmg`, the Linux `.deb` for x64 and arm64, trek-server tarballs for macOS and
-Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How to cut a
+macOS, Linux and Windows (the Linux leg runs under xvfb). A `vX.Y.Z` tag builds a signed, notarized
+`Trek-X.Y.Z-arm64.dmg`, the Linux `.deb` for x64 and arm64, the Windows installer
+`Trek-X.Y.Z-win-x64.exe` (not code-signed yet) (installed and smoke-tested on a Windows runner), trek-server tarballs
+for macOS and Linux (x64 and arm64), the trek-server Windows zip and the trek-relay bundle, and opens a draft GitHub Release. How to cut a
 release, the signing secrets and how to run the Electron smokes by hand:
 [docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.
 

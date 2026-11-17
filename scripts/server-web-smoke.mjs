@@ -41,7 +41,7 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
@@ -49,6 +49,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 150_000
 const DAEMON_READY_MS = 15_000
@@ -75,9 +79,9 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(32).toString('base64url')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-web-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-web-smoke-')))
 const serverHome = join(work, 'server-home')
 const pageHome = join(work, 'page-home')
 const userData = join(work, 'user-data')
@@ -91,9 +95,8 @@ writeFileSync(join(repo, 'a.txt'), 'one\n')
 git('-C', repo, 'add', '.')
 git('-C', repo, 'commit', '-q', '-m', 'init')
 
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT_IN_THE_BROWSER"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT_IN_THE_BROWSER'"] }))
 const configPath = join(work, 'config.json')
 const writeConfig = (tokens) =>
   writeFileSync(
@@ -159,7 +162,7 @@ const finish = async (reason) => {
     await Promise.race([new Promise((r) => daemon.once('exit', r)), sleep(5000).then(() => daemon.kill('SIGKILL'))])
   }
   const pids = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').map(Number) : [])
-  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -212,7 +215,7 @@ try {
 
   const localWeb = spawnSync(process.execPath, ['dist/trek-server.cjs', 'start', '--local', '--web'], {
     cwd: join(root, 'server'),
-    env: { ...process.env, HOME: serverHome },
+    env: { ...process.env, ...homeEnv(serverHome) },
     encoding: 'utf8',
     timeout: 10_000
   })
@@ -224,7 +227,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--web', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(serverHome), XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -294,7 +297,7 @@ try {
 
   // ---- 4. The page: sign in ------------------------------------------------------------------------
 
-  const env = { ...process.env, HOME: pageHome, TREK_WEB_URL: `${base}/`, TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(pageHome), TREK_WEB_URL: `${base}/`, TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: [pageMain, `--user-data-dir=${userData}`], cwd: work, env })
   app.on('window', watch)

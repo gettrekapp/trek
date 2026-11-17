@@ -3,6 +3,7 @@
 import { isLocalEntryId, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_TARGET, normalizePath } from '../shared/model/importProject.ts'
 import { worktreeOrderKey } from '../shared/model/keys.ts'
+import { pathBaseName } from '../shared/pathName.ts'
 import type { Project, Session } from '../shared/model/types.ts'
 import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
@@ -516,7 +517,7 @@ export const NOT_CARRIED =
 const quoted = (name: string): string => `“${name}”`
 
 function fileSection(o: ImportOutcome): string {
-  if ('error' in o) return `${quoted(o.path.split('/').pop() ?? o.path)} could not be read: ${o.error}`
+  if ('error' in o) return `${quoted(pathBaseName(o.path))} could not be read: ${o.error}`
   const lines: string[] = []
   const places = localFirst(o.pieces).map((p) => p.serverName)
   if (places.length === 1) lines.push(`${quoted(o.name)} is now a project on ${places[0]}.`)

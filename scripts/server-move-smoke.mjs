@@ -33,13 +33,17 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -65,8 +69,8 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
 for (const dir of [appHome, userData]) mkdirSync(dir, { recursive: true })
@@ -90,9 +94,8 @@ const stackCalls = join(work, 'stack-calls.log')
 
 const origin = join(work, 'origin.git')
 git('init', '-q', '--bare', origin)
-const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: ["'FAKE_AGENT'"] }))
 
 /** One server's files: its HOME (with its clone), config, token and data dir. */
 function serverFiles(name) {
@@ -199,7 +202,7 @@ const finish = async (reason) => {
     }
   }
   const pids = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').map(Number) : [])
-  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of pids(agentPids)) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   for (const s of [A, B]) spawnSync('git', ['-C', s.repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -215,7 +218,7 @@ async function start(s) {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', s.configPath, '--port', String(port), '--data-dir', s.data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}`, TMPDIR: serverTmp, HOME: s.home, XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}`, TMPDIR: serverTmp, ...homeEnv(s.home), XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemons.push(d)
@@ -296,7 +299,7 @@ try {
 
   // ---- 2. The app, with both servers saved, and A's project window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(appHome), XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)
@@ -314,7 +317,8 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 4)
   check("the window's moveWorktree feature follows the server's move", await until(() => win.evaluate(() => window.__features().moveWorktree), true), true)
-  check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  if (SERVER_HAS_ENVS) check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+  else console.log(`SKIP the environments poll lists feature-x's VM, running (${NO_ENVS})`)
 
   // ---- 3. The dialog ---------------------------------------------------------------------------------
 
@@ -351,16 +355,21 @@ try {
     lines.some((l) => l.includes('1 queued prompt(s) are not moved')),
     lines.some((l) => l.includes('running sessions are stopped first'))
   ], [true, true, true])
+  // Windows: no VM or dev stack to tear down (NO_ENVS), so no teardown box.
   const teardownBox = modal.locator('.move-teardown input')
-  await teardownBox.waitFor({ timeout: 10_000 })
-  const teardownLabel = await modal.locator('.move-teardown').textContent()
-  check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
+  if (SERVER_HAS_ENVS) {
+    await teardownBox.waitFor({ timeout: 10_000 })
+    const teardownLabel = await modal.locator('.move-teardown').textContent()
+    check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
+  } else console.log(`SKIP the dialog offers to tear down its running VM and dev stack, ticked (${NO_ENVS})`)
   check('it warns the ignored .trek/ is deleted with the source', [await modal.locator('.move-ignored').count(), (await modal.locator('.move-ignored .move-paths').textContent()).includes('.trek/')], [1, true])
   await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
   await modal.locator('.move-path').waitFor({ timeout: 10_000 })
-  await teardownBox.uncheck()
-  check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
-  await teardownBox.check()
+  if (SERVER_HAS_ENVS) {
+    await teardownBox.uncheck()
+    check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
+    await teardownBox.check()
+  } else console.log(`SKIP unticked while the stack runs, the move is refused (${NO_ENVS})`)
   check('B\'s project is offered, with the new path', await until(() => modal.locator('.move-path').textContent().catch(() => null), `New worktree: ${targetPath}`), `New worktree: ${targetPath}`)
   check('the place is On B — app', (await modal.locator('.move-row select').nth(1).locator('option:checked').textContent()).trim(), 'On B — app')
 
@@ -368,10 +377,15 @@ try {
 
   await modal.locator('button', { hasText: 'Move worktree' }).click()
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
-  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done', 'done'])
-  check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
-  check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
-  check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
+  // Windows: no VM or stack, so the teardown step is skipped ("nothing to tear down", moveFlow.ts).
+  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', SERVER_HAS_ENVS ? 'done' : 'skipped', 'done'])
+  if (SERVER_HAS_ENVS) {
+    check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
+    check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
+    check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
+  } else {
+    for (const name of ["the dev stack was destroyed on A after B had it, while A's folder was still there", "the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", "and is gone from A's registry"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
   check('the history step copied the whole 17 MB', (await modal.locator('.move-step.done', { hasText: 'Copy the session histories' }).locator('.move-step-detail').textContent()).includes('1 session history, 17.0 MB'), true)
   check('origin has the branch at the source commit', git('--git-dir', origin, 'rev-parse', 'refs/heads/feature-x').trim(), head)
   check('B has the worktree on the same commit', existsSync(targetPath) && git('-C', targetPath, 'rev-parse', 'HEAD').trim(), head)
@@ -382,7 +396,8 @@ try {
   const arrived = readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`))
   check("the session's history (over 16 MiB) is under the new path in B's HOME, byte for byte", [arrived.length > 16 * 1024 * 1024, createHash('sha256').update(arrived).digest('hex')], [true, historySha])
   check('nothing is left staged in either server\'s TMPDIR', readdirSync(serverTmp).filter((n) => n.startsWith('trek-move-')), [])
-  check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', 'PORT=4100\n'])
+  // A target without env (Windows) does not take the .env (src/shared/move.ts).
+  check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', SERVER_HAS_ENVS ? 'PORT=4100\n' : null])
   check("A's worktree is gone from disk and from A's project", [existsSync(sourcePath), (await a.project(pa)).repositories[0].worktrees.some((w) => w.id === worktreeId)], [false, false])
   check("and from A's window", await until(() => rows.filter({ hasText: 'feature-x' }).count(), 0), 0)
   await sleep(500)
@@ -423,7 +438,7 @@ try {
 
   const held = await Promise.all(app.windows().map((w) => w.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))))
   check("no window's store or page holds either server's token", held.some((h) => h.includes(A.token) || h.includes(B.token)), false)
-  const machineLines = readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean)
+  const machineLines = existsSync(machineCalls) ? readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean) : []
   const unexpected = machineLines.filter((l) => !(l.startsWith('docker ps') || l.startsWith('colima list') || l === `colima delete ${vmProfile} --force` || (l.startsWith('docker ') && l.includes(' compose ') && l.endsWith(' down -v'))))
   check('docker and colima ran only as the stubs: status, the VM\'s compose down and delete (never colima start)', unexpected, [])
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])

@@ -1,5 +1,5 @@
 {
-  "name": "trek-developer",
+  "name": "trek",
   "productName": "Trek",
   "version": "0.7.0",
   "description": "Multi-worktree Claude workspace manager",
@@ -49,7 +49,9 @@
     "dist": "npm run build && electron-builder --mac --arm64 --publish never",
     "dist:dir": "npm run build && electron-builder --mac --arm64 --dir --publish never",
     "dist:linux": "npm run build && electron-builder --linux deb --publish never",
-    "dist:linux:dir": "npm run build && electron-builder --linux dir --publish never"
+    "dist:linux:dir": "npm run build && electron-builder --linux dir --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:win:dir": "npm run build && electron-builder --win dir --x64 --publish never"
   },
   "build": {
     "appId": "com.trek.trekdev",
@@ -66,7 +68,6 @@
     "files": [
       "out/**",
       "resources/**",
-      "!**/node_modules/node-pty/prebuilds/{win32-*,darwin-x64}/**",
       "!**/node_modules/node-pty/{deps,third_party,src}/**"
     ],
     "fileAssociations": [
@@ -104,7 +105,10 @@
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Trek Dev switches to an already-open Chrome tab when opening a link."
-      }
+      },
+      "files": [
+        "!**/node_modules/node-pty/prebuilds/{win32-*,darwin-x64}/**"
+      ]
     },
     "linux": {
       "target": [
@@ -131,6 +135,34 @@
       "files": [
         "!**/node_modules/node-pty/prebuilds/**"
       ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icons/256x256.png",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}",
+      "signExts": [
+        ".node",
+        ".dll"
+      ],
+      "files": [
+        "!**/node_modules/node-pty/prebuilds/{darwin-*,win32-arm64}/**"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Trek",
+      "deleteAppDataOnUninstall": false
     },
     "deb": {
       "packageName": "trek",

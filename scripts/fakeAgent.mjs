@@ -43,3 +43,24 @@ export function writeFakeAgent(dir, name, source, platform = process.platform) {
   writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/${script}" "$@"\n`, { mode: 0o755 })
   return launcher
 }
+
+/** The agent's arguments as sh's "$*" has them: joined by spaces (a JS expression, for `print`). */
+export const ARGS = "process.argv.slice(2).join(' ')"
+
+/**
+ * The source of the smokes' usual agent: appends its pid to `pidFile` (when given), prints each of
+ * `print` (JS expressions) on a line of its own, then lingers 300 s, as the sh agents'
+ * `echo $$ >> pids; echo …; exec sleep 300` did. Its pid is the session's: the POSIX launcher
+ * execs node, and on Windows the session runs node on the script.
+ */
+export function lingeringAgent({ pidFile, print = [] }) {
+  return [
+    "import { appendFileSync } from 'node:fs'",
+    ...(pidFile ? [`appendFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n')`] : []),
+    ...print.map((expr) => `console.log(${expr})`),
+    'setTimeout(() => {}, 300_000)'
+  ].join('\n')
+}
+
+/** Whether `command` (a pid's command line, smokeTeardown's commandOf) runs the fake agent `name`'s script. */
+export const isFakeAgentCommand = (command, name = 'fake-agent') => command.includes(`${name}.mjs`)

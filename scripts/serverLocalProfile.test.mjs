@@ -12,9 +12,9 @@ import { removeDir } from './testPlatform.mjs'
 const info = { port: 51234, pid: 4242, token: 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU', version: '0.2.0', build: 'abc123def456' }
 
 /** A profile's paths on Linux, home /h and data dir /d/trek-server, as this machine's join() spells them. */
-const linuxProfile = (segment) => {
+const linuxProfile = (segment, name) => {
   const dir = join('/h', '.config', 'trek-server', segment)
-  return { dir, configPath: join(dir, 'config.json'), infoPath: join(dir, 'local.json'), lockPath: join(dir, 'local.lock'), dataDir: join('/d/trek-server', segment) }
+  return { dir, configPath: join(dir, 'config.json'), infoPath: join(dir, 'local.json'), lockPath: join(dir, 'local.lock'), dataDir: join('/d/trek-server', segment), ...(name === undefined ? {} : { name }) }
 }
 
 function tempDir(t) {
@@ -29,7 +29,7 @@ test('the local profile lives under ~/.config/trek-server/local and <dataDir>/lo
 })
 
 test('a named profile lives under ~/.config/trek-server/local-<name> and <dataDir>/local-<name>', () => {
-  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev', 'linux', {}), linuxProfile('local-dev'))
+  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev', 'linux', {}), linuxProfile('local-dev', 'dev'))
   assert.deepEqual(localProfile('/h', '/d', undefined), localProfile('/h', '/d'), 'no name is the default profile')
   assert.deepEqual(localProfileDir(), LOCAL_PROFILE_DIR)
   assert.deepEqual(localProfileDir('a-1'), ['.config', 'trek-server', 'local-a-1'])

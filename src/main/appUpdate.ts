@@ -11,15 +11,18 @@ import {
   checkDue,
   checkRequest,
   clampPercent,
+  installsOnQuit,
   offerAfterCheck,
   promptFor,
   releaseNotesUrl,
   updateCheckDisabled,
   updatePlatform,
+  waitsForSquirrel,
   type AppUpdateState,
   type UpdateAction
 } from '../shared/appUpdate.ts'
 import { appSettings, updateAppSettings } from './appSettings'
+import { stopLocalServerForInstall } from './localServer'
 
 const PLATFORM = updatePlatform(process.platform)
 
@@ -33,7 +36,7 @@ let prepareQuit: () => Promise<boolean> = async () => true
 let checking: { manual: boolean; outcome: Promise<CheckOutcome> } | null = null
 /** One of the dialogs with a choice or a check's answer is open: a second request does nothing. */
 let prompting = false
-/** Restart to Update is under way: the quit steps, then quitAndInstall. */
+/** Restart to Update is under way: the quit steps (and on Windows the Local server's stop), then quitAndInstall. */
 let installing = false
 
 /**
@@ -74,7 +77,12 @@ async function ask(options: MessageBoxOptions): Promise<number | null> {
   }
 }
 
-/** A download or an install failed: says so (`advice` is what to do about it) and offers the release's page, where the dmg is. */
+/** What to download by hand from the release page: the Mac's dmg, or the Windows installer. */
+function manualDownload(version: string): string {
+  return PLATFORM === 'win32' ? `Trek-${version}-win-x64.exe` : 'the dmg'
+}
+
+/** A download or an install failed: says so (`advice` is what to do about it) and offers the release's page, where the dmg (or the Windows installer) is. */
 async function showUpdateError(message: string, err: unknown, version: string, advice: string): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'error',
@@ -200,28 +208,34 @@ function waitForSquirrel(): { accepted: () => Promise<void>; stop: () => void } 
 
 async function download(version: string): Promise<void> {
   setState({ kind: 'downloading', version, percent: 0 })
-  const squirrel = waitForSquirrel()
+  // The Mac only: on Windows the installer is ready once electron-updater has downloaded it.
+  const squirrel = PLATFORM && waitsForSquirrel(PLATFORM) ? waitForSquirrel() : null
   try {
     await autoUpdater.downloadUpdate()
     // Ready only once macOS has the update: Restart to Update would otherwise wait for it forever.
-    await squirrel.accepted()
+    if (squirrel) await squirrel.accepted()
     setState({ kind: 'ready', version })
   } catch (err) {
     // Before the dialog, which may stay open: the timer must not outlive the wait.
-    squirrel.stop()
+    squirrel?.stop()
     console.warn('trek: the update download failed', err)
     setState({ kind: 'available', version })
-    await showUpdateError(`Could not download Trek ${version}`, err, version, 'You can download the dmg from the release page instead.')
+    await showUpdateError(
+      `Could not download Trek ${version}`,
+      err,
+      version,
+      `You can download ${manualDownload(version)} from the release page instead.`
+    )
   } finally {
-    squirrel.stop()
+    squirrel?.stop()
   }
 }
 
 /**
- * The install failed, at once or later from Squirrel. Only ever after prepareQuit() succeeded:
- * every window is closed, the quit steps have run and the Local server is no longer watched, so
- * the app cannot carry on. It says so, offers the release page, and quits (the quit goes
- * straight through: its steps are done).
+ * The install failed, at once or later from Squirrel (or, on Windows, the Local server could not
+ * be stopped). Only ever after prepareQuit() succeeded: every window is closed, the quit steps
+ * have run and the Local server is no longer watched, so the app cannot carry on. It says so,
+ * offers the release page, and quits (the quit goes straight through: its steps are done).
  */
 async function installFailed(version: string, err: unknown): Promise<void> {
   console.warn('trek: the update could not be installed', err)
@@ -232,12 +246,21 @@ async function installFailed(version: string, err: unknown): Promise<void> {
       `Could not install Trek ${version}`,
       err,
       version,
-      'Trek will now quit. If macOS accepted the update, it is installed the next time Trek starts. ' +
-        'Otherwise, download the dmg from the release page.'
+      PLATFORM === 'win32'
+        ? // Not the installer by hand: it would meet the same running Local server.
+          'Trek will now quit. Open Trek and choose Restart to Update again (the download is kept), or stop the ' +
+            'local server first (File → Local Server → Stop Local Server), then try again.'
+        : 'Trek will now quit. If macOS accepted the update, it is installed the next time Trek starts. ' +
+            'Otherwise, download the dmg from the release page.'
     )
   } finally {
     app.quit()
   }
+}
+
+function logStopFailure(err: unknown): false {
+  console.warn('trek: stopping the local server for the install failed', err)
+  return false
 }
 
 async function install(version: string): Promise<void> {
@@ -255,6 +278,13 @@ async function install(version: string): Promise<void> {
     installing = false
     throw err
   }
+  // Windows: the installer replaces Trek.exe, which the Local server runs on, so the server stops
+  // first (after the quit steps, which stop watching it). If it cannot be, nothing is installed.
+  // A throw counts as not stopped: the windows are closed, so it must still reach installFailed's dialog and quit.
+  if (PLATFORM === 'win32' && !(await stopLocalServerForInstall().catch(logStopFailure))) {
+    await installFailed(version, new Error('The local server could not be stopped, so the update was not installed.'))
+    return
+  }
   // quitAndInstall does not always quit at once, and a failure then arrives as an 'error' event,
   // not a throw. The windows are closed by now, so the event gets the same dialog (and the same
   // quit) rather than leaving the app with nothing to show.
@@ -263,7 +293,9 @@ async function install(version: string): Promise<void> {
   }
   autoUpdater.once('error', onError)
   try {
-    autoUpdater.quitAndInstall()
+    // Windows: a silent install (the NSIS installer shows no wizard), and Trek runs again after it.
+    if (PLATFORM === 'win32') autoUpdater.quitAndInstall(true, true)
+    else autoUpdater.quitAndInstall()
   } catch (err) {
     autoUpdater.removeListener('error', onError)
     await installFailed(version, err)
@@ -285,7 +317,8 @@ async function act(action: UpdateAction, at: AppUpdateState): Promise<void> {
       setState({ kind: 'idle' })
       return
     case 'later':
-      // An offered update hides until the next check finds it again; a downloaded one stays ready (it installs on quit).
+      // An offered update hides until the next check finds it again; a downloaded one stays ready
+      // (actionApplies says no: on the Mac it installs on quit, on Windows it waits for Restart to Update).
       setState({ kind: 'idle' })
       return
     case 'install':
@@ -333,7 +366,8 @@ export function startAppUpdates(opts: { prepareQuit: () => Promise<boolean> }): 
   if (!appUpdatesEnabled()) return
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = PLATFORM === 'darwin'
+  // Not on Windows: the Local server must stop before the installer runs, which only Restart to Update does.
+  autoUpdater.autoInstallOnAppQuit = PLATFORM !== null && installsOnQuit(PLATFORM)
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
   autoUpdater.logger = console

@@ -42,21 +42,33 @@
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import electronPath from 'electron'
 import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isInheritedDescriptor } from '../server/src/inheritedDescriptors.ts'
-import { closeApp } from './smokeTeardown.mjs'
+import { closeApp, commandOf } from './smokeTeardown.mjs'
+import { windowsArgv } from '../src/shared/processCommand.ts'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 const APP_CLOSE_MS = 20_000
 
+const WIN = process.platform === 'win32'
+/** A Windows path or argument, compared as Windows does: either slash, any case. */
+const winPath = (p) => win32.normalize(p).toLowerCase()
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -76,7 +88,7 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const packagedAt = process.argv.indexOf('--packaged')
 const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
 if (packagedAt >= 0 && !packaged) {
@@ -85,12 +97,12 @@ if (packagedAt >= 0 && !packaged) {
 }
 const layout = packaged && packagedLayout(packaged)
 const bundled = JSON.parse(readFileSync(join(root, 'out', 'server', 'build.json'), 'utf8'))
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 // An unpackaged app uses the dev profile, a packaged one the default (localProfileName).
 const profileArgs = packaged ? [] : ['--local-profile', 'dev']
-const profile = join(home, '.config', 'trek-server', packaged ? 'local' : 'local-dev')
+const profile = smokeLocalProfile(home, packaged ? undefined : 'dev')
 const infoPath = join(profile, 'local.json')
 const lockPath = join(profile, 'local.lock')
 const logPath = join(profile, 'server.log')
@@ -99,10 +111,9 @@ const repo = join(work, 'repos', 'my-app')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, '-c', 'user.name=c', '-c', 'user.email=c@c', 'commit', '--allow-empty', '-q', '-m', 'init'])
 // A fake agent: its args, whether a variable from the app's env leaked to it, then it lingers.
-const fakeAgent = join(work, 'fake-agent.sh')
-// Each records its pid (the `sleep 300` it execs keeps it), so finish() can end any one left behind.
+// Each records its pid (it lingers 300 s), so finish() can end any one left behind.
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT $*"\necho "LEAK=\${TREK_SMOKE_LEAK-unset}"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: [`'FAKE_AGENT ' + ${ARGS}`, "'LEAK=' + (process.env.TREK_SMOKE_LEAK ?? 'unset')"] }))
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The dialog stub, loaded before the app's main script. Every message box is recorded; the
@@ -141,6 +152,13 @@ const alive = (pid) => {
   }
 }
 const spawnsInLog = () => (existsSync(logPath) ? readFileSync(logPath, 'utf8').split('\n').filter((l) => l.includes('starts the local server')).length : 0)
+/** Should a spawn count be off: server.log's lines around each spawn's header, to tell who spawned and how each start ended. */
+const showSpawns = (expected) => {
+  if (spawnsInLog() === expected || !existsSync(logPath)) return
+  const lines = readFileSync(logPath, 'utf8').split('\n')
+  const around = lines.flatMap((l, i) => (l.includes('starts the local server') ? [lines.slice(i, i + 4).join(' | ')] : []))
+  console.log(`  server.log's spawns (${around.length}, expected ${expected}):\n    ${around.join('\n    ')}`)
+}
 
 // ---- The app ---------------------------------------------------------------
 
@@ -155,7 +173,7 @@ const watch = (page) => {
 const launch = async (answers = {}) => {
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     TREK_NO_WINDOW_RESTORE: '1',
     // A packaged app would ask the release feed for an update: a smoke never contacts GitHub.
@@ -244,12 +262,12 @@ const finish = async (reason) => {
   if (app) await quit()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', ...profileArgs], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   const left = info()
   if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
-  // The squatter, and any fake agent (its `sleep 300`) a killed server left behind.
+  // The squatter, and any fake agent a killed server left behind.
   const strays = [squatter?.pid, ...(existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : [])]
   for (const pid of strays) {
     if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
@@ -275,12 +293,19 @@ try {
   if (!first) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
   check("with the bundle's version and build", [first.version, first.build], [bundled.version, bundled.build])
   if (packaged) {
-    const command = execFileSync('ps', ['-o', 'command=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
+    const command = commandOf(first.pid)
     // --import-env-from: the app's userData, whose environments the Local server takes over once (5a).
-    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${layout.executable} ${packagedServerBundle(layout)} start --local --import-env-from ${userData}`)
+    const want = [layout.executable, packagedServerBundle(layout), 'start', '--local', '--import-env-from', userData]
+    // Windows: the command line as CreateProcess got it (quoted where needed, backslashes), split
+    // as Windows splits it; the layout's paths are joined with /.
+    if (WIN) check("it runs the packaged app's binary on the bundle inside app.asar", windowsArgv(command).map(winPath), want.map(winPath))
+    else check("it runs the packaged app's binary on the bundle inside app.asar", command, want.join(' '))
   }
-  const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
-  check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  if (WIN) console.log('SKIP it runs detached, leading its own process group (setsid) (Windows has no process groups)')
+  else {
+    const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
+    check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)
+  }
   // Linux: none of the app's sockets or pipes (on macOS libuv's spawn hands the child only its stdio).
   if (process.platform === 'linux') {
     const fdDir = `/proc/${first.pid}/fd`
@@ -296,7 +321,8 @@ try {
     const note = readFileSync(logPath, 'utf8').split('\n').find((l) => l.startsWith('local: closed '))
     console.log(`note: ${note ?? 'the server closed no inherited descriptor'}`)
   } else console.log("SKIP it keeps none of the app's sockets or pipes open (Linux: macOS's spawn passes only stdio)")
-  check('its output goes to server.log in the profile, 0600', [existsSync(logPath), statSync(logPath).mode & 0o777, spawnsInLog()], [true, 0o600, 1])
+  check('its output goes to server.log in the profile, 0600', [existsSync(logPath), existsSync(logPath) && modeOf(logPath), spawnsInLog()], [true, mode(0o600), 1])
+  showSpawns(1)
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------
 
@@ -398,6 +424,7 @@ try {
   win = await launch()
   check('the next launch reuses it: Local running on the same pid', await until(async () => (await localLink(win))?.local?.pid ?? null, third.pid), third.pid)
   check('no new spawn', spawnsInLog(), 3)
+  showSpawns(3)
   check("main's connection to it is up", await until(async () => (await localLink(win))?.status, 'connected'), 'connected')
   check('no skew question for the same build', (await dialogs()).filter((m) => m.includes('local server is running')).length, 0)
   await quit()

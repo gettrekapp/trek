@@ -68,12 +68,16 @@ import './smokeGh.mjs'
 import { openSettingsTab, settingsTabNames } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
+import { fileURLToPath } from 'node:url'
+import { SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent, ARGS } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 360_000
 const DAEMON_READY_MS = 15_000
@@ -117,8 +121,8 @@ const until = async (fn, expected, ms = 10_000) => {
 
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-v2-smoke-')))
-const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-v2-outside-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-v2-smoke-')))
+const outside = realPath(mkdtempSync(join(tmpdir(), 'trek-v2-outside-')))
 const repos = join(work, 'repos')
 mkdirSync(repos)
 const gitRepo = (path) => {
@@ -138,8 +142,15 @@ mkdirSync(machineStubs)
 const machineCalls = join(work, 'machine-calls')
 for (const tool of ['docker', 'colima']) writeFileSync(join(machineStubs, tool), `#!/bin/sh\necho "${tool} $*" >> '${machineCalls}'\nexit 0\n`, { mode: 0o755 })
 // A fake agent: prints its args, then echoes each line typed into it as GOT:<line>; "quit" exits 3.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nwhile IFS= read -r line; do\n  [ "$line" = quit ] && exit 3\n  echo "GOT:$line"\ndone\n', { mode: 0o755 })
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { createInterface } from 'node:readline'",
+    `console.log('FAKE_AGENT ' + ${ARGS})`,
+    "createInterface({ input: process.stdin }).on('line', (line) => (line === 'quit' ? process.exit(3) : console.log('GOT:' + line))).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ llm: { providers: { claude: { command: fakeAgent } } }, tokenHash, repos: [{ id: 'alpha', name: 'Alpha', path: repoA }] }))
 
@@ -161,8 +172,8 @@ let daemon = null
 const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', join(work, 'data')], {
-      cwd: new URL('../server/', import.meta.url).pathname,
-      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}` },
+      cwd: fileURLToPath(new URL('../server/', import.meta.url)),
+      env: { ...process.env, PATH: `${machineStubs}${delimiter}${process.env.PATH}` },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -816,10 +827,12 @@ try {
   check('the exit shows in the terminal', await until(() => term(s1).then((t) => t.includes('[process exited with code 3]')), true), true)
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
-  check('Restart runs the session again on the server', await until(async () => {
+  const restarted = await until(async () => {
     const text = await term(s1, 80)
     return text.includes('[restarted]') && text.split('FAKE_AGENT').length === 3
-  }, true), true)
+  }, true)
+  check('Restart runs the session again on the server', restarted, true)
+  if (!restarted) console.log(`  its terminal: ${JSON.stringify(await term(s1, 80))}`)
 
   // Queue a prompt, then send it: both go through the server.
   await detail.locator('.terminal-pane:visible .queue-toggle').click()
@@ -859,10 +872,11 @@ try {
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
   })), { actions: [], tabs: [], skills: 1 })
+  // Windows: the server has no env or stacks (SERVER_HAS_ENVS), and the window follows it.
   check("and its features say so; the server's docker, env, stacks and skills are on", await w1.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, true, true, false, false])
+  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, false, false])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -995,19 +1009,21 @@ try {
   await settingsRow.click()
   await settings.waitFor({ timeout: 5000 })
   // Environments too since 5a: the server runs them on its own machine.
+  // Not on Windows, whose server has no environments: no Environments tab there.
   check("a server window's Settings show the project's tabs, General first", [await settingsTabNames(settings), await settings.locator('.settings-tab.active').textContent()], [
-    ['General', 'Agents', 'Sessions', 'Worktrees', 'Environments', 'Plugins'],
+    ['General', 'Agents', 'Sessions', 'Worktrees', ...(SERVER_HAS_ENVS ? ['Environments'] : []), 'Plugins'],
     'General'
   ])
   const tabHeadings = async (name) => {
     await openSettingsTab(settings, name)
     return settings.locator('h3').allTextContents()
   }
-  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), await tabHeadings('Environments'), await tabHeadings('Plugins'), await tabHeadings('General')], [
+  if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
+  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await tabHeadings('Plugins'), await tabHeadings('General')], [
     ['Agents', 'Session types'],
     ['Session system prompt', 'Terminal quick buttons', 'Global system prompt', 'Global quick buttons'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
-    ['Environments'],
+    ...(SERVER_HAS_ENVS ? [['Environments']] : []),
     ['Plugins', 'Voice summaries', 'Linear'],
     ['Appearance', 'Notifications', 'Local server']
   ])

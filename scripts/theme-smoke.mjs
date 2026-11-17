@@ -28,14 +28,16 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import electronPath from 'electron'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { sha256Hex } from '../src/renderer/src/plugins/installedLoader.ts'
 import { buildExampleTheme } from '../plugins/example-theme/build.mjs'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL } from './smokeShell.mjs'
+import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
 
 const WATCHDOG_MS = 180_000
 const DEFAULT_BG = '#111113'
@@ -63,11 +65,11 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-theme-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-theme-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 // From here on, the work dir goes on exit, whatever throws. No agents run here.
 const { info, teardown } = localTeardown({ root, home, work, agentPids: join(work, 'agent-pids'), isAgent: () => false })
@@ -113,10 +115,10 @@ dialog.showMessageBox = async (...args) => {
 
 const env = {
   ...process.env,
-  HOME: home,
+  ...homeEnv(home),
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: SMOKE_SHELL,
+  ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
   TREK_NO_WINDOW_RESTORE: '1',
   TREK_NO_UPDATE_CHECK: '1'
 }

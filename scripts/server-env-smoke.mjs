@@ -29,13 +29,22 @@ import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+
+// Windows: trek-server has no environments or dev stacks there yet (welcomeCapabilities drops env and
+// stacks on win32, server/src/capabilities.ts), and this smoke is about them.
+if (process.platform === 'win32') {
+  console.log('SERVER ENV SMOKE SKIP (trek-server on Windows has no environments or dev stacks yet)')
+  process.exit(0)
+}
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -61,10 +70,10 @@ const until = async (fn, expected, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-env-smoke-')))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-server-env-smoke-')))
 // The server's machine: its HOME holds the repositories (Colima mounts only $HOME) and the stacks' registry.
 const serverHome = join(work, 'server-home')
 const appHome = join(work, 'app-home')
@@ -216,7 +225,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), PATH: `${stubs}:${process.env.PATH}` },
+      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), PATH: `${stubs}${delimiter}${process.env.PATH}` },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d

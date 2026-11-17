@@ -3,15 +3,34 @@
 // window's delete, before its stack or VM goes). None of it reads or writes a project.
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { execFile } from 'node:child_process'
+import { statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
+import { hidden } from '../host/childOptions.ts'
+import { commandPath, findOnPath } from '../host/commandPath.ts'
 import { getRecents, removeRecent } from './recents'
-import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText } from './appIpcRules'
+import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText, VSCODE_CMDS, vscodeLaunch } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
 
 const execFileAsync = promisify(execFile)
+
+/** VS Code's (or Insiders') code.cmd on PATH, never the current directory; undefined if neither is there. */
+function windowsCodeCmd(): string | undefined {
+  const isFile = (path: string): boolean => {
+    try {
+      return statSync(path).isFile()
+    } catch {
+      return false
+    }
+  }
+  for (const name of VSCODE_CMDS) {
+    const hit = findOnPath(name, process.env, isFile, ['.cmd'])
+    if (hit) return hit
+  }
+  return undefined
+}
 
 /** How long a `dialog:cancel` for a confirmation not open yet is remembered (the IPC keeps order; this is a backstop) */
 const EARLY_CANCEL_MS = 30_000
@@ -157,11 +176,26 @@ export function registerAppIpc(): void {
     // Absolute, so neither `code` nor `open` reads it as an option.
     const dirPath = editorPath(raw)
     if (!dirPath) throw new Error('dirPath must be an absolute path')
+    // Windows: `code` is bin\code.cmd, which needs a shell; run what it runs (never from the cwd).
+    const codeCmd = process.platform === 'win32' ? windowsCodeCmd() : undefined
+    if (codeCmd) {
+      const { file, args, env } = vscodeLaunch(codeCmd, dirPath, process.env, await readFile(codeCmd, 'utf8').catch(() => ''))
+      try {
+        await execFileAsync(commandPath(file), args, hidden({ env }))
+      } catch (err) {
+        // A PATH entry left by an uninstalled VS Code.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`VS Code was not found at ${file} (from ${codeCmd} on PATH). Reinstall VS Code, or remove its old folder from PATH.`)
+        }
+        throw err
+      }
+      return
+    }
     try {
-      await execFileAsync('code', [dirPath])
+      await execFileAsync(commandPath('code'), [dirPath], hidden({}))
     } catch {
       // `code` shell command not installed — launch the app bundle directly.
-      await execFileAsync('open', ['-a', 'Visual Studio Code', dirPath])
+      await execFileAsync(commandPath('open'), ['-a', 'Visual Studio Code', dirPath], hidden({}))
     }
   })
 }

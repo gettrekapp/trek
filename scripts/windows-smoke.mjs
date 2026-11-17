@@ -32,12 +32,15 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -60,20 +63,29 @@ const until = async (fn, expected, ms = 15_000) => {
   return value
 }
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-windows-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-windows-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 const agentPids = join(work, 'agent-pids')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
 writeShellRc(home)
-const fakeAgent = join(work, 'fake-agent.sh')
 // Each agent records its pid and its worktree ("<pid> <path>"), so a session's process can be found.
-writeFileSync(fakeAgent, `#!/bin/sh\necho "$$ $TREK_WORKTREE_PATH" >> '${agentPids}'\necho "FAKE_AGENT $TREK_WORKTREE_PATH"\nwhile IFS= read -r line; do echo "GOT:$line"; done\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + ' ' + process.env.TREK_WORKTREE_PATH + '\\n')`,
+    "console.log('FAKE_AGENT ' + process.env.TREK_WORKTREE_PATH)",
+    "createInterface({ input: process.stdin }).on('line', (line) => console.log('GOT:' + line)).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 const makeRepo = (name) => {
   const repo = join(work, 'repos', name)
@@ -97,7 +109,7 @@ dialog.showMessageBox = async (...args) => {
 `
 )
 
-const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_UPDATE_CHECK: '1' }
+const env = { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}), TREK_NO_UPDATE_CHECK: '1' }
 delete env.TREK_NO_LOCAL_SERVER
 delete env.TREK_NO_WINDOW_RESTORE
 delete env.TREK_LOCAL_PROFILE
@@ -215,25 +227,38 @@ try {
   const shown = (page, id) => page.evaluate((id) => window.__terminals.readTerminal(id, 50) ?? '', id)
   check("alpha's terminal shows alpha's agent, not beta's", await until(async () => { const t = await shown(a, sa); return t.includes(repos.alpha) && !t.includes(repos.beta) }, true), true)
   check("beta's terminal shows beta's agent, not alpha's", await until(async () => { const t = await shown(b, sb); return t.includes(repos.beta) && !t.includes(repos.alpha) }, true), true)
+  // What each showed, should either check fail.
+  for (const [name, page, id] of [['alpha', a, sa], ['beta', b, sb]]) {
+    const t = await shown(page, id)
+    if (!t.includes(repos[name])) console.log(`  ${name}'s terminal: ${JSON.stringify(t.slice(-600))} (looked for ${JSON.stringify(repos[name])})`)
+  }
 
   // ---- Each project's MCP token reaches its own project -------------------------------------------
 
   const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)])) : [])
   const mcpList = async (projectId) => {
-    const config = filesUnder(home).find((f) => f.endsWith(`/mcp/${projectId}.json`))
+    const config = filesUnder(home).find((f) => basename(f) === `${projectId}.json` && basename(dirname(f)) === 'mcp')
     const { url, headers } = JSON.parse(readFileSync(config, 'utf8')).mcpServers['trek-dev']
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_worktrees', arguments: {} } })
     })
-    return { config, text: JSON.stringify(await res.json()) }
+    // The tool's answer is JSON in a text part: its worktrees' paths, parsed (a raw substring match
+    // misses a Windows path, whose backslashes JSON escapes).
+    const answer = await res.json()
+    let paths = null
+    try {
+      paths = JSON.parse(answer.result.content[0].text).map((w) => w.path)
+    } catch {}
+    return { config, paths, raw: JSON.stringify(answer).slice(0, 600) }
   }
   const mcpA = await mcpList(ids.alpha)
   const mcpB = await mcpList(ids.beta)
   check('each project has its own MCP config', mcpA.config !== mcpB.config, true)
-  check("alpha's token lists alpha's worktrees, not beta's", [mcpA.text.includes(repos.alpha), mcpA.text.includes(repos.beta)], [true, false])
-  check("beta's token lists beta's worktrees, not alpha's", [mcpB.text.includes(repos.beta), mcpB.text.includes(repos.alpha)], [true, false])
+  check("alpha's token lists alpha's worktrees, not beta's", [mcpA.paths?.includes(repos.alpha) ?? null, mcpA.paths?.includes(repos.beta) ?? null], [true, false])
+  check("beta's token lists beta's worktrees, not alpha's", [mcpB.paths?.includes(repos.beta) ?? null, mcpB.paths?.includes(repos.alpha) ?? null], [true, false])
+  for (const [name, m] of [['alpha', mcpA], ['beta', mcpB]]) if (!m.paths?.includes(repos[name])) console.log(`  ${name}'s token listed: ${JSON.stringify(m.paths)} (${m.raw})`)
 
   // ---- Closing a window ------------------------------------------------------------------------------
 
@@ -405,9 +430,11 @@ try {
     document.body.appendChild(backdrop)
     const { left, right, width } = modal.getBoundingClientRect()
     backdrop.remove()
-    return [Math.round(width), left >= 0 && right <= window.innerWidth]
+    return [Math.round(width), left >= 0 && right <= window.innerWidth, window.innerWidth]
   })
-  check('a modal is capped to the window (448 of 480 wide) and sits inside it', modalFits, [448, true])
+  // The cap is 32px under the page's width: 448 of a 480 window where the frame takes no width
+  // (macOS, Linux); on Windows the frame's borders take some of the 480 (innerWidth is less).
+  check('a modal is capped to the window (448 of 480 wide) and sits inside it', modalFits.slice(0, 2), [modalFits[2] - 32, true])
 
   // ---- The sidebar hides ----------------------------------------------------------------------------------------
 

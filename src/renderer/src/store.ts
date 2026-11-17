@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { pathBaseName } from '../../shared/pathName'
 import { OFF_VIEW, type BotEvent, type BotView } from '../../shared/bot'
 import type { BotSettings } from '../../shared/types'
 import { hostKey, sameWorktree } from '../../shared/types'
@@ -34,8 +35,9 @@ export const BOT_DECISION_ID = '__bot__'
 
 export const GLOBAL_WORKTREE_ID = '__global__'
 
+/** A path's last part, a Windows server's paths included (pathBaseName). */
 export function baseName(p: string): string {
-  return p.replace(/\/+$/, '').split('/').pop() ?? p
+  return pathBaseName(p)
 }
 
 function primaryWorktree(repo: Repository): WorktreeInstance {

@@ -37,23 +37,30 @@ import './smokeGh.mjs'
 import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent, isFakeAgentCommand } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 
 const checks = []
 const failedChecks = []
+/** A file's permission bits; Windows has none (its files are guarded by the user profile), so there both sides read NO_MODES. */
+const NO_MODES = 'no file modes on Windows'
+const modeOf = (path) => (process.platform === 'win32' ? NO_MODES : statSync(path).mode & 0o777)
+const mode = (bits) => (process.platform === 'win32' ? NO_MODES : bits)
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
@@ -83,11 +90,11 @@ const first = async (fn, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-features-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
 mkdirSync(profile, { recursive: true })
@@ -161,12 +168,48 @@ echo "$(next_seq)#$PWD|$*" >> '${calls('docker')}'
 case " $* " in *" compose "*" ps "*) echo "[]" ;; esac
 exit 0`)
 stub('code', `echo "$(next_seq)#$*" >> '${calls('code')}'`)
+// Windows: Trek finds VS Code's bin\code.cmd on PATH (findOnPath, .cmd only) and runs the install's
+// Code.exe, one folder up, as Node on resources\app\out\cli.js with the folder (vscodeLaunch). So the
+// stub is such an install: a code.cmd (only read for a cli.js path), node.exe copied as Code.exe
+// (ELECTRON_RUN_AS_NODE means nothing to node), and a cli.js that records the folder as the sh stub does.
+const vscodeBin = join(work, 'vscode', 'bin')
+if (process.platform === 'win32') {
+  const install = join(work, 'vscode')
+  mkdirSync(vscodeBin, { recursive: true })
+  mkdirSync(join(install, 'resources', 'app', 'out'), { recursive: true })
+  writeFileSync(join(vscodeBin, 'code.cmd'), '@echo off\r\nrem a smoke stub: Trek runs Code.exe on resources\\app\\out\\cli.js itself\r\n')
+  copyFileSync(process.execPath, join(install, 'Code.exe'))
+  writeFileSync(
+    join(install, 'resources', 'app', 'out', 'cli.js'),
+    [
+      "const { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')",
+      `const lock = ${JSON.stringify(seqLock)}`,
+      `const file = ${JSON.stringify(seqFile)}`,
+      'const pause = new Int32Array(new SharedArrayBuffer(4))',
+      'for (;;) { try { mkdirSync(lock); break } catch { Atomics.wait(pause, 0, 0, 10) } }',
+      "let n = 0; try { n = Number(readFileSync(file, 'utf8')) || 0 } catch {}",
+      "writeFileSync(file, `${n + 1}\\n`)",
+      'rmSync(lock, { recursive: true, force: true })',
+      `appendFileSync(${JSON.stringify(calls('code'))}, \`\${n + 1}#\${process.argv.slice(2).join(' ')}\\n\`)`
+    ].join('\n')
+  )
+}
 // fixPath reads PATH from the login shell ($SHELL -ilc: .zshrc, or bash's .bash_profile), and so do the server's agents.
 writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
-// The Local server's agent: it lingers, so the tty echoes what is typed into it.
-const fakeAgent = join(work, 'fake-agent.sh')
+// The Local server's agent: it reads its input a line at a time, so what is typed into it shows in
+// its output: a POSIX tty echoes it anyway, but ConPTY (Windows) echoes only input a program reads.
 const agentPids = join(work, 'agent-pids')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT ready"\nexec sleep 300\n`, { mode: 0o755 })
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "console.log('FAKE_AGENT ready')",
+    "createInterface({ input: process.stdin }).on('line', (line) => console.log('GOT:' + line)).on('close', () => process.exit(0))"
+  ].join('\n')
+)
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The upgrade: what a pre-5a Trek left in userData. Its registry knew the feature branch's VM, and
@@ -204,7 +247,7 @@ await new Promise((r) => services.listen(0, '127.0.0.1', r))
 const servicesUrl = `http://127.0.0.1:${services.address().port}`
 
 // The Local profile's data dir, where the server keeps them from now on (server/src/dataDir.ts).
-const localData = join(defaultDataDir(process.platform, { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
+const localData = join(defaultDataDir(process.platform, { ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
 
 // Main's dialogs and Reveal, stubbed before its script runs: every message box is recorded with its
 // detail, its checkbox and a number from the stubs' shared sequence (for the order against
@@ -277,14 +320,14 @@ const finish = async (reason) => {
   services.close()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   // Each only when its command line is still the one this run started (a reused pid is left alone).
   const left = info()
   if (left) killIfOurs(left.pid, (command) => isLocalServerCommand(command, 'dev'), 'the Local server')
   killIfOurs(legacyUp.pid, (command) => command === 'sleep 600', "the app's legacy up")
-  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
+  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -299,15 +342,18 @@ try {
 
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
-    SHELL: SMOKE_SHELL,
+    ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1',
     TREK_SERVER_LINEAR_URL: `${servicesUrl}/graphql`,
     TREK_SERVER_ELEVENLABS_URL: `${servicesUrl}/v1`
   }
+  // Windows: the VS Code stub install's bin, then the stubs, first on PATH (no-ops elsewhere).
+  stubsFirstOnPath(env, vscodeBin)
+  stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
@@ -318,12 +364,13 @@ try {
   await win.waitForLoadState('domcontentloaded')
   const local = (await until(() => !!info(), true, 20_000)) && info()
   if (!local) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
-  check("main's PATH has the stubs first (fixPath, through the HOME's shell startup file)", await app.evaluate(() => process.env.PATH.split(':')[0]), stubs)
+  check("main's PATH has the stubs first (fixPath, through the HOME's shell startup file)", await app.evaluate((_electron, sep) => process.env.PATH.split(sep)[0], delimiter), stubs)
 
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'local-features-smoke' })
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
-  check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, true])
+  // Windows: no env or stacks on its server (SERVER_HAS_ENVS).
+  check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, SERVER_HAS_ENVS, SERVER_HAS_ENVS])
   // The app's childEnv keeps TREK_SERVER_GH: the Local server asked smokeGh.mjs's stub, not the real gh (5c-1).
   check("the Local server's gh is the smoke's stub: no prWatch", sdk.welcome?.capabilities.includes('prWatch'), false)
   // The upgrade: the server took the app's files over before it served anything; the app's stay.
@@ -340,7 +387,7 @@ try {
   const handover = join(userData, 'integrations-handover.json')
   check('main handed the Linear and ElevenLabs settings to this Local profile once', await until(() => (existsSync(handover) ? JSON.parse(readFileSync(handover, 'utf8')) : null), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true }), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true })
   const serverSecrets = join(profile, 'secrets.json')
-  check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? statSync(serverSecrets).mode & 0o777 : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, 0o600])
+  check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? modeOf(serverSecrets) : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, mode(0o600)])
   const voiceFile = join(localData, 'plugins', 'voice', 'config.json')
   check("and the voice and model, with Summarize automatically (the voice plugin's config)", existsSync(voiceFile) ? JSON.parse(readFileSync(voiceFile, 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
   check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).plugins.voice?.active, false)
@@ -371,7 +418,7 @@ try {
   check("the window's features: the machine-local ones, the server's skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.bot, f.promote, f.moveWorktree]
-  }), [true, true, true, true, true, true, false, true, true]), [true, true, true, true, true, true, false, true, true])
+  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true]), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.
@@ -410,10 +457,16 @@ try {
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
   // The repository has docker/stack/stack.sh too, so main has a Stack tab (once its status is read).
   const mainTabs = ['Changes', 'Notes', 'History', 'Docker ▾', 'Stack']
-  check("main's tabs: Docker and Stack", await until(() => tabs(), mainTabs), mainTabs)
-  await runClick(detail.locator('.docker-menu-trigger'))
-  await win.locator('.docker-menu .skill-menu-item', { hasText: 'compose up -d' }).first().click()
-  check('the Docker menu runs docker compose in the repository', await until(() => callsOf('docker').filter((c) => c.includes('|compose')), [`${repo}|compose up -d`]), [`${repo}|compose up -d`])
+  // Windows: Docker, the environments and the stacks are W3 (NO_ENVS); Open in VS Code and Reveal above are tested there.
+  if (SERVER_HAS_ENVS) {
+    check("main's tabs: Docker and Stack", await until(() => tabs(), mainTabs), mainTabs)
+    await runClick(detail.locator('.docker-menu-trigger'))
+    await win.locator('.docker-menu .skill-menu-item', { hasText: 'compose up -d' }).first().click()
+    check('the Docker menu runs docker compose in the repository', await until(() => callsOf('docker').filter((c) => c.includes('|compose')), [`${repo}|compose up -d`]), [`${repo}|compose up -d`])
+  } else {
+    console.log(`SKIP main's tabs: Docker and Stack (${NO_ENVS})`)
+    console.log(`SKIP the Docker menu runs docker compose in the repository (${NO_ENVS})`)
+  }
 
   // ---- 3. Settings: Linear and the environments, saved on the server ------------------------------
 
@@ -423,47 +476,62 @@ try {
   await openSettingsTab(settings, 'Plugins')
   const headings = await settings.locator('h3').allTextContents()
   const tabNames = await settings.locator('.settings-tab').allTextContents()
-  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, true, false])
+  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, SERVER_HAS_ENVS, false])
   check("its Voice section lists the handed-over key's voices, from the server", await until(() => settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select option').allTextContents().catch(() => []), ['Nine']), ['Nine'])
-  await openSettingsTab(settings, 'Environments')
-  await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
-  check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
-  check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
-  check('and colima list fills the environments', await until(() => win.evaluate(() => Object.keys(window.__store.getState().environments).sort()), [featureProfile, 'twb-leftover-000000'].sort()), [featureProfile, 'twb-leftover-000000'].sort())
-  // The VM the app's registry knew is the server's now: only the crash leftover is an orphan.
-  check('only the VM no registry knows is an orphan in Settings', await until(() => settings.locator('.env-orphan-row').allTextContents(), ['twb-leftover-000000Delete']), ['twb-leftover-000000Delete'])
+  if (SERVER_HAS_ENVS) {
+    await openSettingsTab(settings, 'Environments')
+    await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
+    check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
+    check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
+    check('and colima list fills the environments', await until(() => win.evaluate(() => Object.keys(window.__store.getState().environments).sort()), [featureProfile, 'twb-leftover-000000'].sort()), [featureProfile, 'twb-leftover-000000'].sort())
+    // The VM the app's registry knew is the server's now: only the crash leftover is an orphan.
+    check('only the VM no registry knows is an orphan in Settings', await until(() => settings.locator('.env-orphan-row').allTextContents(), ['twb-leftover-000000Delete']), ['twb-leftover-000000Delete'])
+  } else {
+    for (const name of ['the environments switch is saved on the server', 'the environments poll runs: the tool check passes', 'and colima list fills the environments', 'only the VM no registry knows is an orphan in Settings']) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
   // ---- 4. The feature row ---------------------------------------------------------------------------
 
   const featureRow = rows.filter({ hasText: 'feature-x' })
-  check("the feature row has a running env badge, main's row none", [await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), await mainRow.locator('.mini-chip.env').count()], [1, 0])
+  if (SERVER_HAS_ENVS) check("the feature row has a running env badge, main's row none", [await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), await mainRow.locator('.mini-chip.env').count()], [1, 0])
+  else console.log(`SKIP the feature row has a running env badge, main's row none (${NO_ENVS})`)
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
-  check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack']), ['Changes', 'Notes', 'History', 'Env', 'Stack'])
-  check("its header's env chip shows the VM", (await detail.locator('.chip-env').first().innerText()).trim(), 'Env · 192.168.106.5')
+  if (SERVER_HAS_ENVS) {
+    check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack']), ['Changes', 'Notes', 'History', 'Env', 'Stack'])
+    check("its header's env chip shows the VM", (await detail.locator('.chip-env').first().innerText()).trim(), 'Env · 192.168.106.5')
+  } else {
+    console.log(`SKIP its tabs: Env and Stack, no Docker (${NO_ENVS})`)
+    console.log(`SKIP its header's env chip shows the VM (${NO_ENVS})`)
+  }
   await (await menuItem('Open in VS Code')).click()
   check('Open in VS Code runs `code` on the worktree', await until(() => callsOf('code').at(-1), worktree), worktree)
 
-  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
-  // The Stack panel shares the class; only the open one is visible.
-  const envPanel = detail.locator('.env-panel:visible')
-  await envPanel.waitFor({ timeout: 5000 })
-  check("the Env panel names the branch's VM, running", [(await envPanel.locator('.env-header .docker-name').innerText()).trim(), (await envPanel.locator('.env-header .docker-meta').innerText()).includes('Running')], [featureProfile, true])
-  await envPanel.locator('.env-vars-toggle').click()
-  await envPanel.locator('.env-vars-editor').fill('FOO=bar')
-  check('typed variables are a draft until blur', ((await project()).repositories[0].branchData['feature-x'] ?? {}).env ?? null, null)
-  await envPanel.locator('.env-vars-toggle').click()
-  check('and saved on the server on blur', await until(async () => ((await project()).repositories[0].branchData['feature-x'] ?? {}).env ?? null, 'FOO=bar'), 'FOO=bar')
+  if (SERVER_HAS_ENVS) {
+    await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
+    // The Stack panel shares the class; only the open one is visible.
+    const envPanel = detail.locator('.env-panel:visible')
+    await envPanel.waitFor({ timeout: 5000 })
+    check("the Env panel names the branch's VM, running", [(await envPanel.locator('.env-header .docker-name').innerText()).trim(), (await envPanel.locator('.env-header .docker-meta').innerText()).includes('Running')], [featureProfile, true])
+    await envPanel.locator('.env-vars-toggle').click()
+    await envPanel.locator('.env-vars-editor').fill('FOO=bar')
+    check('typed variables are a draft until blur', ((await project()).repositories[0].branchData['feature-x'] ?? {}).env ?? null, null)
+    await envPanel.locator('.env-vars-toggle').click()
+    check('and saved on the server on blur', await until(async () => ((await project()).repositories[0].branchData['feature-x'] ?? {}).env ?? null, 'FOO=bar'), 'FOO=bar')
 
-  await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
-  check("the Stack panel reads the worktree's stack", await until(() => detail.locator('.env-panel:visible', { hasText: 'trek-app-feature-x' }).count(), 1), 1)
-  // The app's `up`, by the pid file the server took over: still starting, with its log.
-  check("the app's running up counts, and its log shows", [await until(() => detail.locator('.env-panel:visible .docker-meta').first().innerText(), 'Starting…'), await until(() => detail.locator('.env-panel:visible .docker-log').innerText().then((t) => t.includes('started by the app before 5a'), () => false), true)], ['Starting…', true])
+    await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
+    check("the Stack panel reads the worktree's stack", await until(() => detail.locator('.env-panel:visible', { hasText: 'trek-app-feature-x' }).count(), 1), 1)
+    // The app's `up`, by the pid file the server took over: still starting, with its log.
+    check("the app's running up counts, and its log shows", [await until(() => detail.locator('.env-panel:visible .docker-meta').first().innerText(), 'Starting…'), await until(() => detail.locator('.env-panel:visible .docker-log').innerText().then((t) => t.includes('started by the app before 5a'), () => false), true)], ['Starting…', true])
+  } else {
+    for (const name of ["the Env panel names the branch's VM, running", 'typed variables are a draft until blur', 'and saved on the server on blur', "the Stack panel reads the worktree's stack", "the app's running up counts, and its log shows"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
 
   // ---- 5. A skill, typed into the server's pty ------------------------------------------------------
 
-  await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
+  // Closes the Stack panel opened above (none on Windows).
+  if (SERVER_HAS_ENVS) await runClick(detail.locator('.panel-btn', { hasText: 'Stack' }))
   await detail.locator('.no-session button', { hasText: 'Start session' }).click()
   const tab = detail.locator('.session-tab').first()
   await tab.waitFor({ timeout: 10_000 })
@@ -492,28 +560,40 @@ try {
   const asked = dialogs.find((d) => d.message === 'Delete worktree “feature-x”?')
   check('the confirm was built on a clean status (the file came after)', asked?.detail?.includes('Uncommitted changes will block the deletion.') ?? false, true)
   const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
-  check('the confirm names the VM and offers the stack', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.detail ?? ''), asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
-  check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
-  check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
+  if (SERVER_HAS_ENVS) {
+    check('the confirm names the VM and offers the stack', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.detail ?? ''), asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
+    check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
+    check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
+  } else {
+    for (const name of ['the confirm names the VM and offers the stack', 'stack.sh destroy ran in the worktree', "colima delete ran on the branch's VM"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
   check('the worktree directory is gone', existsSync(worktree), false)
   const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
-  const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
-  check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
-  // A broken worktree.dirty falls back to "clean": the stack and the VM go, and git's own refusal
-  // asks the same question afterwards. Only the order tells the two apart.
-  check(
-    'a fresh dirty check asks before the stack and the VM go (seq)',
-    [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],
-    [true, true, true]
-  )
-  check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
-  // Ctrl-C'd by the destroy (its process group), and dead before stack.sh destroy ran (seq).
-  await until(() => legacyUp.signalCode, 'SIGINT', 5000)
-  check(
-    "the destroy Ctrl-C'd the app's running up before stack.sh destroy (seq)",
-    [alive(legacyUp.pid), legacyUp.signalCode, legacyUpEndedAt !== null && stackAt !== null && legacyUpEndedAt < stackAt],
-    [false, 'SIGINT', true]
-  )
+  if (SERVER_HAS_ENVS) {
+    const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
+    check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
+    // A broken worktree.dirty falls back to "clean": the stack and the VM go, and git's own refusal
+    // asks the same question afterwards. Only the order tells the two apart.
+    check(
+      'a fresh dirty check asks before the stack and the VM go (seq)',
+      [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],
+      [true, true, true]
+    )
+    check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
+    // Ctrl-C'd by the destroy (its process group), and dead before stack.sh destroy ran (seq).
+    await until(() => legacyUp.signalCode, 'SIGINT', 5000)
+    check(
+      "the destroy Ctrl-C'd the app's running up before stack.sh destroy (seq)",
+      [alive(legacyUp.pid), legacyUp.signalCode, legacyUpEndedAt !== null && stackAt !== null && legacyUpEndedAt < stackAt],
+      [false, 'SIGINT', true]
+    )
+  } else {
+    // The stack and the VM do not exist there; a fresh dirty check still asks after the first confirm.
+    console.log(`SKIP in order: the stack, then the VM (seq) (${NO_ENVS})`)
+    check('a fresh dirty check asks after the first confirm (seq)', [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq], [true, true])
+    console.log(`SKIP then the server's removal: the worktree was still there when the VM went (${NO_ENVS})`)
+    console.log(`SKIP the destroy Ctrl-C'd the app's running up before stack.sh destroy (seq) (${NO_ENVS})`)
+  }
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])
 

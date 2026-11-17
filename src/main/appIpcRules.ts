@@ -1,5 +1,5 @@
 // The checks on what a renderer sends the app's own IPC (appIpc.ts, importUi.ts). Pure.
-import { isAbsolute } from 'node:path'
+import { isAbsolute, win32 } from 'node:path'
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v))
 
@@ -12,6 +12,42 @@ export function absolutePath(raw: unknown): string | null {
 export function editorPath(raw: unknown): string | null {
   const path = absolutePath(raw)
   return path && !path.startsWith('-') ? path : null
+}
+
+/** The VS Code launchers on a Windows PATH, in the order tried: VS Code's, then Insiders'. */
+export const VSCODE_CMDS = ['code', 'code-insiders'] as const
+
+/**
+ * Windows: what VS Code's `bin\code.cmd` (or `code-insiders.cmd`) runs, so Trek, which starts
+ * programs without a shell, can run it itself: the install's Code.exe (`Code - Insiders.exe`) one
+ * folder up, as Node (ELECTRON_RUN_AS_NODE), on its `resources\app\out\cli.js`, with `folder`.
+ * `cmdText`, the .cmd's own text, names the cli.js it runs (`"%~dp0..\…\cli.js"`) when an install
+ * keeps it elsewhere; that path is taken if it stays inside the install.
+ */
+export function vscodeLaunch(
+  codeCmd: string,
+  folder: string,
+  env: Readonly<Record<string, string | undefined>>,
+  cmdText = ''
+): { file: string; args: string[]; env: Record<string, string | undefined> } {
+  const install = win32.dirname(win32.dirname(codeCmd))
+  const insiders = win32.basename(codeCmd).toLowerCase() === 'code-insiders.cmd'
+  const named = /"%~dp0\.\.\\([^"%]+\\cli\.js)"/i.exec(cmdText)?.[1]
+  const cli = named !== undefined && inside(install, named) ? win32.resolve(install, named) : win32.join(install, 'resources', 'app', 'out', 'cli.js')
+  // As code.cmd: VSCODE_DEV cleared (a dev build's would point Code.exe at its sources).
+  const launchEnv: Record<string, string | undefined> = { ...env, ELECTRON_RUN_AS_NODE: '1' }
+  delete launchEnv.VSCODE_DEV
+  return {
+    file: win32.join(install, insiders ? 'Code - Insiders.exe' : 'Code.exe'),
+    args: [cli, folder],
+    env: launchEnv
+  }
+}
+
+/** `rel` (either slash) resolved under `dir` stays inside it. */
+function inside(dir: string, rel: string): boolean {
+  const back = win32.relative(dir, win32.resolve(dir, rel))
+  return back !== '' && back !== '..' && !back.startsWith('..\\') && !win32.isAbsolute(back)
 }
 
 /** A .trekproj to open: an absolute path ending in .trekproj; else null. */

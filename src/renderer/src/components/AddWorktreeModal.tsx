@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { pathBaseName } from '../../../shared/pathName'
 import { repoById, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
@@ -8,9 +9,7 @@ interface Props {
   onClose: () => void
 }
 
-function baseName(p: string): string {
-  return p.replace(/\/+$/, '').split('/').pop() ?? p
-}
+const baseName = pathBaseName
 
 interface ParsedPullRequest {
   owner: string

@@ -18,7 +18,7 @@
 //   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app | Linux dir>]
 import './smokeGh.mjs'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -27,9 +27,14 @@ import { packagedLayout, packagedServerBundle } from './packagedLayout.mjs'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
 import { redeemPairingCode } from '../src/shared/client/pairing.ts'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { writeFakeAgent, lingeringAgent, isFakeAgentCommand, ARGS } from './fakeAgent.mjs'
+import { killIfOurs } from './smokeTeardown.mjs'
 
 const WAIT_MS = 15000
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const bundle = join(root, 'server', 'dist', 'trek-server.cjs')
 const built = JSON.parse(readFileSync(join(root, 'server', 'dist', 'build.json'), 'utf8'))
 
@@ -59,6 +64,9 @@ let failed = false
 const ok = (msg) => { checks++; console.log(`ok: ${msg}`) }
 const fail = (msg) => { checks++; failed = true; console.error(`FAIL: ${msg}`) }
 const check = (cond, msg, detail = '') => (cond ? ok(msg) : fail(detail ? `${msg}: ${detail}` : msg))
+/** A check this platform cannot make: named, with why, and not counted. */
+const skip = (msg, why) => console.log(`SKIP ${msg} (${why})`)
+const WIN = process.platform === 'win32'
 
 /** Resolves true once `pred()` holds, false after `ms`. */
 const waitFor = async (pred, ms = WAIT_MS) => {
@@ -87,7 +95,7 @@ const must = (cond, msg, detail = '') => {
 
 async function suite(rt) {
   console.log(`--- ${rt.name} (${rt.cmd}) ---`)
-  const work = realpathSync(mkdtempSync(join(tmpdir(), `trek-local-smoke-${rt.name}-`)))
+  const work = realPath(mkdtempSync(join(tmpdir(), `trek-local-smoke-${rt.name}-`)))
   const home = join(work, 'home')
   // The app's layout: out/server/trek-server.cjs, and node-pty in the app's node_modules.
   const app = join(work, 'app')
@@ -99,16 +107,18 @@ async function suite(rt) {
     copyFileSync(bundle, cli)
     symlinkSync(join(root, 'node_modules', 'node-pty'), join(app, 'node_modules', 'node-pty'))
   }
-  const env = { ...process.env, ...rt.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), TREK_SERVER_PHONE_ADDRESS: '127.0.0.1' }
+  const env = { ...process.env, ...rt.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), TREK_SERVER_PHONE_ADDRESS: '127.0.0.1' }
   // Only the app's node_modules may resolve: no NODE_PATH fallback.
   delete env.NODE_PATH
-  const profile = join(home, '.config', 'trek-server', 'local')
+  const profile = smokeLocalProfile(home)
   const infoPath = join(profile, 'local.json')
   const lockPath = join(profile, 'local.lock')
 
   // A fake agent that prints its arguments and ELECTRON_RUN_AS_NODE, and lingers until it is killed.
-  const fakeAgent = join(work, 'fake-agent.sh')
-  writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\necho "RUN_AS_NODE=${ELECTRON_RUN_AS_NODE-unset}"\nexec sleep 300\n', { mode: 0o755 })
+  // Its pid is recorded, so the cleanup can end one a killed server left behind (on Windows a
+  // TerminateProcess'd server's ConPTY agents outlive it).
+  const agentPids = join(work, 'agent-pids')
+  const fakeAgent = writeFakeAgent(work, 'fake-agent', lingeringAgent({ pidFile: agentPids, print: [`'FAKE_AGENT ' + ${ARGS}`, "'RUN_AS_NODE=' + (process.env.ELECTRON_RUN_AS_NODE ?? 'unset')"] }))
   mkdirSync(profile, { recursive: true })
   writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
   // A repo with no registered repo anywhere near it.
@@ -159,6 +169,7 @@ async function suite(rt) {
     for (const c of conns.splice(0)) c.close()
     for (const r of children) if (r.code === undefined) r.child.kill('SIGKILL')
     await Promise.all(children.map((r) => r.exited))
+    for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => isFakeAgentCommand(command), 'a fake agent')
   }
 
   try {
@@ -170,11 +181,13 @@ async function suite(rt) {
     const a = start()
     must(await waitFor(() => info()?.pid === a.child.pid || a.code !== undefined), 'local.json appears with the server\'s pid', `code ${a.code}, ${a.err}`)
     const infoA = info()
-    check((statSync(infoPath).mode & 0o777) === 0o600, 'local.json is 0600', (statSync(infoPath).mode & 0o777).toString(8))
+    if (WIN) skip('local.json is 0600', 'Windows has no file modes; the user profile protects it')
+    else check((statSync(infoPath).mode & 0o777) === 0o600, 'local.json is 0600', (statSync(infoPath).mode & 0o777).toString(8))
     check(infoA.version === built.version && infoA.build === built.build, `local.json has the bundle's version and build (${infoA.version}, ${infoA.build})`, JSON.stringify(infoA))
     check(lockPid() === a.child.pid, 'local.lock holds the pid')
     // The smoke made the profile directory 0755; the lock tightens it.
-    check((statSync(profile).mode & 0o777) === 0o700, 'the profile directory is 0700', (statSync(profile).mode & 0o777).toString(8))
+    if (WIN) skip('the profile directory is 0700', 'Windows has no file modes; the user profile protects it')
+    else check((statSync(profile).mode & 0o777) === 0o700, 'the profile directory is 0700', (statSync(profile).mode & 0o777).toString(8))
     check(a.out.includes(`listening on ws://127.0.0.1:${infoA.port}`), 'it listens on 127.0.0.1 at the port in local.json', a.out)
 
     // --- 3. the welcome ---
@@ -317,16 +330,28 @@ async function suite(rt) {
     check(await waitFor(() => resumed.includes(`--resume ${agentSessionId}`)), 'the agent is resumed with --resume and its session id', JSON.stringify(resumed))
 
     for (const x of conns.splice(0)) x.close()
-    d.child.kill('SIGTERM')
-    await d.exited
-    check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
+    // Windows has no SIGTERM or SIGHUP for another process: child.kill() is TerminateProcess, which
+    // no cleanup survives (docs/WINDOWS.md: a stop by signal is not possible there). `stop --local`
+    // (checked above) is how it stops; here it ends d, so the next steps start from no server.
+    if (WIN) {
+      skip('SIGTERM again: exit 0, local.json and local.lock gone', 'Windows has no SIGTERM for another process')
+      const stopD = await runCli(['stop', '--local'])
+      await d.exited
+      must(stopD.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'stop --local ends it instead (Windows)', `${stopD.code} ${d.code} ${stopD.out} ${stopD.err}`)
+      skip('a start for SIGHUP writes local.json', 'Windows has no SIGHUP')
+      skip('SIGHUP: exit 0, local.json and local.lock gone', 'Windows has no SIGHUP')
+    } else {
+      d.child.kill('SIGTERM')
+      await d.exited
+      check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
 
-    // --- 10. SIGHUP (the terminal that ran it closed) cleans up too ---
-    const h = start()
-    must(await waitFor(() => info()?.pid === h.child.pid || h.code !== undefined), 'a start for SIGHUP writes local.json', `code ${h.code}, ${h.err}`)
-    h.child.kill('SIGHUP')
-    await h.exited
-    check(h.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGHUP: exit 0, local.json and local.lock gone', `${h.code} ${existsSync(infoPath)} ${existsSync(lockPath)}`)
+      // --- 10. SIGHUP (the terminal that ran it closed) cleans up too ---
+      const h = start()
+      must(await waitFor(() => info()?.pid === h.child.pid || h.code !== undefined), 'a start for SIGHUP writes local.json', `code ${h.code}, ${h.err}`)
+      h.child.kill('SIGHUP')
+      await h.exited
+      check(h.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGHUP: exit 0, local.json and local.lock gone', `${h.code} ${existsSync(infoPath)} ${existsSync(lockPath)}`)
+    }
 
     // --- 11. a lock path that cannot be taken is a clear error, not a stack trace ---
     mkdirSync(lockPath)
@@ -343,7 +368,7 @@ async function suite(rt) {
       '--local-profile ../x, and --local-profile without --local, are usage errors (exit 2)',
       `${badName.status} ${noLocal.status} ${noLocal.stderr.slice(0, 200)}`
     )
-    const devProfile = join(home, '.config', 'trek-server', 'local-dev')
+    const devProfile = smokeLocalProfile(home, 'dev')
     const devInfo = join(devProfile, 'local.json')
     const devLock = join(devProfile, 'local.lock')
     const p = start()
@@ -380,7 +405,8 @@ async function suite(rt) {
     for (const r of children) if (r.err) console.error(`[${rt.name} pid ${r.child.pid} stderr]\n${r.err}`)
   } finally {
     await stopAll()
-    rmSync(work, { recursive: true, force: true })
+    // Windows: a just-killed process's files and cwd stay busy for a moment.
+    rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
 

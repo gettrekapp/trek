@@ -166,7 +166,7 @@ jobs:
       - name: Client contract smoke
         if: ${{ !cancelled() }}
         run: node scripts/client-contract.mjs
-      # The release's Windows zip, as release.yml's server job makes and checks it (not uploaded),
+      # The release's Windows zip, as release.yml's server-win job makes and checks it (not uploaded),
       # so a packaging break shows up here rather than on a tag.
       - name: Build the web client
         if: ${{ !cancelled() }}

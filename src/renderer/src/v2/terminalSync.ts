@@ -190,6 +190,17 @@ export interface XtermWindowsPty {
 }
 
 /**
+ * The xterm options that follow a terminal's `windowsPty`: the option itself, and, for a Windows
+ * pty, `scrollOnEraseInDisplay`. ConPTY starts every pty with a clear screen (ED2), which would
+ * erase what the terminal showed (a restart's old output and its "[restarted]" line); with the
+ * option on, ED2 pushes the screen into the scrollback instead, as Windows Terminal does (a
+ * `cls` scrolls up too). Off for any other pty, where ED2 clears as before.
+ */
+export function windowsPtyOptions(windowsPty: XtermWindowsPty): { windowsPty: XtermWindowsPty; scrollOnEraseInDisplay: boolean } {
+  return { windowsPty, scrollOnEraseInDisplay: windowsPty.backend !== undefined }
+}
+
+/**
  * xterm's `windowsPty` for a terminal of this server, from its welcome: ConPTY's on a Windows
  * server, none on any other (a server before W1 says no platform: not Windows). Set when the
  * entry is created or re-pointed at another server, before the attach, because the attach's

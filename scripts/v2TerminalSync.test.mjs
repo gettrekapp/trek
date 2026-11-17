@@ -13,7 +13,8 @@ import {
   recordAttachFailure,
   shouldRetry,
   terminalTargets,
-  welcomeWindowsPty
+  welcomeWindowsPty,
+  windowsPtyOptions
 } from '../src/renderer/src/v2/terminalSync.ts'
 
 const s = (id, ptyId) => ({ id, agentSessionId: id, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle', ...(ptyId ? { ptyId } : {}) })
@@ -244,4 +245,13 @@ test('welcomeWindowsPty: ConPTY on a Windows server before the attach, cleared o
   assert.equal(welcomeWindowsPty({ backend: 'conpty', buildNumber: 1 }, null), undefined)
   // Another Windows build (re-pointed at another Windows server): the new one.
   assert.deepEqual(welcomeWindowsPty({ backend: 'conpty', buildNumber: 19045 }, win), { backend: 'conpty', buildNumber: 22631 })
+})
+
+test('windowsPtyOptions: a ConPTY terminal pushes a clear screen into the scrollback, any other erases it', () => {
+  // Windows: ConPTY's clear at a pty's start (a restart) keeps the old output above "[restarted]".
+  assert.deepEqual(windowsPtyOptions({ backend: 'conpty', buildNumber: 22631 }), { windowsPty: { backend: 'conpty', buildNumber: 22631 }, scrollOnEraseInDisplay: true })
+  assert.deepEqual(windowsPtyOptions({ backend: 'conpty' }), { windowsPty: { backend: 'conpty' }, scrollOnEraseInDisplay: true })
+  assert.equal(windowsPtyOptions({ backend: 'winpty' }).scrollOnEraseInDisplay, true)
+  // Cleared (a macOS or Linux server): ED2 clears again.
+  assert.deepEqual(windowsPtyOptions({}), { windowsPty: {}, scrollOnEraseInDisplay: false })
 })

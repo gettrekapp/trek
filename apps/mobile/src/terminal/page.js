@@ -118,7 +118,11 @@
     if (m.type === 'data') term.write(m.data)
     else if (m.type === 'reset') term.reset()
     // A Windows server's pty (ConPTY): set before its output is written.
-    else if (m.type === 'windowsPty') term.options.windowsPty = { backend: 'conpty', buildNumber: m.buildNumber }
+    else if (m.type === 'windowsPty') {
+      term.options.windowsPty = { backend: 'conpty', buildNumber: m.buildNumber }
+      // ConPTY clears the screen when a pty starts: keep what it clears in scrollback (a restart keeps its old output), as the desktop does.
+      term.options.scrollOnEraseInDisplay = true
+    }
     else if (m.type === 'size') {
       if (fitted && fitted.cols === m.cols && fitted.rows === m.rows) {
         if (term.options.fontSize !== BASE_FONT) term.options.fontSize = BASE_FONT

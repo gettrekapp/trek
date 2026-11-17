@@ -24,12 +24,15 @@
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, execSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { commandOf, localTeardown, makeFinish } from './smokeTeardown.mjs'
+import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 180_000
 
@@ -51,11 +54,11 @@ const until = async (fn, ms = 15_000) => {
   return value
 }
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-providers-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-providers-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 const agentPids = join(work, 'agent-pids')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
@@ -68,21 +71,28 @@ const repo = join(work, 'repos', 'app')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, '-c', 'user.name=s', '-c', 'user.email=s@s', 'commit', '--allow-empty', '-q', '-m', 'init'])
 
-// Each ends as node, not a system binary: macOS hides a platform binary's environment from
-// ps -E, which would make the environment check vacuous.
+// Each is node (writeFakeAgent), not a system binary: macOS hides a platform binary's environment
+// from ps -E, which would make the environment check vacuous.
 const bin = join(work, 'bin')
 mkdirSync(bin)
+const agents = {}
 for (const [name, marker] of [['fake-codex', 'esc to interrupt'], ['fake-gemini', 'esc to cancel']]) {
-  const path = join(bin, name)
-  writeFileSync(
-    path,
-    `#!/bin/sh\necho $$ >> '${agentPids}'\nfor a in "$@"; do echo "ARG[$a]"; done\necho "PID[$$]"\necho "working (${marker})"\nsleep 1\necho ready\nexec "${process.execPath}" -e 'process.stdin.pipe(process.stdout)' '${work}'\n`
+  agents[name] = writeFakeAgent(
+    bin,
+    name,
+    [
+      "import { appendFileSync } from 'node:fs'",
+      `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+      "for (const a of process.argv.slice(2)) console.log('ARG[' + a + ']')",
+      "console.log('PID[' + process.pid + ']')",
+      `console.log(${JSON.stringify(`working (${marker})`)})`,
+      "setTimeout(() => { console.log('ready'); process.stdin.pipe(process.stdout) }, 1000)"
+    ].join('\n')
   )
-  chmodSync(path, 0o755)
 }
 writeFileSync(
   join(profile, 'config.json'),
-  JSON.stringify({ repos: [], llm: { llmDefault: { provider: 'claude' }, providers: { codex: { command: join(bin, 'fake-codex') }, gemini: { command: join(bin, 'fake-gemini') } } } })
+  JSON.stringify({ repos: [], llm: { llmDefault: { provider: 'claude' }, providers: { codex: { command: agents['fake-codex'] }, gemini: { command: agents['fake-gemini'] } } } })
 )
 
 let app = null
@@ -138,7 +148,7 @@ const argvAndEnvironment = (pid) => {
 }
 
 try {
-  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: SMOKE_SHELL, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
+  const env = { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}), TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
@@ -184,7 +194,18 @@ try {
     }
     return outputs.get(id).text
   }
-  const argLines = (text) => text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('ARG['))
+  // The pty's raw output as lines. On Windows it comes through ConPTY, which renders the screen with
+  // VT sequences: its first lines arrive after a mode/clear/title preamble (\x1b[?9001h…\x1b]0;…\x07)
+  // and may be placed with cursor moves rather than CRLF. A cursor move starts a new line here; the
+  // rest of the sequences (CSI, OSC, the two-byte ones) are dropped.
+  const plainLines = (text) =>
+    text
+      .replace(/\x1b\[[0-9;?]*[Hf]/g, '\n')
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+      .replace(/\x1b[()][0-9A-Za-z]|\x1b[=>78DEM]/g, '')
+      .split(/\r?\n|\r/)
+  const argLines = (text) => plainLines(text).map((l) => l.trim()).filter((l) => l.startsWith('ARG['))
 
   /** The session's output once its agent printed `ready`, or what it printed by the timeout. */
   const launched = async (id) =>
@@ -221,6 +242,8 @@ try {
     const args = argLines(text)
     check(`${c.provider}: launched the configured fake command`, args.length > 0, text.slice(-300))
     for (const arg of c.args) check(`${c.provider}: argv has ${arg}`, args.some((l) => l.includes(arg)), args.join(' | '))
+    // The raw start of the output, should a line still be missed: what the pty sent, escapes and all.
+    if (!c.args.every((arg) => args.some((l) => l.includes(arg)))) console.log(`  raw output start: ${JSON.stringify(text.slice(0, 600))}`)
     if (c.provider === 'codex') {
       const at = args.findIndex((l) => l === 'ARG[--]')
       check('codex: -- directly precedes the first message', at >= 0 && args[at + 1] === 'ARG[--evil-flag hello]', args.join(' | '))
@@ -269,7 +292,7 @@ try {
     const args = argLines(text)
     const pidMatch = /PID\[(\d+)\]/.exec(text)
     // The project's MCP files, which the server writes under its data dir (in the temp HOME).
-    const mcpConfig = filesUnder(home).find((f) => f.endsWith(`/mcp/${projectId}.json`))
+    const mcpConfig = filesUnder(home).find((f) => basename(f) === `${projectId}.json` && basename(dirname(f)) === 'mcp')
     const configUrl = mcpConfig ? JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers?.['trek-dev']?.url ?? null : null
     const headersFile = filesUnder(home).find((f) => f.endsWith(`${projectId}.codex.json`))
     const token = headersFile ? JSON.parse(readFileSync(headersFile, 'utf8')).Authorization.replace(/^Bearer /, '') : null
@@ -283,15 +306,23 @@ try {
     if (!pidMatch) {
       check('codex global: the agent printed its pid', false, text.slice(-300))
     } else {
-      const seen = argvAndEnvironment(Number(pidMatch[1]))
-      // The control: the environment ps shows is this session's (the server sets TREK_TERMINAL_ID to its id).
-      check("codex global: ps -E shows its environment (its own TREK_TERMINAL_ID)", seen.includes(`TREK_TERMINAL_ID=${id} `) || seen.trimEnd().endsWith(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
-      check('codex global: the token is not in its environment or argv (ps -E)', !!token && !seen.includes(token))
+      if (process.platform === 'win32') {
+        // Windows: no tool reads another process's environment (no ps -E, no /proc); its command
+        // line is what Win32_Process shows.
+        console.log("SKIP codex global: ps -E shows its environment (its own TREK_TERMINAL_ID) (Windows: another process's environment cannot be read)")
+        check('codex global: the token is not in its command line (Win32_Process)', !!token && !commandOf(Number(pidMatch[1])).includes(token))
+      } else {
+        const seen = argvAndEnvironment(Number(pidMatch[1]))
+        // The control: the environment ps shows is this session's (the server sets TREK_TERMINAL_ID to its id).
+        check("codex global: ps -E shows its environment (its own TREK_TERMINAL_ID)", seen.includes(`TREK_TERMINAL_ID=${id} `) || seen.trimEnd().endsWith(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
+        check('codex global: the token is not in its environment or argv (ps -E)', !!token && !seen.includes(token))
+      }
     }
     if (helperArg && url) {
-      // Run the helper as Codex does (sh -c, cleared environment), then use what it prints.
+      // Run the helper as Codex does (sh -c, or cmd /C on Windows; a cleared environment), then use what it prints.
       const helper = JSON.parse(helperArg.slice(helperArg.indexOf('=') + 1, -1))
-      const headers = JSON.parse(execSync(helper, { encoding: 'utf8', shell: '/bin/sh', env: {} }))
+      const shell = process.platform === 'win32' ? process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe' : '/bin/sh'
+      const headers = JSON.parse(execSync(helper, { encoding: 'utf8', shell, env: {} }))
       check('codex global: the helper prints the Authorization header', headers.Authorization === `Bearer ${token}`)
       const res = await fetch(url, {
         method: 'POST',

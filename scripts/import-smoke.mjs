@@ -29,20 +29,23 @@
 //
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { SMOKE_SHELL } from './smokeShell.mjs'
+import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import electronPath from 'electron'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { localProfilePath, parseLocalInfo } from '../src/shared/localServer.ts'
 import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
 import { encodeTokenRecord } from '../src/main/serverTokenRules.ts'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 300_000
 const DAEMON_READY_MS = 15_000
@@ -87,12 +90,12 @@ const claudeDir = (cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 // Not realpath'd: macOS, under /var/folders, whose realpath is /private/var/folders. Linux's /tmp
 // is no symlink, so a symlink to the dir beside it stands in for /var (the file's paths through it
 // are not the realpaths, which the server stores).
 const made = mkdtempSync(join(tmpdir(), 'trek-import-smoke-'))
-const real = realpathSync(made)
+const real = realPath(made)
 const work = made === real ? `${real}-var` : made
 if (work !== made) symlinkSync(real, work)
 const removeWork = () => {
@@ -102,7 +105,7 @@ const removeWork = () => {
 const home = join(real, 'home')
 const remoteHome = join(real, 'remote-home')
 const userData = join(real, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
 for (const dir of [profile, remoteHome, userData, join(real, 'files'), join(real, 'real'), join(real, 'remote')]) mkdirSync(dir, { recursive: true })
@@ -249,7 +252,7 @@ const realHomeLeaks = () => {
   }
   const appSupport = join(realHome, 'Library', 'Application Support')
   const files = [
-    ...['local', 'local-dev'].flatMap((p) => ['config.json', 'local.json'].map((f) => join(realHome, '.config', 'trek-server', p, f))),
+    ...[undefined, 'dev'].flatMap((p) => ['config.json', 'local.json'].map((f) => join(localProfilePath(join, process.platform, process.env, realHome, p), f))),
     ...['Trek Dev', 'Trek'].flatMap((a) => ['migrated.json', 'recent-projects.json', 'open-windows.json', 'app-servers.json'].map((f) => join(appSupport, a, f)))
   ]
   for (const f of files) {
@@ -266,7 +269,9 @@ if (realHome === home || realHome.startsWith(real)) {
 
 // userData as an older Trek left it: the file in recents (by its /var spelling) and open at quit,
 // and the server's v1 token, bound to its origin ("plain:" is the secret store's unencrypted form).
-const bounds = { x: 120, y: 90, width: 1111, height: 777 }
+// Smaller than the smallest runner screen (Windows': 1024x768, and the OS shrinks a window that would
+// not fit its work area), and unlike the default 1400x900.
+const bounds = { x: 60, y: 40, width: 911, height: 577 }
 writeFileSync(join(userData, 'recent-projects.json'), JSON.stringify([join(work, 'files', 'Imported.trekproj')]))
 writeFileSync(join(userData, 'open-windows.json'), JSON.stringify([{ filePath: fileA, bounds }]))
 writeFileSync(join(userData, 'server-tokens.json'), JSON.stringify({ srv: `plain:${Buffer.from(encodeTokenRecord(token, remoteUrl)).toString('base64')}` }))
@@ -278,19 +283,24 @@ writeFileSync(join(userData, 'app-servers.json'), JSON.stringify([{ id: 'decoy',
 // that id is where Claude would look (the cwd's project folder), then lingers.
 const agentLog = join(real, 'agent-log')
 const agentPids = join(real, 'agent-pids')
-const fakeAgent = join(real, 'fake-agent.sh')
-writeFileSync(
-  fakeAgent,
-  `#!/bin/sh
-echo $$ >> '${agentPids}'
-id=""; prev=""
-for a in "$@"; do [ "$prev" = "--resume" ] && id="$a"; prev="$a"; done
-dir="$HOME/.claude/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
-found=no; [ -n "$id" ] && [ -f "$dir/$id.jsonl" ] && found=yes
-echo "$(pwd -P)|$id|$found" >> '${agentLog}'
-exec sleep 300
-`,
-  { mode: 0o755 }
+// Claude's folder is under the home (os.homedir(): HOME, or USERPROFILE on Windows).
+const fakeAgent = writeFakeAgent(
+  real,
+  'fake-agent',
+  [
+    "import { appendFileSync, existsSync, realpathSync } from 'node:fs'",
+    "import { homedir } from 'node:os'",
+    "import { join } from 'node:path'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "const args = process.argv.slice(2)",
+    "const at = args.lastIndexOf('--resume')",
+    "const id = at >= 0 && at + 1 < args.length ? args[at + 1] : ''",
+    "const cwd = (process.platform === 'win32' ? realpathSync.native : realpathSync)(process.cwd())",
+    "const dir = join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))",
+    "const found = id !== '' && existsSync(join(dir, id + '.jsonl')) ? 'yes' : 'no'",
+    `appendFileSync(${JSON.stringify(agentLog)}, cwd + '|' + id + '|' + found + '\\n')`,
+    'setTimeout(() => {}, 300_000)'
+  ].join('\n')
 )
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 const remoteConfig = join(real, 'remote-config.json')
@@ -336,7 +346,7 @@ const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', remoteConfig, '--port', String(port), '--data-dir', join(real, 'remote-data')], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: remoteHome, SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(remoteHome), SHELL: '/bin/sh' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -357,10 +367,10 @@ const startDaemon = () =>
 
 const env = {
   ...process.env,
-  HOME: home,
+  ...homeEnv(home),
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: SMOKE_SHELL,
+  ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
   TREK_NO_UPDATE_CHECK: '1'
 }
 // Windows are restored: this run's userData is its own.
@@ -410,7 +420,7 @@ const finish = async (reason) => {
   for (const sdk of sdks) sdk.close()
   await closeApp(app)
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
   const left = info()

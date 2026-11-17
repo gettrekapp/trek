@@ -12,7 +12,7 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { resetRuntime } from '../server/src/projects/model.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 import { FAILS_BEFORE_NOTICE, PrWatcher, pollMsFromEnv, watchTargets } from '../server/src/prWatch/watcher.ts'
-import { ghBinary, ghRunner, isAuthFailure } from '../server/src/prWatch/gh.ts'
+import { ghBinary, ghCommand, ghRunner, isAuthFailure } from '../server/src/prWatch/gh.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 import { prQueryArgs } from '../src/shared/prWatch.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
@@ -118,6 +118,25 @@ test('ghBinary: gh on the PATH only when TREK_SERVER_GH is unset; an absolute pa
   for (const v of ['', 'gh', './gh', 'stub/gh']) assert.equal(ghBinary(v), null, String(v))
   // The fail-closed runner never runs anything: gh reads as not installed.
   await assert.rejects(ghRunner(null)(['auth', 'status']), /gh is not installed on the server/)
+})
+
+test('ghCommand: a Windows Node-script stub runs through this binary with ELECTRON_RUN_AS_NODE=1, anything else as it is', () => {
+  // The Local server runs as Trek.exe with ELECTRON_RUN_AS_NODE, and removes it from its own env
+  // (for its sessions): without it again, Trek.exe would start the Trek app, not run the script.
+  const env = { PATH: 'C:\\bin', TREK_X: 'kept' }
+  const win = ghCommand('C:\\stubs\\gh.mjs', ['auth', 'status'], 'win32', env)
+  assert.deepEqual(win, {
+    viaNode: true,
+    args: ['C:\\stubs\\gh.mjs', 'auth', 'status'],
+    env: { PATH: 'C:\\bin', TREK_X: 'kept', GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1', ELECTRON_RUN_AS_NODE: '1' }
+  })
+  assert.equal(ghCommand('C:\\stubs\\gh.js', [], 'win32', env).env.ELECTRON_RUN_AS_NODE, '1')
+  // The real gh (or any other program), and every stub off Windows: run as it is, without the variable.
+  for (const [binary, platform] of [['gh', 'win32'], ['C:\\Program Files\\GitHub CLI\\gh.exe', 'win32'], ['/tmp/stub/gh.mjs', 'darwin'], ['/usr/bin/gh', 'linux']]) {
+    const c = ghCommand(binary, ['api'], platform, env)
+    assert.deepEqual([c.viaNode, c.args, 'ELECTRON_RUN_AS_NODE' in c.env, c.env.GH_PAGER], [false, ['api'], false, 'cat'], `${binary} on ${platform}`)
+  }
+  assert.equal('ELECTRON_RUN_AS_NODE' in env, false, 'the env given is not changed')
 })
 
 test('ghRunner on Windows: a stub given as a Node script runs with this Node (Windows has no sh stubs)', async (t) => {

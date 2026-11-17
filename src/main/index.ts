@@ -4,6 +4,8 @@ import { statSync } from 'node:fs'
 import { trekprojArgs } from './launchArgsRules'
 
 app.setName('Trek Dev')
+// Windows: toast notifications need the AppUserModelID of the Start-menu shortcut NSIS made (build.appId).
+if (process.platform === 'win32') app.setAppUserModelId('com.trek.trekdev')
 
 function setDockIcon(): void {
   if (process.platform !== 'darwin' || !app.dock) return
@@ -129,7 +131,7 @@ function localServerMenu(): Electron.MenuItemConstructorOptions[] {
         {
           label: running ? 'Restart Local Server' : 'Start Local Server',
           enabled: !busy,
-          click: () => void (running ? restartLocalServer() : startLocalServer())
+          click: () => void (running ? restartLocalServer() : startLocalServer('the menu'))
         },
         { label: 'Stop Local Server', enabled: running, click: () => void stopLocalServer() }
       ]

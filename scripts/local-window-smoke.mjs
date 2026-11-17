@@ -41,13 +41,16 @@ import './smokeGh.mjs'
 import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
-import { SMOKE_SHELL, writeShellRc } from './smokeShell.mjs'
+import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
+import { fileURLToPath } from 'node:url'
+import { realPath } from '../src/host/pathContainment.ts'
+import { writeFakeAgent } from './fakeAgent.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -82,11 +85,11 @@ const first = async (fn, ms = 15_000) => {
 
 // ---- Fixtures --------------------------------------------------------------
 
-const root = new URL('..', import.meta.url).pathname
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
+const root = fileURLToPath(new URL('..', import.meta.url))
+const work = realPath(mkdtempSync(join(tmpdir(), 'trek-local-window-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local-dev')
+const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 const agentPids = join(work, 'agent-pids')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
@@ -126,11 +129,18 @@ case " $* " in *" ps "*) echo "[]" ;; esac
 exit 0`)
 writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
 // The agent: "work" prints Claude's working marker, "bell" rings, anything else is echoed.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(
-  fakeAgent,
-  `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT ready"\nwhile IFS= read -r line; do\n  case "$line" in\n    work) echo "esc to interrupt" ;;\n    bell) printf '\\007' ;;\n    *) echo "GOT:$line" ;;\n  esac\ndone\n`,
-  { mode: 0o755 }
+const fakeAgent = writeFakeAgent(
+  work,
+  'fake-agent',
+  [
+    "import { appendFileSync } from 'node:fs'",
+    "import { createInterface } from 'node:readline'",
+    `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    "console.log('FAKE_AGENT ready')",
+    "createInterface({ input: process.stdin })",
+    "  .on('line', (line) => (line === 'work' ? console.log('esc to interrupt') : line === 'bell' ? process.stdout.write('\\x07') : console.log('GOT:' + line)))",
+    "  .on('close', () => process.exit(0))"
+  ].join('\n')
 )
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
@@ -179,13 +189,14 @@ try {
 
   const env = {
     ...process.env,
-    HOME: home,
+    ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
-    SHELL: SMOKE_SHELL,
+    ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1'
   }
+  stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
@@ -401,11 +412,16 @@ try {
   check('the session mode starts at the default', await mode.inputValue(), '')
   await mode.selectOption('acceptEdits')
   check('a picked mode is saved on the server', await until(async () => (await project()).settings.claudePermissionMode ?? null, 'acceptEdits'), 'acceptEdits')
-  const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
-  await openSettingsTab(settings, 'Environments')
-  await envSwitch.click()
-  check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
-  check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)
+  if (SERVER_HAS_ENVS) {
+    const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
+    await openSettingsTab(settings, 'Environments')
+    await envSwitch.click()
+    check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
+    check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)
+  } else {
+    console.log(`SKIP the environments switch is saved on the server (${NO_ENVS})`)
+    console.log(`SKIP Settings: the environments' three VM size fields (${NO_ENVS})`)
+  }
   await sw.locator('.sidebar button[title="App settings"]').click()
 
   // ---- 7. The overflow menus ------------------------------------------------------------------------
@@ -488,11 +504,13 @@ try {
 
   // ---- 11. The Env panel ----------------------------------------------------------------------------------
 
-  await apiFeatureRow.click()
-  await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
-  const envPanel = detail.locator('.env-panel:visible')
-  await envPanel.waitFor({ timeout: 10_000 })
-  check("the Env panel: its VM's three actions, and No services", [await until(() => envPanel.locator('.env-header .docker-actions button').count(), 3), await until(() => envPanel.locator('.muted', { hasText: 'No services' }).count(), 1)], [3, 1])
+  if (SERVER_HAS_ENVS) {
+    await apiFeatureRow.click()
+    await runClick(detail.locator('.panel-btn', { hasText: 'Env' }))
+    const envPanel = detail.locator('.env-panel:visible')
+    await envPanel.waitFor({ timeout: 10_000 })
+    check("the Env panel: its VM's three actions, and No services", [await until(() => envPanel.locator('.env-header .docker-actions button').count(), 3), await until(() => envPanel.locator('.muted', { hasText: 'No services' }).count(), 1)], [3, 1])
+  } else console.log(`SKIP the Env panel: its VM's three actions, and No services (${NO_ENVS})`)
 
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])

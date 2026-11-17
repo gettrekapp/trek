@@ -9,16 +9,25 @@
 #                and stapled, and the dmg notarized and stapled too; verified, then the
 #                packaged-app smokes run against it. It and server-mac are the only jobs that use
 #                the Apple signing secrets: they live in the `release` environment (limited to v*
-#                tags), not the repository. `release` names that environment too, for the key
+#                tags), not the repository, as the Windows ones (windows-app, server-win) do. `release` names that environment too, for the key
 #                that signs SHA256SUMS.
 #                Also Trek-X.Y.Z-arm64.zip (+ .blockmap) and latest-mac.yml, the app updater's
 #                download and feed.
 #   linux-app    linux-app.yml: Trek-X.Y.Z-linux-<arch>.deb on a native runner per arch, verified,
 #                installed with apt and smoke-tested under xvfb; plus latest-linux.yml /
 #                latest-linux-arm64.yml
-#   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, and
-#                trek-server-X.Y.Z-win32-x64.zip on Windows (unsigned: nothing in it is an .exe
-#                SmartScreen checks), each unpacked and run (scripts/server-tarball-smoke.mjs)
+#   windows-app  windows-app.yml: Trek-X.Y.Z-win-x64.exe, the per-user NSIS installer, signed with
+#                Azure Trusted Signing when the `release` environment has all seven AZURE_* secrets
+#                (and verified), unsigned with a warning when it has none, a failure when it has
+#                only some; installed silently, smoke-tested and uninstalled; plus its .blockmap
+#                and latest.yml
+#   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, unpacked
+#                and run (scripts/server-tarball-smoke.mjs)
+#   server-win   trek-server-X.Y.Z-win32-x64.zip on Windows the same way, its bin\trek-server.ps1
+#                signed with Azure Trusted Signing when all seven AZURE_* secrets are set (the .cmd
+#                cannot be signed, and nothing in it is an .exe SmartScreen checks), unsigned with
+#                a warning when none are, a failure when only some; it names the `release`
+#                environment for that
 #   server-mac   trek-server-X.Y.Z-darwin-<arch>.tar.gz the same way, with node-pty's pty.node and
 #                spawn-helper signed (Developer ID, hardened runtime) and notarized, the smoke
 #                unpacking it quarantined as a browser download is (--notarized)
@@ -252,6 +261,18 @@ jobs:
     permissions:
       contents: read
 
+  # Its signing job names the `release` environment itself and so reads that environment's AZURE_*
+  # secrets (environment secrets cannot be passed to a reusable workflow; inherit passes the
+  # repository's). On this tag run it is windows-app.yml's `signed` job that runs, signing only when all seven
+  # secrets are there (windows-app.yml says what it does otherwise).
+  windows-app:
+    name: Trek installer
+    needs: version
+    uses: ./.github/workflows/windows-app.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
   server:
     name: trek-server ${{ matrix.target }}
     needs: version
@@ -264,21 +285,12 @@ jobs:
       matrix:
         include:
           # Ubuntu 22.04 (glibc 2.35): node-pty compiled there runs on older distros than 24.04's.
-          - { target: linux-x64, runner: ubuntu-22.04, ext: tar.gz }
-          - { target: linux-arm64, runner: ubuntu-22.04-arm, ext: tar.gz }
-          # node-pty's own Windows prebuild (ConPTY + winpty), zipped by Windows' bsdtar.
-          - { target: win32-x64, runner: windows-latest, ext: zip }
+          - { target: linux-x64, runner: ubuntu-22.04 }
+          - { target: linux-arm64, runner: ubuntu-22.04-arm }
     env:
       VERSION: ${{ needs.version.outputs.version }}
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-    defaults:
-      run:
-        # Git Bash on the Windows runner, so the steps are the same everywhere.
-        shell: bash
     steps:
-      # Byte-exact checkouts, as ci.yml's Windows job: the launchers and web client are packaged as
-      # committed (.gitattributes fixes the line endings that matter), not as core.autocrlf rewrites them.
-      - run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -298,13 +310,130 @@ jobs:
       - name: Package
         run: |
           node scripts/package-server.mjs --out dist-release
-          test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.${{ matrix.ext }}"
+          test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
       - name: Unpack and run it
-        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.${{ matrix.ext }}"
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-${{ matrix.target }}
-          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.ext }}
+          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # The Windows zip: node-pty's own Windows prebuild (ConPTY + winpty), zipped by Windows' bsdtar,
+  # with bin\trek-server.ps1 signed (Azure Trusted Signing) before it is zipped
+  # (package-server.mjs --sign-azure), so PowerShell's AllSigned and RemoteSigned policies can
+  # check it, when all seven AZURE_* secrets are set; with none the zip is unsigned (a warning on
+  # the run), with only some the job fails. Its own job, not a leg of `server`: it names the `release` environment for the
+  # AZURE_* secrets, and the Linux legs need none.
+  server-win:
+    name: trek-server win32-x64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    defaults:
+      run:
+        # Git Bash, so the steps read as server's (the signature check is PowerShell's).
+        shell: bash
+    steps:
+      # SIGN=true only with all seven secrets, as the installer (windows-app.yml).
+      - name: Decide whether to sign
+        env:
+          HAS_TENANT: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_CLIENT: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT != '' }}
+          HAS_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+          HAS_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE != '' }}
+          HAS_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER != '' }}
+        run: |
+          missing=()
+          [ "$HAS_TENANT" = true ] || missing+=("AZURE_TENANT_ID")
+          [ "$HAS_CLIENT" = true ] || missing+=("AZURE_CLIENT_ID")
+          [ "$HAS_SECRET" = true ] || missing+=("AZURE_CLIENT_SECRET")
+          [ "$HAS_ENDPOINT" = true ] || missing+=("AZURE_SIGNING_ENDPOINT")
+          [ "$HAS_ACCOUNT" = true ] || missing+=("AZURE_SIGNING_ACCOUNT")
+          [ "$HAS_PROFILE" = true ] || missing+=("AZURE_SIGNING_PROFILE")
+          [ "$HAS_PUBLISHER" = true ] || missing+=("AZURE_SIGNING_PUBLISHER")
+          if [ ${#missing[@]} -eq 7 ]; then
+            echo "SIGN=false" >> "$GITHUB_ENV"
+            echo "::warning title=trek-server.ps1 UNSIGNED::Windows trek-server zip built UNSIGNED: no Azure signing secrets in the release environment (docs/RELEASING.md)"
+          elif [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Signing secrets incomplete::Some but not all of the Azure signing secrets are set in the release environment. Missing: ${missing[*]}. Set them all, or remove the rest. See docs/RELEASING.md."
+            exit 1
+          else
+            echo "SIGN=true" >> "$GITHUB_ENV"
+          fi
+      # Byte-exact checkouts, as ci.yml's Windows job: the launchers and web client are packaged as
+      # committed (.gitattributes fixes the line endings that matter), not as core.autocrlf rewrites them.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build the web client and the server
+        run: |
+          npm run build:web
+          npm --prefix server run build
+      - name: Package, signing the PowerShell launcher
+        if: env.SIGN == 'true'
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
+        run: |
+          node scripts/package-server.mjs --out dist-release --sign-azure
+          test -f "dist-release/trek-server-$VERSION-win32-x64.zip"
+      - name: Package (unsigned)
+        if: env.SIGN != 'true'
+        run: |
+          node scripts/package-server.mjs --out dist-release
+          test -f "dist-release/trek-server-$VERSION-win32-x64.zip"
+      # The zip holds the signed launcher (package-server.mjs checked it before zipping).
+      - name: The zipped launcher is signed
+        if: env.SIGN == 'true'
+        shell: pwsh
+        env:
+          AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $x = Join-Path $env:RUNNER_TEMP 'trek-server-ps1'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $x
+          New-Item -ItemType Directory -Path $x | Out-Null
+          & "$env:SystemRoot\System32\tar.exe" -xf "dist-release/trek-server-$env:VERSION-win32-x64.zip" -C $x
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $ps1 = Join-Path $x "trek-server-$env:VERSION-win32-x64\bin\trek-server.ps1"
+          $sig = Get-AuthenticodeSignature -LiteralPath $ps1
+          $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(none)' }
+          Write-Output "$($sig.Status) bin\trek-server.ps1 [$subject]"
+          if ($sig.Status -ne 'Valid' -or -not $subject.Contains($env:AZURE_SIGNING_PUBLISHER)) {
+            Write-Output "::error::the zip's bin\trek-server.ps1 is not signed by $env:AZURE_SIGNING_PUBLISHER"
+            exit 1
+          }
+      - name: Unpack and run it
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-win32-x64.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-win32-x64
+          path: dist-release/trek-server-${{ env.VERSION }}-win32-x64.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -444,7 +573,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, ci, macos-smokes, mac-app, linux-app, server, server-mac, relay]
+    needs: [version, ci, macos-smokes, mac-app, linux-app, windows-app, server, server-win, server-mac, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The key that signs SHA256SUMS is the `release` environment's too (docs/RELEASING.md): only
@@ -478,6 +607,7 @@ jobs:
           expected=("Trek-$VERSION-arm64.dmg" "Trek-$VERSION-arm64.zip" "Trek-$VERSION-arm64.zip.blockmap" "latest-mac.yml" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
           for a in x64 arm64; do expected+=("Trek-$VERSION-linux-$a.deb"); done
           expected+=("latest-linux.yml" "latest-linux-arm64.yml")
+          expected+=("Trek-$VERSION-win-x64.exe" "Trek-$VERSION-win-x64.exe.blockmap" "latest.yml")
           for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do expected+=("trek-server-$VERSION-$t.tar.gz"); done
           expected+=("trek-server-$VERSION-win32-x64.zip")
           for f in "${expected[@]}"; do [ -f "$f" ] || { echo "::error::missing artifact $f"; exit 1; }; done
@@ -498,12 +628,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The Windows wording is the unsigned one; change it when the Azure secrets are added.
           cat > notes.md <<EOF
           **Trek $VERSION**
 
           - \`Trek-$VERSION-arm64.dmg\`: the desktop app for Apple silicon Macs (signed and notarized).
           - \`Trek-$VERSION-arm64.zip\`, its \`.blockmap\` and \`latest-mac.yml\`: what an installed Trek downloads to update itself (Trek → Check for Updates…). Not for installing by hand.
           - \`Trek-$VERSION-linux-x64.deb\`, \`Trek-$VERSION-linux-arm64.deb\`: the desktop app for Ubuntu 22.04+ and Debian 12+. Install with \`sudo apt install ./Trek-$VERSION-linux-<arch>.deb\` (see docs/LINUX.md). \`latest-linux*.yml\` is what an installed Trek checks for a newer version.
+          - \`Trek-$VERSION-win-x64.exe\`: the desktop app for Windows 10 and 11 (x64); installs for your user (no admin) and updates itself. Not code-signed yet: Windows SmartScreen asks once, choose More info → Run anyway. Its \`.blockmap\` and \`latest.yml\` are what an installed Trek downloads to update.
           - \`trek-server-$VERSION-<os>-<arch>.tar.gz\`: trek-server for macOS and Linux (x64, arm64); needs Node.js 22 or later. Unpack it and run \`bin/trek-server\` (see its README.md).
           - \`trek-server-$VERSION-win32-x64.zip\`: trek-server for Windows (x64); needs Node.js 22 or later. Unzip it and run \`bin\\trek-server\` (see its README.md and docs/WINDOWS.md).
           - \`trek-relay-$VERSION.cjs\`: the push relay (\`node trek-relay-$VERSION.cjs start --config <file>\`); see relay/README.md.

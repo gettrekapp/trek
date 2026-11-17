@@ -10,13 +10,15 @@ import { removeDir } from './testPlatform.mjs'
 
 const scratch = () => {
   const work = mkdtempSync(join(tmpdir(), 'trek-filekey-'))
-  const real = realpathSync(work)
+  // The native realpath: on Windows the temp dir is often an 8.3 spelling (C:\Users\RUNNER~1\…),
+  // whose long form is the file's key; elsewhere it is the JS realpath (/var → /private/var).
+  const real = realpathSync.native(work)
   mkdirSync(join(real, 'files'))
   symlinkSync(join(real, 'files'), join(real, 'link'))
   return { work, real, done: () => removeDir(real) }
 }
 
-test('fileKey is the realpath, through a symlink and another spelling of the temp dir', () => {
+test('fileKey is the realpath, through a symlink and another spelling of the temp dir (an 8.3 short name on Windows)', () => {
   const { work, real, done } = scratch()
   try {
     const file = join(real, 'files', 'P.trekproj')

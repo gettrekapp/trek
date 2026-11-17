@@ -14,12 +14,16 @@ const root = join(fileURLToPath(import.meta.url), '..', '..')
 const PLUGIN_SERVERS = readdirSync(join(root, 'plugins'))
   .map((id) => `plugins/${id}/server`)
   .filter((dir) => existsSync(join(root, dir)) && statSync(join(root, dir)).isDirectory())
-const TREES = ['server/src', 'src/host', ...PLUGIN_SERVERS]
-/** Calls that are not child_process ones, or that never run on Windows. */
+const TREES = ['server/src', 'src/host', 'src/main', ...PLUGIN_SERVERS]
+/** Calls that are not child_process ones, or that never run on Windows. Each entry exempts its whole file. */
 const ALLOWED = new Set([
   // The bot refuses to start on win32 (src/host/bot/sandbox.ts), so its processes never run there.
   'src/host/bot/turnProcess.ts',
-  'src/host/bot/sandbox.ts'
+  'src/host/bot/sandbox.ts',
+  // osascript (focusing a Chrome tab) runs on macOS only.
+  'src/main/openUrl.ts',
+  // fixPath returns at once on win32: the login shell it runs is macOS's and Linux's.
+  'src/main/env.ts'
 ])
 // The program a call runs: commandPath(…), this very Node, or a choice between the two.
 const PROGRAM = /^(commandPath\(.*\)|process\.execPath|\w+ \? (process\.execPath|commandPath\(.*\)) : (process\.execPath|commandPath\(.*\)))$/s

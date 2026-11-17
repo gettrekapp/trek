@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import electronPath from 'electron'
 import { isLocalServerCommand } from '../src/main/localServerRules.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { processCommandLine } from '../src/shared/processCommand.ts'
+import { homeEnv, smokeLocalProfile } from './smokeShell.mjs'
 
 export const APP_CLOSE_MS = 15_000
 const HARD_MS = 45_000
@@ -30,8 +32,17 @@ export const alive = (pid) => {
   }
 }
 
-/** The pid's command line (`ps -o command=`), or '' when ps cannot tell. */
-export const commandOf = (pid) => (spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 }).stdout ?? '').trim()
+/**
+ * The pid's command line, or '' when it cannot be read: `ps -ww -o command=` on macOS and Linux,
+ * Win32_Process's CommandLine on Windows (there is no ps; Git Bash's is not procps), as the app
+ * reads it (processCommandLine).
+ */
+export const commandOf = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return ''
+  const { file, args } = processCommandLine(pid)
+  // PowerShell takes a second or two to start.
+  return (spawnSync(file, args, { encoding: 'utf8', timeout: process.platform === 'win32' ? 30_000 : 5000, windowsHide: true }).stdout ?? '').trim()
+}
 
 /** SIGKILLs `pid` when it is alive and its command line passes `expected`; a reused pid is left alone. */
 export function killIfOurs(pid, expected, label) {
@@ -110,7 +121,7 @@ export async function closeApp(app, ms = APP_CLOSE_MS) {
  * then `work` removed. `isAgent(command)` tells an agent's command line.
  */
 export function localTeardown({ root, home, work, agentPids, isAgent }) {
-  const infoPath = join(home, '.config', 'trek-server', `local-${PROFILE}`, 'local.json')
+  const infoPath = join(smokeLocalProfile(home, PROFILE), 'local.json')
   // A throw before the run's try (the fixtures) exits without finish: remove the work dir anyway.
   process.on('exit', () => rmSync(work, { recursive: true, force: true }))
   const info = () => {
@@ -125,7 +136,7 @@ export function localTeardown({ root, home, work, agentPids, isAgent }) {
     if (done) return
     done = true
     spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', PROFILE], {
-      env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...process.env, ...homeEnv(home), XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
       timeout: 15_000
     })
     const left = info()

@@ -108,18 +108,8 @@ export function localProfileArgs(profile: string | undefined): string[] {
   return ['--local-profile', profile]
 }
 
-/**
- * The command line (`ps -o command=`) is a local server of `profile`: it mentions
- * trek-server (the bundle's trek-server.cjs, or an installed trek-server bin), has
- * `start --local`, and has `--local-profile <profile>` for a named profile or no
- * `--local-profile` for the default one. Errs towards "a server": that only ever
- * refuses a Reset or a SIGKILL.
- */
-export function isLocalServerCommand(command: string, profile: string | undefined): boolean {
-  if (!command.includes('trek-server') || !/(^|\s)start\s+--local(\s|$)/.test(command)) return false
-  const named = /(^|\s)--local-profile\s+(\S+)/.exec(command)?.[2]
-  return named === profile
-}
+// Shared with trek-server's `stop --local`, which checks a pid the same way before it ends it.
+export { isLocalServerCommand, processCommandLine } from '../shared/processCommand.ts'
 
 /** The profile's files; `profile` is localProfileName's (throws on an invalid name). */
 export function localPaths(home: string, profile?: string, platform: string = process.platform, env: Record<string, string | undefined> = process.env): LocalPaths {

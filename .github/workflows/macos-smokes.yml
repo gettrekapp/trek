@@ -1,10 +1,13 @@
-# The Electron smokes, on macOS (arm64) and Linux (x64, each under xvfb-run): nightly, by hand
+# The Electron smokes, on macOS (arm64), Linux (x64, each under xvfb-run) and Windows (x64, under
+# Git Bash: the job's default shell is bash, which is Git Bash on windows-latest): nightly, by hand
 # (Actions → Electron smokes → Run workflow), and as part of release.yml's gate (workflow_call).
 # They drive the built app with Playwright, each in its own temp HOME and user-data directory,
 # with stub gh/docker/colima/code: nothing on the runner is touched. One matrix leg per OS, one
 # smoke at a time within a leg (they must not overlap); every smoke runs even when an earlier one
-# failed, so one run shows every failure. The Linux leg sets TREK_NO_KEYRING_NOTICE so the
-# one-time no-keyring notice does not take the focus from the windows the smokes type in.
+# failed, so one run shows every failure. TREK_NO_KEYRING_NOTICE is set on every leg but only
+# matters on Linux without a keyring, where the one-time notice would take the focus from the
+# windows the smokes type in; it is harmless elsewhere. The Windows leg has no login shell:
+# scripts/smokeShell.mjs leaves SHELL out and the smokes put their stubs on PATH through the env.
 #
 # Each `npm run smoke:<name>` is `npm run build && node scripts/<name>-smoke.mjs`: a leg builds
 # once and runs the scripts. smoke:server-pairing needs a non-internal IPv4 address and prints
@@ -29,17 +32,25 @@ jobs:
   smokes:
     name: Electron smokes (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.timeout }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: macOS arm64, runner: macos-latest, wrap: '' }
-          - { name: Linux x64, runner: ubuntu-22.04, wrap: 'xvfb-run -a' }
+          - { name: macOS arm64, runner: macos-latest, wrap: '', timeout: 120 }
+          - { name: Linux x64, runner: ubuntu-22.04, wrap: 'xvfb-run -a', timeout: 120 }
+          - { name: Windows x64, runner: windows-latest, wrap: '', timeout: 180 }
     env:
       # Linux without a keyring: the one-time notice would take the focus from the windows the smokes type in.
       TREK_NO_KEYRING_NOTICE: '1'
     steps:
+      # Byte-exact checkouts (ci.yml's Windows job and release.yml do the same).
+      - name: No CRLF conversion on checkout
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -55,7 +66,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb build-essential python3
       - run: npm ci --no-audit --no-fund
-      # node-pty against Electron's headers, as `npm run rebuild` does for a dev checkout.
+      # node-pty against Electron's headers, as `npm run rebuild` does for a dev checkout. Kept on
+      # Windows too: it is cheap there if electron-rebuild takes the win32-x64 prebuild, and
+      # windows-latest has the Visual Studio build tools if it compiles.
       - name: Rebuild node-pty for Electron
         run: npm run rebuild
       - name: Unit tests (with the macOS-only ones)

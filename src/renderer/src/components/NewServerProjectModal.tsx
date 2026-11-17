@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { pathBaseName } from '../../../shared/pathName'
 import { errorCode, errorText } from '../v2/errors'
 import { whileCreating } from '../createGuard'
 import type { RegisteredServer } from '../../../shared/client/index.ts'
@@ -29,9 +30,7 @@ interface Props {
 /** How long Create waits for an added repo's `server` topic patch before it says so. */
 const TOPIC_WAIT_MS = 5000
 
-function baseName(p: string): string {
-  return p.replace(/\/+$/, '').split('/').pop() || p
-}
+const baseName = pathBaseName
 
 export function NewServerProjectModal({ registered, serverName, repos, onClose, onCreated, local = false, initialPath }: Props): React.JSX.Element {
   const [name, setName] = useState(() => (initialPath ? baseName(initialPath) : ''))
