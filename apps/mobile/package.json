@@ -35,8 +35,8 @@
     "android": "expo run:android",
     "typecheck": "node scripts/build-terminal.mjs && tsc --noEmit",
     "export": "node scripts/build-terminal.mjs && expo export --platform ios --platform android --output-dir dist",
-    "update:preview": "node scripts/build-terminal.mjs && TREK_APNS_MODE=production npx eas-cli@27.10.0 update --channel preview --environment preview",
-    "update:production": "node scripts/build-terminal.mjs && TREK_APNS_MODE=production npx eas-cli@27.10.0 update --channel production --environment production",
+    "update:preview": "node scripts/publish-update.mjs preview",
+    "update:production": "node scripts/publish-update.mjs production",
     "build:terminal": "node scripts/build-terminal.mjs",
     "postinstall": "node scripts/build-terminal.mjs"
   },
