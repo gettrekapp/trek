@@ -3,18 +3,19 @@
 // that every request the phone sends is in DEMO_METHODS or NOT_IN_DEMO.
 import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../shared.ts'
 import type { DemoContext } from './demoServer.ts'
+import { AUTOMATION_HANDLERS } from './handlers/automations.ts'
 import { BRANCH_HANDLERS } from './handlers/branch.ts'
+import { SESSION_HANDLERS } from './handlers/sessions.ts'
+import { WORKTREE_HANDLERS } from './handlers/worktrees.ts'
 
 export type DemoHandler<M extends MethodNameV2> = (ctx: DemoContext, params: MethodParamsV2[M]) => MethodResultsV2[M]
 export type DemoHandlers<M extends MethodNameV2> = { [K in M]: DemoHandler<K> }
 
 export const DEMO_HANDLERS: Partial<DemoHandlers<MethodNameV2>> = {
   ...BRANCH_HANDLERS,
-  'pty.attach': (ctx, p) => ctx.server.terminals.attach(p.ptyId, ctx.connection),
-  'pty.write': (ctx, p) => {
-    ctx.server.terminals.write(p.ptyId, p.data)
-    return null
-  }
+  ...SESSION_HANDLERS,
+  ...AUTOMATION_HANDLERS,
+  ...WORKTREE_HANDLERS
 }
 
 /** Answered by the server itself (demoServer.ts) */

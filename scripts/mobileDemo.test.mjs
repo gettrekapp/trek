@@ -328,3 +328,170 @@ test('demo: a session that leaves done and returns gets a new since', async () =
     h.close()
   }
 })
+const sessionIn = (h, id) => {
+  for (const w of h.server.state.project.repositories[0].worktrees) for (const s of w.sessions) if (s.id === id) return s
+  return h.server.state.project.globalSessions.find((s) => s.id === id)
+}
+
+test('demo: a prompt plays a reply, clears the decision and ends done', async () => {
+  const h = harness()
+  try {
+    const attention = watch(h.reg, 'attention')
+    await until(() => attention.snapshot)
+    const session = sessionIn(h, 's-login-claude')
+    let out = ''
+    await h.reg.ptys.attach(session.ptyId, { onData: (d) => (out += d), onExit() {} })
+    await h.conn.request('session.sendPrompt', { projectId: DEMO_PROJECT_ID, sessionId: session.id, text: '1' })
+    assert.equal(session.decision, undefined)
+    await until(() => out.includes('the idle timeout is 30 minutes') && session.status === 'done')
+    await until(() => attention.snapshot.entries.some((e) => e.sessionId === session.id && e.status === 'done' && !e.decision))
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: start, queue, dequeue, dismiss and close a session', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID }
+    const { sessionId, ptyId } = await h.conn.request('session.start', { ...ref, worktreeId: 'wt-main', llm: { provider: 'gemini' }, cols: 80, rows: 24 })
+    const session = sessionIn(h, sessionId)
+    assert.equal(session.title, 'Gemini')
+    assert.equal(session.ptyId, ptyId)
+    await h.conn.request('session.enqueue', { ...ref, sessionId, text: 'later' })
+    await assert.rejects(h.conn.request('session.dequeue', { ...ref, sessionId, index: 0, expected: 'other' }), { code: 'CONFLICT' })
+    await h.conn.request('session.dequeue', { ...ref, sessionId, index: 0, expected: 'later' })
+    assert.deepEqual(session.queue, [])
+    await h.conn.request('session.dismissDecision', { ...ref, sessionId: 's-login-claude' })
+    assert.equal(sessionIn(h, 's-login-claude').decision, undefined)
+    const { ptyId: again } = await h.conn.request('session.restart', { ...ref, sessionId, cols: 80, rows: 24 })
+    assert.notEqual(again, ptyId)
+    await h.conn.request('session.close', { ...ref, sessionId })
+    assert.equal(sessionIn(h, sessionId), undefined)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: review.send queues the draft on a session and clears it', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const wt = h.server.state.project.repositories[0].worktrees[1]
+    await assert.rejects(h.conn.request('review.send', { projectId: DEMO_PROJECT_ID, worktreeId: wt.id, sessionId: 's-checkout-claude', revision: 1 }), { code: 'CONFLICT' })
+    await h.conn.request('review.send', { projectId: DEMO_PROJECT_ID, worktreeId: wt.id, sessionId: 's-checkout-claude', revision: wt.review.revision })
+    assert.equal(wt.review, undefined)
+    const queued = sessionIn(h, 's-checkout-claude').queue
+    assert.equal(queued.length, 1)
+    assert.match(queued[0], /review comments/i)
+    assert.match(queued[0], /Clamp the total at zero/)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: worktrees are created, unloaded, loaded and removed', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID }
+    const branches = await h.conn.request('repo.listBranches', { ...ref, repoId: 'demo-repo' })
+    assert.ok(branches.includes('feature/saved-carts'))
+    const { worktreeId } = await h.conn.request('worktree.create', { ...ref, repoId: 'demo-repo', branch: 'feature/saved-carts', createBranch: false })
+    await assert.rejects(h.conn.request('worktree.remove', { ...ref, worktreeId }), { code: 'IN_USE' })
+    await h.conn.request('worktree.unload', { ...ref, worktreeId })
+    await h.conn.request('worktree.remove', { ...ref, worktreeId })
+    assert.ok(!h.server.state.project.repositories[0].worktrees.some((w) => w.id === worktreeId))
+    // A dirty worktree needs force; its sessions keep their scrollback across unload and load
+    await h.conn.request('worktree.unload', { ...ref, worktreeId: 'wt-login' })
+    assert.equal(sessionIn(h, 's-login-claude').ptyId, undefined)
+    await h.conn.request('worktree.load', { ...ref, worktreeId: 'wt-login' })
+    let out = ''
+    await h.reg.ptys.attach(sessionIn(h, 's-login-claude').ptyId, { onData: (d) => (out += d), onExit() {} })
+    assert.ok(out.includes('Waiting for you') && out.includes('Resumed.'))
+    await h.conn.request('worktree.unload', { ...ref, worktreeId: 'wt-login' })
+    await assert.rejects(h.conn.request('worktree.remove', { ...ref, worktreeId: 'wt-login' }), (err) => err.code === 'GIT_ERROR' && err.details?.reason === 'dirty')
+    await h.conn.request('worktree.remove', { ...ref, worktreeId: 'wt-login', force: true })
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: changes, diffs and commits per source', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID, worktreeId: 'wt-checkout' }
+    const all = await h.conn.request('worktree.changes', ref)
+    assert.equal(all.base, 'main')
+    assert.equal(all.files.length, 3)
+    const uncommitted = await h.conn.request('worktree.changes', { ...ref, source: { kind: 'uncommitted' } })
+    assert.deepEqual(uncommitted.files.map((f) => f.path), ['src/checkout/order-summary.css'])
+    const commits = await h.conn.request('worktree.commits', ref)
+    const oneCommit = await h.conn.request('worktree.changes', { ...ref, source: { kind: 'commit', sha: commits[1].sha } })
+    assert.deepEqual(oneCommit.files.map((f) => f.path), ['src/checkout/OrderSummary.tsx'])
+    const diff = await h.conn.request('worktree.diff', { ...ref, paths: ['src/ui/Badge.tsx'] })
+    assert.deepEqual(Object.keys(diff), ['src/ui/Badge.tsx'])
+    const agents = await h.conn.request('server.agents', { projectId: DEMO_PROJECT_ID })
+    assert.ok(agents.agents.some((a) => a.provider === 'codex' && a.installed))
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: automations run now, resolve missed runs and save edits', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID }
+    const automations = h.server.state.project.automations
+    const { sessionId } = await h.conn.request('automation.runNow', { ...ref, automationId: 'auto-changelog' })
+    const run = sessionIn(h, sessionId)
+    assert.deepEqual(run.context, { kind: 'automation', automationId: 'auto-changelog' })
+    assert.equal(automations[1].history[0].trigger, 'manual')
+    await until(() => run.status === 'done')
+    const { started } = await h.conn.request('automation.resolveMissed', { ...ref, run: ['auto-nightly'], dismiss: [] })
+    assert.equal(started[0].sessionId, 's-nightly')
+    assert.equal(automations[0].missed, undefined)
+    const a = automations[1]
+    await h.conn.request('automation.save', { ...ref, automation: { id: a.id, name: 'Weekly notes', prompt: a.prompt, schedule: a.schedule, enabled: true } })
+    assert.equal(a.name, 'Weekly notes')
+    assert.equal(a.enabled, true)
+    assert.equal(run.title, 'Weekly notes')
+    await assert.rejects(h.conn.request('automation.save', { ...ref, automation: { name: 'New', prompt: 'p', schedule: a.schedule, enabled: true } }), { message: 'Not available in the demo' })
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: the working session prints its lines, then is done', async () => {
+  const h = harness({ tickMs: 2 })
+  try {
+    await until(() => h.conn.status === 'connected')
+    await until(() => sessionIn(h, 's-login-codex').status === 'done')
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: state survives a reconnect; a new demo starts fresh', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    await h.conn.request('branch.setNote', { ...REPO, branch: 'main', note: 'Kept' })
+    h.registry.remove('demo')
+    const again = h.registry.add({ id: 'demo', url: DEMO_URL, token: 'demo' })
+    const project = watch(again, `project:${DEMO_PROJECT_ID}`)
+    await until(() => project.snapshot)
+    assert.equal(project.snapshot.repositories[0].branchData.main.note, 'Kept')
+    const fresh = new DemoServer({ tickMs: 1_000_000 })
+    try {
+      assert.equal(fresh.state.project.repositories[0].branchData.main, undefined)
+    } finally {
+      fresh.dispose()
+    }
+  } finally {
+    h.close()
+  }
+})
