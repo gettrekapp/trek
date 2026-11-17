@@ -52,6 +52,8 @@ interface Props {
   readOnly?: string
 }
 
+const QUICK_BUTTON_MIME = 'application/x-trek-quick-button'
+
 export function TerminalPane({ terminalId, visible, global = false, readOnly }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
@@ -115,15 +117,19 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     setDragId(null)
     setDropTarget(null)
   }
+  // The pointer left the row or menu: no stale drop indicator.
+  const leaveDrop = (e: React.DragEvent<HTMLElement>): void => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null)
+  }
   const dragProps = (id: string, axis: 'x' | 'y'): React.HTMLAttributes<HTMLDivElement> & { draggable: boolean } => ({
     draggable: true,
     onDragStart: (e) => {
       e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('application/x-trek-quick-button', id)
+      e.dataTransfer.setData(QUICK_BUTTON_MIME, id)
       setDragId(id)
     },
     onDragOver: (e) => {
-      if (!dragId) return
+      if (!dragId || !e.dataTransfer.types.includes(QUICK_BUTTON_MIME)) return
       e.preventDefault()
       const rect = e.currentTarget.getBoundingClientRect()
       const after = axis === 'x' ? e.clientX > rect.left + rect.width / 2 : e.clientY > rect.top + rect.height / 2
@@ -131,6 +137,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
       if (dropTarget?.id !== id || dropTarget.side !== side) setDropTarget({ id, side })
     },
     onDrop: (e) => {
+      if (!e.dataTransfer.types.includes(QUICK_BUTTON_MIME)) return
       e.preventDefault()
       if (dragId && dropTarget?.id === id) {
         const next = moveButton(buttons, dragId, id, dropTarget.side)
@@ -245,7 +252,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           {status !== 'exited' && (
             <div className="quick-buttons">
               {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}
-              <div className="quick-btn-list" ref={listRef}>
+              <div className="quick-btn-list" ref={listRef} onDragLeave={leaveDrop}>
                 {buttons.map((btn) => {
                   const label = btn.label.trim() || btn.text
                   return (
@@ -270,6 +277,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
                         className="quick-btn-edit"
                         title="Edit"
                         aria-label={`Edit ${label}`}
+                        // a drag that starts on the pencil does not move the button
                         draggable={false}
                         onClick={() => setEditing(btn)}
                       >
@@ -292,7 +300,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
                   {moreOpen && (
                     <>
                       <div className="detail-menu-backdrop" onClick={() => setMoreOpen(false)} />
-                      <div className="quick-more-menu">
+                      <div className="quick-more-menu" onDragLeave={leaveDrop}>
                         {overflow.more.map(moreRow)}
                         {overflow.shown.length > 0 && (
                           <>
