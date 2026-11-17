@@ -148,6 +148,31 @@ npx expo run:android   # or an Android emulator
 Nothing in the repo's checks runs these: they need Xcode or the Android SDK, and a device
 or simulator.
 
+## Over-the-air updates
+
+Builds 11 and later take JS-only updates through EAS Update. Each build profile has its own
+channel (`development`, `preview`, `production`). The runtime version is the native
+fingerprint, so an update reaches only builds whose native code matches the tree it was
+published from: a change that adds or upgrades a native module needs a store build.
+
+Publish from `apps/mobile`:
+
+```bash
+npm run update:production -- --message "What changed"
+npm run update:preview -- --message "What changed"
+```
+
+The scripts set `TREK_APNS_MODE=production` themselves: `app.config.js` turns it into the
+expo-notifications plugin's `mode`, which is part of the fingerprint, and `eas update` doesn't
+read a build profile's `env` in `eas.json`. Without it the update's fingerprint differs from
+the preview and production builds', and no phone receives it. `--environment` brings the EAS
+environment's variables (relay URL and key), so `extra` matches the build's too.
+
+The phone checks on launch and when it comes back to the foreground (at most every 15
+minutes, `src/logic/updates.ts`), downloads the update, and shows **Update ready** with
+Restart and Later. A downloaded update also loads on the next cold start. Dev builds never
+check. Rollbacks and rollouts are on the EAS dashboard (`npx eas-cli@27.10.0 update:rollback`).
+
 ## Store review
 
 Reviewers have no Trek server, so the app has a built-in demo: **Try the demo** on the first
