@@ -29,9 +29,10 @@ export function connectionNotice(status: KnownStatus): string | null {
  * The session screen's text where its terminal would be, when there is none: the session is
  * known but not running; its project is still loading; the server is not connected yet (a cold
  * start, where the topic says "Not connected" before the connection is made: not gone); or gone.
+ * A Global session (`global`) has no worktree to load: it is restarted from the Global screen.
  */
-export function sessionPlaceholder(opts: { hasSession: boolean; topic: 'loading' | 'ready' | 'error'; status: KnownStatus }): string {
-  if (opts.hasSession) return 'Not running. Restart it from the worktree, or load the worktree.'
+export function sessionPlaceholder(opts: { hasSession: boolean; global?: boolean; topic: 'loading' | 'ready' | 'error'; status: KnownStatus }): string {
+  if (opts.hasSession) return opts.global ? 'Not running. Restart it from the Global screen: ⋯, then Restart.' : 'Not running. Restart it from the worktree, or load the worktree.'
   if (opts.topic === 'loading') return 'Loading…'
   if (opts.topic === 'error' && opts.status !== 'connected') return connectionNotice(opts.status) ?? 'Connecting…'
   return 'This session is gone.'

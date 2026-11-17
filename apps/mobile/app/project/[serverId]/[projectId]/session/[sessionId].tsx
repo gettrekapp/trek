@@ -289,7 +289,7 @@ export default function SessionScreen(): React.JSX.Element {
           />
         ) : (
           <View style={ui.pad}>
-            <Text style={ui.muted}>{sessionPlaceholder({ hasSession: !!session, topic: topic.state, status })}</Text>
+            <Text style={ui.muted}>{sessionPlaceholder({ hasSession: !!session, global: !!session && worktreeOfSession(project, sessionId) === null, topic: topic.state, status })}</Text>
           </View>
         )}
       </View>

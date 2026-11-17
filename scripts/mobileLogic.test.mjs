@@ -209,6 +209,9 @@ test("the session placeholder: a cold start's not-connected topic is Connecting�
   assert.equal(sessionPlaceholder({ hasSession: false, topic: 'ready', status: 'connected' }), 'This session is gone.')
   assert.equal(sessionPlaceholder({ hasSession: false, topic: 'loading', status: 'connecting' }), 'Loading…')
   assert.match(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), /^Not running/)
+  assert.equal(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the worktree, or load the worktree.')
+  // A Global session has no worktree to load: it is restarted from the Global screen.
+  assert.equal(sessionPlaceholder({ hasSession: true, global: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the Global screen: ⋯, then Restart.')
 })
 
 test('generations are per server: bumping one leaves the others', () => {

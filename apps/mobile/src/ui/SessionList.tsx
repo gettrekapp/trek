@@ -48,14 +48,18 @@ export function SessionList({ serverId, projectId, sessions, running, disabled, 
   return (
     <>
       {sessions.map((s) => {
-        const mark = running ? sessionMark(s) : 'none'
+        // Running sessions without a terminal: a Global session after the server restarted, or after a
+        // repository was removed (a loaded worktree's always have one). ⋯ → Restart brings it back.
+        const stopped = running && !s.ptyId && s.status !== 'exited'
+        const mark = running && !stopped ? sessionMark(s) : 'none'
+        const status = stopped ? 'Not running' : STATUS_TEXT[s.status]
         const wants = mark === 'attention' || mark === 'done'
         return (
           <View key={s.id} style={[ui.listRow, { paddingVertical: 0, paddingRight: 0 }]}>
             <View style={{ flex: 1, minWidth: 0, paddingVertical: 12 }}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`${s.title}, ${STATUS_TEXT[s.status]}${s.decision ? `, decision: ${s.decision.question}` : ''}`}
+                accessibilityLabel={`${s.title}, ${status}${s.decision ? `, decision: ${s.decision.question}` : ''}`}
                 style={{ flexDirection: 'row', gap: 12 }}
                 onPress={() => router.push(sessionRoute(serverId, projectId, s.id))}
               >
@@ -65,7 +69,7 @@ export function SessionList({ serverId, projectId, sessions, running, disabled, 
                     {s.title}
                   </Text>
                   <Text numberOfLines={2} style={{ fontSize: 13, color: s.decision ? colors.attention : colors.muted }}>
-                    {s.decision ? `Decision: ${s.decision.question}` : STATUS_TEXT[s.status]}
+                    {s.decision ? `Decision: ${s.decision.question}` : status}
                     {s.queue.length ? ` · ${s.queue.length} queued` : ''}
                   </Text>
                 </View>
