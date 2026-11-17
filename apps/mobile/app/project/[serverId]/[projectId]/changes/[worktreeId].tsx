@@ -6,7 +6,7 @@
 // older server): the branch against its base, read-only (6a).
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react'
 import { Keyboard, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { useLocalSearchParams } from 'expo-router'
+import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
@@ -25,10 +25,10 @@ import {
   type ServerConnection,
   type Worktree,
   type WorktreeChanges
-} from '../../../../src/shared.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { useServers } from '../../../../src/state/ServersProvider.tsx'
-import { classifyDiff } from '../../../../src/logic/diff.ts'
+} from '../../../../../src/shared.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { classifyDiff } from '../../../../../src/logic/diff.ts'
 import {
   barText,
   boxAfter,
@@ -49,13 +49,13 @@ import {
   writingOn,
   type CommentEditor,
   type ReviewAction
-} from '../../../../src/logic/review.ts'
-import { confirmAlert } from '../../../../src/ui/alerts.ts'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../src/ui/CommentBox.tsx'
-import { FileDiff } from '../../../../src/ui/FileDiff.tsx'
-import { ReviewBar } from '../../../../src/ui/ReviewBar.tsx'
-import { colors, ui } from '../../../../src/ui/theme.ts'
+} from '../../../../../src/logic/review.ts'
+import { confirmAlert } from '../../../../../src/ui/alerts.ts'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../../src/ui/CommentBox.tsx'
+import { FileDiff } from '../../../../../src/ui/FileDiff.tsx'
+import { ReviewBar } from '../../../../../src/ui/ReviewBar.tsx'
+import { colors, ui } from '../../../../../src/ui/theme.ts'
 
 interface Params {
   serverId: string
@@ -73,12 +73,20 @@ export default function ChangesScreen(): React.JSX.Element {
   if (welcome) review.current = welcome.capabilities.includes(CAPABILITY.review)
   // Not known before the connection's first welcome: neither screen is shown (and nothing asked of
   // the server) until it is, so a server with `review` never shows the read-only one first.
-  if (server && review.current === null) return <Waiting serverId={serverId} />
-  return review.current ? (
-    // Keyed by the worktree: a comment begun on one is never saved to another.
-    <ReviewChanges key={`${serverId}\n${projectId}\n${worktreeId}`} serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
-  ) : (
-    <ReadOnlyChanges serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+  const body =
+    server && review.current === null ? (
+      <Waiting serverId={serverId} />
+    ) : review.current ? (
+      // Keyed by the worktree: a comment begun on one is never saved to another.
+      <ReviewChanges key={`${serverId}\n${projectId}\n${worktreeId}`} serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+    ) : (
+      <ReadOnlyChanges serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+    )
+  return (
+    <>
+      <Stack.Screen options={{ title: 'Changes' }} />
+      {body}
+    </>
   )
 }
 

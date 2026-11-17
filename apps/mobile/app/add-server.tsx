@@ -115,7 +115,7 @@ export default function AddServer(): React.JSX.Element {
   }
 
   return (
-    <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
+    <ScrollView style={ui.screen} contentContainerStyle={[ui.pad, ui.column]} keyboardShouldPersistTaps="handled">
       <Button label="Scan the pairing code" onPress={() => void scan()} />
       {cameraBlocked ? (
         <>

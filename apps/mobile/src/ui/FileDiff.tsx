@@ -10,10 +10,11 @@
 // lines are drawn until "Show all <n> lines" is tapped (logic/review.ts' lineCap), and the rows are
 // memoised: a save, a delete or an opened box re-renders only the rows it touches.
 import { createContext, memo, useContext, useMemo, useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import { missingPatchNote, numberedLines, patchBody, reviewLineText, type ChangedFile, type NumberedLine, type ReviewComment } from '../shared.ts'
 import { canComment, commentPlace, fileReview, gutter, lineCap, type NewComment } from '../logic/review.ts'
 import { Button } from './Button.tsx'
+import { usePaneWidth } from './paneWidth.tsx'
 import { CommentBox, CommentView } from './CommentBox.tsx'
 import { colors, ui } from './theme.ts'
 
@@ -127,12 +128,12 @@ export const FileDiff = memo(function FileDiff({ file, patch, loading, failed, c
   const [showAll, setShowAll] = useState(false)
   const cap = lineCap(review, lines?.length ?? 0, showAll, editingId)
 
-  // The part of the diff on screen: its width (the window's, less the screen's and the card's
+  // The part of the diff on screen: its width (the pane's, less the screen's and the card's
   // padding, until it is measured) and how far it is scrolled to the right, once a scroll ends.
-  const screen = useWindowDimensions()
+  const paneWidth = usePaneWidth()
   const [width, setWidth] = useState<number | null>(null)
   const [left, setLeft] = useState(0)
-  const place = useMemo(() => ({ left, width: width ?? Math.max(0, screen.width - 58) }), [left, width, screen.width])
+  const place = useMemo(() => ({ left, width: width ?? Math.max(0, paneWidth - 58) }), [left, width, paneWidth])
   const scrolled = (e: NativeSyntheticEvent<NativeScrollEvent>): void => setLeft(Math.max(0, Math.round(e.nativeEvent.contentOffset.x)))
 
   return (

@@ -8,6 +8,7 @@ import { Button } from '../src/ui/Button.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
 import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
+import { projectRoute } from '../src/logic/routes.ts'
 
 const needsPairing = (status: ServerView['status']): boolean => status === 'needs-auth' || status === 'no-token'
 
@@ -33,7 +34,7 @@ export default function ServersScreen(): React.JSX.Element {
     if (demoBusy) return
     setDemoBusy(true)
     void addDemo()
-      .then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
+      .then((where) => router.navigate(projectRoute(where.serverId, where.projectId)))
       .finally(() => setDemoBusy(false))
   }
   const confirmRemoveDemo = (id: string): void => {
@@ -45,7 +46,7 @@ export default function ServersScreen(): React.JSX.Element {
   return (
     <View style={ui.screen}>
       <FlatList
-        style={{ flex: 1 }}
+        style={[{ flex: 1 }, ui.column]}
         contentContainerStyle={ui.pad}
         data={servers}
         keyExtractor={(s) => s.id}

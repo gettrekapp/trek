@@ -2,6 +2,7 @@
 // screens, while focused) and what it does when the server asks it to show a session (`ui.focus`,
 // from the MCP tool focus_session): the rules of ui/useUiSelection.ts. Pure.
 import { CAPABILITY, type Project, type ServerEvent, type UiFocusEvent, type UiReportParams } from '../shared.ts'
+import { sessionRoute, type SessionRoute } from './routes.ts'
 
 /** What a screen shows: the project screen neither, the worktree screen its worktree, the session screen both (no worktree for a Global session). */
 export interface UiSelection {
@@ -48,10 +49,7 @@ export function focusNavigation(current: UiSelection): 'push' | 'replace' {
   return current.sessionId ? 'replace' : 'push'
 }
 
-/** The session screen to open for a `ui.focus`, as the worktree screen pushes it. */
-export function focusRoute(
-  serverId: string,
-  event: UiFocusEvent
-): { pathname: '/session/[serverId]/[projectId]/[sessionId]'; params: { serverId: string; projectId: string; sessionId: string } } {
-  return { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId: event.projectId, sessionId: event.sessionId } }
+/** The session screen to open for a `ui.focus`. */
+export function focusRoute(serverId: string, event: UiFocusEvent): SessionRoute {
+  return sessionRoute(serverId, event.projectId, event.sessionId)
 }

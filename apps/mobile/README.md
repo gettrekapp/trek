@@ -14,6 +14,23 @@ It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-expo
 (`metro.config.js`). That code must stay free of Node, Electron, DOM and packages:
 `scripts/sharedForMobile.test.mjs` (in the root's `npm test`) checks it.
 
+## Tablets
+
+The app runs natively on iPads and Android tablets, in every orientation. Phones stay portrait:
+`app/_layout.tsx` locks them at start-up (`expo-screen-orientation`), as `app.json` allows every
+orientation for iPad multitasking. A project on a window at least 700pt wide (`src/logic/layout.ts`)
+is a sidebar (its worktrees, the one you're in opened to its sessions, Worktree and Changes, and its
+automations) beside a detail pane, which is the project's own stack
+(`app/project/[serverId]/[projectId]/_layout.tsx`). A pick in the sidebar starts the pane over at that
+screen, with no Back; screens opened inside the pane stack up with Back. Narrower (a phone, iPad
+Split View, Android multi-window) it is the phone's stack, and crossing the width keeps the screen
+you're on. Every project screen lives under `app/project/[serverId]/[projectId]/`, and its route comes
+from `src/logic/routes.ts`. The project's list reads the project's ids from the layout
+(`src/ui/projectContext.tsx`): a screen opened from outside (Needs you, a notification) gets the list
+beneath it as an anchor, which carries no params.
+
+The App Store asks for iPad screenshots once `supportsTablet` is on.
+
 ## The terminal
 
 The session screen's terminal is xterm.js in a WebView at the pty's own size: the phone

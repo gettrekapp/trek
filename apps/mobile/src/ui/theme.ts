@@ -31,6 +31,8 @@ export const ui = StyleSheet.create({
   buttonText: { color: '#ffffff', fontWeight: '600', fontSize: 15 },
   ghost: { borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   ghostText: { color: colors.text, fontSize: 14 },
+  // A top-level screen's content on a wide window: no wider than a comfortable reading line, centred.
+  column: { width: '100%', maxWidth: 720, alignSelf: 'center' },
   // A list row: full width, a hairline under it, its mark in a fixed column.
   listRow: { flexDirection: 'row', gap: 12, paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   section: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 6 },

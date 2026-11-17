@@ -1,9 +1,13 @@
 import { useEffect, useRef } from 'react'
-import { router, Stack } from 'expo-router'
+import { router, Stack, useGlobalSearchParams, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as Device from 'expo-device'
+import * as ScreenOrientation from 'expo-screen-orientation'
 import * as Notifications from 'expo-notifications'
 import { notificationRoute } from '../src/logic/attention.ts'
 import { routeTap } from '../src/logic/push.ts'
+import { shouldLockPortrait } from '../src/logic/layout.ts'
+import { leavesProject } from '../src/logic/routes.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
 import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
 import { colors } from '../src/ui/theme.ts'
@@ -15,7 +19,7 @@ Notifications.setNotificationHandler({
 
 // Attention is under every other screen, also when the app is started by a link (trek://pair)
 // or a notification: Back from there leads home.
-export const unstable_settings = { initialRouteName: 'index' }
+export const unstable_settings = { anchor: 'index' }
 
 /**
  * Tapping a notification opens its session (or worktree): while running, and on a cold start. A
@@ -28,6 +32,11 @@ function NotificationRouting(): null {
   const pending = useRef<Notifications.NotificationResponse[]>([])
   const handled = useRef(new Set<string>())
   const cold = useRef<Notifications.NotificationResponse | null>(null)
+  // Where the phone is now, for the flush closure below to read.
+  const segments = useSegments()
+  const params = useGlobalSearchParams()
+  const where = useRef({ segments: segments as readonly string[], params: params as Record<string, string | string[] | undefined> })
+  where.current = { segments, params }
   const flushRef = useRef<() => void>(() => {})
   flushRef.current = () => {
     const still: Notifications.NotificationResponse[] = []
@@ -46,7 +55,11 @@ function NotificationRouting(): null {
           // Not available (no native module).
         }
       }
-      if (route) router.push(route)
+      if (route) {
+        // From another project's screen, go home first: a project's stack is shared by every project.
+        if (leavesProject(where.current.segments, where.current.params, route)) router.dismissTo('/')
+        router.push(route, { withAnchor: true })
+      }
     }
     pending.current = still
   }
@@ -81,7 +94,18 @@ function NotificationRouting(): null {
   return null
 }
 
+// Phones stay portrait; tablets turn (app.json allows every orientation, which iPad multitasking needs).
+function useOrientationLock(): void {
+  useEffect(() => {
+    if (!shouldLockPortrait(Device.deviceType as number | null)) return
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {
+      // No native module (an old dev build): the phone turns with the device.
+    })
+  }, [])
+}
+
 export default function RootLayout(): React.JSX.Element {
+  useOrientationLock()
   return (
     <ServersProvider>
       <PushProvider>
@@ -104,6 +128,8 @@ export default function RootLayout(): React.JSX.Element {
         <Stack.Screen name="pair" options={{ title: 'Add server' }} />
         <Stack.Screen name="projects" options={{ title: 'Projects', animation: 'none', headerBackVisible: false }} />
         <Stack.Screen name="push/[serverId]" options={{ title: 'Push notifications' }} />
+        {/* The project's own stack draws its headers (app/project/[serverId]/[projectId]/_layout.tsx). */}
+        <Stack.Screen name="project/[serverId]/[projectId]" options={{ headerShown: false }} />
       </Stack>
       </PushProvider>
     </ServersProvider>

@@ -1,5 +1,6 @@
 // The home tab (6a): what needs the user across every paired server, newest first. Pure.
 import type { AttentionEntry } from '../shared.ts'
+import { sessionRoute, worktreeRoute, type SessionRoute, type WorktreeRoute } from './routes.ts'
 
 export interface AttentionItem extends AttentionEntry {
   /** The phone's id for the server entry */
@@ -61,9 +62,7 @@ export interface NotificationTarget {
   worktreeId?: string
 }
 
-export type NotificationRoute =
-  | { pathname: '/session/[serverId]/[projectId]/[sessionId]'; params: { serverId: string; projectId: string; sessionId: string } }
-  | { pathname: '/worktree/[serverId]/[projectId]/[worktreeId]'; params: { serverId: string; projectId: string; worktreeId: string } }
+export type NotificationRoute = SessionRoute | WorktreeRoute
 
 /** Where tapping a notification goes: its session, else its worktree; null for anything else. */
 export function notificationRoute(data: unknown): NotificationRoute | null {
@@ -71,8 +70,8 @@ export function notificationRoute(data: unknown): NotificationRoute | null {
   const d = data as Record<string, unknown>
   const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
   if (!str(d.serverId) || !str(d.projectId)) return null
-  if (str(d.sessionId)) return { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: d.serverId, projectId: d.projectId, sessionId: d.sessionId } }
-  if (str(d.worktreeId)) return { pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId: d.serverId, projectId: d.projectId, worktreeId: d.worktreeId } }
+  if (str(d.sessionId)) return sessionRoute(d.serverId, d.projectId, d.sessionId)
+  if (str(d.worktreeId)) return worktreeRoute(d.serverId, d.projectId, d.worktreeId)
   return null
 }
 

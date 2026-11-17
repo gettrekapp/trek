@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Pressable, ScrollView, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { CAPABILITY, type AgentInfo, type Automation } from '../../../src/shared.ts'
+import { CAPABILITY, type AgentInfo, type Automation } from '../../../../../src/shared.ts'
 import {
   MISSED_ERRORS_TITLE,
   MISSED_INTRO,
@@ -19,11 +19,12 @@ import {
   missedRows,
   type MissedChoice,
   type MissedChoices
-} from '../../../src/logic/automations.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../src/state/hooks.ts'
-import { useServers } from '../../../src/state/ServersProvider.tsx'
-import { Button } from '../../../src/ui/Button.tsx'
-import { ui } from '../../../src/ui/theme.ts'
+} from '../../../../../src/logic/automations.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { ui } from '../../../../../src/ui/theme.ts'
+import { automationRoute } from '../../../../../src/logic/routes.ts'
 
 export default function AutomationsScreen(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
@@ -171,7 +172,7 @@ export default function AutomationsScreen(): React.JSX.Element {
             accessibilityRole="button"
             accessibilityHint="Opens the automation"
             style={ui.card}
-            onPress={() => router.push({ pathname: '/automation/[serverId]/[projectId]/[automationId]', params: { serverId, projectId, automationId: card.id } })}
+            onPress={() => router.push(automationRoute(serverId, projectId, card.id))}
           >
             <Text style={ui.title}>{card.name}</Text>
             {card.schedule ? <Text style={ui.text}>{card.schedule}</Text> : null}

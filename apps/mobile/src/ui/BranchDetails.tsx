@@ -2,15 +2,15 @@
 // pull request (with its watch: logic/prWatch.ts), read from the project's snapshot and saved at
 // once with the matching branch.set* request. A failure shows in the section's error line; the snapshot remains the truth. The
 // project's tag lists are not edited here, and a ticket's title and status are not looked up.
-// History opens the branch's change log (app/history), on a server that keeps one.
+// History opens the branch's change log (app/project/[serverId]/[projectId]/history), on a server that keeps one.
 import { useEffect, useRef, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
 import { CAPABILITY, DEFAULT_WORKTREE_TAGS, type Project, type Repository, type ServerConnection } from '../shared.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink, type NoteEdit } from '../logic/branchDetails.ts'
-import { branchParam } from '../logic/history.ts'
 import { watchAction, watchOffered, watchSuffix } from '../logic/prWatch.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../logic/tickets.ts'
+import { historyRoute } from '../logic/routes.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
 import { explainDemoPullRequest } from './demoLink.ts'
@@ -317,7 +317,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
             ghost
             label="History"
             accessibilityLabel={`History of ${branch}`}
-            onPress={() => router.push({ pathname: '/history/[serverId]/[projectId]/[repoId]', params: { serverId, projectId, repoId: repo.id, branch: branchParam(branch) } })}
+            onPress={() => router.push(historyRoute(serverId, projectId, repo.id, branch))}
           />
         </View>
       ) : null}

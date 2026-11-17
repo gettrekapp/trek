@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshControl, ScrollView, Text, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
-import type { ServerConnection } from '../../../../src/shared.ts'
-import { chipColors } from '../../../../src/logic/branchDetails.ts'
+import type { ServerConnection } from '../../../../../src/shared.ts'
+import { chipColors } from '../../../../../src/logic/branchDetails.ts'
 import {
   EMPTY_HISTORY,
   HISTORY_FAILED,
@@ -23,11 +23,11 @@ import {
   reloaded,
   type HistoryList,
   type HistoryRef
-} from '../../../../src/logic/history.ts'
-import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { useServers } from '../../../../src/state/ServersProvider.tsx'
-import { Button } from '../../../../src/ui/Button.tsx'
-import { ui } from '../../../../src/ui/theme.ts'
+} from '../../../../../src/logic/history.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
+import { useServers } from '../../../../../src/state/ServersProvider.tsx'
+import { Button } from '../../../../../src/ui/Button.tsx'
+import { ui } from '../../../../../src/ui/theme.ts'
 
 export default function HistoryScreen(): React.JSX.Element {
   const { serverId, projectId, repoId, branch: param } = useLocalSearchParams<{ serverId: string; projectId: string; repoId: string; branch?: string }>()

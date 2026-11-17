@@ -23,7 +23,8 @@ export default function PushSettingsScreen(): React.JSX.Element {
   if (!server) return <View style={ui.screen}><Text style={[ui.muted, ui.pad]}>This server is no longer paired.</Text></View>
   const canPush = server.capabilities.includes('push')
   return (
-    <View style={[ui.screen, ui.pad]}>
+    <View style={ui.screen}>
+    <View style={[ui.pad, ui.column, { flex: 1 }]}>
       <Text style={ui.title}>{server.name}</Text>
       {!push.permitted ? <Text style={ui.warn}>Allow notifications for Trek in Settings to get pushes.</Text> : null}
       {push.permitted && push.registrationProblem ? <Text style={ui.error}>{push.registrationProblem}</Text> : null}
@@ -46,6 +47,7 @@ export default function PushSettingsScreen(): React.JSX.Element {
         </View>
       ))}
       <Text style={ui.muted}>A push says only the project and what happened. Changes are saved to the server while it is connected.</Text>
+    </View>
     </View>
   )
 }

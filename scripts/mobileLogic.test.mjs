@@ -17,6 +17,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
+import { WIDE_MIN, aboveIndex, childRoutes, isWide, shouldLockPortrait, sidebarSelection } from '../apps/mobile/src/logic/layout.ts'
+import * as routes from '../apps/mobile/src/logic/routes.ts'
 import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
@@ -150,8 +152,8 @@ test("a notification never shows a decision's question, and routes to its sessio
   assert.deepEqual([pr.title, pr.body, pr.data.sessionId], ['App', 'Checks failed', undefined])
   assert.equal(notificationContent({ ...base, status: 'done' }).body, 'Finished')
 
-  assert.deepEqual(notificationRoute(decision.data), { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: 'a', projectId: 'p', sessionId: 's1' } })
-  assert.deepEqual(notificationRoute(pr.data), { pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId: 'a', projectId: 'p', worktreeId: 'w' } })
+  assert.deepEqual(notificationRoute(decision.data), routes.sessionRoute('a', 'p', 's1'))
+  assert.deepEqual(notificationRoute(pr.data), routes.worktreeRoute('a', 'p', 'w'))
   for (const bad of [null, undefined, 'x', {}, { serverId: 'a' }, { serverId: 'a', projectId: 'p' }, { serverId: 'a', projectId: 'p', sessionId: 3 }, { serverId: '', projectId: 'p', sessionId: 's' }]) {
     assert.equal(notificationRoute(bad), null, JSON.stringify(bad))
   }
@@ -511,7 +513,7 @@ test('push: a tap waits until the phone has loaded its servers, then is routed o
   const routeData = (d) => pushRouteData(d, (id) => (id === 'srv-1' ? 'entry-1' : undefined))
   const tap = { kind: 'session-stopped', serverId: 'srv-1', projectId: 'p', sessionId: 's' }
   assert.equal(routeTap(tap, false, routeData, notificationRoute), 'wait')
-  assert.deepEqual(routeTap(tap, true, routeData, notificationRoute), { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: 'entry-1', projectId: 'p', sessionId: 's' } })
+  assert.deepEqual(routeTap(tap, true, routeData, notificationRoute), routes.sessionRoute('entry-1', 'p', 's'))
   assert.equal(routeTap({ ...tap, serverId: 'gone' }, true, routeData, notificationRoute), null)
   assert.equal(routeTap({ kind: 'decision', serverId: 'srv-1', projectId: 'p' }, true, routeData, notificationRoute), null, 'no session or worktree: nothing to open')
 })
@@ -2636,10 +2638,7 @@ test('ui selection: a report goes only to a server with the ui capability, and o
 })
 
 test('ui.focus: the session screen to open, as the worktree screen pushes it', () => {
-  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), {
-    pathname: '/session/[serverId]/[projectId]/[sessionId]',
-    params: { serverId: 'srv', projectId: 'p', sessionId: 's1' }
-  })
+  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), routes.sessionRoute('srv', 'p', 's1'))
 })
 
 test('ui.focus: followed for this project, unless its session is already the one shown', () => {
@@ -2728,4 +2727,111 @@ test('attentionMark: blue for a finished session, amber for anything that waits 
   assert.equal(attentionMark({ status: 'attention' }), 'attention')
   assert.equal(attentionMark({ status: 'done', decision: { question: 'Q?', at: 1 } }), 'attention')
   assert.equal(attentionMark({ pullRequest: { text: 'Checks failed' } }), 'attention')
+})
+
+test('tablet layout: the split starts at 700pt', () => {
+  assert.equal(WIDE_MIN, 700)
+  assert.equal(isWide(699), false)
+  assert.equal(isWide(700), true)
+  assert.equal(isWide(1366), true)
+})
+
+test('tablet layout: only phones are locked to portrait', () => {
+  // expo-device's DeviceType: UNKNOWN 0, PHONE 1, TABLET 2, DESKTOP 3, TV 4
+  assert.equal(shouldLockPortrait(1), true)
+  assert.equal(shouldLockPortrait(2), false)
+  assert.equal(shouldLockPortrait(0), false)
+  assert.equal(shouldLockPortrait(null), false)
+})
+
+test('tablet layout: the sidebar selection comes from the route', () => {
+  const project = {
+    globalSessions: [{ id: 'g1' }],
+    repositories: [
+      { id: 'r1', worktrees: [
+        { id: 'w1', branch: 'main', missing: false, sessions: [{ id: 's1' }] },
+        { id: 'w2', branch: 'feature/x', missing: false, sessions: [{ id: 's2' }, { id: 's3' }] }
+      ] }
+    ]
+  }
+  const base = ['project', '[serverId]', '[projectId]']
+  const none = { worktreeId: null, sessionId: null, screen: null }
+  assert.deepEqual(sidebarSelection(base, {}, project), none)
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: 'w2' }, project), { worktreeId: 'w2', sessionId: null, screen: 'worktree' })
+  assert.deepEqual(sidebarSelection([...base, 'changes', '[worktreeId]'], { worktreeId: 'w1' }, project), { worktreeId: 'w1', sessionId: null, screen: 'changes' })
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 's3' }, project), { worktreeId: 'w2', sessionId: 's3', screen: 'session' })
+  // A Global session (an automation's run) selects no worktree.
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 'g1' }, project), { worktreeId: null, sessionId: 'g1', screen: 'session' })
+  // The project not loaded yet: the session is known, its worktree is not.
+  assert.deepEqual(sidebarSelection([...base, 'session', '[sessionId]'], { sessionId: 's3' }, null), { worktreeId: null, sessionId: 's3', screen: 'session' })
+  // History names a repository and a branch (history.ts' branchParam encoding).
+  assert.deepEqual(sidebarSelection([...base, 'history', '[repoId]'], { repoId: 'r1', branch: 'feature~002fx' }, project), { worktreeId: 'w2', sessionId: null, screen: 'history' })
+  assert.deepEqual(sidebarSelection([...base, 'automations'], {}, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'automation', '[automationId]'], { automationId: 'a' }, project), { worktreeId: null, sessionId: null, screen: 'automations' })
+  assert.deepEqual(sidebarSelection([...base, 'add-worktree', '[repoId]'], { repoId: 'r1' }, project), { worktreeId: null, sessionId: null, screen: null })
+  // An unknown worktree id selects nothing.
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: 'gone' }, project), none)
+  // Array params (expo-router can give arrays) take the first.
+  assert.deepEqual(sidebarSelection([...base, 'worktree', '[worktreeId]'], { worktreeId: ['w1'] }, project), { worktreeId: 'w1', sessionId: null, screen: 'worktree' })
+})
+
+test('routes: every project screen lives under the project', () => {
+  const p = { serverId: 'a', projectId: 'p' }
+  assert.deepEqual(routes.projectRoute('a', 'p'), { pathname: '/project/[serverId]/[projectId]', params: p })
+  assert.deepEqual(routes.worktreeRoute('a', 'p', 'w'), { pathname: '/project/[serverId]/[projectId]/worktree/[worktreeId]', params: { ...p, worktreeId: 'w' } })
+  assert.deepEqual(routes.sessionRoute('a', 'p', 's'), { pathname: '/project/[serverId]/[projectId]/session/[sessionId]', params: { ...p, sessionId: 's' } })
+  assert.deepEqual(routes.changesRoute('a', 'p', 'w'), { pathname: '/project/[serverId]/[projectId]/changes/[worktreeId]', params: { ...p, worktreeId: 'w' } })
+  assert.deepEqual(routes.historyRoute('a', 'p', 'r', 'feature/x'), { pathname: '/project/[serverId]/[projectId]/history/[repoId]', params: { ...p, repoId: 'r', branch: 'feature~002fx' } })
+  assert.deepEqual(routes.addWorktreeRoute('a', 'p', 'r'), { pathname: '/project/[serverId]/[projectId]/add-worktree/[repoId]', params: { ...p, repoId: 'r' } })
+  assert.deepEqual(routes.automationsRoute('a', 'p'), { pathname: '/project/[serverId]/[projectId]/automations', params: p })
+  assert.deepEqual(routes.automationRoute('a', 'p', 'x'), { pathname: '/project/[serverId]/[projectId]/automation/[automationId]', params: { ...p, automationId: 'x' } })
+})
+
+test('routes: leavesProject is true only for another project than the one open', () => {
+  const seg = ['project', '[serverId]', '[projectId]', 'session', '[sessionId]']
+  const target = routes.sessionRoute('a', 'p', 's')
+  assert.equal(routes.leavesProject(seg, { serverId: 'a', projectId: 'p' }, target), false)
+  assert.equal(routes.leavesProject(seg, { serverId: ['a'], projectId: ['p'] }, target), false)
+  assert.equal(routes.leavesProject(seg, { serverId: 'a', projectId: 'q' }, target), true)
+  assert.equal(routes.leavesProject(seg, { serverId: 'b', projectId: 'p' }, target), true)
+  assert.equal(routes.leavesProject(['servers'], {}, target), false)
+  assert.equal(routes.leavesProject([], {}, target), false)
+})
+
+test('routes: showsRoute is true only for the focused screen with the same params', () => {
+  const p = { serverId: 'a', projectId: 'p' }
+  const wt = ['project', '[serverId]', '[projectId]', 'worktree', '[worktreeId]']
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'w' }, routes.worktreeRoute('a', 'p', 'w')), true)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: ['w'] }, routes.worktreeRoute('a', 'p', 'w')), true)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'v' }, routes.worktreeRoute('a', 'p', 'w')), false)
+  assert.equal(routes.showsRoute(wt, { serverId: 'a', projectId: 'q', worktreeId: 'w' }, routes.worktreeRoute('a', 'p', 'w')), false)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'w' }, routes.changesRoute('a', 'p', 'w')), false)
+  // automations/index and the project's own index have no segment of their own.
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]', 'automations'], p, routes.automationsRoute('a', 'p')), true)
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.projectRoute('a', 'p')), true)
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.automationsRoute('a', 'p')), false)
+  assert.equal(routes.showsRoute(['servers'], {}, routes.projectRoute('a', 'p')), false)
+})
+
+test("layout: a project's stack found in the root state; the screens right above its index lose Back", () => {
+  const pane = [
+    { key: 'i', name: 'index' },
+    { key: 'w', name: 'worktree/[worktreeId]' },
+    { key: 'c', name: 'changes/[worktreeId]' }
+  ]
+  const root = {
+    routes: [
+      {
+        key: 'slot',
+        name: '__root',
+        state: { routes: [{ key: 'home', name: 'index' }, { key: 'proj', name: 'project/[serverId]/[projectId]', state: { routes: pane } }] }
+      }
+    ]
+  }
+  assert.deepEqual(childRoutes(root, 'proj'), pane)
+  assert.deepEqual(childRoutes(root, 'gone'), [])
+  assert.deepEqual(childRoutes(undefined, 'proj'), [])
+  assert.deepEqual([...aboveIndex(pane)], ['w'])
+  assert.deepEqual([...aboveIndex([{ key: 'i', name: 'index' }])], [])
+  assert.deepEqual([...aboveIndex([{ key: 's', name: 'session/[sessionId]' }])], [])
 })

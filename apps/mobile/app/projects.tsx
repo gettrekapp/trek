@@ -5,6 +5,7 @@ import { useServers, statusLabel, type ServerView } from '../src/state/ServersPr
 import { useTopic } from '../src/state/hooks.ts'
 import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
+import { projectRoute } from '../src/logic/routes.ts'
 
 function ServerProjects({ server }: { server: ServerView }): React.JSX.Element {
   const topic = useTopic(server.id, server.status === 'connected' ? 'server' : null)
@@ -22,7 +23,7 @@ function ServerProjects({ server }: { server: ServerView }): React.JSX.Element {
               key={p.id}
               accessibilityRole="button"
               style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
-              onPress={() => router.push({ pathname: '/project/[serverId]/[projectId]', params: { serverId: server.id, projectId: p.id } })}
+              onPress={() => router.push(projectRoute(server.id, p.id))}
             >
               <Text numberOfLines={1} style={{ flex: 1, color: colors.text, fontSize: 15, fontWeight: '500' }}>
                 {p.name}
@@ -39,7 +40,7 @@ export default function ProjectsScreen(): React.JSX.Element {
   const { servers } = useServers()
   return (
     <View style={ui.screen}>
-      <FlatList style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled" data={servers} keyExtractor={(s) => s.id} renderItem={({ item }) => <ServerProjects server={item} />} ListEmptyComponent={<Text style={[ui.muted, { padding: 16 }]}>No servers yet.</Text>} />
+      <FlatList style={[{ flex: 1 }, ui.column]} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled" data={servers} keyExtractor={(s) => s.id} renderItem={({ item }) => <ServerProjects server={item} />} ListEmptyComponent={<Text style={[ui.muted, { padding: 16 }]}>No servers yet.</Text>} />
       <TabBar active="projects" />
     </View>
   )
