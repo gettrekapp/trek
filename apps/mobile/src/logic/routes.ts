@@ -33,3 +33,19 @@ export function leavesProject(
   if (segments[0] !== 'project') return false
   return first(current.serverId) !== target.params.serverId || first(current.projectId) !== target.params.projectId
 }
+
+/**
+ * Whether the focused route (`segments` and `current` params, as for leavesProject) is `target`'s
+ * screen with its params: a sidebar pick of the screen already shown leaves the pane as it is. Pure.
+ */
+export function showsRoute(
+  segments: readonly string[],
+  current: Record<string, string | string[] | undefined>,
+  target: { pathname: string; params: Record<string, string> }
+): boolean {
+  if (segments[0] !== 'project') return false
+  // The target's path after /project/[serverId]/[projectId]; an index route has no segment of its own.
+  const screen = target.pathname.split('/').slice(4)
+  if (segments.length !== 3 + screen.length || screen.some((s, i) => segments[3 + i] !== s)) return false
+  return Object.entries(target.params).every(([k, v]) => first(current[k]) === v)
+}

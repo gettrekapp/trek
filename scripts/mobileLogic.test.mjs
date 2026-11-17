@@ -2797,3 +2797,18 @@ test('routes: leavesProject is true only for another project than the one open',
   assert.equal(routes.leavesProject(['servers'], {}, target), false)
   assert.equal(routes.leavesProject([], {}, target), false)
 })
+
+test('routes: showsRoute is true only for the focused screen with the same params', () => {
+  const p = { serverId: 'a', projectId: 'p' }
+  const wt = ['project', '[serverId]', '[projectId]', 'worktree', '[worktreeId]']
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'w' }, routes.worktreeRoute('a', 'p', 'w')), true)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: ['w'] }, routes.worktreeRoute('a', 'p', 'w')), true)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'v' }, routes.worktreeRoute('a', 'p', 'w')), false)
+  assert.equal(routes.showsRoute(wt, { serverId: 'a', projectId: 'q', worktreeId: 'w' }, routes.worktreeRoute('a', 'p', 'w')), false)
+  assert.equal(routes.showsRoute(wt, { ...p, worktreeId: 'w' }, routes.changesRoute('a', 'p', 'w')), false)
+  // automations/index and the project's own index have no segment of their own.
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]', 'automations'], p, routes.automationsRoute('a', 'p')), true)
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.projectRoute('a', 'p')), true)
+  assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.automationsRoute('a', 'p')), false)
+  assert.equal(routes.showsRoute(['servers'], {}, routes.projectRoute('a', 'p')), false)
+})

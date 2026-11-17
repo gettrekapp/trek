@@ -26,7 +26,7 @@ export interface SidebarSelection {
 }
 
 interface SelectionProject {
-  repositories: readonly { id: string; worktrees: readonly { id: string; branch: string | null; missing?: boolean; sessions: readonly { id: string }[] }[] }[]
+  repositories: readonly { id: string; worktrees: readonly { id: string; branch?: string | null; missing?: boolean; sessions: readonly { id: string }[] }[] }[]
 }
 
 type Params = Record<string, string | string[] | undefined>
