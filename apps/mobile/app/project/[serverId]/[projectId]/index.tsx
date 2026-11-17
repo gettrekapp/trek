@@ -7,23 +7,24 @@
 // the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
 import { useRef } from 'react'
 import { ScrollView, Pressable, Text, View } from 'react-native'
-import { router, Stack, useLocalSearchParams, useNavigation } from 'expo-router'
+import { router, Stack, useNavigation } from 'expo-router'
 import { CAPABILITY } from '../../../../src/shared.ts'
 import { automationsRow } from '../../../../src/logic/automations.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
 import { branchParts } from '../../../../src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved } from '../../../../src/logic/worktreeRow.ts'
+import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { PromotePrompt } from '../../../../src/ui/PromotePrompt.tsx'
 import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
 import { HeaderBack } from '../../../../src/ui/HeaderBack.tsx'
+import { useProjectIds } from '../../../../src/ui/projectContext.tsx'
 import { StateMark } from '../../../../src/ui/StateMark.tsx'
 import { colors, ui } from '../../../../src/ui/theme.ts'
-import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 
 export default function ProjectScreen(): React.JSX.Element {
   const navigation = useNavigation()
-  const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
+  const { serverId, projectId } = useProjectIds()
   const topic = useTopic(serverId, `project:${projectId}`)
   useUiSelection(serverId, projectId, { worktreeId: null, sessionId: null })
   // While the server is not connected the topic's error is that: the notice says it instead.

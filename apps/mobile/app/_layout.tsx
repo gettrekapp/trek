@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { router, Stack } from 'expo-router'
+import { router, Stack, useGlobalSearchParams, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as Notifications from 'expo-notifications'
 import { notificationRoute } from '../src/logic/attention.ts'
 import { routeTap } from '../src/logic/push.ts'
+import { leavesProject } from '../src/logic/routes.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
 import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
 import { colors } from '../src/ui/theme.ts'
@@ -28,6 +29,11 @@ function NotificationRouting(): null {
   const pending = useRef<Notifications.NotificationResponse[]>([])
   const handled = useRef(new Set<string>())
   const cold = useRef<Notifications.NotificationResponse | null>(null)
+  // Where the phone is now, for the flush closure below to read.
+  const segments = useSegments()
+  const params = useGlobalSearchParams()
+  const where = useRef({ segments: segments as readonly string[], params: params as Record<string, string | string[] | undefined> })
+  where.current = { segments, params }
   const flushRef = useRef<() => void>(() => {})
   flushRef.current = () => {
     const still: Notifications.NotificationResponse[] = []
@@ -46,7 +52,11 @@ function NotificationRouting(): null {
           // Not available (no native module).
         }
       }
-      if (route) router.push(route, { withAnchor: true })
+      if (route) {
+        // From another project's screen, go home first: a project's stack is shared by every project.
+        if (leavesProject(where.current.segments, where.current.params, route)) router.dismissTo('/')
+        router.push(route, { withAnchor: true })
+      }
     }
     pending.current = still
   }

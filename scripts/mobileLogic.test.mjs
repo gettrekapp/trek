@@ -2786,3 +2786,14 @@ test('routes: every project screen lives under the project', () => {
   assert.deepEqual(routes.automationsRoute('a', 'p'), { pathname: '/project/[serverId]/[projectId]/automations', params: p })
   assert.deepEqual(routes.automationRoute('a', 'p', 'x'), { pathname: '/project/[serverId]/[projectId]/automation/[automationId]', params: { ...p, automationId: 'x' } })
 })
+
+test('routes: leavesProject is true only for another project than the one open', () => {
+  const seg = ['project', '[serverId]', '[projectId]', 'session', '[sessionId]']
+  const target = routes.sessionRoute('a', 'p', 's')
+  assert.equal(routes.leavesProject(seg, { serverId: 'a', projectId: 'p' }, target), false)
+  assert.equal(routes.leavesProject(seg, { serverId: ['a'], projectId: ['p'] }, target), false)
+  assert.equal(routes.leavesProject(seg, { serverId: 'a', projectId: 'q' }, target), true)
+  assert.equal(routes.leavesProject(seg, { serverId: 'b', projectId: 'p' }, target), true)
+  assert.equal(routes.leavesProject(['servers'], {}, target), false)
+  assert.equal(routes.leavesProject([], {}, target), false)
+})

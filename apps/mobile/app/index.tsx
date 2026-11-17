@@ -9,13 +9,13 @@ import { useServers } from '../src/state/ServersProvider.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
 import { ago, attentionMark, attentionText, notificationRoute, type AttentionItem } from '../src/logic/attention.ts'
 import { noticeDismissal } from '../src/logic/prWatch.ts'
+import { projectRoute } from '../src/logic/routes.ts'
 import { Button } from '../src/ui/Button.tsx'
 import { DecisionActions } from '../src/ui/DecisionActions.tsx'
 import { DismissNotice } from '../src/ui/PrNotice.tsx'
 import { StateMark } from '../src/ui/StateMark.tsx'
 import { TabBar } from '../src/ui/TabBar.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
-import { projectRoute } from '../src/logic/routes.ts'
 
 export default function AttentionScreen(): React.JSX.Element {
   const { ready, servers, attention, addDemo } = useServers()

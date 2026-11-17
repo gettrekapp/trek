@@ -17,3 +17,19 @@ export const automationRoute = (serverId: string, projectId: string, automationI
 
 export type SessionRoute = ReturnType<typeof sessionRoute>
 export type WorktreeRoute = ReturnType<typeof worktreeRoute>
+
+const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v)
+
+/**
+ * Whether going to `target` leaves the project now open: `segments` are the focused route's
+ * (expo-router's useSegments), `current` its params. A project's stack is one navigator for every
+ * project, so a screen of another project must not be pushed into it. Pure.
+ */
+export function leavesProject(
+  segments: readonly string[],
+  current: Record<string, string | string[] | undefined>,
+  target: { params: { serverId: string; projectId: string } }
+): boolean {
+  if (segments[0] !== 'project') return false
+  return first(current.serverId) !== target.params.serverId || first(current.projectId) !== target.params.projectId
+}

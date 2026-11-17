@@ -14,6 +14,7 @@ import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit, sessionMark } from '../../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
+import { changesRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
 import { useServers } from '../../../../../src/state/ServersProvider.tsx'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../../src/state/teardown.ts'
@@ -27,7 +28,6 @@ import { StateMark } from '../../../../../src/ui/StateMark.tsx'
 import { STATUS_TEXT } from '../../../../../src/ui/status.ts'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
 import { knownPtySize } from '../../../../../src/state/ptySizes.ts'
-import { changesRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 
 /**
  * A new session's size: session.start and session.restart need one, and the phone never resizes
