@@ -149,8 +149,7 @@ content → App access → "All or some functionality is restricted" → instruc
 > Everything in the app works against it. To pair a real server, the desktop app shows a QR
 > code under Servers → Pair a phone…
 >
-> The sample pull request links to a placeholder address on github.com
-> (github.com/example/acme-web), which doesn't exist.
+> In the demo, tapping the sample pull request shows a note instead of opening GitHub.
 
 Attach a short screen recording of pairing a real server to the review notes.
 
@@ -603,10 +602,14 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
       Servers lists "Demo server" as Connected with a **Demo** badge.
     - Needs you lists the decision on *Fix login timeout*, the PR #42 notice, *Redesign
       checkout summary* finished and the nightly run finished. **Send answer** "1" on the
-      decision: the reply plays in its terminal, then the session is finished.
+      decision: the reply plays in its terminal, then the session is finished. Typing "1"
+      and Enter in that terminal instead does the same.
+    - Tapping the PR #42 notice, or the pull request in Branch details, shows a "Demo pull
+      request" alert; nothing opens.
     - *Add timeout tests* prints a line every few seconds, then finishes.
     - Changes on `feature/checkout-redesign`: three files, two draft comments on their lines.
-      Add one, **Send to…** the Claude session: the review is in its queue.
+      Add one, **Send to…** the Claude session: the review is in its queue (2 queued: the
+      pull request's prompt was there already). Queued prompts stay queued, as on a real server.
     - Branch details: change the tag, custom tags, note, ticket and pull request (to another
       link: the watch stops); each shows in History.
     - **Add worktree** `feature/saved-carts`, start a Codex session in it, send a prompt, then
