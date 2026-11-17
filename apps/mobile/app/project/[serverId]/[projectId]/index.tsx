@@ -5,11 +5,13 @@
 // a row that opens the project's automations.
 // While it is open, the phone also answers promote_to_primary's confirmations for it. While it is
 // the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
+// On a wide window the sidebar is the list, and this is a placeholder under the screen it opened.
 import { useRef } from 'react'
-import { ScrollView, Pressable, Text, View } from 'react-native'
+import { ScrollView, Pressable, Text, View, useWindowDimensions } from 'react-native'
 import { router, Stack, useNavigation } from 'expo-router'
 import { CAPABILITY } from '../../../../src/shared.ts'
 import { automationsRow } from '../../../../src/logic/automations.ts'
+import { isWide } from '../../../../src/logic/layout.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
 import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
@@ -35,6 +37,16 @@ export default function ProjectScreen(): React.JSX.Element {
   const hasAutomations = useRef(false)
   if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
   const automations = topic.state === 'ready' && hasAutomations.current ? automationsRow(topic.snapshot.automations) : null
+  const wide = isWide(useWindowDimensions().width)
+  // After every hook, so their order never changes when the window crosses the breakpoint.
+  if (wide) {
+    return (
+      <View style={[ui.screen, { alignItems: 'center', justifyContent: 'center', padding: 24 }]}>
+        <Stack.Screen options={{ title: '', headerLeft: () => null }} />
+        <Text style={ui.muted}>Choose a worktree or session.</Text>
+      </View>
+    )
+  }
   return (
     <ScrollView style={ui.screen} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
       <Stack.Screen

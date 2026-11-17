@@ -14,7 +14,7 @@ import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit, sessionMark } from '../../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
-import { changesRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
+import { changesRoute, projectRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
 import { useServers } from '../../../../../src/state/ServersProvider.tsx'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../../src/state/teardown.ts'
@@ -196,7 +196,9 @@ export default function WorktreeScreen(): React.JSX.Element {
         refusedAsDirty
       })
       if (outcome.kind === 'removed') {
-        if (shown.current) router.back()
+        // To the project's index (the list, or on a wide window the placeholder), in the project's
+        // own stack: router.back() could leave the project when this screen is the stack's first.
+        if (shown.current) router.dismissTo(projectRoute(serverId, projectId))
       } else if (!mounted.current) return
       else if (outcome.kind === 'blocked') sayBlocker(outcome.why)
       else if (outcome.kind === 'failed') setError(outcome.reloadFailed ? `${errorMessage(outcome.error)}\n${RELOAD_FAILED}` : errorMessage(outcome.error))
