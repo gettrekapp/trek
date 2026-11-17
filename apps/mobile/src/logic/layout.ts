@@ -62,3 +62,29 @@ export function sidebarSelection(segments: readonly string[], params: Params, pr
   if (kind === 'automations' || kind === 'automation') return { worktreeId: null, sessionId: null, screen: 'automations' }
   return { worktreeId: null, sessionId: null, screen: null }
 }
+
+interface StackState {
+  routes: readonly { key?: string; name: string; state?: StackState }[]
+}
+
+/**
+ * The routes of the stack inside the route `routeKey`, found in the whole navigation state (as
+ * expo-router's useRootNavigationState gives it, the same state every navigator renders from).
+ */
+export function childRoutes(root: StackState | undefined, routeKey: string): StackState['routes'] {
+  for (const route of root?.routes ?? []) {
+    if (route.key === routeKey) return route.state?.routes ?? []
+    const found = route.state ? childRoutes(route.state, routeKey) : null
+    if (found?.length) return found
+  }
+  return []
+}
+
+/** The keys of the screens right above an index route: on a wide window, the screens a sidebar pick opened. */
+export function aboveIndex(routes: StackState['routes']): Set<string> {
+  const keys = new Set<string>()
+  routes.forEach((r, i) => {
+    if (i > 0 && r.key !== undefined && routes[i - 1].name === 'index') keys.add(r.key)
+  })
+  return keys
+}

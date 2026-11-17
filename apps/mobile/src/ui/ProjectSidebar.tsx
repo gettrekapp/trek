@@ -131,6 +131,7 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
                           })}
                           <Pressable
                             accessibilityRole="button"
+                            accessibilityLabel={`Worktree, ${wt.branch ?? wt.name}`}
                             accessibilityState={{ selected: selection.screen === 'worktree' }}
                             style={sub(selection.screen === 'worktree')}
                             onPress={() => openInPane(worktreeRoute(serverId, projectId, wt.id))}
@@ -140,6 +141,7 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
+                            accessibilityLabel={`Changes, ${wt.branch ?? wt.name}`}
                             accessibilityState={{ selected: selection.screen === 'changes' }}
                             style={sub(selection.screen === 'changes')}
                             onPress={() => openInPane(changesRoute(serverId, projectId, wt.id))}

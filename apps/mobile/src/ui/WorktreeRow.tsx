@@ -30,6 +30,7 @@ export function WorktreeRow(props: {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={rowLabel({ name, isMain: wt.isMain, mark, saved, git, line })}
+      accessibilityState={selected === undefined ? undefined : { selected }}
       style={({ pressed }) => [ui.listRow, selected ? { backgroundColor: colors.panel } : null, pressed ? { backgroundColor: colors.panel } : null]}
       onPress={onPress}
     >

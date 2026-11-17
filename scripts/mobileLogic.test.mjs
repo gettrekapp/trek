@@ -17,7 +17,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
-import { WIDE_MIN, isWide, shouldLockPortrait, sidebarSelection } from '../apps/mobile/src/logic/layout.ts'
+import { WIDE_MIN, aboveIndex, childRoutes, isWide, shouldLockPortrait, sidebarSelection } from '../apps/mobile/src/logic/layout.ts'
 import * as routes from '../apps/mobile/src/logic/routes.ts'
 import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
@@ -2811,4 +2811,27 @@ test('routes: showsRoute is true only for the focused screen with the same param
   assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.projectRoute('a', 'p')), true)
   assert.equal(routes.showsRoute(['project', '[serverId]', '[projectId]'], p, routes.automationsRoute('a', 'p')), false)
   assert.equal(routes.showsRoute(['servers'], {}, routes.projectRoute('a', 'p')), false)
+})
+
+test("layout: a project's stack found in the root state; the screens right above its index lose Back", () => {
+  const pane = [
+    { key: 'i', name: 'index' },
+    { key: 'w', name: 'worktree/[worktreeId]' },
+    { key: 'c', name: 'changes/[worktreeId]' }
+  ]
+  const root = {
+    routes: [
+      {
+        key: 'slot',
+        name: '__root',
+        state: { routes: [{ key: 'home', name: 'index' }, { key: 'proj', name: 'project/[serverId]/[projectId]', state: { routes: pane } }] }
+      }
+    ]
+  }
+  assert.deepEqual(childRoutes(root, 'proj'), pane)
+  assert.deepEqual(childRoutes(root, 'gone'), [])
+  assert.deepEqual(childRoutes(undefined, 'proj'), [])
+  assert.deepEqual([...aboveIndex(pane)], ['w'])
+  assert.deepEqual([...aboveIndex([{ key: 'i', name: 'index' }])], [])
+  assert.deepEqual([...aboveIndex([{ key: 's', name: 'session/[sessionId]' }])], [])
 })

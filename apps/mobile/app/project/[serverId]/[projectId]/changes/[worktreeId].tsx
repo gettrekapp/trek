@@ -6,7 +6,7 @@
 // older server): the branch against its base, read-only (6a).
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react'
 import { Keyboard, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { useLocalSearchParams } from 'expo-router'
+import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
@@ -73,12 +73,20 @@ export default function ChangesScreen(): React.JSX.Element {
   if (welcome) review.current = welcome.capabilities.includes(CAPABILITY.review)
   // Not known before the connection's first welcome: neither screen is shown (and nothing asked of
   // the server) until it is, so a server with `review` never shows the read-only one first.
-  if (server && review.current === null) return <Waiting serverId={serverId} />
-  return review.current ? (
-    // Keyed by the worktree: a comment begun on one is never saved to another.
-    <ReviewChanges key={`${serverId}\n${projectId}\n${worktreeId}`} serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
-  ) : (
-    <ReadOnlyChanges serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+  const body =
+    server && review.current === null ? (
+      <Waiting serverId={serverId} />
+    ) : review.current ? (
+      // Keyed by the worktree: a comment begun on one is never saved to another.
+      <ReviewChanges key={`${serverId}\n${projectId}\n${worktreeId}`} serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+    ) : (
+      <ReadOnlyChanges serverId={serverId} projectId={projectId} worktreeId={worktreeId} />
+    )
+  return (
+    <>
+      <Stack.Screen options={{ title: 'Changes' }} />
+      {body}
+    </>
   )
 }
 
