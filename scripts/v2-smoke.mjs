@@ -1021,7 +1021,7 @@ try {
   if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
   check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await tabHeadings('Plugins'), await tabHeadings('General')], [
     ['Agents', 'Session types'],
-    ['Session system prompt', 'Terminal quick buttons', 'Global system prompt', 'Global quick buttons'],
+    ['Session system prompt', 'Global system prompt', 'Quick buttons'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
     ['Plugins', 'Voice summaries', 'Linear'],

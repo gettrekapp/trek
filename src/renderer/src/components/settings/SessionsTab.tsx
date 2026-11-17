@@ -1,15 +1,10 @@
 import { useAppStore } from '../../store'
 import { SettingText } from '../SettingText'
-import { QuickButtonsEditor } from './QuickButtonsEditor'
 
-/** Settings → Sessions: the worktree sessions' prompt and buttons, then the Global session's. */
+/** Settings → Sessions: the worktree and Global sessions' system prompts. */
 export function SessionsTab(): React.JSX.Element {
-  // Defaults applied outside the selectors — `?? []` inside one would return a
-  // fresh array every snapshot and loop React's store re-render (error #185).
-  const terminalButtons = useAppStore((s) => s.project?.terminalButtons) ?? []
-  const setTerminalButtons = useAppStore((s) => s.setTerminalButtons)
-  const globalTerminalButtons = useAppStore((s) => s.project?.globalTerminalButtons) ?? []
-  const setGlobalTerminalButtons = useAppStore((s) => s.setGlobalTerminalButtons)
+  // `?? ''` is safe inside the selectors (strings compare equal). Never use `?? []`
+  // inside one: a fresh array each snapshot loops React's store re-render (error #185).
   const globalSystemPrompt = useAppStore((s) => s.project?.globalSystemPrompt) ?? ''
   const setGlobalSystemPrompt = useAppStore((s) => s.setGlobalSystemPrompt)
   const sessionSystemPrompt = useAppStore((s) => s.project?.sessionSystemPrompt) ?? ''
@@ -36,12 +31,6 @@ export function SessionsTab(): React.JSX.Element {
           onCommit={setSessionSystemPrompt}
         />
       </div>
-      <h3>Terminal quick buttons</h3>
-      <QuickButtonsEditor
-        description="Buttons shown under every worktree agent terminal. Clicking one fills the terminal's input with the text and submits it."
-        buttons={terminalButtons}
-        onChange={setTerminalButtons}
-      />
       <h3>Global system prompt</h3>
       <div className="settings-row">
         <span className="settings-label">
@@ -61,12 +50,14 @@ export function SessionsTab(): React.JSX.Element {
           onCommit={setGlobalSystemPrompt}
         />
       </div>
-      <h3>Global quick buttons</h3>
-      <QuickButtonsEditor
-        description="Buttons shown under the global terminal at the bottom of the window."
-        buttons={globalTerminalButtons}
-        onChange={setGlobalTerminalButtons}
-      />
+      <h3>Quick buttons</h3>
+      <div className="settings-row">
+        <span className="settings-label">
+          <span className="settings-desc">
+            Quick buttons are added, edited and sorted from the bar under each terminal.
+          </span>
+        </span>
+      </div>
     </>
   )
 }
