@@ -9,6 +9,7 @@ import { webLink } from '../logic/branchDetails.ts'
 import { noticeAge } from '../logic/prWatch.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
+import { explainDemoPullRequest } from './demoLink.ts'
 import { colors, ui } from './theme.ts'
 
 /** Dismissing a worktree's notice: one request at a time; its failure is `error`. Nothing is set once the component is gone. */
@@ -74,6 +75,7 @@ export function PrNotice({ serverId, projectId, worktreeId, notice }: { serverId
   const link = webLink(notice.url)
   const open = async (url: string): Promise<void> => {
     setError(null)
+    if (explainDemoPullRequest(serverId)) return
     try {
       await Linking.openURL(url)
     } catch (err) {

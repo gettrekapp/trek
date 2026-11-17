@@ -19,6 +19,7 @@ import { colors, ui } from '../src/ui/theme.ts'
 export default function AttentionScreen(): React.JSX.Element {
   const { ready, servers, attention, addDemo } = useServers()
   const { ensureRegistered } = usePush()
+  const [demoBusy, setDemoBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000)
@@ -56,7 +57,14 @@ export default function AttentionScreen(): React.JSX.Element {
           <Text style={[ui.muted, { marginTop: 16 }]}>Or try Trek with a built-in sample project.</Text>
           <Button
             label="Try the demo"
-            onPress={() => void addDemo().then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))}
+            disabled={demoBusy}
+            onPress={() => {
+              if (demoBusy) return
+              setDemoBusy(true)
+              void addDemo()
+                .then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
+                .finally(() => setDemoBusy(false))
+            }}
           />
         </View>
       ) : (

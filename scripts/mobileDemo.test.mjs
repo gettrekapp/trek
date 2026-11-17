@@ -367,12 +367,39 @@ test('demo: start, queue, dequeue, dismiss and close a session', async () => {
     await assert.rejects(h.conn.request('session.dequeue', { ...ref, sessionId, index: 0, expected: 'other' }), { code: 'CONFLICT' })
     await h.conn.request('session.dequeue', { ...ref, sessionId, index: 0, expected: 'later' })
     assert.deepEqual(session.queue, [])
+    await assert.rejects(h.conn.request('session.enqueue', { ...ref, sessionId, text: '' }), { code: 'BAD_REQUEST' })
+    await assert.rejects(h.conn.request('session.enqueue', { ...ref, sessionId, text: 'x'.repeat(100_001) }), { code: 'BAD_REQUEST' })
+    for (let i = 0; i < 100; i++) await h.conn.request('session.enqueue', { ...ref, sessionId, text: 'p' })
+    await assert.rejects(h.conn.request('session.enqueue', { ...ref, sessionId, text: 'one more' }), { code: 'BAD_REQUEST' })
     await h.conn.request('session.dismissDecision', { ...ref, sessionId: 's-login-claude' })
     assert.equal(sessionIn(h, 's-login-claude').decision, undefined)
     const { ptyId: again } = await h.conn.request('session.restart', { ...ref, sessionId, cols: 80, rows: 24 })
     assert.notEqual(again, ptyId)
     await h.conn.request('session.close', { ...ref, sessionId })
     assert.equal(sessionIn(h, sessionId), undefined)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: an answer typed into a terminal and sent with Enter gets the reply', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const session = sessionIn(h, 's-login-claude')
+    let out = ''
+    await h.reg.ptys.attach(session.ptyId, { onData: (d) => (out += d), onExit() {} })
+    assert.ok(session.decision)
+    await h.conn.request('pty.write', { ptyId: session.ptyId, data: '1x\u007f' })
+    assert.equal(session.decision, undefined)
+    assert.notEqual(session.status, 'working')
+    await h.conn.request('pty.write', { ptyId: session.ptyId, data: '\r' })
+    assert.equal(session.status, 'working')
+    await until(() => out.includes('the idle timeout is 30 minutes') && session.status === 'done')
+    assert.equal(out.split('> 1').length, 1, 'the typed line is not echoed a second time as a prompt')
+    // A blank line gets no reply
+    await h.conn.request('pty.write', { ptyId: session.ptyId, data: '  \r' })
+    assert.equal(session.status, 'done')
   } finally {
     h.close()
   }
@@ -387,9 +414,11 @@ test('demo: review.send queues the draft on a session and clears it', async () =
     await h.conn.request('review.send', { projectId: DEMO_PROJECT_ID, worktreeId: wt.id, sessionId: 's-checkout-claude', revision: wt.review.revision })
     assert.equal(wt.review, undefined)
     const queued = sessionIn(h, 's-checkout-claude').queue
-    assert.equal(queued.length, 1)
-    assert.match(queued[0], /review comments/i)
-    assert.match(queued[0], /Clamp the total at zero/)
+    // After the PR watch's prompt the notice says is queued
+    assert.equal(queued.length, 2)
+    assert.match(queued[0], /All checks passed/)
+    assert.match(queued[1], /review comments/i)
+    assert.match(queued[1], /Clamp the total at zero/)
   } finally {
     h.close()
   }
@@ -552,10 +581,16 @@ test('demo: typing in a terminal answers its decision', async () => {
   }
 })
 
-/** Protocol namespaces the phone's requests use; other dotted strings in its code are events, routes or keys */
-const REQUEST_NAMESPACES = new Set(['automation', 'branch', 'env', 'history', 'promote', 'prWatch', 'pty', 'push', 'repo', 'review', 'server', 'session', 'stack', 'ui', 'worktree'])
-/** Events (not requests) the phone listens for, in those namespaces */
-const PHONE_EVENTS = new Set(['pty.data', 'pty.exit', 'pty.resized', 'history.added', 'promote.request', 'promote.settled', 'ui.focus'])
+/** Every request method protocol v2 has: the keys of MethodParamsV2 */
+function protocolMethods() {
+  const source = readFileSync(fileURLToPath(new URL('../src/shared/protocolV2.ts', import.meta.url)), 'utf8')
+  const start = source.indexOf('export interface MethodParamsV2 {')
+  assert.ok(start >= 0, 'MethodParamsV2 is in protocolV2.ts')
+  const block = source.slice(start).split(/\n}\n/)[0]
+  const methods = new Set([...block.matchAll(/^\s*'([a-z][A-Za-z]*\.[a-z][A-Za-z]*)':/gm)].map((m) => m[1]))
+  assert.ok(methods.size > 50, 'read the protocol methods')
+  return methods
+}
 
 function sourceFiles(dir) {
   const out = []
@@ -570,13 +605,14 @@ function sourceFiles(dir) {
 
 test('demo: every request the phone sends is answered by the demo or listed as not in it', () => {
   const root = fileURLToPath(new URL('../apps/mobile/', import.meta.url))
+  const methods = protocolMethods()
   const seen = new Set()
   for (const file of [...sourceFiles(join(root, 'app')), ...sourceFiles(join(root, 'src'))]) {
     for (const m of readFileSync(file, 'utf8').matchAll(/['"]([a-z][A-Za-z]*)\.([a-z][A-Za-z]*)['"]/g)) {
-      if (REQUEST_NAMESPACES.has(m[1])) seen.add(`${m[1]}.${m[2]}`)
+      if (methods.has(`${m[1]}.${m[2]}`)) seen.add(`${m[1]}.${m[2]}`)
     }
   }
-  const missing = [...seen].filter((method) => !PHONE_EVENTS.has(method) && !DEMO_METHODS.includes(method) && !(method in NOT_IN_DEMO))
+  const missing = [...seen].filter((method) => !DEMO_METHODS.includes(method) && !(method in NOT_IN_DEMO))
   assert.deepEqual(missing, [], 'handle these in apps/mobile/src/demo, or list them in NOT_IN_DEMO with why')
   // And nothing is both
   assert.deepEqual(DEMO_METHODS.filter((m) => m in NOT_IN_DEMO), [])

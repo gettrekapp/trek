@@ -13,6 +13,7 @@ import { watchAction, watchOffered, watchSuffix } from '../logic/prWatch.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../logic/tickets.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
+import { explainDemoPullRequest } from './demoLink.ts'
 import { colors, ui } from './theme.ts'
 
 interface Tag {
@@ -118,8 +119,9 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
     setEditing(null)
   }
 
-  const open = async (url: string): Promise<void> => {
+  const open = async (url: string, pullRequest = false): Promise<void> => {
     setError(null)
+    if (pullRequest && explainDemoPullRequest(serverId)) return
     try {
       await Linking.openURL(url)
     } catch (err) {
@@ -178,7 +180,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
   const shown = (which: 'ticket' | 'pr', label: string | null, none: string, link: string | null): React.JSX.Element => (
     <View style={[ui.row, { justifyContent: 'space-between' }]}>
       {label && link ? (
-        <Pressable accessibilityRole="link" accessibilityHint="Opens in the browser" onPress={() => void open(link)} style={{ flexShrink: 1 }}>
+        <Pressable accessibilityRole="link" accessibilityHint="Opens in the browser" onPress={() => void open(link, which === 'pr')} style={{ flexShrink: 1 }}>
           <Text style={[ui.text, { color: colors.accent }]}>{label}</Text>
         </Pressable>
       ) : (

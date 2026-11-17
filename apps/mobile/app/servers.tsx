@@ -1,5 +1,6 @@
 // The paired servers and their connection state (6a). Removing one forgets its token on this
 // phone only: it stays valid on the server until revoked there.
+import { useState } from 'react'
 import { Alert, FlatList, Switch, Text, View } from 'react-native'
 import { Link, router } from 'expo-router'
 import { statusLabel, useServers, type ServerView } from '../src/state/ServersProvider.tsx'
@@ -26,8 +27,14 @@ export default function ServersScreen(): React.JSX.Element {
     )
   }
   const hasDemo = servers.some((s) => s.demo)
+  // One tap at a time while the demo is being added
+  const [demoBusy, setDemoBusy] = useState(false)
   const openDemo = (): void => {
-    void addDemo().then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
+    if (demoBusy) return
+    setDemoBusy(true)
+    void addDemo()
+      .then((where) => router.navigate({ pathname: '/project/[serverId]/[projectId]', params: where }))
+      .finally(() => setDemoBusy(false))
   }
   const confirmRemoveDemo = (id: string): void => {
     Alert.alert('Remove the demo?', 'What you changed in it is discarded. You can try it again any time.', [
@@ -94,7 +101,7 @@ export default function ServersScreen(): React.JSX.Element {
             <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
               Add server
             </Link>
-            <Button ghost disabled={!ready} label={hasDemo ? 'Open the demo' : 'Try the demo'} onPress={openDemo} />
+            <Button ghost disabled={!ready || demoBusy} label={hasDemo ? 'Open the demo' : 'Try the demo'} onPress={openDemo} />
           </View>
         }
       />

@@ -162,6 +162,16 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
     return () => sub.remove()
   }, [connectAll, disconnectAll])
 
+  // After the load effect's cleanup above (React runs cleanups in declaration order), which has closed
+  // every connection: the demo server is disposed with nothing still registered on it.
+  useEffect(
+    () => () => {
+      demoRef.current?.dispose()
+      demoRef.current = null
+    },
+    []
+  )
+
   const servers: ServerView[] = saved.map((s) => {
     const st = statuses[s.id]
     return { ...s, status: st?.status ?? 'connecting', message: st?.message ?? '', capabilities: st?.capabilities ?? [], demo: s.id === DEMO_SERVER_ID }

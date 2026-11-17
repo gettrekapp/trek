@@ -1,6 +1,6 @@
 // Finding things in the demo's project, and its attention list (apps/mobile/src/demo). Pure, except
-// attentionOf, which keeps `state.since` (the handlers change what these return).
-import type { AttentionEntry, Automation, BranchData, Project, Repository, Session, Worktree } from '../shared.ts'
+// attentionOf and setStatus, which keep `state.since` (the handlers change what these return).
+import type { AttentionEntry, Automation, Project, Repository, Session, Worktree } from '../shared.ts'
 import { DEMO_PROJECT_ID, type DemoState } from './demoData.ts'
 import { DemoError } from './demoError.ts'
 
@@ -48,18 +48,6 @@ export function findAutomation(automations: Automation[], automationId: unknown)
   const automation = automations.find((a) => a.id === automationId)
   if (!automation) throw new DemoError('NOT_FOUND', 'No such automation')
   return automation
-}
-
-/** The branch's data, made when it has none */
-export function branchData(repo: Repository, branch: string): BranchData {
-  repo.branchData[branch] ??= {}
-  return repo.branchData[branch]
-}
-
-/** Drops the branch's data once it holds nothing */
-export function tidyBranchData(repo: Repository, branch: string): void {
-  const data = repo.branchData[branch]
-  if (data && Object.keys(data).length === 0) delete repo.branchData[branch]
 }
 
 /**

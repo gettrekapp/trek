@@ -4,8 +4,8 @@
 
 const CSI = '\u001b['
 const paint = (code: string) => (s: string): string => `${CSI}${code}m${s}${CSI}0m`
-export const dim = paint('2')
-export const bold = paint('1')
+const dim = paint('2')
+const bold = paint('1')
 const cyan = paint('36')
 const green = paint('32')
 const yellow = paint('33')

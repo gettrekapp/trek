@@ -24,6 +24,8 @@ interface Pty {
   listeners: Set<PtyListener>
   /** The pending step of a play, if one is running */
   play: unknown
+  /** The printable input typed since the last Enter */
+  line: string
 }
 
 const MAX_BUFFER = 200_000
@@ -54,7 +56,7 @@ export class DemoTerminals {
   /** A new terminal showing `text`; answers its id */
   open(text: string, cwd: string): string {
     const id = `pty-${++this.next}`
-    this.ptys.set(id, { id, cwd, cols: 80, rows: 24, seq: 0, buffer: '', listeners: new Set(), play: null })
+    this.ptys.set(id, { id, cwd, cols: 80, rows: 24, seq: 0, buffer: '', listeners: new Set(), play: null, line: '' })
     this.print(id, text)
     return id
   }
@@ -101,9 +103,20 @@ export class DemoTerminals {
     for (const l of pty.listeners) l.event('pty.resized', { ptyId: id, cols, rows })
   }
 
-  write(id: string, data: string): void {
-    this.get(id)
-    this.print(id, echo(String(data)))
+  /** Echoes typed input; answers the lines it completed (Enter), each as typed (Backspace applied, escape sequences dropped) */
+  write(id: string, data: string): string[] {
+    const pty = this.get(id)
+    const text = String(data)
+    this.print(id, echo(text))
+    const lines: string[] = []
+    for (const ch of text.replace(/\r\n/g, '\r').replace(/\u001b\[[0-9;?]*[A-Za-z~]|\u001b./g, '')) {
+      if (ch === '\r' || ch === '\n') {
+        lines.push(pty.line)
+        pty.line = ''
+      } else if (ch === '\u007f' || ch === '\b') pty.line = pty.line.slice(0, -1)
+      else if (ch >= ' ') pty.line += ch
+    }
+    return lines
   }
 
   print(id: string, text: string): void {

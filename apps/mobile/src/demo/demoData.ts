@@ -156,7 +156,7 @@ export function initialDemoState(now: number): DemoState {
   const ago = (ms: number): number => now - ms
   const claude = { provider: 'claude' as const }
 
-  const checkoutClaude: Session = { id: 's-checkout-claude', title: 'Redesign checkout summary', llm: claude, queue: [], status: 'done' }
+  const checkoutClaude: Session = { id: 's-checkout-claude', title: 'Redesign checkout summary', llm: claude, queue: [`Pull request #42 (${PR_URL}) changed:\n- All checks passed.`], status: 'done' }
   const loginClaude: Session = {
     id: 's-login-claude',
     title: 'Fix login timeout',
@@ -212,7 +212,7 @@ export function initialDemoState(now: number): DemoState {
     behind: 0,
     loaded: true,
     sessions: [checkoutClaude],
-    prNotice: { title: 'PR #42', text: 'Checks passed — no agent session to send it to', url: PR_URL, at: ago(25 * MIN) },
+    prNotice: { title: 'PR #42', text: 'Checks passed — prompt queued for Redesign checkout summary', url: PR_URL, at: ago(25 * MIN) },
     review: { revision: 2, comments },
     reviewRevision: 2
   }

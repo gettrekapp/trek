@@ -8,6 +8,10 @@ import { allSessions, checkProject, findSession, findWorktree, setStatus, type F
 import { promptEcho, replyFor, RESUMED, sessionBanner } from '../demoScripts.ts'
 import type { DemoContext } from '../demoServer.ts'
 
+// The real server's limits (server/src/sessions/limits.ts, not in the shared code the phone can import)
+const MAX_QUEUE_ENTRY = 100_000
+const MAX_QUEUE_LENGTH = 100
+
 const AGENT_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', local: 'Local model' }
 export const agentLabel = (provider: string): string => AGENT_LABELS[provider] ?? provider
 
@@ -20,15 +24,15 @@ function ptyOf(ctx: DemoContext, found: FoundSession): string {
   return id
 }
 
-/** Types the prompt in and plays the reply (by default the canned one for it); then the session is done */
-export function runPrompt(ctx: DemoContext, found: FoundSession, text: string, reply: string[] = replyFor(text)): void {
+/** Types the prompt in (unless `echoed`: the terminal already showed it) and plays the reply (by default the canned one for it); then the session is done */
+export function runPrompt(ctx: DemoContext, found: FoundSession, text: string, reply: string[] = replyFor(text), echoed = true): void {
   const ptyId = ptyOf(ctx, found)
   const { session } = found
   delete session.decision
   delete ctx.server.state.ticking[session.id]
   setStatus(ctx.server.state, session, 'working', ctx.server.clock.now())
   ctx.server.changed()
-  ctx.server.terminals.print(ptyId, promptEcho(text))
+  if (echoed) ctx.server.terminals.print(ptyId, promptEcho(text))
   ctx.server.terminals.play(ptyId, reply, () => {
     setStatus(ctx.server.state, session, 'done', ctx.server.clock.now())
     ctx.server.changed()
@@ -126,7 +130,13 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
   },
   'session.enqueue': (ctx, p) => {
     checkProject(p.projectId)
-    findSession(ctx.server.state.project, p.sessionId).session.queue.push(p.text)
+    const { session } = findSession(ctx.server.state.project, p.sessionId)
+    // As the real server (sessions/manager.ts enqueue)
+    if (typeof p.text !== 'string') throw new DemoError('BAD_REQUEST', 'text must be a string')
+    if (p.text === '') throw new DemoError('BAD_REQUEST', 'text must not be empty')
+    if (p.text.length > MAX_QUEUE_ENTRY) throw new DemoError('BAD_REQUEST', `text must be at most ${MAX_QUEUE_ENTRY} characters`)
+    if (session.queue.length >= MAX_QUEUE_LENGTH) throw new DemoError('BAD_REQUEST', `the queue is full (${MAX_QUEUE_LENGTH} prompts)`)
+    session.queue.push(p.text)
     ctx.server.changed()
     return null
   },
@@ -170,13 +180,16 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
     return null
   },
   'pty.write': (ctx, p) => {
-    ctx.server.terminals.write(p.ptyId, p.data)
+    const lines = ctx.server.terminals.write(p.ptyId, p.data)
     // Typing answers an open decision, as the real server's onUserInput does
     const owner = allSessions(ctx.server.state.project).find((f) => f.session.ptyId === p.ptyId)
     if (owner?.session.decision) {
       delete owner.session.decision
       ctx.server.changed()
     }
+    // A typed line sent with Enter gets the same reply as a prompt, unless a reply is still playing
+    const line = lines.find((l) => l.trim() !== '')
+    if (owner && line !== undefined && !ctx.server.terminals.playing(p.ptyId)) runPrompt(ctx, owner, line, replyFor(line), false)
     return null
   },
   'pty.resize': (ctx, p) => {
