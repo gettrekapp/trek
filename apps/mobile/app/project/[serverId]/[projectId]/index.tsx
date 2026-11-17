@@ -11,15 +11,13 @@ import { router, Stack, useNavigation } from 'expo-router'
 import { CAPABILITY } from '../../../../src/shared.ts'
 import { automationsRow } from '../../../../src/logic/automations.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
-import { branchParts } from '../../../../src/logic/worktreeList.ts'
-import { rowGit, rowLabel, rowMark, rowReason, rowSaved } from '../../../../src/logic/worktreeRow.ts'
 import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { PromotePrompt } from '../../../../src/ui/PromotePrompt.tsx'
 import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
 import { HeaderBack } from '../../../../src/ui/HeaderBack.tsx'
 import { useProjectIds } from '../../../../src/ui/projectContext.tsx'
-import { StateMark } from '../../../../src/ui/StateMark.tsx'
+import { WorktreeRow } from '../../../../src/ui/WorktreeRow.tsx'
 import { colors, ui } from '../../../../src/ui/theme.ts'
 
 export default function ProjectScreen(): React.JSX.Element {
@@ -67,53 +65,16 @@ export default function ProjectScreen(): React.JSX.Element {
                 </Pressable>
               </View>
               {repo.worktrees.length === 0 ? <Text style={[ui.muted, { paddingHorizontal: 16, paddingVertical: 8 }]}>No worktrees.</Text> : null}
-              {repo.worktrees.map((wt) => {
-                const name = wt.branch ?? wt.name
-                const mark = rowMark(wt)
-                const git = rowGit(wt)
-                const saved = rowSaved(wt)
-                const reason = rowReason(wt)
-                const parts = reason ? [] : branchParts(topic.snapshot.settings, repo, wt.branch, trackers)
-                const line = reason ? reason.text : parts.map((p) => p.text).join(' · ')
-                // A row that wants you is bold; one with nothing loaded is quieter.
-                const wants = mark === 'attention' || mark === 'done' || !!reason
-                return (
-                  <Pressable
-                    key={wt.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={rowLabel({ name, isMain: wt.isMain, mark, saved, git, line })}
-                    style={({ pressed }) => [ui.listRow, pressed ? { backgroundColor: colors.panel } : null]}
-                    onPress={() => router.push(worktreeRoute(serverId, projectId, wt.id))}
-                  >
-                    <StateMark mark={mark} />
-                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
-                        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: wants ? '600' : '500', color: mark === 'none' && !reason ? colors.muted : colors.text }}>
-                          {name}
-                        </Text>
-                        {wt.isMain ? <Text style={{ color: colors.muted, fontSize: 12 }}>primary</Text> : null}
-                        {git?.dirty ? <Text style={{ color: colors.text, fontSize: 10 }}>●</Text> : null}
-                        {git?.counts ? <Text style={{ color: colors.muted, fontSize: 12 }}>{git.counts}</Text> : null}
-                        {saved ? <Text style={{ color: colors.muted, fontSize: 12 }}>▸{saved}</Text> : null}
-                      </View>
-                      {reason ? (
-                        <Text numberOfLines={1} style={{ fontSize: 13, color: reason.kind === 'missing' ? colors.danger : colors.attention }}>
-                          {reason.text}
-                        </Text>
-                      ) : parts.length ? (
-                        <Text numberOfLines={1} style={ui.muted}>
-                          {parts.map((part, i) => (
-                            <Text key={i}>
-                              {i > 0 ? ' · ' : ''}
-                              <Text style={part.color ? { color: part.color } : null}>{part.text}</Text>
-                            </Text>
-                          ))}
-                        </Text>
-                      ) : null}
-                    </View>
-                  </Pressable>
-                )
-              })}
+              {repo.worktrees.map((wt) => (
+                <WorktreeRow
+                  key={wt.id}
+                  settings={topic.snapshot.settings}
+                  repo={repo}
+                  worktree={wt}
+                  trackers={trackers}
+                  onPress={() => router.push(worktreeRoute(serverId, projectId, wt.id))}
+                />
+              ))}
             </View>
           ))
         : null}
