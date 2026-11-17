@@ -1,9 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { router, Stack, useGlobalSearchParams, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as Device from 'expo-device'
+import * as ScreenOrientation from 'expo-screen-orientation'
 import * as Notifications from 'expo-notifications'
 import { notificationRoute } from '../src/logic/attention.ts'
 import { routeTap } from '../src/logic/push.ts'
+import { shouldLockPortrait } from '../src/logic/layout.ts'
 import { leavesProject } from '../src/logic/routes.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
 import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
@@ -91,7 +94,18 @@ function NotificationRouting(): null {
   return null
 }
 
+// Phones stay portrait; tablets turn (app.json allows every orientation, which iPad multitasking needs).
+function useOrientationLock(): void {
+  useEffect(() => {
+    if (!shouldLockPortrait(Device.deviceType as number | null)) return
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {
+      // No native module (an old dev build): the phone turns with the device.
+    })
+  }, [])
+}
+
 export default function RootLayout(): React.JSX.Element {
+  useOrientationLock()
   return (
     <ServersProvider>
       <PushProvider>

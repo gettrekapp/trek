@@ -40,7 +40,7 @@ export default function ProjectsScreen(): React.JSX.Element {
   const { servers } = useServers()
   return (
     <View style={ui.screen}>
-      <FlatList style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled" data={servers} keyExtractor={(s) => s.id} renderItem={({ item }) => <ServerProjects server={item} />} ListEmptyComponent={<Text style={[ui.muted, { padding: 16 }]}>No servers yet.</Text>} />
+      <FlatList style={[{ flex: 1 }, ui.column]} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled" data={servers} keyExtractor={(s) => s.id} renderItem={({ item }) => <ServerProjects server={item} />} ListEmptyComponent={<Text style={[ui.muted, { padding: 16 }]}>No servers yet.</Text>} />
       <TabBar active="projects" />
     </View>
   )

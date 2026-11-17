@@ -46,7 +46,7 @@ export default function ServersScreen(): React.JSX.Element {
   return (
     <View style={ui.screen}>
       <FlatList
-        style={{ flex: 1 }}
+        style={[{ flex: 1 }, ui.column]}
         contentContainerStyle={ui.pad}
         data={servers}
         keyExtractor={(s) => s.id}

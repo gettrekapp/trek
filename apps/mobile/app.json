@@ -3,11 +3,11 @@
     "name": "Trek",
     "slug": "trek-mobile",
     "version": "0.1.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
       "bundleIdentifier": "app.gettrek.mobile",
       "config": {
         "usesNonExemptEncryption": false

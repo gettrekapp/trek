@@ -49,7 +49,7 @@ export default function AttentionScreen(): React.JSX.Element {
   return (
     <View style={ui.screen}>
       {ready && servers.length === 0 ? (
-        <View style={[ui.pad, { flex: 1 }]}>
+        <View style={[ui.pad, { flex: 1 }, ui.column]}>
           <Text style={ui.title}>No servers yet</Text>
           <Text style={ui.muted}>On your desktop, open Trek's server list and choose Pair a phone… for a server, then add it here.</Text>
           <Link href="/add-server" style={{ color: colors.accent, fontSize: 16 }}>
@@ -70,7 +70,7 @@ export default function AttentionScreen(): React.JSX.Element {
         </View>
       ) : (
         <FlatList
-          style={{ flex: 1 }}
+          style={[{ flex: 1 }, ui.column]}
           contentContainerStyle={{ paddingBottom: 24 }}
           // A decision's answer box is in the list: a tap on its Send lands while the keyboard is up.
           keyboardShouldPersistTaps="handled"
