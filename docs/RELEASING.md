@@ -116,7 +116,10 @@ are set, electron-builder signs it through Azure Trusted Signing (`azureSignOpti
 command line from the `AZURE_SIGNING_*` secrets, so a local, branch or secret-less build stays
 unsigned), and electron-updater checks that an update is signed by the same publisher,
 `AZURE_SIGNING_PUBLISHER`. Unsigned, there is no `publisherName` in `app-update.yml`, so the
-updater checks no signer. Until the secrets exist the release ships unsigned and SmartScreen asks
+updater checks no signer. **Once a signed release has shipped, keep signing on:** installed copies of it carry
+`publisherName`, so they refuse an update that is unsigned or signed by another publisher. A later
+tag without the secrets (removed, or a lapsed client secret) only warns and ships unsigned, and those
+installs then stop updating until a signed release reaches them. Until the secrets exist the release ships unsigned and SmartScreen asks
 once (docs/WINDOWS.md); the release notes' Windows line says so, and needs rewording when signing
 is switched on. The Local server runs on
 `Trek.exe`, so the installer must replace it: the app stops the server before it installs an
