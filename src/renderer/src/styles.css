@@ -2313,7 +2313,7 @@ button:disabled {
   cursor: default;
 }
 
-/* Settings editor for the quick buttons */
+/* Settings row editors (session types, worktree tags, agent commands) */
 .quick-btn-row {
   display: flex;
   align-items: flex-start;
