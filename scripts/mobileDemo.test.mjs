@@ -205,3 +205,83 @@ test('demo: closing a terminal ends an attached handler', async () => {
     h.close()
   }
 })
+
+const REPO = { projectId: DEMO_PROJECT_ID, repoId: 'demo-repo' }
+
+test('demo: a tag change arrives as a patch and adds history', async () => {
+  const h = harness()
+  try {
+    const project = watch(h.reg, `project:${DEMO_PROJECT_ID}`)
+    await until(() => project.snapshot)
+    const added = []
+    h.conn.on('event', ({ event, payload }) => event === 'history.added' && added.push(payload.event))
+    await h.conn.request('branch.setTag', { ...REPO, branch: 'fix/login-timeout', tag: 'In Review' })
+    await until(() => project.snapshot.repositories[0].branchData['fix/login-timeout'].tag === 'In Review')
+    await until(() => added.length === 1)
+    assert.equal(added[0].kind, 'status')
+    assert.equal(added[0].to.text, 'In Review')
+    const page = await h.conn.request('history.list', { ...REPO, branch: 'fix/login-timeout' })
+    assert.equal(page.events[0].id, added[0].id)
+    assert.equal(page.more, false)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: the note is compare-and-set', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    await assert.rejects(h.conn.request('branch.setNote', { ...REPO, branch: 'fix/login-timeout', note: 'x', expected: 'not the note' }), { code: 'CONFLICT' })
+    await h.conn.request('branch.setNote', { ...REPO, branch: 'fix/login-timeout', note: 'New note', expected: 'Users on slow networks get signed out mid-checkout.' })
+    assert.equal(h.server.state.project.repositories[0].branchData['fix/login-timeout'].note, 'New note')
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: custom tags, ticket, PR and its watch', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const branch = 'fix/login-timeout'
+    await h.conn.request('branch.setCustomTags', { ...REPO, branch, customTags: ['needs-design'] })
+    await h.conn.request('branch.setTicket', { ...REPO, branch, ticket: 'ACME-120' })
+    await assert.rejects(h.conn.request('branch.setPrWatch', { ...REPO, branch, watch: true }), { code: 'BAD_REQUEST' })
+    await h.conn.request('branch.setPr', { ...REPO, branch, pr: 'https://github.com/example/acme-web/pull/43' })
+    await h.conn.request('branch.setPrWatch', { ...REPO, branch, watch: true })
+    const data = h.server.state.project.repositories[0].branchData[branch]
+    assert.deepEqual(data.customTags, ['needs-design'])
+    assert.equal(data.ticket, 'ACME-120')
+    assert.deepEqual(data.prWatch, {})
+    await h.conn.request('branch.setPr', { ...REPO, branch, pr: null })
+    assert.equal(data.prWatch, undefined)
+    await h.conn.request('prWatch.dismiss', { projectId: DEMO_PROJECT_ID, worktreeId: 'wt-checkout' })
+    assert.equal(h.server.state.project.repositories[0].worktrees[1].prNotice, undefined)
+  } finally {
+    h.close()
+  }
+})
+
+test('demo: review comments are added, edited and removed, with the revision going up', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    const ref = { projectId: DEMO_PROJECT_ID, worktreeId: 'wt-checkout' }
+    const wt = () => h.server.state.project.repositories[0].worktrees[1]
+    const { commentId } = await h.conn.request('review.add', { ...ref, source: { kind: 'branch' }, path: 'src/ui/Badge.tsx', side: 'new', line: 4, lineText: '  return <span className="badge">{children}</span>', body: 'Use a <strong>?' })
+    assert.equal(wt().review.comments.length, 3)
+    assert.equal(wt().review.revision, 3)
+    await assert.rejects(h.conn.request('review.edit', { ...ref, commentId, body: 'x', expected: 'other' }), { code: 'CONFLICT' })
+    await h.conn.request('review.edit', { ...ref, commentId, body: 'Keep the span.' })
+    assert.equal(wt().review.comments[2].body, 'Keep the span.')
+    await h.conn.request('review.remove', { ...ref, commentId })
+    assert.equal(wt().review.comments.length, 2)
+    await assert.rejects(h.conn.request('review.clear', { ...ref, revision: 1 }), { code: 'CONFLICT' })
+    await h.conn.request('review.clear', { ...ref, revision: wt().review.revision })
+    assert.equal(wt().review, undefined)
+    assert.equal(wt().reviewRevision, 6)
+  } finally {
+    h.close()
+  }
+})
