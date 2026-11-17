@@ -1,9 +1,10 @@
 // A project's sidebar on a wide window (tablets): its repositories' worktrees as rows, the selected
-// one opened to its sessions, its Worktree and Changes; then the project's Global sessions (opened
-// to its sessions while the pane shows the Global screen or one of them) and its automations. What
-// is selected comes from the screen in the detail pane (logic/layout.ts' sidebarSelection). A pick
-// starts the pane over at that screen, on the placeholder; screens opened inside the pane stack up
-// with Back.
+// one opened to its sessions, its Worktree and Changes, under the Tag filter the project screen
+// shares (ui/TagFilter.tsx; while filtering, a repository with no match is left out); then, never
+// filtered, the project's Global sessions (opened to its sessions while the pane shows the Global
+// screen or one of them) and its automations. What is selected comes from the screen in the detail
+// pane (logic/layout.ts' sidebarSelection). A pick starts the pane over at that screen, on the
+// placeholder; screens opened inside the pane stack up with Back.
 import { useRef } from 'react'
 import { Pressable, ScrollView, Text, View } from 'react-native'
 import { router, useGlobalSearchParams, useSegments } from 'expo-router'
@@ -14,13 +15,16 @@ import { globalGroupOpen, globalRow, normalGlobalSessions } from '../logic/globa
 import { SIDEBAR_WIDTH, sidebarSelection, type SidebarSelection } from '../logic/layout.ts'
 import { activeTicketProviders } from '../logic/tickets.ts'
 import { addWorktreeRoute, automationsRoute, changesRoute, globalRoute, leavesProject, projectRoute, sessionRoute, showsRoute, worktreeRoute } from '../logic/routes.ts'
+import { cleanTagFilter, matchesTagFilter } from '../logic/worktreeFilter.ts'
 import { sessionMark } from '../logic/worktreeRow.ts'
 import { useConnectionNotice, useServer, useTopic } from '../state/hooks.ts'
+import { useTagFilter } from '../state/worktreeFilter.ts'
 import { HeaderBack } from './HeaderBack.tsx'
 import { PromotePrompt } from './PromotePrompt.tsx'
 import { useProjectIds } from './projectContext.tsx'
 import { StateMark } from './StateMark.tsx'
 import { STATUS_TEXT } from './status.ts'
+import { TagFilter } from './TagFilter.tsx'
 import { WorktreeRow } from './WorktreeRow.tsx'
 import { colors, ui } from './theme.ts'
 
@@ -42,6 +46,15 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
   const hasAutomations = useRef(false)
   if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
   const automations = project && hasAutomations.current ? automationsRow(project.automations) : null
+  // Shared with the project screen; ids of tags the project no longer has drop out.
+  const [rawFilter, setFilter] = useTagFilter(serverId, projectId)
+  const filter = project ? cleanTagFilter(project.settings, rawFilter) : []
+  // While filtering, a repository with no matching worktree is not drawn.
+  const repositories = project
+    ? project.repositories
+        .map((repo) => ({ repo, rows: repo.worktrees.filter((wt) => matchesTagFilter(project.settings, repo, wt, filter)) }))
+        .filter(({ rows }) => filter.length === 0 || rows.length > 0)
+    : []
 
   const segments = useSegments() as readonly string[]
   const params = useGlobalSearchParams() as Record<string, string | string[] | undefined>
@@ -84,8 +97,12 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
             {topic.state === 'loading' ? <Text style={ui.muted}>Loading…</Text> : null}
           </View>
         ) : null}
+        {project ? <TagFilter settings={project.settings} filter={filter} onChange={setFilter} /> : null}
+        {project && filter.length > 0 && repositories.length === 0 ? (
+          <Text style={[ui.muted, { paddingHorizontal: 16, paddingVertical: 12 }]}>No worktrees match the tag filter.</Text>
+        ) : null}
         {project
-          ? project.repositories.map((repo) => (
+          ? repositories.map(({ repo, rows }) => (
               <View key={repo.id}>
                 <View style={ui.section}>
                   <Text style={ui.sectionText}>{repo.name}</Text>
@@ -99,7 +116,7 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
                   </Pressable>
                 </View>
                 {repo.worktrees.length === 0 ? <Text style={[ui.muted, { paddingHorizontal: 16, paddingVertical: 8 }]}>No worktrees.</Text> : null}
-                {repo.worktrees.map((wt) => {
+                {rows.map((wt) => {
                   const open = selection.worktreeId === wt.id
                   return (
                     <View key={wt.id}>

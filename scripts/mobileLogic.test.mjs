@@ -13,7 +13,8 @@
 // and automations (a card's lines, next runs in the schedule's timezone, the missed-runs answer, the
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
 // tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
-// and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus).
+// and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus),
+// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -28,6 +29,7 @@ import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/qu
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
@@ -2902,4 +2904,63 @@ test('routes: the Global screen', () => {
   const base = ['project', '[serverId]', '[projectId]']
   assert.equal(routes.showsRoute([...base, 'global'], { serverId: 'srv', projectId: 'p1' }, r), true)
   assert.equal(routes.showsRoute([...base, 'automations'], { serverId: 'srv', projectId: 'p1' }, r), false)
+})
+
+test('tag filter: the options are the workflow tags, the custom tags and Untagged', () => {
+  const settings = {
+    worktreeTags: [{ id: 'wip', name: 'WIP', color: '#111' }],
+    customTags: [{ id: 'fe', name: 'frontend', color: '#222' }]
+  }
+  assert.deepEqual(tagFilterOptions(settings), {
+    workflow: [{ id: 'wip', name: 'WIP', color: '#111' }],
+    custom: [{ id: 'fe', name: 'frontend', color: '#222' }]
+  })
+  // A project that never set its tags has the defaults, as on the desktop.
+  assert.equal(tagFilterOptions({}).workflow[0].id, 'In Progress')
+  assert.deepEqual(tagFilterOptions({}).custom, [])
+})
+
+test('tag filter: a worktree matches any picked tag', () => {
+  const settings = {
+    worktreeTags: [{ id: 'wip', name: 'WIP', color: '#111' }, { id: 'rev', name: 'Review', color: '#333' }],
+    customTags: [{ id: 'fe', name: 'frontend', color: '#222' }]
+  }
+  const repo = {
+    branchData: {
+      a: { tag: 'wip', customTags: ['fe'] },
+      b: { tag: 'rev' },
+      c: { tag: 'gone' },
+      d: { customTags: ['fe', 'gone-custom'] }
+    }
+  }
+  const wt = (branch) => ({ branch })
+  assert.equal(matchesTagFilter(settings, repo, wt('a'), []), true, 'no filter: all')
+  assert.equal(matchesTagFilter(settings, repo, wt('a'), ['wip']), true)
+  assert.equal(matchesTagFilter(settings, repo, wt('b'), ['wip']), false)
+  assert.equal(matchesTagFilter(settings, repo, wt('b'), ['wip', 'rev']), true, 'any of them')
+  assert.equal(matchesTagFilter(settings, repo, wt('a'), ['fe']), true, 'a custom tag')
+  assert.equal(matchesTagFilter(settings, repo, wt('d'), ['fe']), true)
+  // Untagged: no workflow tag the project still has.
+  assert.equal(matchesTagFilter(settings, repo, wt('c'), [UNTAGGED]), true)
+  assert.equal(matchesTagFilter(settings, repo, wt('d'), [UNTAGGED]), true)
+  assert.equal(matchesTagFilter(settings, repo, wt('a'), [UNTAGGED]), false)
+  assert.equal(matchesTagFilter(settings, repo, wt('none'), [UNTAGGED]), true, 'no branch data')
+  assert.equal(matchesTagFilter(settings, repo, { branch: undefined }, [UNTAGGED]), true, 'detached')
+  assert.equal(matchesTagFilter(settings, repo, { branch: undefined }, ['wip']), false)
+  // A custom tag id the project no longer has does not match.
+  assert.equal(matchesTagFilter(settings, repo, wt('d'), ['gone-custom']), false)
+})
+
+test('tag filter: ids of deleted tags drop out, picking toggles, and the label', () => {
+  const settings = {
+    worktreeTags: [{ id: 'wip', name: 'WIP', color: '#111' }],
+    customTags: [{ id: 'fe', name: 'frontend', color: '#222' }]
+  }
+  assert.deepEqual(cleanTagFilter(settings, ['wip', 'gone', UNTAGGED, 'fe']), ['wip', UNTAGGED, 'fe'])
+  assert.deepEqual(toggledTagFilter(['wip'], 'fe'), ['wip', 'fe'])
+  assert.deepEqual(toggledTagFilter(['wip', 'fe'], 'wip'), ['fe'])
+  assert.deepEqual(tagFilterLabel(settings, []), { text: 'Tag: All', colors: [] })
+  assert.deepEqual(tagFilterLabel(settings, ['wip']), { text: 'Tag: WIP', colors: ['#111'] })
+  assert.deepEqual(tagFilterLabel(settings, [UNTAGGED]), { text: 'Tag: Untagged', colors: [] })
+  assert.deepEqual(tagFilterLabel(settings, ['wip', 'fe', UNTAGGED]), { text: 'Tag: 3 tags', colors: ['#111', '#222'] })
 })
