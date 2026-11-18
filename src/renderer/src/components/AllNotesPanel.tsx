@@ -94,7 +94,8 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
   const groups = groupNotes(entries, query, severalRepos, held)
   const rows = groups.flatMap((g) => g.rows)
   const selected = resolveNoteSelection(rows, chosen)
-  const gone = entries.filter((e) => e.gone)
+  // The gone notes the page counts and deletes: an emptied one kept listed is no note any more.
+  const gone = entries.filter((e) => e.gone && e.text !== '')
   const pane = useListDetail({ hasSelection: selected !== undefined, scroller: '.allnotes-scroll', selectedRow: '.ld-row.selected .ld-row-main' })
 
   // An emptied note stays listed only while it is selected and the page shows: leaving the page lets it go.
@@ -232,7 +233,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
                 <section key={group.id} className="ld-group" aria-label={group.heading}>
                   <div className="allnotes-group-head">
                     <h4 className="ld-group-head">{group.heading}</h4>
-                    {group.id === 'gone' && (
+                    {group.id === 'gone' && group.goneCount > 0 && (
                       <button className="allnotes-quiet" disabled={offline} onClick={askGone}>
                         {deleteGoneLabel(group.goneCount, false)}
                       </button>

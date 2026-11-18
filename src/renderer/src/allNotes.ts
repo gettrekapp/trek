@@ -42,7 +42,7 @@ export interface NoteRow extends NoteEntry {
 export interface NoteGroup {
   id: string
   heading: string
-  /** How many of its rows have no worktree */
+  /** How many of its notes (rows with text) have no worktree */
   goneCount: number
   rows: NoteRow[]
 }
@@ -96,11 +96,26 @@ export function markOf(text: string, query: string): Mark | null {
   return start < 0 ? null : { start, end: start + q.length }
 }
 
+/** A row cuts its line off at its end: a match that starts further along than this is shown from `MATCH_LEAD` characters before it. */
+const MATCH_FAR = 24
+const MATCH_LEAD = 16
+
+/** `line` as a row shows a match in it: whole when the match is near its start, else from just before the match, after a `…`. */
+function aroundMatch(line: string, q: string): string {
+  const at = line.toLowerCase().indexOf(q)
+  return at > MATCH_FAR ? `…${line.slice(at - MATCH_LEAD)}` : line
+}
+
+/** An entry that has text is a note; one with none is an emptied note kept listed, which the counts leave out as the server does. */
+const hasText = (entry: NoteEntry): boolean => entry.text !== ''
+const noteCount = (entries: readonly NoteEntry[]): number => entries.filter(hasText).length
+
 function toRow(entry: NoteEntry, query: string): NoteRow {
   const short = shortBranch(entry.branch)
   const q = query.trim().toLowerCase()
   // With a search, the line that matches; else (or when only the name matches) the first line.
-  const matching = q ? entry.text.split('\n').find((l) => l.toLowerCase().includes(q))?.trim() : undefined
+  const found = q ? entry.text.split('\n').find((l) => l.toLowerCase().includes(q))?.trim() : undefined
+  const matching = found === undefined ? undefined : aroundMatch(found, q)
   const line = entry.text === '' ? EMPTY_LINE : (matching ?? previewLine(entry.text))
   return { ...entry, key: noteKey(entry), short, line, nameMark: markOf(short, query), lineMark: entry.text === '' ? null : markOf(line, query) }
 }
@@ -110,7 +125,8 @@ const matches = (entry: NoteEntry, q: string): boolean => entry.branch.toLowerCa
 /**
  * The list's groups. One repository: the notes with a worktree, then the ones whose worktree is
  * gone. Several: a group per repository, its gone notes last. With a search: one group of the
- * matches, in the entries' order, headed by how many of how many. `held` is the note being typed
+ * matches, in the entries' order, headed by how many of how many. A heading counts the notes
+ * that have text: an emptied note kept listed is a row but not a note. `held` is the note being typed
  * in: a search keeps it among its results when the typing stops it matching, or the editor would
  * go from under the keys.
  */
@@ -118,21 +134,21 @@ export function groupNotes(entries: readonly NoteEntry[], query: string, several
   const q = query.trim().toLowerCase()
   if (q) {
     const isHeld = (e: NoteEntry): boolean => held !== null && e.repoId === held.repoId && e.branch === held.branch
-    const rows = entries.filter((e) => matches(e, q) || isHeld(e)).map((e) => toRow(e, query))
-    return [{ id: 'results', heading: `${rows.length} of ${entries.length} notes`, goneCount: 0, rows }]
+    const shown = entries.filter((e) => matches(e, q) || isHeld(e))
+    return [{ id: 'results', heading: `${noteCount(shown)} of ${noteCount(entries)} notes`, goneCount: 0, rows: shown.map((e) => toRow(e, query)) }]
   }
   const groups: NoteGroup[] = []
   if (!severalRepos) {
-    const live = entries.filter((e) => !e.gone).map((e) => toRow(e, ''))
-    const gone = entries.filter((e) => e.gone).map((e) => toRow(e, ''))
-    if (live.length > 0) groups.push({ id: 'live', heading: `Has a worktree · ${live.length}`, goneCount: 0, rows: live })
-    if (gone.length > 0) groups.push({ id: 'gone', heading: `Worktree gone · ${gone.length}`, goneCount: gone.length, rows: gone })
+    const live = entries.filter((e) => !e.gone)
+    const gone = entries.filter((e) => e.gone)
+    if (live.length > 0) groups.push({ id: 'live', heading: `Has a worktree · ${noteCount(live)}`, goneCount: 0, rows: live.map((e) => toRow(e, '')) })
+    if (gone.length > 0) groups.push({ id: 'gone', heading: `Worktree gone · ${noteCount(gone)}`, goneCount: noteCount(gone), rows: gone.map((e) => toRow(e, '')) })
     return groups
   }
   for (const repoId of [...new Set(entries.map((e) => e.repoId))]) {
     const own = entries.filter((e) => e.repoId === repoId)
     const rows = [...own.filter((e) => !e.gone), ...own.filter((e) => e.gone)].map((e) => toRow(e, ''))
-    groups.push({ id: repoId, heading: `${own[0].repoName} · ${rows.length}`, goneCount: own.filter((e) => e.gone).length, rows })
+    groups.push({ id: repoId, heading: `${own[0].repoName} · ${noteCount(own)}`, goneCount: noteCount(own.filter((e) => e.gone)), rows })
   }
   return groups
 }

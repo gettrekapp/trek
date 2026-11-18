@@ -80,6 +80,38 @@ test('groupNotes: an emptied, kept note says so on its row', () => {
   assert.equal(groups[0].rows[0].line, EMPTY_LINE)
 })
 
+test('groupNotes: an emptied, kept note has its row but is not counted, as the server has no note for it', () => {
+  // a main and a bug/gone are emptied drafts; each is listed only as the kept one.
+  const emptied = (branch) => (repoId, b) => (repoId === 'a' && b === branch ? '' : null)
+  const one = groupNotes(collectNotes([repoA], live, emptied('main'), { repoId: 'a', branch: 'main' }), '', false, null)
+  assert.deepEqual(one.map((g) => [g.heading, g.goneCount, g.rows.length]), [['Has a worktree · 1', 0, 2], ['Worktree gone · 1', 1, 1]])
+  const gone = groupNotes(collectNotes([repoA], live, emptied('bug/gone'), { repoId: 'a', branch: 'bug/gone' }), '', false, null)
+  assert.deepEqual(gone.map((g) => [g.heading, g.goneCount, g.rows.length]), [['Has a worktree · 2', 0, 2], ['Worktree gone · 0', 0, 1]])
+  const several = groupNotes(collectNotes([repoA, repoB], live, emptied('bug/gone'), { repoId: 'a', branch: 'bug/gone' }), '', true, null)
+  assert.deepEqual(several.map((g) => [g.heading, g.goneCount, g.rows.length]), [['app · 2', 0, 3], ['lib · 1', 0, 1]])
+  // A search: the held, emptied note is a row, in neither number.
+  const ref = { repoId: 'a', branch: 'main' }
+  const found = groupNotes(collectNotes([repoA, repoB], live, emptied('main'), ref), 'lib', true, ref)[0]
+  assert.deepEqual([found.heading, keysOf(found.rows), found.rows[0].line], ['1 of 3 notes', ['a main', 'b main'], EMPTY_LINE])
+  // A held note that has text but no longer matches is a row and a note: counted in both.
+  const typed = groupNotes(collectNotes([repoA, repoB], live, noDrafts, ref), 'lib', true, ref)[0]
+  assert.equal(typed.heading, '2 of 4 notes')
+})
+
+test('groupNotes with a search: a match far along a long line is shown from just before it', () => {
+  const near = 'Run the release checklist before the tag'
+  const far = 'Before anything else, and after the storage migration has landed, run the release checklist twice'
+  const entries = collectNotes([{ id: 'a', name: 'app', branchNotes: { near, far: `first line\n  ${far}` } }], live, noDrafts, null)
+  const rows = groupNotes(entries, 'Checklist', false, null)[0].rows
+  const [farRow, nearRow] = rows
+  assert.deepEqual([nearRow.line, nearRow.lineMark], [near, { start: 16, end: 25 }], 'a match near the start: the whole line')
+  assert.equal(farRow.line, '…run the release checklist twice', 'the sixteen characters before the match, after a …')
+  assert.equal(farRow.line.slice(farRow.lineMark.start, farRow.lineMark.end), 'checklist')
+  // A branch-name match shows the first line whole, however long.
+  const byName = groupNotes(entries, 'far', false, null)[0].rows[0]
+  assert.deepEqual([byName.line, byName.lineMark], ['first line', null])
+})
+
 test('groupNotes with a search: one list of the matches, in order, with the matching line and the match marked', () => {
   const entries = collectNotes([repoA, repoB], live, noDrafts, null)
   const [group, ...rest] = groupNotes(entries, '  LATER ', true, null)
