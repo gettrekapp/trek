@@ -17,9 +17,10 @@ test('pluginRowLine: nothing for an on plugin, where it stands for the others', 
 })
 
 test('pluginGroups: On, Off, Not available, in that order, each with its count; empty groups left out', () => {
-  const groups = pluginGroups([azure, linear, gone, voice], 'Towbook', false)
+  // voice before linear: rows keep the plugins' own order, they are not sorted
+  const groups = pluginGroups([azure, voice, gone, linear], 'Towbook', false)
   assert.deepEqual(groups.map((g) => [g.id, g.heading, g.rows.map((r) => r.id)]), [
-    ['on', 'On in Towbook · 2', ['linear', 'voice']],
+    ['on', 'On in Towbook · 2', ['voice', 'linear']],
     ['off', 'Off · 1', ['azure-devops']],
     ['missing', 'Not available · 1', ['gone']]
   ])
