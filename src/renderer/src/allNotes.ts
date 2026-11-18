@@ -110,12 +110,15 @@ const matches = (entry: NoteEntry, q: string): boolean => entry.branch.toLowerCa
 /**
  * The list's groups. One repository: the notes with a worktree, then the ones whose worktree is
  * gone. Several: a group per repository, its gone notes last. With a search: one group of the
- * matches, in the entries' order, headed by how many of how many.
+ * matches, in the entries' order, headed by how many of how many. `held` is the note being typed
+ * in: a search keeps it among its results when the typing stops it matching, or the editor would
+ * go from under the keys.
  */
-export function groupNotes(entries: readonly NoteEntry[], query: string, severalRepos: boolean): NoteGroup[] {
+export function groupNotes(entries: readonly NoteEntry[], query: string, severalRepos: boolean, held: NoteRef | null): NoteGroup[] {
   const q = query.trim().toLowerCase()
   if (q) {
-    const rows = entries.filter((e) => matches(e, q)).map((e) => toRow(e, query))
+    const isHeld = (e: NoteEntry): boolean => held !== null && e.repoId === held.repoId && e.branch === held.branch
+    const rows = entries.filter((e) => matches(e, q) || isHeld(e)).map((e) => toRow(e, query))
     return [{ id: 'results', heading: `${rows.length} of ${entries.length} notes`, goneCount: 0, rows }]
   }
   const groups: NoteGroup[] = []

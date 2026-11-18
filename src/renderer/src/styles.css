@@ -3176,8 +3176,11 @@ button:disabled {
   line-height: 1.5;
 }
 
-/* Both panes fill the page's height, so the editor can. */
-.allnotes-body {
+/*
+ * Both panes fill the page's height, so the editor can. Two classes here and on the detail: the
+ * shared one-class rules come later in this file and would win.
+ */
+.list-detail.allnotes-body {
   align-items: stretch;
   min-height: 100%;
 }
@@ -3242,7 +3245,7 @@ button:disabled {
   border-radius: 2px;
 }
 
-.allnotes-detail {
+.list-detail-detail.allnotes-detail {
   gap: 12px;
 }
 
@@ -3327,8 +3330,16 @@ button:disabled {
   font-size: 12.5px;
 }
 
-.allnotes-confirm span {
+.allnotes-confirm > span:first-child {
   flex: 1 1 180px;
+}
+
+/* The two buttons stay together at the right, and wrap under the question as a pair. */
+.allnotes-confirm-buttons {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .allnotes-confirm button.danger {
@@ -3338,9 +3349,10 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Two panes: the editor takes the height the page has left, so a short window does not scroll for it. */
 .allnotes-textarea {
-  flex: 1 1 320px;
-  min-height: 320px;
+  flex: 1 1 200px;
+  min-height: 200px;
   padding: 12px 14px;
   border-radius: 8px;
   border: 1px solid var(--bg-lighter);
@@ -3374,7 +3386,7 @@ button:disabled {
 
 /* One pane: the editor is as tall as it needs, not the page. */
 @container listdetail (width < 800px) {
-  .allnotes-body {
+  .list-detail.allnotes-body {
     min-height: 0;
   }
 
@@ -3382,6 +3394,7 @@ button:disabled {
     display: block;
     width: 100%;
     box-sizing: border-box;
+    min-height: max(320px, 55vh);
   }
 }
 

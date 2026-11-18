@@ -56,7 +56,8 @@ export function useNoteDraft(repoId: string, branch: string): NoteDraftView {
 
   return {
     text: draft?.text ?? note,
-    pending: draft !== null,
+    // A draft that equals the saved note has nothing to save: typed and taken back within the pause.
+    pending: draft !== null && draft.text !== note,
     readOnly: offline,
     onChange: (text) => {
       if (!drafts) {

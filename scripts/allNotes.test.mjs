@@ -57,18 +57,18 @@ test('collectNotes: the kept branch is listed even when the server has no note f
 })
 
 test('groupNotes, one repository: with a worktree, then gone, each with its count', () => {
-  const groups = groupNotes(collectNotes([repoA], live, noDrafts, null), '', false)
+  const groups = groupNotes(collectNotes([repoA], live, noDrafts, null), '', false, null)
   assert.deepEqual(groups.map((g) => [g.id, g.heading, g.goneCount, g.rows.map((r) => r.branch)]), [
     ['live', 'Has a worktree · 2', 0, ['feature/x/zeta', 'main']],
     ['gone', 'Worktree gone · 1', 1, ['bug/gone']]
   ])
   const row = groups[0].rows[0]
   assert.deepEqual([row.key, row.short, row.line, row.nameMark, row.lineMark], ['a feature/x/zeta', 'zeta', 'Zeta first', null, null])
-  assert.deepEqual(groupNotes([], '', false), [])
+  assert.deepEqual(groupNotes([], '', false, null), [])
 })
 
 test('groupNotes, several repositories: a group per repository, its gone notes last', () => {
-  const groups = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true)
+  const groups = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true, null)
   assert.deepEqual(groups.map((g) => [g.id, g.heading, g.goneCount, g.rows.map((r) => r.branch)]), [
     ['a', 'app · 3', 1, ['feature/x/zeta', 'main', 'bug/gone']],
     ['b', 'lib · 1', 0, ['main']]
@@ -76,25 +76,38 @@ test('groupNotes, several repositories: a group per repository, its gone notes l
 })
 
 test('groupNotes: an emptied, kept note says so on its row', () => {
-  const groups = groupNotes(collectNotes([{ id: 'a', name: 'app', branchNotes: {} }], live, noDrafts, { repoId: 'a', branch: 'main' }), '', false)
+  const groups = groupNotes(collectNotes([{ id: 'a', name: 'app', branchNotes: {} }], live, noDrafts, { repoId: 'a', branch: 'main' }), '', false, null)
   assert.equal(groups[0].rows[0].line, EMPTY_LINE)
 })
 
 test('groupNotes with a search: one list of the matches, in order, with the matching line and the match marked', () => {
   const entries = collectNotes([repoA, repoB], live, noDrafts, null)
-  const [group, ...rest] = groupNotes(entries, '  LATER ', true)
+  const [group, ...rest] = groupNotes(entries, '  LATER ', true, null)
   assert.equal(rest.length, 0)
   assert.deepEqual([group.id, group.heading, group.goneCount], ['results', '1 of 4 notes', 0])
   assert.deepEqual([group.rows[0].branch, group.rows[0].line, group.rows[0].lineMark, group.rows[0].nameMark], ['main', 'later', { start: 0, end: 5 }, null])
 
-  const byName = groupNotes(entries, 'zet', true)[0].rows[0]
+  const byName = groupNotes(entries, 'zet', true, null)[0].rows[0]
   assert.deepEqual([byName.branch, byName.nameMark, byName.line, byName.lineMark], ['feature/x/zeta', { start: 0, end: 3 }, 'Zeta first', { start: 0, end: 3 }])
 
-  const byPrefix = groupNotes(entries, 'feature/x', true)[0]
+  const byPrefix = groupNotes(entries, 'feature/x', true, null)[0]
   assert.deepEqual([byPrefix.heading, byPrefix.rows[0].branch, byPrefix.rows[0].nameMark, byPrefix.rows[0].line], ['1 of 4 notes', 'feature/x/zeta', null, 'Zeta first'], 'a match in the part of the name the row does not show marks nothing')
 
-  assert.deepEqual(keysOf(groupNotes(entries, 'main', true)[0].rows), ['a main', 'b main'], 'both repositories, in order')
-  assert.deepEqual(groupNotes(entries, 'nothing like it', true), [{ id: 'results', heading: '0 of 4 notes', goneCount: 0, rows: [] }])
+  assert.deepEqual(keysOf(groupNotes(entries, 'main', true, null)[0].rows), ['a main', 'b main'], 'both repositories, in order')
+  assert.deepEqual(groupNotes(entries, 'nothing like it', true, null), [{ id: 'results', heading: '0 of 4 notes', goneCount: 0, rows: [] }])
+})
+
+test('groupNotes with a search: the note being typed in stays in the results when it stops matching, in order; a note not held does not', () => {
+  const entries = collectNotes([repoA, repoB], live, noDrafts, null)
+  // entries: a bug/gone, a feature/x/zeta, a main, b main. "lib" matches only b main's text.
+  assert.deepEqual(keysOf(groupNotes(entries, 'lib', true, null)[0].rows), ['b main'])
+  const held = groupNotes(entries, 'lib', true, { repoId: 'a', branch: 'feature/x/zeta' })[0]
+  assert.deepEqual(keysOf(held.rows), ['a feature/x/zeta', 'b main'], 'the held note, in the entries\' order')
+  assert.deepEqual([held.rows[0].line, held.rows[0].lineMark, held.rows[0].nameMark], ['Zeta first', null, null], 'its first line, nothing marked')
+  assert.deepEqual(keysOf(groupNotes(entries, 'lib', true, { repoId: 'b', branch: 'main' })[0].rows), ['b main'], 'held and matching: listed once')
+  assert.deepEqual(keysOf(groupNotes(entries, 'lib', true, { repoId: 'a', branch: 'nope' })[0].rows), ['b main'], 'held but not listed: nothing added')
+  // Without a search nothing is held: the groups are the same.
+  assert.deepEqual(groupNotes(entries, '', true, { repoId: 'a', branch: 'main' }), groupNotes(entries, '', true, null))
 })
 
 test('markOf: where the search text sits, whatever its case', () => {
@@ -105,7 +118,7 @@ test('markOf: where the search text sits, whatever its case', () => {
 })
 
 test('resolveNoteSelection: the chosen note while it is listed, else the first row', () => {
-  const rows = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true).flatMap((g) => g.rows)
+  const rows = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true, null).flatMap((g) => g.rows)
   assert.equal(resolveNoteSelection(rows, { repoId: 'b', branch: 'main' }).key, 'b main')
   assert.equal(resolveNoteSelection(rows, null).key, 'a feature/x/zeta')
   assert.equal(resolveNoteSelection(rows, { repoId: 'a', branch: 'nope' }).key, 'a feature/x/zeta')
@@ -113,7 +126,7 @@ test('resolveNoteSelection: the chosen note while it is listed, else the first r
 })
 
 test('afterDelete: the selection stays unless it was deleted; then the next row, else the one before', () => {
-  const rows = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true).flatMap((g) => g.rows)
+  const rows = groupNotes(collectNotes([repoA, repoB], live, noDrafts, null), '', true, null).flatMap((g) => g.rows)
   // rows: a feature/x/zeta, a main, a bug/gone, b main
   assert.deepEqual(afterDelete(rows, new Set(['a bug/gone']), 'a main'), { repoId: 'a', branch: 'main' }, 'not deleted: stays')
   assert.deepEqual(afterDelete(rows, new Set(['a main']), 'a main'), { repoId: 'a', branch: 'bug/gone' }, 'the next row')

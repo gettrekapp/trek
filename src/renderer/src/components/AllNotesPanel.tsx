@@ -10,6 +10,7 @@ import {
   deleteGoneLabel,
   deleteQuestion,
   groupNotes,
+  noteKey,
   resolveNoteSelection,
   saveStatus,
   type Mark,
@@ -74,6 +75,8 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
   const ticketViewOf = useTicketViews()
   const [chosen, setChosen] = useState<NoteRef | null>(null)
   const [query, setQuery] = useState('')
+  /** The note being typed in: a search keeps it among its results until another row is chosen or the search changes. */
+  const [held, setHeld] = useState<NoteRef | null>(null)
   /** The confirm bar: for the selected note, or for every note whose worktree is gone. */
   const [confirming, setConfirming] = useState<'one' | 'gone' | null>(null)
   // The list shows a draft's first line: redraw when any draft changes.
@@ -88,7 +91,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
     chosen
   )
   const severalRepos = repositories.length > 1
-  const groups = groupNotes(entries, query, severalRepos)
+  const groups = groupNotes(entries, query, severalRepos, held)
   const rows = groups.flatMap((g) => g.rows)
   const selected = resolveNoteSelection(rows, chosen)
   const gone = entries.filter((e) => e.gone)
@@ -100,13 +103,21 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
     if (!visible && selectedEmpty) setChosen(null)
   }, [visible, selectedEmpty])
 
-  // The confirm bar takes the focus when it opens (its Keep button), and gives it back to the list when it closes.
+  // The confirm bar takes the focus when it opens (its Keep button), and gives it back when it
+  // closes: to the selected row, or to the detail's Delete where a narrow page hides the list.
   const confirmBar = useRef<HTMLDivElement>(null)
+  const searchField = useRef<HTMLInputElement>(null)
   const root = pane.root
   const wasConfirming = useRef(false)
   useLayoutEffect(() => {
     if (confirming) confirmBar.current?.querySelector<HTMLElement>('button')?.focus()
-    else if (wasConfirming.current) root.current?.querySelector<HTMLElement>('.ld-row.selected .ld-row-main')?.focus({ preventScroll: true })
+    else if (wasConfirming.current && (!document.activeElement || document.activeElement === document.body)) {
+      // Only when closing the bar dropped the focus: a search typed while it was open keeps the focus in its field.
+      const row = root.current?.querySelector<HTMLElement>('.ld-row.selected .ld-row-main')
+      // A hidden row has no boxes and cannot take the focus.
+      const to = row && row.getClientRects().length > 0 ? row : root.current?.querySelector<HTMLElement>('.allnotes-actions button[aria-label="Delete this note"]')
+      to?.focus({ preventScroll: true })
+    }
     wasConfirming.current = confirming !== null
     // `root` is a ref: the same object every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,12 +125,32 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
 
   const choose = (row: NoteRow): void => {
     setChosen({ repoId: row.repoId, branch: row.branch })
+    // Another row lets the held note go; its own row (a narrow page, back in the list) does not.
+    if (held && noteKey(held) !== row.key) setHeld(null)
     setConfirming(null)
     pane.open()
   }
-  /** Typing pins the selection: until a row is chosen the first row is shown, and the first row can change. */
+  /**
+   * Typing makes the note on show the chosen one and holds it. It may be on show only as the first
+   * row (nothing chosen, or the chosen note is not among a search's results), and the typing can
+   * change which row is first, stop the note matching the search, or empty it.
+   */
   const pin = (): void => {
-    if (!chosen && selected) setChosen({ repoId: selected.repoId, branch: selected.branch })
+    if (!selected) return
+    const ref = { repoId: selected.repoId, branch: selected.branch }
+    if (!chosen || noteKey(chosen) !== selected.key) setChosen(ref)
+    if (!held || noteKey(held) !== selected.key) setHeld(ref)
+  }
+  /** A new search: its results are its matches alone, and a question asked about the old results' note is dropped. */
+  const search = (text: string): void => {
+    setQuery(text)
+    setHeld(null)
+    setConfirming(null)
+  }
+  /** Asks about the gone notes. The bar sits in the list, so a narrow page showing a detail goes back to the list first. */
+  const askGone = (): void => {
+    pane.back()
+    setConfirming('gone')
   }
   const show = (info: GitWorktreeInfo): void => {
     const project = useAppStore.getState().project
@@ -143,10 +174,13 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
   const confirm = confirming && (
     <div className="allnotes-confirm" role="alertdialog" aria-label="Delete" ref={confirmBar} onKeyDown={(e) => e.key === 'Escape' && setConfirming(null)}>
       <span>{confirming === 'one' && selected ? deleteQuestion({ branch: selected.branch }) : deleteQuestion({ gone: gone.length })}</span>
-      <button onClick={() => setConfirming(null)}>Keep</button>
-      <button className="danger" disabled={offline} onClick={confirmDelete}>
-        {confirming === 'gone' && gone.length > 1 ? `Delete ${gone.length}` : 'Delete'}
-      </button>
+      {/* The two buttons wrap as a pair, under the question in a narrow list. */}
+      <span className="allnotes-confirm-buttons">
+        <button onClick={() => setConfirming(null)}>Keep</button>
+        <button className="danger" disabled={offline} onClick={confirmDelete}>
+          {confirming === 'gone' && gone.length > 1 ? `Delete ${gone.length}` : 'Delete'}
+        </button>
+      </span>
     </div>
   )
 
@@ -167,7 +201,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
         {noteCount > 0 && <span className="muted">{countLabel(noteCount)}</span>}
         <span className="allnotes-header-actions">
           {severalRepos && gone.length > 0 && !searching && (
-            <button className="allnotes-quiet" disabled={offline} onClick={() => setConfirming('gone')}>
+            <button className="allnotes-quiet" disabled={offline} onClick={askGone}>
               {deleteGoneLabel(gone.length, true)}
             </button>
           )}
@@ -177,10 +211,11 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
               className="allnotes-search"
               aria-label="Search notes"
               placeholder="Search branches and notes…"
+              ref={searchField}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => search(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Escape') setQuery('')
+                if (e.key === 'Escape') search('')
               }}
             />
           )}
@@ -198,7 +233,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
                   <div className="allnotes-group-head">
                     <h4 className="ld-group-head">{group.heading}</h4>
                     {group.id === 'gone' && (
-                      <button className="allnotes-quiet" disabled={offline} onClick={() => setConfirming('gone')}>
+                      <button className="allnotes-quiet" disabled={offline} onClick={askGone}>
                         {deleteGoneLabel(group.goneCount, false)}
                       </button>
                     )}
@@ -225,7 +260,14 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
               {searching && rows.length === 0 && (
                 <div className="allnotes-nomatch">
                   <span className="muted">No note or branch matches “{query.trim()}”.</span>
-                  <button className="allnotes-quiet" onClick={() => setQuery('')}>
+                  <button
+                    className="allnotes-quiet"
+                    onClick={() => {
+                      // The button goes with the line it is on: the focus moves to the field first.
+                      searchField.current?.focus()
+                      search('')
+                    }}
+                  >
                     Clear
                   </button>
                 </div>
