@@ -25,10 +25,12 @@ import {
   attentionGroup,
   cardAnchor,
   gitWords,
+  compareLabels,
   groupByAttention,
   isUnloaded,
   parseSidebarView,
   rowGit,
+  rowMatchesQuery,
   rowReason,
   sessionLine,
   sidebarViewChanged,
@@ -192,14 +194,30 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     (a, b) =>
       (rank.get(worktreeKey(a)) ?? Infinity) - (rank.get(worktreeKey(b)) ?? Infinity)
   )
-  const rows = ordered
-    .filter(
-      (w) =>
-        !query ||
-        branchLabel(w).toLowerCase().includes(query) ||
-        w.path.toLowerCase().includes(query) ||
-        repoOfInfo(project, w).name.toLowerCase().includes(query)
-    )
+  // The order rows are shown in; drags always work on the manual order above.
+  const shown =
+    view.sort === 'alphabetical'
+      ? [...ordered].sort((a, b) => compareLabels(branchLabel(a), branchLabel(b)))
+      : ordered
+  const rows = shown
+    .filter((w) => {
+      if (!query) return true
+      const repo = repoOfInfo(project, w)
+      const ticket = w.branch ? repo.branchTickets?.[w.branch] : undefined
+      const ticketInfo = ticket ? ticketViewOf(ticket) : undefined
+      const pullRequest = w.branch ? repo.branchPullRequests?.[w.branch] : undefined
+      // The chips are searchable too: a PR number ("9166") or a ticket key finds its row.
+      return rowMatchesQuery(query, [
+        branchLabel(w),
+        w.path,
+        repo.name,
+        ticket,
+        ticketInfo?.label,
+        ticketInfo?.info?.title,
+        pullRequest,
+        pullRequest ? pullRequestLabel(pullRequest) : undefined
+      ])
+    })
     .filter((w) => {
       if (tagFilter.length === 0) return true
       const tag = tagOf(w)
@@ -659,6 +677,17 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                 >
                   Manual order
                   {view.sort === 'manual' && <span className="tag-check">✓</span>}
+                </div>
+                <div
+                  className={`tag-menu-item ${view.sort === 'alphabetical' ? 'active' : ''}`}
+                  title="Each repository's rows by branch name, A to Z. Rows don't drag in this view."
+                  onClick={() => {
+                    setView({ sort: 'alphabetical' })
+                    setSortOpen(false)
+                  }}
+                >
+                  Alphabetical
+                  {view.sort === 'alphabetical' && <span className="tag-check">✓</span>}
                 </div>
                 <div
                   className={`tag-menu-item ${view.sort === 'attention' ? 'active' : ''}`}

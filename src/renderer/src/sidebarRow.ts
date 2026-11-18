@@ -107,9 +107,13 @@ export function cardAnchor(
 }
 
 /** How the sidebar lists its rows: the Sort menu's choices, kept per window in localStorage. */
+export type SidebarSort = 'manual' | 'alphabetical' | 'attention'
+
+const SIDEBAR_SORTS: SidebarSort[] = ['manual', 'alphabetical', 'attention']
+
 export interface SidebarView {
-  /** 'manual' is the dragged order; 'attention' groups each repository's rows by who needs you */
-  sort: 'manual' | 'attention'
+  /** 'manual' is the dragged order; 'alphabetical' is by branch name; 'attention' groups each repository's rows by who needs you */
+  sort: SidebarSort
   /** One-line rows; a row that needs you keeps its second line */
   compact: boolean
   /** Leave out rows with no loaded session (the selected row always stays) */
@@ -124,7 +128,7 @@ export function parseSidebarView(raw: string | null | undefined): SidebarView {
   try {
     const v = JSON.parse(raw) as Partial<Record<keyof SidebarView, unknown>> | null
     if (!v || typeof v !== 'object') return DEFAULT_SIDEBAR_VIEW
-    return { sort: v.sort === 'attention' ? 'attention' : 'manual', compact: v.compact === true, hideUnloaded: v.hideUnloaded === true }
+    return { sort: SIDEBAR_SORTS.includes(v.sort as SidebarSort) ? (v.sort as SidebarSort) : 'manual', compact: v.compact === true, hideUnloaded: v.hideUnloaded === true }
   } catch {
     return DEFAULT_SIDEBAR_VIEW
   }
@@ -133,6 +137,11 @@ export function parseSidebarView(raw: string | null | undefined): SidebarView {
 /** True when the view differs from the default, so the Sort button can say so. */
 export function sidebarViewChanged(view: SidebarView): boolean {
   return view.sort !== 'manual' || view.compact || view.hideUnloaded
+}
+
+/** Branch labels A→Z for the Alphabetical sort: case-insensitive, with numbers in number order (fix-2 before fix-10). */
+export function compareLabels(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }) || a.localeCompare(b)
 }
 
 /** No session is loaded: nothing running, with or without saved sessions. */
@@ -160,4 +169,10 @@ export function groupByAttention<T>(rows: T[], groupOf: (row: T) => AttentionGro
   return order
     .map((group) => ({ group, rows: rows.filter((row) => groupOf(row) === group) }))
     .filter((g) => g.rows.length > 0)
+}
+
+/** The filter box: a row matches when any of its texts (name, path, repository, ticket, PR) holds the query. */
+export function rowMatchesQuery(query: string, fields: (string | undefined)[]): boolean {
+  const q = query.trim().toLowerCase()
+  return !q || fields.some((f) => !!f && f.toLowerCase().includes(q))
 }

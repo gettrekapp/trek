@@ -4,12 +4,14 @@ import assert from 'node:assert/strict'
 import {
   attentionGroup,
   cardAnchor,
+  compareLabels,
   DEFAULT_SIDEBAR_VIEW,
   gitWords,
   groupByAttention,
   isUnloaded,
   parseSidebarView,
   rowGit,
+  rowMatchesQuery,
   rowReason,
   sessionLine,
   sidebarViewChanged
@@ -98,6 +100,7 @@ test('parseSidebarView: the default for nothing stored, junk, or the wrong shape
 
 test('parseSidebarView: reads each choice and ignores values it does not know', () => {
   assert.deepEqual(parseSidebarView('{"sort":"attention","compact":true,"hideUnloaded":true}'), { sort: 'attention', compact: true, hideUnloaded: true })
+  assert.deepEqual(parseSidebarView('{"sort":"alphabetical"}'), { sort: 'alphabetical', compact: false, hideUnloaded: false })
   assert.deepEqual(parseSidebarView('{"sort":"recent","compact":"yes"}'), { sort: 'manual', compact: false, hideUnloaded: false })
 })
 
@@ -105,6 +108,11 @@ test('sidebarViewChanged: only a non-default choice counts', () => {
   assert.equal(sidebarViewChanged(DEFAULT_SIDEBAR_VIEW), false)
   assert.equal(sidebarViewChanged({ ...DEFAULT_SIDEBAR_VIEW, compact: true }), true)
   assert.equal(sidebarViewChanged({ ...DEFAULT_SIDEBAR_VIEW, sort: 'attention' }), true)
+})
+
+test('compareLabels: A to Z ignoring case, numbers in number order', () => {
+  const labels = ['main', 'feature/fix-10', 'Feature/fix-2', 'bugfix/a']
+  assert.deepEqual([...labels].sort(compareLabels), ['bugfix/a', 'Feature/fix-2', 'feature/fix-10', 'main'])
 })
 
 test('isUnloaded: no session, or only saved ones', () => {
@@ -128,4 +136,21 @@ test('groupByAttention: groups in order, rows keep their own order, empty groups
     [['needs', ['b', 'd']], ['quiet', ['a', 'c']]]
   )
   assert.deepEqual(groupByAttention([], () => 'quiet'), [])
+})
+
+test('rowMatchesQuery: an empty query matches every row', () => {
+  assert.equal(rowMatchesQuery('', ['feature/x']), true)
+})
+
+test('rowMatchesQuery: matches any field, ignoring case, and skips missing ones', () => {
+  assert.equal(rowMatchesQuery('feat', ['Feature/x', undefined]), true)
+  assert.equal(rowMatchesQuery('nope', ['feature/x', undefined]), false)
+})
+
+test('rowMatchesQuery: a PR number or ticket key finds the row through its chips', () => {
+  const fields = ['fix/login', '#9166', 'https://github.com/o/r/pull/9166', 'ENG-412', 'Login button is broken']
+  assert.equal(rowMatchesQuery('9166', fields), true)
+  assert.equal(rowMatchesQuery('#9166', fields), true)
+  assert.equal(rowMatchesQuery('eng-412', fields), true)
+  assert.equal(rowMatchesQuery('button', fields), true)
 })
