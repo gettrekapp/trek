@@ -7,7 +7,7 @@
 // Claude, gh or network. The built app runs with a temp HOME and --user-data-dir. Checks: validation,
 // an on-time run, missed runs, the missed-runs modal, the Automations page (toggle, editor), runNow,
 // the Global drawer's Automations view (the run tab out of the sessions strip, the toggle, the
-// panel's "open tab" link, a renewed run's clean screen), delete.
+// panel's "Open tab" link, a renewed run's clean screen), delete.
 // Every run reuses the automation's one run tab (a Global session with its context): the first opens
 // it, the later ones renew it — the same session id, a new title, the fake agent launched again with
 // the prompt. (The fake agent's one line of output settles to idle, so runs renew rather than skip.)
@@ -257,20 +257,23 @@ try {
   const panel = win.locator('.automations-panel')
   const navCount = () => automationsRow.locator('.sidebar-nav-count').textContent()
   check('the left panel counts the automations', await until(navCount, '1'), '1')
-  check('the page lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-schedule').first().textContent().catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
-  await panel.locator('.automation-row input[type="checkbox"]').first().click()
+  check('the page lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-line').first().textContent().then((t) => t?.split(' · ')[0] ?? null).catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
+  await panel.locator('.automation-row input.plugin-switch').first().click()
   check('the toggle pauses it on the server', await until(async () => (await automation()).enabled, false), false)
   await panel.locator('button', { hasText: 'New automation' }).click()
   const editor = win.locator('.automation-editor')
   await editor.locator('input[type="text"]').first().fill('Morning')
   await editor.locator('textarea').fill('Plan the day')
-  await editor.locator('select').first().selectOption('daily')
+  await editor.locator('.automation-kinds button', { hasText: 'Daily' }).click()
   await editor.locator('input[type="time"]').fill('09:30')
-  await editor.locator('input[type="text"]').nth(1).fill('UTC')
+  await editor.locator('input.automation-tz').fill('UTC')
   await editor.locator('button', { hasText: 'Save' }).click()
   const morning = async () => (await project()).automations?.find((a) => a.name === 'Morning') ?? null
   check('the editor saves a daily automation', await until(async () => (await morning())?.schedule ?? null, { cron: '30 9 * * *', tz: 'UTC' }), { cron: '30 9 * * *', tz: 'UTC' })
   check('back to the list', await until(() => panel.locator('.automation-row').count(), 2), 2)
+  // The paused "Smoke run" sorts last, so the page's selection (the first row) is now the new one.
+  const selectedName = await panel.locator('.automation-row .ld-row-main[aria-current="true"] .ld-row-name').textContent()
+  check('the detail shows the selected automation, its prompt and its history', [await panel.locator('.automation-detail h3').first().textContent(), await panel.locator('.automation-prompt').count(), await panel.locator('.automation-section[aria-label="History"]').count()], [selectedName, 1, 1])
   check('and counts the new one', await until(navCount, '2'), '2')
 
   // ---- 5. runNow and delete through the SDK ----------------------------------------------------------
@@ -310,8 +313,8 @@ try {
   await toggleBtn.click()
   check('the toggle goes back to the sessions', await until(stripTitles, normalTitle), normalTitle)
   const smokeRow = panel.locator('.automation-row', { hasText: 'Smoke run' })
-  await smokeRow.locator('button', { hasText: 'History' }).click()
-  await smokeRow.locator('.automation-history button.link-button', { hasText: 'open tab' }).first().click()
+  await smokeRow.locator('.ld-row-main').click()
+  await panel.locator('.automation-history button.link-button', { hasText: 'Open tab' }).first().click()
   check("the history's open tab selects the run tab in the Automations view", await until(() => store(() => [window.__store.getState().globalView, window.__store.getState().activeTerminal.__global__]), ['automations', tabId]), ['automations', tabId])
   check('…and the strip shows it active', await until(() => win.locator('.global-tabs .global-tab.active:not(.automations-tab) .global-tab-title').textContent().catch(() => null), RUN_TITLE), RUN_TITLE)
 
