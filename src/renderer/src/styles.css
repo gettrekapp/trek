@@ -6163,28 +6163,58 @@ body.resizing-row {
 }
 
 /* Automations panel */
-.automations-panel { position: absolute; inset: 0; flex-direction: column; gap: 8px; padding: 16px; overflow-y: auto; background: var(--bg-darker); }
-.automations-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+/* The Automations page: a header, then a list of automations and the selected one's detail (.list-detail). */
+.automations-panel { position: absolute; inset: 0; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; background: var(--bg-darker); }
+.automations-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .automations-header h2 { margin: 0; }
-.automations-header .primary { margin-left: auto; padding: 5px 12px; border: 1px solid var(--accent); border-radius: 6px; font-size: 12px; cursor: pointer; }
-.automations-header .primary:disabled { opacity: 0.45; cursor: default; }
-.automations-empty { padding: 20px; text-align: center; font-size: 12.5px; line-height: 1.5; max-width: 560px; align-self: center; }
-/* A card like a note's: the name and its actions, then the schedule and runs as one quiet line. */
-.automation-row { background: var(--bg); border: 1px solid var(--bg-lighter); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
-.automation-row.paused .automation-name { color: var(--text-muted); }
-.automation-main { display: flex; align-items: center; gap: 8px; }
-.automation-name { font-weight: 600; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.automation-actions { margin-left: auto; display: flex; gap: 6px; flex: 0 0 auto; }
-.automation-actions button { padding: 3px 10px; border-radius: 6px; border: 1px solid var(--surface); background: transparent; color: var(--text); font-size: 11px; cursor: pointer; }
-.automation-actions button:hover:not(:disabled), .automation-actions button.active { border-color: var(--accent); }
+.automations-header .primary, .automations-empty .primary { padding: 5px 12px; border: 1px solid var(--accent); border-radius: 6px; font-size: 12px; cursor: pointer; }
+.automations-header .primary { margin-left: auto; }
+.automations-header .primary:disabled, .automations-empty .primary:disabled { opacity: 0.45; cursor: default; }
+.automations-offline { font-size: 12px; }
+/* Runs wait in the missed-runs modal: the one thing on the page that asks for the user. */
+.automations-missed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--attention) 14%, transparent); color: var(--text); font-size: 12.5px; }
+.automations-missed span { flex: 1 1 240px; }
+.automations-missed button { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--attention); background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.automations-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 560px; padding: 24px; border: 1px dashed var(--surface); border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
+.automations-empty strong { font-size: 14px; }
+.automations-body { flex: 1 0 auto; }
+.automations-list { display: flex; flex-direction: column; gap: 2px; }
+.automations-list.waiting { opacity: 0.5; }
+.automations-how { margin: 10px 8px 0; font-size: 12px; line-height: 1.5; }
+.automations-list .ld-row-main { padding-left: 10px; }
+/* A row's state: one mark, the same shapes the sidebar uses for a session. */
+.automation-mark { flex: 0 0 14px; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; margin: 0 3px; }
+.automation-mark.waiting { background: var(--done-soft); }
+.automation-mark.never { background: var(--surface); }
+.automation-mark.failed { background: var(--danger); }
+.automation-mark.paused { border: 1.5px solid var(--surface); }
+.automation-mark.running { width: 10px; height: 10px; margin: 0 2px; border: 2px solid var(--done-soft); border-right-color: transparent; animation: automation-spin 1s linear infinite; }
+.automation-mark.missed { width: 14px; height: 14px; margin: 0; background: var(--attention); color: #1a1405; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+@keyframes automation-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .automation-mark.running { animation: none; } }
+.automation-line.attention { color: var(--attention); }
+.automation-line.danger { color: var(--danger); }
+/* The detail: its head and actions, three facts, the prompt, the history. */
+.automation-detail { gap: 18px; }
+.automation-detail-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; }
+.automation-detail-title { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.automation-detail-title h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.automation-detail-title code { font-family: var(--mono); font-size: 12px; }
+.automation-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.automation-actions button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--surface); background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.automation-actions button:hover:not(:disabled) { border-color: var(--accent); }
 .automation-actions button:disabled { opacity: 0.45; cursor: default; }
-.automation-facts { display: flex; flex-wrap: wrap; align-items: baseline; font-size: 12px; color: var(--text-muted); padding-left: 21px; }
-.automation-facts > * + *::before { content: '·'; margin: 0 7px; color: var(--text-muted); opacity: 0.6; }
-.automation-schedule { color: rgba(255, 255, 255, 0.75); }
-.automation-missed { color: var(--attention); background: none; border: none; cursor: pointer; padding: 0; font: inherit; }
-.automation-missed:hover { text-decoration: underline; }
-.automation-history { margin: 4px 0 0 21px; padding: 8px 0 0; border-top: 1px solid var(--bg-lighter); list-style: none; display: grid; gap: 4px; font-size: 12px; }
-.automation-history li { display: flex; gap: 10px; }
+.automation-facts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.automation-fact { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--bg-lighter); border-radius: 8px; background: var(--bg); font-size: 12px; min-width: 0; }
+.automation-fact strong { font-size: 13px; overflow-wrap: anywhere; }
+.automation-section { display: flex; flex-direction: column; gap: 8px; }
+.automation-section h4 { margin: 0; font-size: 13px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.automation-section h4 .muted { font-weight: 400; font-size: 12px; }
+.automation-prompt { margin: 0; max-height: 240px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--bg-lighter); border-radius: 8px; background: var(--bg); font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.automation-history { border: 1px solid var(--bg-lighter); border-radius: 8px; overflow-x: auto; }
+.automation-history table { width: 100%; min-width: 420px; border-collapse: collapse; text-align: left; font-size: 12px; }
+.automation-history th { padding: 7px 12px; font-weight: 500; color: var(--text-muted); }
+.automation-history td { padding: 7px 12px; border-top: 1px solid var(--bg-lighter); }
 /* The editor is a plain form: a quiet label column and dark fields, with no card around each row. */
 .automation-editor { display: flex; flex-direction: column; gap: 14px; max-width: 720px; --automation-label: 84px; }
 .automation-editor h2 { margin: 0 0 6px; }
