@@ -6,6 +6,7 @@ import {
   MINUTE_STEPS,
   WEEKDAY_NAMES,
   cronFromPicker,
+  describeCron,
   formatWall,
   nextSlots,
   parseCron,
@@ -13,6 +14,7 @@ import {
   type SchedulePicker
 } from '../../../shared/cron'
 import { getBackend } from '../backend'
+import { defaultPicker } from '../automations'
 import { useAppStore } from '../store'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 
@@ -35,6 +37,14 @@ function parseTime(value: string): { hour: number; minute: number } | null {
   return m ? { hour: Number(m[1]), minute: Number(m[2]) } : null
 }
 
+const SCHEDULE_KINDS: { kind: SchedulePicker['kind'] | 'cron'; label: string }[] = [
+  { kind: 'minutes', label: 'Minutes' },
+  { kind: 'hours', label: 'Hours' },
+  { kind: 'daily', label: 'Daily' },
+  { kind: 'weekly', label: 'Weekly' },
+  { kind: 'cron', label: 'Cron' }
+]
+
 /** Name, prompt, schedule (picker or cron), timezone, agent and enabled; Save / Cancel / Delete. */
 export function AutomationEditor({ automation, onDone }: Props): React.JSX.Element {
   const [name, setName] = useState(automation?.name ?? '')
@@ -44,7 +54,8 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   const [advanced, setAdvanced] = useState(automation ? pickerFromCron(initialCron) === null : false)
   const [cron, setCron] = useState(initialCron)
   const [tz, setTz] = useState(automation?.schedule.tz ?? localTz())
-  const [enabled, setEnabled] = useState(automation?.enabled ?? true)
+  // On or off is the list's switch: the editor keeps what the automation has, and a new one starts on.
+  const enabled = automation?.enabled ?? true
   const [llm, setLlm] = useState(automation?.llm)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -70,6 +81,21 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
     if (on) setCron(cronFromPicker(picker))
     else setPicker(pickerFromCron(cron) ?? DEFAULT_PICKER)
     setAdvanced(on)
+  }
+
+  /** The schedule's kind as the row of choices shows it: one of the picker's, or cron. */
+  const kind: SchedulePicker['kind'] | 'cron' = advanced ? 'cron' : picker.kind
+  // A cron line the pickers cannot write can only be edited as cron.
+  const cronOnly = advanced && pickerFromCron(cron) === null
+  const chooseKind = (next: SchedulePicker['kind'] | 'cron'): void => {
+    if (next === 'cron') {
+      if (!advanced) setAdvancedMode(true)
+      return
+    }
+    // Leaving cron keeps the line where the pickers can write it and it is of this kind.
+    const from = advanced ? pickerFromCron(cron) : picker
+    setPicker(from?.kind === next ? from : defaultPicker(next))
+    setAdvanced(false)
   }
 
   const save = async (): Promise<void> => {
@@ -123,55 +149,58 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
       </label>
       <div className="settings-row">
         <span className="settings-name">Schedule</span>
-        {advanced ? (
-          <input type="text" className="automation-cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="m h dom mon dow" />
-        ) : (
+        <div className="automation-schedule-fields">
+          <div className="automation-kinds" role="radiogroup" aria-label="Repeats">
+            {SCHEDULE_KINDS.map((k) => {
+              const blocked = k.kind !== 'cron' && cronOnly
+              return (
+                <button
+                  key={k.kind}
+                  type="button"
+                  role="radio"
+                  aria-checked={kind === k.kind}
+                  className={kind === k.kind ? 'active' : ''}
+                  disabled={blocked}
+                  title={blocked ? 'This schedule can only be edited as cron' : undefined}
+                  onClick={() => chooseKind(k.kind)}
+                >
+                  {k.label}
+                </button>
+              )
+            })}
+          </div>
           <div className="automation-picker">
-            <select
-              value={picker.kind}
-              onChange={(e) => {
-                const kind = e.target.value as SchedulePicker['kind']
-                setPicker(
-                  kind === 'minutes' ? { kind, every: 15 } : kind === 'hours' ? { kind, every: 1, minute: 0 } : kind === 'daily' ? { kind, hour: 9, minute: 0 } : { kind, days: [1, 2, 3, 4, 5], hour: 9, minute: 0 }
-                )
-              }}
-            >
-              <option value="minutes">Every N minutes</option>
-              <option value="hours">Every N hours</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-            </select>
-            {picker.kind === 'minutes' && (
-              <select value={picker.every} onChange={(e) => setPicker({ kind: 'minutes', every: Number(e.target.value) })}>
+            {advanced && <input type="text" className="automation-cron" aria-label="Cron line" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="m h dom mon dow" />}
+            {!advanced && picker.kind === 'minutes' && (
+              <select aria-label="Every" value={picker.every} onChange={(e) => setPicker({ kind: 'minutes', every: Number(e.target.value) })}>
                 {MINUTE_STEPS.map((n) => <option key={n} value={n}>{n} minutes</option>)}
               </select>
             )}
-            {picker.kind === 'hours' && (
+            {!advanced && picker.kind === 'hours' && (
               <>
-                <select value={picker.every} onChange={(e) => setPicker({ ...picker, every: Number(e.target.value) })}>
+                <select aria-label="Every" value={picker.every} onChange={(e) => setPicker({ ...picker, every: Number(e.target.value) })}>
                   {HOUR_STEPS.map((n) => <option key={n} value={n}>{n === 1 ? 'hour' : `${n} hours`}</option>)}
                 </select>
                 <span>at minute</span>
-                <input type="number" min={0} max={59} value={picker.minute} onChange={(e) => setPicker({ ...picker, minute: Math.max(0, Math.min(59, Number(e.target.value) || 0)) })} />
+                <input type="number" aria-label="Minute" min={0} max={59} value={picker.minute} onChange={(e) => setPicker({ ...picker, minute: Math.max(0, Math.min(59, Number(e.target.value) || 0)) })} />
               </>
             )}
-            {picker.kind === 'weekly' && (
-              <span className="automation-days">
-                {WEEKDAY_NAMES.map((label, day) => (
-                  <label key={day}>
-                    <input
-                      type="checkbox"
-                      checked={picker.days.includes(day)}
-                      onChange={(e) => setPicker({ ...picker, days: e.target.checked ? [...picker.days, day] : picker.days.filter((d) => d !== day) })}
-                    />
-                    {label}
-                  </label>
-                ))}
+            {!advanced && picker.kind === 'weekly' && (
+              <span className="automation-days" role="group" aria-label="Days">
+                {WEEKDAY_NAMES.map((label, day) => {
+                  const on = picker.days.includes(day)
+                  return (
+                    <button key={day} type="button" aria-pressed={on} className={on ? 'active' : ''} onClick={() => setPicker({ ...picker, days: on ? picker.days.filter((d) => d !== day) : [...picker.days, day] })}>
+                      {label}
+                    </button>
+                  )
+                })}
               </span>
             )}
-            {(picker.kind === 'daily' || picker.kind === 'weekly') && (
+            {!advanced && (picker.kind === 'daily' || picker.kind === 'weekly') && (
               <input
                 type="time"
+                aria-label="Time"
                 value={time}
                 onChange={(e) => {
                   const t = parseTime(e.target.value)
@@ -179,19 +208,15 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
                 }}
               />
             )}
+            <label className="automation-tz-field">
+              <span>in</span>
+              <input type="text" className="automation-tz" aria-label="Timezone" value={tz} onChange={(e) => setTz(e.target.value.trim())} />
+            </label>
           </div>
-        )}
-        <label className="llm-inline-check">
-          <input type="checkbox" checked={advanced} disabled={advanced && pickerFromCron(cron) === null} title={advanced && pickerFromCron(cron) === null ? 'This schedule can only be edited as cron' : undefined} onChange={(e) => setAdvancedMode(e.target.checked)} />
-          Advanced (cron)
-        </label>
+        </div>
       </div>
-      <label className="settings-row">
-        <span className="settings-name">Timezone</span>
-        <input type="text" value={tz} onChange={(e) => setTz(e.target.value.trim())} />
-      </label>
       <div className="automation-preview muted">
-        {typeof preview === 'string' ? preview : preview.length ? `Next runs: ${preview.join(' · ')}` : 'Never runs'}
+        {typeof preview === 'string' ? preview : `${describeCron(effectiveCron)} (${tz}). ${preview.length ? `Next runs: ${preview.join(' · ')}` : 'Never runs'}`}
       </div>
       <div className="settings-row">
         <span className="settings-name">Agent</span>
@@ -201,10 +226,6 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
         </label>
         {llm && <LlmPicker value={llm} onChange={setLlm} {...serverPicker} filter={mcpOnly} />}
       </div>
-      <label className="llm-inline-check automation-enabled">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled
-      </label>
       <div className="modal-footer automation-footer">
         {automation &&
           (confirmDelete ? (

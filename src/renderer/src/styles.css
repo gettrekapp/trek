@@ -6230,12 +6230,18 @@ body.resizing-row {
 .automation-editor textarea::placeholder { color: var(--text-muted); }
 .automation-picker { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
 .automation-days { display: inline-flex; flex-wrap: wrap; gap: 10px; }
-.automation-days label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-.automation-editor .settings-row > input.automation-cron { font-family: var(--mono, monospace); max-width: none; }
+.automation-days { gap: 4px; }
+.automation-days button, .automation-kinds button { height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--surface); background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.automation-days button.active, .automation-kinds button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
+.automation-kinds button:disabled { opacity: 0.45; cursor: default; }
+.automation-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.automation-schedule-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.automation-tz-field { display: inline-flex; align-items: center; gap: 8px; }
+.automation-editor input.automation-tz { width: 170px; }
+.automation-editor .automation-picker > input.automation-cron { flex: 1 1 200px; min-width: 0; font-family: var(--mono, monospace); }
 .automation-editor .llm-inline-check { color: var(--text-muted); }
-.automation-preview, .automation-enabled { padding-left: calc(var(--automation-label) + 12px); font-size: 12px; }
+.automation-preview { padding-left: calc(var(--automation-label) + 12px); font-size: 12px; }
 .automation-preview { margin-top: -6px; }
-.automation-editor .automation-enabled { color: var(--text); }
 .automation-footer { gap: 8px; align-items: center; margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--bg-lighter); font-size: 12px; }
 .automation-footer button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--surface); background: transparent; color: var(--text); font-size: 12px; font-family: inherit; cursor: pointer; }
 .automation-footer button:hover:not(:disabled) { border-color: var(--accent); }
