@@ -204,7 +204,8 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
           </div>
         </div>
       </div>
-      <div className="automation-preview muted">
+      {/* A string is what is wrong with the schedule, not a preview of it. */}
+      <div className={`automation-preview ${cronInvalid ? 'error-text' : 'muted'}`}>
         {typeof preview === 'string' ? preview : `${describeCron(effectiveCron)} (${tz}). ${preview.length ? `Next runs: ${preview.join(' · ')}` : 'Never runs'}`}
       </div>
       <div className="settings-row">

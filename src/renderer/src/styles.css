@@ -6165,6 +6165,9 @@ body.resizing-row {
 /* Automations panel */
 /* The Automations page: a header, then a list of automations and the selected one's detail (.list-detail). */
 .automations-panel { position: absolute; inset: 0; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; background: var(--bg-darker); }
+/* One focus ring for the page's buttons, the rows' and switches'. A row and Back fill their box, so theirs stays inside it. */
+.automations-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.automations-panel :is(.ld-row-main, .list-detail-back):focus-visible { outline-offset: -2px; }
 .automations-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .automations-header h2 { margin: 0; }
 .automations-header .primary, .automations-empty .primary { padding: 5px 12px; border: 1px solid var(--accent); border-radius: 6px; font-size: 12px; cursor: pointer; }
@@ -6214,9 +6217,11 @@ body.resizing-row {
 .automation-section h4 .muted { font-weight: 400; font-size: 12px; }
 .automation-prompt { margin: 0; max-height: 240px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--bg-lighter); border-radius: 8px; background: var(--bg); font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .automation-history { border: 1px solid var(--bg-lighter); border-radius: 8px; overflow-x: auto; }
-.automation-history table { width: 100%; min-width: 420px; border-collapse: collapse; text-align: left; font-size: 12px; }
+.automation-history table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
 .automation-history th { padding: 7px 12px; font-weight: 500; color: var(--text-muted); }
-.automation-history td { padding: 7px 12px; border-top: 1px solid var(--bg-lighter); }
+.automation-history td { padding: 7px 12px; border-top: 1px solid var(--bg-lighter); vertical-align: top; overflow-wrap: break-word; }
+/* In a narrow pane the cells wrap rather than push Open tab out of sight; a date is not broken in two. */
+.automation-history td:first-child { white-space: nowrap; }
 /* The editor is a plain form: a quiet label column and dark fields, with no card around each row. */
 .automation-editor { display: flex; flex-direction: column; gap: 14px; max-width: 720px; --automation-label: 84px; }
 .automation-editor h2 { margin: 0 0 6px; }
@@ -6231,15 +6236,15 @@ body.resizing-row {
 .automation-editor .settings-row > textarea { flex: 1; min-width: 0; height: auto; min-height: 120px; padding: 7px 8px; line-height: 1.5; resize: vertical; }
 .automation-editor textarea::placeholder { color: var(--text-muted); }
 .automation-picker { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
-.automation-days { display: inline-flex; flex-wrap: wrap; gap: 10px; }
-.automation-days { gap: 4px; }
+.automation-days { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .automation-days button, .automation-kinds button { height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--surface); background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
 .automation-days button.active, .automation-kinds button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
 .automation-kinds button:disabled { opacity: 0.45; cursor: default; }
 .automation-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
 .automation-schedule-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.automation-tz-field { display: inline-flex; align-items: center; gap: 8px; }
-.automation-editor input.automation-tz { width: 170px; }
+/* A long zone name (America/Argentina/Buenos_Aires) needs more than the 170px most fit in: the field grows where its row has room. */
+.automation-tz-field { flex: 1 1 200px; min-width: 0; max-width: 330px; display: inline-flex; align-items: center; gap: 8px; }
+.automation-editor input.automation-tz { flex: 1 1 170px; min-width: 0; max-width: 300px; }
 .automation-editor .automation-picker > input.automation-cron { flex: 1 1 200px; min-width: 0; font-family: var(--mono, monospace); }
 .automation-editor .llm-inline-check { color: var(--text-muted); }
 .automation-preview { padding-left: calc(var(--automation-label) + 12px); font-size: 12px; }
