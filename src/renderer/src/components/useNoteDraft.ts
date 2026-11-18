@@ -56,7 +56,9 @@ export function useNoteDraft(repoId: string, branch: string): NoteDraftView {
 
   return {
     text: draft?.text ?? note,
-    // A draft that equals the saved note has nothing to save: typed and taken back within the pause.
+    // A draft the mirror already shows waits for nothing: its own save, whose patch arrives before
+    // its answer drops the draft, or the same text written elsewhere. (One typed and taken back is
+    // not kept at all: v2/noteDraft.ts, keepNote.)
     pending: draft !== null && draft.text !== note,
     readOnly: offline,
     onChange: (text) => {

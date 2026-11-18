@@ -35,6 +35,18 @@ export function noteUnsaved(draft: NoteDraft | null): boolean {
   return !!draft && draft.text !== draft.base
 }
 
+/**
+ * A draft is kept only while it has something to send or a save of it is out.
+ * Typed and taken back, or saved, it holds nothing of the user's: kept, it
+ * would go on showing its text over a change made elsewhere, and nothing would
+ * ever drop it (the mirror only settles a draft it comes to equal). A save out
+ * keeps it until it returns, since that save moves the base the text is
+ * compared with.
+ */
+export function keepNote(draft: NoteDraft | null, inFlight: boolean): NoteDraft | null {
+  return draft && (inFlight || noteUnsaved(draft)) ? draft : null
+}
+
 /** What a save does with the draft right now. */
 export type NoteSavePlan =
   /** Nothing unsaved. */

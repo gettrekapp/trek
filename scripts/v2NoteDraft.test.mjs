@@ -1,7 +1,7 @@
 // scripts/v2NoteDraft.test.mjs — a server window's notes draft and the note it expects to replace.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { editNote, noteSaveFailed, noteSaved, noteUnsaved, planNoteSave, settleNote } from '../src/renderer/src/v2/noteDraft.ts'
+import { editNote, keepNote, noteSaveFailed, noteSaved, noteUnsaved, planNoteSave, settleNote } from '../src/renderer/src/v2/noteDraft.ts'
 
 test('a draft starts from the saved note and keeps that base while typing', () => {
   let d = editNote(null, 'old', 'old!')
@@ -83,4 +83,18 @@ test('a NOT_FOUND refusal (the branch is gone) drops the draft and shows its tex
     keep: false,
     dialog: { title: 'Could not save the note', message: 'no such branch\n\nYour text was:\n\nmine' }
   })
+})
+
+test('a draft with nothing to send is not kept, unless a save is out', () => {
+  // Typed and taken back: the draft is the note it started from again.
+  const back = editNote(editNote(null, 'old', 'old!'), 'old', 'old')
+  assert.equal(keepNote(back, false), null)
+  // The save out may still move the base under it: kept until that returns.
+  assert.equal(keepNote(back, true), back)
+  const typed = editNote(null, 'old', 'new')
+  assert.equal(keepNote(typed, false), typed)
+  // Saved, whatever the mirror shows by now: nothing of the user's is left to send.
+  assert.equal(keepNote(noteSaved(typed, 'new'), false), null)
+  assert.equal(keepNote(null, false), null)
+  assert.equal(keepNote(null, true), null)
 })

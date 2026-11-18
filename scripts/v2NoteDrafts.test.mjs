@@ -173,3 +173,101 @@ test('leave with a save in flight: a failure after the window left shows the tex
   await tick()
   assert.deepEqual([passing.sent.length, passing.always], [1, []])
 })
+
+test('typed and taken back: the draft goes, listeners hear it, and a change made elsewhere shows', async () => {
+  const { drafts, notes, sent } = setup()
+  notes['r\nfeat'] = 'old'
+  let heard = 0
+  drafts.subscribe(() => heard++)
+  drafts.edit('r', 'feat', 'oldq')
+  assert.deepEqual(drafts.get('r', 'feat'), { text: 'oldq', base: 'old' })
+  drafts.edit('r', 'feat', 'old')
+  assert.equal(drafts.get('r', 'feat'), null)
+  assert.equal(heard, 2)
+  // Nothing is held for the branch: neither a save nor the link coming back sends anything.
+  drafts.save('r', 'feat')
+  drafts.saveAll()
+  await tick()
+  assert.deepEqual(sent, [])
+  // The next edit starts from the note as it is by then, not from the one the dropped draft knew.
+  notes['r\nfeat'] = 'theirs'
+  drafts.edit('r', 'feat', 'theirs!')
+  assert.deepEqual(drafts.get('r', 'feat'), { text: 'theirs!', base: 'theirs' })
+})
+
+test('an edit that changes nothing starts no draft and tells no one', () => {
+  const { drafts, notes } = setup()
+  notes['r\nfeat'] = 'old'
+  let heard = 0
+  drafts.subscribe(() => heard++)
+  drafts.edit('r', 'feat', 'old')
+  assert.equal(drafts.get('r', 'feat'), null)
+  assert.equal(heard, 0)
+})
+
+test('taken back while a save is out: the draft waits for the save, then sends the text it was taken back to', async () => {
+  let release
+  const { drafts, sent } = setup({ answers: [(r) => (release = r)] })
+  drafts.edit('r', 'feat', 'a')
+  drafts.save('r', 'feat')
+  drafts.edit('r', 'feat', '')
+  // Equal to its base, but the save out is about to move that base to 'a'.
+  assert.deepEqual(drafts.get('r', 'feat'), { text: '', base: '' })
+  release()
+  await tick()
+  assert.deepEqual(drafts.get('r', 'feat'), { text: '', base: 'a' })
+  drafts.save('r', 'feat')
+  await tick()
+  assert.deepEqual(sent, [['feat', 'a', ''], ['feat', '', 'a']])
+  assert.equal(drafts.get('r', 'feat'), null)
+})
+
+test('typed on and taken back to the text a save is sending: the draft is gone once that save returns', async () => {
+  let release
+  const { drafts, sent } = setup({ answers: [(r) => (release = r)] })
+  drafts.edit('r', 'feat', 'a')
+  drafts.save('r', 'feat')
+  drafts.edit('r', 'feat', 'ab')
+  drafts.edit('r', 'feat', 'a')
+  assert.deepEqual(drafts.get('r', 'feat'), { text: 'a', base: '' })
+  let heard = 0
+  drafts.subscribe(() => heard++)
+  release()
+  await tick()
+  assert.equal(drafts.get('r', 'feat'), null)
+  assert.equal(heard, 1)
+  assert.deepEqual(sent, [['feat', 'a', '']])
+})
+
+test('a save answered after the note moved on elsewhere leaves no draft to hide that change', async () => {
+  let release
+  const { drafts, notes } = setup({ answers: [(r) => (release = r)] })
+  drafts.edit('r', 'feat', 'mine')
+  drafts.save('r', 'feat')
+  release()
+  // The fake mirror takes the save, and then the other change, before the save's answer is handled.
+  await Promise.resolve()
+  notes['r\nfeat'] = 'theirs'
+  await tick()
+  assert.equal(notes['r\nfeat'], 'theirs')
+  assert.equal(drafts.get('r', 'feat'), null)
+})
+
+test('a failed save whose text was taken back meanwhile leaves no draft: nothing is left to send', async () => {
+  let fail
+  const { drafts, notes, sent, shown } = setup({ answers: [(_resolve, reject) => (fail = reject)] })
+  notes['r\nfeat'] = 'old'
+  drafts.edit('r', 'feat', 'new')
+  drafts.save('r', 'feat')
+  drafts.edit('r', 'feat', 'old')
+  assert.deepEqual(drafts.get('r', 'feat'), { text: 'old', base: 'old' })
+  fail(coded('TIMEOUT', 'setNote timed out'))
+  await tick()
+  await tick()
+  assert.equal(drafts.get('r', 'feat'), null)
+  // The save did fail, and says so.
+  assert.deepEqual(shown, [['Could not save the note', 'setNote timed out']])
+  drafts.saveAll()
+  await tick()
+  assert.equal(sent.length, 1)
+})

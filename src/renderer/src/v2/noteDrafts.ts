@@ -6,7 +6,7 @@
 // shows it again when it comes back. Leaving the project sends each unsaved
 // draft once more, and one that cannot be saved shows its text.
 // Pure: installV2.ts builds it with the backend and the store.
-import { editNote, noteSaveFailed, noteSaved, noteUnsaved, planNoteSave, settleNote, type NoteDraft } from './noteDraft.ts'
+import { editNote, keepNote, noteSaveFailed, noteSaved, noteUnsaved, planNoteSave, settleNote, type NoteDraft } from './noteDraft.ts'
 import { errorCode, errorText } from './errors.ts'
 
 export interface NoteDraftsDeps {
@@ -68,10 +68,11 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
   }
 
   const update = (entry: Entry, next: NoteDraft | null): void => {
-    if (next === entry.draft) return
+    const changed = next !== entry.draft
     entry.draft = next
+    // Also when nothing changed: an edit that starts no draft leaves no entry behind.
     if (!next && !entry.inFlight) entries.delete(keyOf(entry.repoId, entry.branch))
-    for (const listener of [...listeners]) listener()
+    if (changed) for (const listener of [...listeners]) listener()
   }
 
   /** The window left and this text could not be saved: show it, and forget it. */
@@ -94,7 +95,9 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
     deps
       .setNote(repoId, branch, text, expected)
       .then(
-        () => update(entry, settleNote(noteSaved(entry.draft, text), deps.saved(repoId, branch))),
+        // Saved with nothing typed since: the draft goes whatever the mirror shows by now (this
+        // text, or a later change made elsewhere, which the draft would hide).
+        () => update(entry, keepNote(settleNote(noteSaved(entry.draft, text), deps.saved(repoId, branch)), false)),
         (err: unknown) => {
           const failure = noteSaveFailed(errorCode(err), errorText(err), text, deps.saved(repoId, branch))
           // Leaving: whatever the reason, unless the note already shows the text, it is lost now.
@@ -103,7 +106,8 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
             else update(entry, null)
             return
           }
-          if (!failure.keep) update(entry, null)
+          // Kept to be sent again, unless the text was taken back while the save was out.
+          update(entry, failure.keep ? keepNote(entry.draft, false) : null)
           if (failure.dialog) deps.show(failure.dialog.title, failure.dialog.message)
         }
       )
@@ -126,7 +130,8 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
     },
     edit: (repoId, branch, text) => {
       const entry = entryOf(repoId, branch)
-      update(entry, editNote(entry.draft, deps.saved(repoId, branch), text))
+      // Taken back to the note it started from, the draft goes: the editor shows the mirror again.
+      update(entry, keepNote(editNote(entry.draft, deps.saved(repoId, branch), text), entry.inFlight))
     },
     save: (repoId, branch) => {
       const entry = entries.get(keyOf(repoId, branch))
