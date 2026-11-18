@@ -50,14 +50,6 @@ export function SessionsTab(): React.JSX.Element {
           onCommit={setGlobalSystemPrompt}
         />
       </div>
-      <h3>Quick buttons</h3>
-      <div className="settings-row">
-        <span className="settings-label">
-          <span className="settings-desc">
-            Quick buttons are added, edited and sorted from the bar under each terminal.
-          </span>
-        </span>
-      </div>
     </>
   )
 }
