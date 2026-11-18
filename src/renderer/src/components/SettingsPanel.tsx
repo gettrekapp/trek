@@ -40,6 +40,8 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const [chosen, setChosen] = useState<SettingsTabId>('general')
   // The Plugins tab's selected row, kept here because the tab's panel remounts on a settings
   // reload. It belongs to the backend it was picked on: another server or project starts afresh.
+  // Whether a narrow panel had that row's detail open is not kept: a reload or a return to the tab
+  // shows the list, with the row still selected.
   const backend = useSyncExternalStore(subscribeBackend, getBackend)
   const [pluginPick, setPluginPick] = useState<{ backend: WindowBackend; selection: PluginSelection } | null>(null)
   const pluginSelection = pluginPick?.backend === backend ? pluginPick.selection : null

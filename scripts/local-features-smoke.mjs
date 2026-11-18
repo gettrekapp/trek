@@ -478,7 +478,9 @@ try {
   const headings = await settings.locator('h3').allTextContents()
   const pluginNames = await settings.locator('.plugins-row-name').allTextContents()
   const tabNames = await settings.locator('.settings-tab').allTextContents()
-  check('Settings show Linear, Voice summaries and Environments, not Servers', [pluginNames.includes('Linear'), pluginNames.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, SERVER_HAS_ENVS, false])
+  // A row alone does not say the plugin runs here (an off or unavailable one has a row too): its switch does.
+  const linearOn = await settings.locator('[data-plugin="linear"] input.plugin-switch').isChecked()
+  check('Settings show Linear (on), Voice summaries and Environments, not Servers', [pluginNames.includes('Linear') && linearOn, pluginNames.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, SERVER_HAS_ENVS, false])
   check("its Voice section lists the handed-over key's voices, from the server", await until(() => settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select option').allTextContents().catch(() => []), ['Nine']), ['Nine'])
   if (SERVER_HAS_ENVS) {
     await openSettingsTab(settings, 'Environments')

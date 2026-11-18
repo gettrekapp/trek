@@ -6,7 +6,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { getBackend } from '../backend'
 import { useAppStore } from '../store'
 import { PluginScope, usePluginEntries, type PluginEntry } from './PluginHost'
-import { pluginActive } from './presence'
+import { pluginActive, type PluginStatus } from './presence'
 import { PLUGINS_ONE_PANE_BELOW_PX, pluginDetailNote, pluginGroups, pluginSwitchLabel, resolveSelection, type PluginRow, type PluginSelection } from './pluginsTab'
 
 /** Whether Settings has anything to show for plugins: the Plugins tab shows with it. */
@@ -84,19 +84,22 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
     }
   }, [showDetail])
 
-  /** The plugin whose list switch was just flipped, until its row has moved to its new group. */
-  const flipped = useRef<string | null>(null)
+  /** The plugin whose list switch was just flipped, and what to: until the next change of any row's group. */
+  const flipped = useRef<{ id: string; to: PluginStatus } | null>(null)
   // The groups are these statuses' (pluginGroups): a change here is a row changing group.
   const standing = entries.map((e) => `${e.plugin.manifest.id}:${e.status}`).join('|')
   useLayoutEffect(() => {
-    const id = flipped.current
-    if (id === null) return
+    const pending = flipped.current
     flipped.current = null
+    // A flip that did not take (the change is another row's, or this one's being undone) leaves the focus alone.
+    if (!pending || entries.find((e) => e.plugin.manifest.id === pending.id)?.status !== pending.to) return
     // The row was remounted in another group, which took the focus off its switch: put it back,
     // unless the user has moved the focus somewhere else since.
     const active = document.activeElement
     if (active && active !== document.body && active.isConnected) return
-    root.current?.querySelector<HTMLElement>(`.plugins-list [data-plugin="${CSS.escape(id)}"] input.plugin-switch`)?.focus({ preventScroll: true })
+    root.current?.querySelector<HTMLElement>(`.plugins-list [data-plugin="${CSS.escape(pending.id)}"] input.plugin-switch`)?.focus({ preventScroll: true })
+    // `standing` stands for the entries' statuses, which is all this reads of them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [standing])
 
   if (!hasPluginSettings(entries)) return null
@@ -128,7 +131,7 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
     setDetailOpen(false)
   }
   const flip = (id: string, enabled: boolean): void => {
-    flipped.current = id
+    flipped.current = { id, to: enabled ? 'on' : 'off' }
     setPluginEnabled(id, enabled)
   }
 
