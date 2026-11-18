@@ -232,6 +232,9 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
     // A new automation had no detail to return to, and a deleted one has none left: a narrow page
     // goes back to the list. Otherwise it stays on the automation's detail.
     if (editing === 'new' || result?.deleted) pane.back()
+    // The window's own delete can reach the list before the editor reports it, which reads as a
+    // delete from elsewhere (below): that message is not for the one who deleted it.
+    if (result?.deleted) setError(null)
     setEditing(null)
   }
 
