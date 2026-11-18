@@ -87,7 +87,9 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
 
   const save = (entry: Entry): void => {
     const plan = planNoteSave(entry.draft, { offline: deps.offline(), inFlight: entry.inFlight })
-    if (plan.kind === 'busy') entry.again = true
+    // A save is out: ask again when it ends, whatever this one planned. A draft back at its base
+    // has nothing to send now, but the save in flight moves the base, and it may have then.
+    if (entry.inFlight && entry.draft) entry.again = true
     if (plan.kind !== 'send') return
     const { text, expected } = plan
     const { repoId, branch } = entry

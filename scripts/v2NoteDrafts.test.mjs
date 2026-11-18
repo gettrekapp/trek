@@ -271,3 +271,20 @@ test('a failed save whose text was taken back meanwhile leaves no draft: nothing
   await tick()
   assert.equal(sent.length, 1)
 })
+
+test('a save asked for while the text matches its base during a flight is still sent once the flight ends (a delete during a note\'s first save)', async () => {
+  let release
+  const { drafts, notes, sent } = setup({ answers: [(resolve) => (release = resolve)] })
+  drafts.edit('r', 'feat', 'T')
+  drafts.save('r', 'feat')
+  // The note is deleted before its first save has answered: the text is back at the base ('').
+  drafts.edit('r', 'feat', '')
+  drafts.save('r', 'feat')
+  assert.deepEqual(sent, [['feat', 'T', '']], 'one save is out; the delete waits for it')
+  release()
+  await tick()
+  await tick()
+  assert.deepEqual(sent, [['feat', 'T', ''], ['feat', '', 'T']], 'then the delete goes, expecting what the first save wrote')
+  assert.equal(notes['r\nfeat'], '')
+  assert.equal(drafts.get('r', 'feat'), null)
+})
