@@ -69,6 +69,9 @@ export function useListDetail({ hasSelection, scroller, selectedRow }: Options):
       setDetailOpen(false)
       return
     }
+    // Already on the detail (an Edit pressed there): the list's scroll position is the one saved
+    // when the row was opened, and no pane swaps, so there is nothing for the effect to settle.
+    if (showDetail) return
     listScroll.current = scrollEl()?.scrollTop ?? 0
     swapped.current = 'detail'
     setDetailOpen(true)

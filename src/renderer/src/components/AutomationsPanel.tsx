@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Automation } from '../../../shared/model/types'
 import { describeCron, formatWall } from '../../../shared/cron'
 import { GLOBAL_WORKTREE_ID, useAppStore, type TerminalMeta } from '../store'
@@ -92,7 +92,7 @@ function AutomationDetail({ a, state, now, offline, terminals, onRun, onEdit }: 
           <button disabled={offline || running} title={running ? 'The previous run is still working' : undefined} onClick={onRun}>
             Run now
           </button>
-          <button disabled={offline} onClick={onEdit}>
+          <button className="automation-edit" disabled={offline} onClick={onEdit}>
             Edit
           </button>
         </span>
@@ -208,8 +208,12 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
       setError(explain?.(err) ?? backend.errors.inline(err))
     }
   }
-  const toggle = (a: Automation): Promise<void> =>
-    act(() => getBackend().automations.save({ id: a.id, name: a.name, prompt: a.prompt, schedule: a.schedule, enabled: !a.enabled, llm: a.llm ?? null }))
+  const toggle = (a: Automation): Promise<void> => {
+    // Pausing a row moves it after the rest: the automation that only shows as the first row is
+    // chosen first, so the detail stays on it.
+    if (selected && selected.id !== chosen) setChosen(selected.id)
+    return act(() => getBackend().automations.save({ id: a.id, name: a.name, prompt: a.prompt, schedule: a.schedule, enabled: !a.enabled, llm: a.llm ?? null }))
+  }
   // A busy run tab (its last run still working) refuses with CONFLICT: the run is skipped.
   const runNow = (a: Automation): Promise<void> => act(async () => showRun(await getBackend().automations.runNow(a.id)), runNowError)
 
@@ -223,9 +227,11 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
     // A narrow page shows the editor where the detail goes.
     pane.open()
   }
-  const doneEditing = (): void => {
-    // A new automation has no row to stay on: a narrow page goes back to the list.
-    if (editing === 'new') pane.back()
+  const doneEditing = (result?: { saved?: string; deleted?: true }): void => {
+    if (result?.saved) setChosen(result.saved)
+    // A new automation had no detail to return to, and a deleted one has none left: a narrow page
+    // goes back to the list. Otherwise it stays on the automation's detail.
+    if (editing === 'new' || result?.deleted) pane.back()
     setEditing(null)
   }
 
@@ -240,6 +246,20 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
   }, [deletedElsewhere])
   const editorOpen = !!editing && !deletedElsewhere
   const empty = automations.length === 0 && !editorOpen
+
+  // Closing the editor unmounts the button that had the focus, which would drop it to the page:
+  // it goes to the detail's Edit, or to the selected row where a narrow page shows the list.
+  const { root } = pane
+  const wasEditing = useRef(false)
+  useLayoutEffect(() => {
+    const closed = wasEditing.current && !editorOpen
+    wasEditing.current = editorOpen
+    if (!closed) return
+    const edit = root.current?.querySelector<HTMLElement>('.automation-edit')
+    // No boxes: the detail is the pane a narrow page hides.
+    const target = edit && edit.getClientRects().length > 0 ? edit : root.current?.querySelector<HTMLElement>('.ld-row.selected .ld-row-main')
+    target?.focus({ preventScroll: true })
+  }, [editorOpen, root])
 
   return (
     <div className="automations-panel list-detail-host" style={{ display: visible ? 'flex' : 'none' }}>
@@ -274,7 +294,9 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
           </button>
         </div>
       ) : (
-        <div className={`list-detail automations-body${pane.showDetail ? ' detail-open' : ''}`} ref={pane.root}>
+        // The editor is in the detail pane, so a narrow page shows that pane while it is open, whether
+        // or not a row was opened first (with no automations there was no list to open one from).
+        <div className={`list-detail automations-body${pane.showDetail || editorOpen ? ' detail-open' : ''}`} ref={pane.root}>
           {/* While the editor is open the list waits: Save or Cancel leaves it. */}
           <nav className={`list-detail-list automations-list${editorOpen ? ' waiting' : ''}`} aria-label="Automations" inert={editorOpen}>
             {editing === 'new' && (

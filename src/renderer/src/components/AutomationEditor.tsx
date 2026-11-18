@@ -21,7 +21,8 @@ import { LlmPicker, useServerPicker } from './LlmPicker'
 interface Props {
   /** Absent: a new automation */
   automation?: Automation
-  onDone: () => void
+  /** The editor closes: after a save with the automation's id, after a delete, or cancelled with neither */
+  onDone: (result?: { saved?: string; deleted?: true }) => void
 }
 
 const DEFAULT_PICKER: SchedulePicker = { kind: 'daily', hour: 9, minute: 0 }
@@ -111,8 +112,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
     }
     const backend = getBackend()
     try {
-      await backend.automations.save(input)
-      onDone()
+      onDone({ saved: await backend.automations.save(input) })
     } catch (err) {
       setError(backend.errors.inline(err))
     } finally {
@@ -126,7 +126,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
     const backend = getBackend()
     try {
       await backend.automations.remove(automation.id)
-      onDone()
+      onDone({ deleted: true })
     } catch (err) {
       setError(backend.errors.inline(err))
     } finally {
@@ -238,7 +238,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
             <button className="danger-button" onClick={() => setConfirmDelete(true)}>Delete…</button>
           ))}
         <span className="spacer" />
-        <button onClick={onDone}>Cancel</button>
+        <button onClick={() => onDone()}>Cancel</button>
         <button className="primary primary-action" disabled={busy || offline || !name.trim() || !prompt.trim() || noDays || cronInvalid} onClick={() => void save()}>
           Save
         </button>

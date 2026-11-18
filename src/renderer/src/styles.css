@@ -6183,15 +6183,17 @@ body.resizing-row {
 .automations-how { margin: 10px 8px 0; font-size: 12px; line-height: 1.5; }
 .automations-list .ld-row-main { padding-left: 10px; }
 /* A row's state: one mark, the same shapes the sidebar uses for a session. */
-.automation-mark { flex: 0 0 14px; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; margin: 0 3px; }
-.automation-mark.waiting { background: var(--done-soft); }
-.automation-mark.never { background: var(--surface); }
-.automation-mark.failed { background: var(--danger); }
-.automation-mark.paused { border: 1.5px solid var(--surface); }
-.automation-mark.running { width: 10px; height: 10px; margin: 0 2px; border: 2px solid var(--done-soft); border-right-color: transparent; animation: automation-spin 1s linear infinite; }
-.automation-mark.missed { width: 14px; height: 14px; margin: 0; background: var(--attention); color: #1a1405; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.automation-mark { flex: 0 0 14px; width: 14px; height: 14px; display: grid; place-items: center; }
+.automation-mark::before { content: ''; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; }
+.automation-mark.waiting::before { background: var(--done-soft); }
+.automation-mark.never::before { background: var(--surface); }
+.automation-mark.failed::before { background: var(--danger); }
+.automation-mark.paused::before { border: 1.5px solid var(--surface); }
+.automation-mark.running::before { width: 10px; height: 10px; border: 2px solid var(--done-soft); border-right-color: transparent; animation: automation-spin 1s linear infinite; }
+.automation-mark.missed { border-radius: 50%; background: var(--attention); color: #1a1405; font-size: 10px; font-weight: 700; }
+.automation-mark.missed::before { content: none; }
 @keyframes automation-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .automation-mark.running { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .automation-mark.running::before { animation: none; } }
 .automation-line.attention { color: var(--attention); }
 .automation-line.danger { color: var(--danger); }
 /* The detail: its head and actions, three facts, the prompt, the history. */
