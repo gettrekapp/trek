@@ -1053,13 +1053,18 @@ try {
     await openSettingsTab(settings, name)
     return settings.locator('h3').allTextContents()
   }
+  // The Plugins tab: its heading, the plugins its list names, and the selected one's (the first's) section.
+  const pluginsTabHeadings = async () => {
+    await openSettingsTab(settings, 'Plugins')
+    return [await settings.locator('.plugins-list h3').allTextContents(), await settings.locator('.plugins-row-name').allTextContents(), await settings.locator('.plugin-settings h3').allTextContents()]
+  }
   if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
-  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await tabHeadings('Plugins'), await tabHeadings('General')], [
+  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await pluginsTabHeadings(), await tabHeadings('General')], [
     ['Agents', 'Session types'],
-    ['Session system prompt', 'Global system prompt', 'Quick buttons'],
+    ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
-    ['Plugins', 'Voice summaries', 'Linear'],
+    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps'], ['Voice summaries']],
     ['Appearance', 'Notifications', 'Local server']
   ])
   await openSettingsTab(settings, 'Agents')

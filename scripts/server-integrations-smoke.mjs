@@ -31,7 +31,7 @@
 //
 // Prints SERVER INTEGRATIONS SMOKE PASS (n checks) or SERVER INTEGRATIONS SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { openSettingsTab } from './smokeSettings.mjs'
+import { openPlugin, openSettingsTab, pluginSwitch } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -315,9 +315,11 @@ try {
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   await openSettingsTab(settings, 'Plugins')
-  check('Settings show Linear, Plugins and Voice summaries', [await settings.locator('h3', { hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await settings.locator('h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1])
-  const voiceSwitch = settings.locator('label.settings-row', { hasText: 'Agent sessions read a short summary aloud' }).locator('input')
-  check('the voice plugin is on for the project (its default)', await voiceSwitch.isChecked(), true)
+  // The tab lists the plugins; the first, Voice, is selected, so the detail's heading is its name.
+  const pluginRowNames = settings.locator('.plugins-row-name')
+  check('Settings show Linear, Plugins and Voice summaries', [await pluginRowNames.filter({ hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await pluginRowNames.filter({ hasText: /^Voice summaries$/ }).count(), await settings.locator('.plugins-detail-head h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1, 1])
+  check('the voice plugin is on for the project (its default)', await (await pluginSwitch(settings, 'voice')).isChecked(), true)
+  await openPlugin(settings, 'linear')
   const linearRow = settings.locator('.settings-row', { hasText: 'API key' }).filter({ has: win.locator('input[placeholder="lin_api_…"]') })
   await linearRow.locator('input').fill('lin_api_wrong')
   await linearRow.locator('button', { hasText: 'Connect' }).click()
@@ -334,6 +336,7 @@ try {
 
   // ---- 4. Settings → Voice, with the server's key ----------------------------------------------------
 
+  await openPlugin(settings, 'voice')
   const voiceRow = settings.locator('.settings-row', { hasText: 'ElevenLabs API key' })
   await voiceRow.locator('input').fill(VOICE_KEY)
   await voiceRow.locator('button', { hasText: 'Connect' }).click()
@@ -405,28 +408,31 @@ try {
   }
   check('speak_summary is listed while voice is on', (await toolNames()).includes('speak_summary'), true)
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
-  await voiceSwitch.click()
+  await openPlugin(settings, 'voice')
+  await (await pluginSwitch(settings, 'voice')).click()
   const pluginsSetting = async () => (await project()).settings.plugins ?? null
   check("off: the project's plugins setting says so, on the server", await until(pluginsSetting, { voice: { enabled: false } }), { voice: { enabled: false } })
   const offCall = await tool('speak_summary', { terminalId: started.sessionId, summary: 'Off.' })
   check('off: speak_summary leaves the tools, its call is refused as unknown', [(await toolNames()).includes('speak_summary'), offCall.isError, offCall.value], [false, true, 'Unknown tool: speak_summary'])
-  check("off: the voice section and the sidebar's toggle are gone", [await until(() => settings.locator('h3', { hasText: 'Voice summaries' }).count(), 0), await until(() => win.locator('.voice-toggle').count(), 0)], [0, 0])
-  await voiceSwitch.click()
+  // The detail's head still names the plugin while it is off: its settings are what go, for a note.
+  check("off: the voice section and the sidebar's toggle are gone", [await until(() => settings.locator('.plugin-settings').count(), 0), await until(() => settings.locator('.plugins-note', { hasText: 'Turn it on to set it up for this project.' }).count(), 1), await until(() => win.locator('.voice-toggle').count(), 0)], [0, 1, 0])
+  await (await pluginSwitch(settings, 'voice')).click()
   check('on again: speak_summary is back, and the toggle', [await until(async () => (await toolNames()).includes('speak_summary'), true), await until(() => win.locator('.voice-toggle').count(), 1)], [true, 1])
 
   // ---- 5c. The Linear plugin off for the project, then on again (plugin system phase 2) -------------
 
-  const linearSwitch = settings.locator('label.settings-row', { hasText: 'Link worktree branches to Linear issues' }).locator('input')
+  await openPlugin(settings, 'linear')
+  check('Linear on: its settings show in the detail', await until(() => settings.locator('.plugin-settings h3', { hasText: /^Linear$/ }).count(), 1), 1)
   const chipTitle = () => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null)
   // The sidebar chip's text: a bare chip is still there, with the id ("no chip" is not "bare").
   const chipText = () => featureRow.locator('.mini-chip.ticket').textContent().catch(() => null)
   const branchTicket = async () => (await project()).repositories[0].branchData?.['feature-x']?.ticket ?? null
   const linearWorkspace = async () => (await project()).settings.linearWorkspace ?? null
   const headerChip = detail.locator('.chip-ticket')
-  await linearSwitch.click()
+  await (await pluginSwitch(settings, 'linear')).click()
   check("Linear off: the project's plugins setting says so", await until(pluginsSetting, { voice: { enabled: true }, linear: { enabled: false } }), { voice: { enabled: true }, linear: { enabled: false } })
   check("off: the chip is the bare id, no issue; the header's says so", [await until(chipTitle, null), await until(chipText, 'TOW-7'), await until(() => headerChip.textContent().catch(() => null), 'Ticket TOW-7')], [null, 'TOW-7', 'Ticket TOW-7'])
-  check("off: the Linear section is gone", await until(() => settings.locator('h3', { hasText: /^Linear$/ }).count(), 0), 0)
+  check("off: the Linear section is gone", [await until(() => settings.locator('.plugin-settings').count(), 0), await until(() => settings.locator('.plugins-note', { hasText: 'Turn it on to set it up for this project.' }).count(), 1)], [0, 1])
   const workspaceBefore = await linearWorkspace()
   const offTicket = await tool('set_worktree_ticket', { worktree: 'feature-x', ticket: 'https://linear.app/x/issue/TOW-8' })
   check('off: set_worktree_ticket refuses a Linear URL, naming the trackers on (not Linear)', [offTicket.isError, /Unrecognised ticket.*Azure DevOps work item id or URL/.test(String(offTicket.value)), !/Linear issue id/.test(String(offTicket.value))], [true, true, true])
@@ -438,7 +444,7 @@ try {
   await win.locator('.ticket-modal').locator('button', { hasText: 'Cancel' }).click()
   check('off: Cancel closes the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 0), 0)
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
-  await linearSwitch.click()
+  await (await pluginSwitch(settings, 'linear')).click()
   check('on again: the chip shows the issue again', await until(chipTitle, 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
 

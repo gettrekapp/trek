@@ -474,9 +474,11 @@ try {
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   await openSettingsTab(settings, 'Plugins')
+  // The Plugins tab lists the plugins by name; only the selected one (Voice, the first) has its section.
   const headings = await settings.locator('h3').allTextContents()
+  const pluginNames = await settings.locator('.plugins-row-name').allTextContents()
   const tabNames = await settings.locator('.settings-tab').allTextContents()
-  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, SERVER_HAS_ENVS, false])
+  check('Settings show Linear, Voice summaries and Environments, not Servers', [pluginNames.includes('Linear'), pluginNames.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, SERVER_HAS_ENVS, false])
   check("its Voice section lists the handed-over key's voices, from the server", await until(() => settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select option').allTextContents().catch(() => []), ['Nine']), ['Nine'])
   if (SERVER_HAS_ENVS) {
     await openSettingsTab(settings, 'Environments')
