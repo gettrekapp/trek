@@ -2,12 +2,13 @@
 // the selected one's detail beside it — its switch for this project and, while it is on, its own
 // settings. In a narrow panel the list fills the tab and a row opens its detail (styles.css).
 // The rules are pluginsTab.ts's; the selection is SettingsPanel's.
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef } from 'react'
+import { useListDetail } from '../components/useListDetail'
 import { getBackend } from '../backend'
 import { useAppStore } from '../store'
 import { PluginScope, usePluginEntries, type PluginEntry } from './PluginHost'
 import { pluginActive, type PluginStatus } from './presence'
-import { PLUGINS_ONE_PANE_BELOW_PX, pluginDetailNote, pluginGroups, pluginSwitchLabel, resolveSelection, type PluginRow, type PluginSelection } from './pluginsTab'
+import { pluginDetailNote, pluginGroups, pluginSwitchLabel, resolveSelection, type PluginRow, type PluginSelection } from './pluginsTab'
 
 /** Whether Settings has anything to show for plugins: the Plugins tab shows with it. */
 export function hasPluginSettings(entries: readonly PluginEntry[]): boolean {
@@ -52,37 +53,8 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
   const entries = usePluginEntries()
   const setPluginEnabled = useAppStore((s) => s.setPluginEnabled)
   const projectName = useAppStore((s) => s.project?.name ?? '')
-  // A narrow panel shows the list or the detail, never both: which one. A wide panel ignores it.
-  const [detailOpen, setDetailOpen] = useState(false)
-  // The selection can go while the detail is open (the window moved to another project): the list shows again.
-  const showDetail = detailOpen && chosen !== null
-  const root = useRef<HTMLDivElement>(null)
-  const backButton = useRef<HTMLButtonElement>(null)
-  /** Where the list was scrolled when a row was opened, put back when Back returns to it. */
-  const listScroll = useRef(0)
-  /**
-   * The pane a click just swapped in, until the effect below has settled it. Swapping hides the
-   * element that had the focus, which would drop the focus to the page. Null on the first render
-   * and when the pane changes for another reason, so neither moves the focus.
-   */
-  const swapped = useRef<'detail' | 'list' | null>(null)
-  const scroller = (): Element | null => root.current?.closest('.settings-scroll') ?? null
-  // `.plugins-tab` fills the container the stylesheet measures, so its width is the container's.
-  const narrow = (): boolean => (root.current?.getBoundingClientRect().width ?? Infinity) < PLUGINS_ONE_PANE_BELOW_PX
-  useLayoutEffect(() => {
-    const to = swapped.current
-    swapped.current = null
-    if (!to) return
-    const el = scroller()
-    if (to === 'detail') {
-      // The detail starts at its top, not wherever the list was scrolled to.
-      if (el) el.scrollTop = 0
-      backButton.current?.focus({ preventScroll: true })
-    } else {
-      root.current?.querySelector<HTMLElement>('.plugins-row.selected .plugins-row-main')?.focus({ preventScroll: true })
-      if (el) el.scrollTop = listScroll.current
-    }
-  }, [showDetail])
+  const pane = useListDetail({ hasSelection: chosen !== null, scroller: '.settings-scroll', selectedRow: '.plugins-row.selected .plugins-row-main' })
+  const root = pane.root
 
   /** The plugin whose list switch was just flipped, and what to: until the next change of any row's group. */
   const flipped = useRef<{ id: string; to: PluginStatus } | null>(null)
@@ -116,19 +88,7 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
 
   const open = (id: string): void => {
     onChoose({ kind: 'plugin', id })
-    // Two panes: the click only selects. Were it to open the detail too, narrowing the window
-    // later would land on the detail instead of the list.
-    if (!narrow()) {
-      setDetailOpen(false)
-      return
-    }
-    listScroll.current = scroller()?.scrollTop ?? 0
-    swapped.current = 'detail'
-    setDetailOpen(true)
-  }
-  const back = (): void => {
-    swapped.current = 'list'
-    setDetailOpen(false)
+    pane.open()
   }
   const flip = (id: string, enabled: boolean): void => {
     flipped.current = { id, to: enabled ? 'on' : 'off' }
@@ -143,8 +103,8 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
   const SwitchWrap = working ? 'label' : 'div'
 
   return (
-    <div className={`plugins-tab${showDetail ? ' detail-open' : ''}`} ref={root}>
-      <nav className="plugins-list" aria-label="Plugins">
+    <div className={`list-detail plugins-tab${pane.showDetail ? ' detail-open' : ''}`} ref={root}>
+      <nav className="list-detail-list plugins-list" aria-label="Plugins">
         {/* Not drawn: the groups' h4s and the detail's h3 need a heading above them. */}
         <h3 className="plugins-heading">Plugins</h3>
         {legacyServer && <p className="settings-desc plugins-legacy">This server is older than Trek&apos;s plugins: update it to turn them on or off per project.</p>}
@@ -161,7 +121,7 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
                   </span>
                 </button>
                 <PluginSwitch row={row} onChange={(enabled) => flip(row.id, enabled)} />
-                <span className="plugins-chevron" aria-hidden="true">
+                <span className="list-detail-chevron plugins-chevron" aria-hidden="true">
                   ›
                 </span>
               </div>
@@ -172,8 +132,8 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
       </nav>
 
       {selectedEntry && selectedRow && (
-        <section className="plugins-detail" aria-label={selectedRow.name}>
-          <button type="button" className="plugins-back" ref={backButton} onClick={back}>
+        <section className="list-detail-detail plugins-detail" aria-label={selectedRow.name}>
+          <button type="button" className="list-detail-back plugins-back" ref={pane.backButton} onClick={pane.back}>
             ‹ Plugins
           </button>
           <div className="plugins-detail-head">

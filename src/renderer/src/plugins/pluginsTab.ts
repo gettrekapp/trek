@@ -2,12 +2,6 @@
 // row says, which row is selected, and the detail pane's words. Pure: imported by tests.
 import type { PluginStatus } from './presence.ts'
 
-/**
- * The tab shows one pane at a time (the list, or a row's detail) while it is narrower than this.
- * The container query in styles.css draws that layout and must use the same number.
- */
-export const PLUGINS_ONE_PANE_BELOW_PX = 800
-
 /** A plugin as the tab needs it: from a PluginEntry's manifest and status. */
 export interface PluginRowInput {
   id: string
