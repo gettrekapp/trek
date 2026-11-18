@@ -17,7 +17,8 @@
 //     does not; the ticket and PR chips in the sidebar and the detail; the tag menu (8 tags and
 //     Remove) saves on the server; the tag filter (All, 8 tags, Untagged) and its clear;
 //   - Notes and All Notes: a note saved on the server; a note on a branch with no worktree is
-//     listed as gone, and its two-step delete clears it on the server;
+//     listed as gone, and its delete (asked again in the confirm bar) clears it on the server; a
+//     note edited on the page is saved on the server;
 //   - Settings: Audio alerts and the session mode, saved on the server;
 //   - the overflow menus: the primary's (Open in VS Code, Reveal and Promote branch to worktree; no
 //     Move or Delete) and a worktree's (Delete and Promote to primary; no Move);
@@ -386,16 +387,20 @@ try {
   check('the sidebar has the All Notes row with its count, and the tab strip has no All Notes button', [(await notesRow.locator('.sidebar-nav-count').innerText()).trim(), await detail.locator('.panel-btn', { hasText: 'All Notes' }).count()], ['3', 0])
   await notesRow.click()
   const notesPage = sw.locator('.allnotes-panel')
-  const cards = notesPage.locator('.note-card')
-  check("All Notes: the three notes, the one with no worktree marked gone", [await until(() => cards.count(), 3), await notesPage.locator('.note-gone-tag').count(), await notesPage.locator('.note-card-btn:not(.danger)').count()], [3, 1, 2])
-  const goneDelete = notesPage.locator('.note-card', { hasText: 'gone-branch' }).locator('.note-card-btn.danger')
-  await goneDelete.click()
-  // A stray pointer event disarms the confirm (mouseleave): re-arm, so the delete itself is tested.
-  if ((await goneDelete.innerText()).trim() !== 'Really delete?') await goneDelete.click()
-  check('its delete asks again first', (await goneDelete.innerText()).trim(), 'Really delete?')
-  await goneDelete.click()
-  check('then clears it on the server', [await until(() => cards.count(), 2), await until(async () => (await branchData(0, 'gone-branch')).note ?? null, null)], [2, null])
-  await notesPage.locator('.note-card', { hasText: 'main' }).locator('.note-card-btn:not(.danger)').first().click()
+  const noteRows = notesPage.locator('.notes-row')
+  check("All Notes: the three notes, the one with no worktree marked gone", [await until(() => noteRows.count(), 3), await notesPage.locator('.notes-row.gone').count(), await notesPage.locator('.notes-row:not(.gone)').count()], [3, 1, 2])
+  await notesPage.locator('.notes-row', { hasText: 'gone-branch' }).locator('.ld-row-main').click()
+  check('a note with no worktree opens, with no way to a worktree', [await until(() => notesPage.locator('.allnotes-detail h3').innerText().catch(() => null), 'gone-branch'), await notesPage.locator('.allnotes-actions button', { hasText: 'Go to worktree' }).count()], ['gone-branch', 0])
+  await notesPage.locator('.allnotes-actions button[aria-label="Delete this note"]').click()
+  const confirmBar = notesPage.locator('.allnotes-confirm')
+  check('its delete asks again first', (await confirmBar.locator('span').first().innerText()).trim(), 'Delete the note for gone-branch?')
+  await confirmBar.locator('button.danger').click()
+  check('then clears it on the server', [await until(() => noteRows.count(), 2), await until(async () => (await branchData(0, 'gone-branch')).note ?? null, null)], [2, null])
+  // The page edits a note too, through the same drafts as the worktree's Notes panel.
+  await notesPage.locator('.notes-row .ld-row-main[title="main"]').first().click()
+  await notesPage.locator('.allnotes-textarea').fill('remember the thing, and the other')
+  check('a note edited on the page is saved on the server', await until(async () => (await branchData(0, 'main')).note ?? null, 'remember the thing, and the other'), 'remember the thing, and the other')
+  await notesPage.locator('.allnotes-actions button', { hasText: 'Go to worktree' }).click()
   check('Show closes the page and selects the worktree', [await until(() => notesPage.isVisible(), false), await until(() => notesRow.evaluate((el) => el.classList.contains('active')), false)], [false, false])
 
   // ---- 6. Settings: audio alerts and the session mode ----------------------------------------------
