@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { useAppStore } from '../store'
 import { PluginsSettings, hasPluginSettings } from '../plugins/PluginsSettings'
 import { usePluginEntries } from '../plugins/PluginHost'
+import type { PluginSelection } from '../plugins/pluginsTab'
+import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
 import { settingsSections } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
 import { nextSettingsTab, resolveSettingsTab, visibleSettingsTabs, type SettingsTabId } from '../settingsTabs'
@@ -36,6 +38,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const repoSelector = <RepoSelector repositories={repositories} repo={settingsRepo} onSelect={setSettingsRepoId} />
   // Kept while the window is open (the panel stays mounted while hidden); General in a new one.
   const [chosen, setChosen] = useState<SettingsTabId>('general')
+  // The Plugins tab's selected row, kept here because the tab's panel remounts on a settings
+  // reload. It belongs to the backend it was picked on: another server or project starts afresh.
+  const backend = useSyncExternalStore(subscribeBackend, getBackend)
+  const [pluginPick, setPluginPick] = useState<{ backend: WindowBackend; selection: PluginSelection } | null>(null)
+  const pluginSelection = pluginPick?.backend === backend ? pluginPick.selection : null
   const tabs = visibleSettingsTabs({
     environments: sections.environments !== 'hidden',
     plugins: hasPluginSettings(pluginEntries)
@@ -70,7 +77,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
       </div>
       <div className="settings-scroll">
         <div
-          className="settings-content"
+          className={`settings-content${active === 'plugins' ? ' settings-content-wide' : ''}`}
           id="settings-tabpanel"
           role="tabpanel"
           aria-labelledby={tabDomId(active)}
@@ -81,7 +88,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           {active === 'sessions' && <SessionsTab />}
           {active === 'worktrees' && <WorktreesTab repo={settingsRepo} repoSelector={repoSelector} />}
           {active === 'environments' && <EnvironmentsTab repo={settingsRepo} repoSelector={repoSelector} />}
-          {active === 'plugins' && <PluginsSettings />}
+          {active === 'plugins' && <PluginsSettings chosen={pluginSelection} onChoose={(selection) => setPluginPick({ backend, selection })} />}
         </div>
       </div>
     </div>
