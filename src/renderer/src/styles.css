@@ -199,7 +199,8 @@ button:disabled {
 
 .sidebar-banner {
   flex: 0 0 auto;
-  padding: 12px 12px 0;
+  display: flex;
+  justify-content: center;
 }
 
 .sidebar-banner img {
