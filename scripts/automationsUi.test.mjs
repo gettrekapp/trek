@@ -6,6 +6,8 @@ import {
   automationFact,
   automationRowLine,
   automationState,
+  chooseScheduleKind,
+  cronOnly,
   defaultPicker,
   lastRunLabel,
   missedBanner,
@@ -92,7 +94,7 @@ test('automationState: the first that applies — missed, running, paused, faile
   assert.equal(automationState(a('x', { missed: { since: SINCE, count: 2 } }), true), 'missed', 'missed over running')
 })
 
-test('relativeUntil: minutes under an hour, hours under twelve, then the day and the time', () => {
+test('relativeUntil: minutes under an hour, hours under twelve, then the day and the time, then the date alone', () => {
   const at = (ms) => relativeUntil(NOW + ms, NOW, 'UTC')
   assert.equal(at(20_000), 'in under a minute')
   assert.equal(at(60_000), 'in 1 min')
@@ -102,12 +104,18 @@ test('relativeUntil: minutes under an hour, hours under twelve, then the day and
   assert.equal(at(11 * 3_600_000 + 20 * 60_000), 'in 11 h')
   assert.equal(at(12 * 3_600_000), 'today 18:00')
   assert.equal(at(27 * 3_600_000), 'tomorrow 09:00')
-  assert.equal(at(51 * 3_600_000), '2026-01-07 09:00')
+  assert.equal(at(51 * 3_600_000), 'Wed 09:00', 'two days on: the weekday')
+  assert.equal(at(6 * 86_400_000), 'Sun 06:00', 'six days on is still within the week')
+  assert.equal(at(7 * 86_400_000 + 3 * 3_600_000), '2026-01-12', 'a week on the weekday would read as this week\'s: the date')
+  assert.equal(at(40 * 86_400_000), '2026-02-14')
 })
 
 test('relativeUntil: the day is the timezone\'s, not UTC\'s', () => {
   // 06:00 UTC is 15:00 in Tokyo; 13 hours on is 04:00 the next day there, though still the same UTC day.
   assert.equal(relativeUntil(NOW + 13 * 3_600_000, NOW, 'Asia/Tokyo'), 'tomorrow 04:00')
+  // Three days later the same hour is Thursday 19:00 UTC and Friday 04:00 in Tokyo.
+  assert.equal(relativeUntil(NOW + 3 * 86_400_000 + 13 * 3_600_000, NOW, 'Asia/Tokyo'), 'Fri 04:00')
+  assert.equal(relativeUntil(NOW + 3 * 86_400_000 + 13 * 3_600_000, NOW, 'UTC'), 'Thu 19:00')
 })
 
 test('automationFact: what the row says after the schedule, and its tone', () => {
@@ -135,6 +143,12 @@ test('nextRunFact: the detail\'s Next run, absolute and relative', () => {
   assert.deepEqual(nextRunFact(a('x'), NOW), { value: '2026-01-05 09:00', sub: 'in 3 h' })
   assert.deepEqual(nextRunFact(a('x', { enabled: false }), NOW), { value: 'Paused', sub: null })
   assert.deepEqual(nextRunFact(a('x', { schedule: { cron: 'nope', tz: 'UTC' } }), NOW), { value: 'Invalid schedule', sub: null })
+})
+
+test('nextRunFact: from two days ahead the value already says the day, so nothing is under it', () => {
+  assert.deepEqual(nextRunFact(a('x', { schedule: { cron: '0 5 * * *', tz: 'UTC' } }), NOW + 3_600_000), { value: '2026-01-06 05:00', sub: 'tomorrow 05:00' })
+  assert.deepEqual(nextRunFact(a('x', { schedule: { cron: '0 9 7 1 *', tz: 'UTC' } }), NOW), { value: '2026-01-07 09:00', sub: null })
+  assert.deepEqual(nextRunFact(a('x', { schedule: { cron: '0 9 1 3 *', tz: 'UTC' } }), NOW), { value: '2026-03-01 09:00', sub: null })
 })
 
 test('missedBanner: the sum of the missed runs, or nothing', () => {
@@ -168,4 +182,35 @@ test('defaultPicker: what each schedule kind starts from', () => {
   assert.deepEqual(defaultPicker('hours'), { kind: 'hours', every: 1, minute: 0 })
   assert.deepEqual(defaultPicker('daily'), { kind: 'daily', hour: 9, minute: 0 })
   assert.deepEqual(defaultPicker('weekly'), { kind: 'weekly', days: [1, 2, 3, 4, 5], hour: 9, minute: 0 })
+})
+
+test('chooseScheduleKind: a picker to cron writes the picker\'s cron line', () => {
+  const picker = { kind: 'weekly', days: [1, 3], hour: 7, minute: 30 }
+  assert.deepEqual(chooseScheduleKind({ advanced: false, cron: '0 9 * * *', picker }, 'cron'), { advanced: true, cron: '30 7 * * 1,3', picker })
+})
+
+test('chooseScheduleKind: cron to the line\'s own kind keeps its values; to another kind takes that kind\'s default', () => {
+  const state = { advanced: true, cron: '30 7 * * *', picker: { kind: 'minutes', every: 5 } }
+  assert.deepEqual(chooseScheduleKind(state, 'daily'), { advanced: false, cron: '30 7 * * *', picker: { kind: 'daily', hour: 7, minute: 30 } })
+  assert.deepEqual(chooseScheduleKind(state, 'weekly'), { advanced: false, cron: '30 7 * * *', picker: defaultPicker('weekly') })
+  // Between two pickers: the same kind is left as it is, another starts from its default.
+  const daily = { advanced: false, cron: '0 9 * * *', picker: { kind: 'daily', hour: 7, minute: 30 } }
+  assert.deepEqual(chooseScheduleKind(daily, 'daily'), daily)
+  assert.deepEqual(chooseScheduleKind(daily, 'hours').picker, defaultPicker('hours'))
+})
+
+test('cronOnly and chooseScheduleKind: a line the pickers cannot write is cron only, and stays cron', () => {
+  assert.equal(cronOnly(true, '15 3 1 * *'), true)
+  assert.equal(cronOnly(true, '30 7 * * *'), false)
+  assert.equal(cronOnly(false, '15 3 1 * *'), false, 'the pickers are showing: the line is not what is being edited')
+  const state = { advanced: true, cron: '15 3 1 * *', picker: { kind: 'daily', hour: 9, minute: 0 } }
+  assert.deepEqual(chooseScheduleKind(state, 'daily'), state)
+  assert.deepEqual(chooseScheduleKind(state, 'minutes'), state)
+})
+
+test('chooseScheduleKind: cron while already cron changes nothing, the line least of all', () => {
+  const state = { advanced: true, cron: '15 3 1 * *', picker: { kind: 'daily', hour: 9, minute: 0 } }
+  assert.deepEqual(chooseScheduleKind(state, 'cron'), state)
+  const edited = { advanced: true, cron: '5 4 * * 2', picker: { kind: 'daily', hour: 9, minute: 0 } }
+  assert.deepEqual(chooseScheduleKind(edited, 'cron'), edited, 'not rewritten from the picker')
 })

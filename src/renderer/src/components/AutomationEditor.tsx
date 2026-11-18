@@ -14,7 +14,7 @@ import {
   type SchedulePicker
 } from '../../../shared/cron'
 import { getBackend } from '../backend'
-import { defaultPicker } from '../automations'
+import { chooseScheduleKind, cronOnly } from '../automations'
 import { useAppStore } from '../store'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 
@@ -78,25 +78,14 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   const cronInvalid = typeof preview === 'string'
   const noDays = !advanced && picker.kind === 'weekly' && picker.days.length === 0
 
-  const setAdvancedMode = (on: boolean): void => {
-    if (on) setCron(cronFromPicker(picker))
-    else setPicker(pickerFromCron(cron) ?? DEFAULT_PICKER)
-    setAdvanced(on)
-  }
-
   /** The schedule's kind as the row of choices shows it: one of the picker's, or cron. */
   const kind: SchedulePicker['kind'] | 'cron' = advanced ? 'cron' : picker.kind
-  // A cron line the pickers cannot write can only be edited as cron.
-  const cronOnly = advanced && pickerFromCron(cron) === null
+  const onlyCron = cronOnly(advanced, cron)
   const chooseKind = (next: SchedulePicker['kind'] | 'cron'): void => {
-    if (next === 'cron') {
-      if (!advanced) setAdvancedMode(true)
-      return
-    }
-    // Leaving cron keeps the line where the pickers can write it and it is of this kind.
-    const from = advanced ? pickerFromCron(cron) : picker
-    setPicker(from?.kind === next ? from : defaultPicker(next))
-    setAdvanced(false)
+    const to = chooseScheduleKind({ advanced, cron, picker }, next)
+    setAdvanced(to.advanced)
+    setCron(to.cron)
+    setPicker(to.picker)
   }
 
   const save = async (): Promise<void> => {
@@ -152,7 +141,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
         <div className="automation-schedule-fields">
           <div className="automation-kinds" role="radiogroup" aria-label="Repeats">
             {SCHEDULE_KINDS.map((k) => {
-              const blocked = k.kind !== 'cron' && cronOnly
+              const blocked = k.kind !== 'cron' && onlyCron
               return (
                 <button
                   key={k.kind}

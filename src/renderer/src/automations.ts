@@ -1,7 +1,7 @@
 // The Automations panel's and the missed-runs modal's pure helpers. Times are shown in each
 // automation's own timezone (the one its schedule is read in).
 import type { Automation, AutomationMissed, AutomationRun } from '../../shared/model/types'
-import { describeCron, formatWall, nextSlot, parseCron, wallTime, type SchedulePicker } from '../../shared/cron.ts'
+import { WEEKDAY_NAMES, cronFromPicker, describeCron, formatWall, nextSlot, parseCron, pickerFromCron, wallTime, type SchedulePicker } from '../../shared/cron.ts'
 
 export function missedRows(automations: readonly Automation[] | undefined): Automation[] {
   return (automations ?? []).filter((a) => a.missed)
@@ -81,16 +81,25 @@ const dayIndex = (ms: number, tz: string): number => {
   return Date.UTC(w.year, w.month - 1, w.day) / DAY
 }
 
-/** When a coming run is, as a row says it: minutes under an hour, hours under twelve, then the day and the time in `tz`. */
+/** How many calendar days in `tz` the instant `at` is after `now`'s day. */
+const daysAhead = (at: number, now: number, tz: string): number => dayIndex(at, tz) - dayIndex(now, tz)
+
+/**
+ * When a coming run is, short enough for a row: minutes under an hour, hours under twelve, then
+ * the day and the time in `tz` — today, tomorrow, the weekday within the week — and from a week
+ * on the date alone, where a weekday would read as this week's.
+ */
 export function relativeUntil(at: number, now: number, tz: string): string {
   const ms = at - now
   if (ms < MINUTE) return 'in under a minute'
   if (ms < HOUR) return `in ${Math.floor(ms / MINUTE)} min`
   if (ms < 12 * HOUR) return `in ${Math.floor(ms / HOUR)} h`
-  const days = dayIndex(at, tz) - dayIndex(now, tz)
+  const days = daysAhead(at, now, tz)
   if (days === 0) return `today ${formatWall(at, tz)}`
   if (days === 1) return `tomorrow ${formatWall(at, tz)}`
-  return formatWall(at, tz, true)
+  // The calendar day in `tz` as a UTC date: its weekday is the one the timezone's clock shows.
+  if (days < 7) return `${WEEKDAY_NAMES[new Date(dayIndex(at, tz) * DAY).getUTCDay()]} ${formatWall(at, tz)}`
+  return formatWall(at, tz, true).slice(0, 10)
 }
 
 /** A piece of a row's text with how it is coloured: quiet, asking for the user, or a fault. */
@@ -126,13 +135,14 @@ export function automationRowLine(a: Automation, state: AutomationState, now: nu
   return { text: `${schedule} · ${fact.text}`, tone: fact.tone }
 }
 
-/** The detail's Next run: the wall time, and how far off it is. */
+/** The detail's Next run: the wall time, and how far off it is while that says more than the date above it does (up to tomorrow). */
 export function nextRunFact(a: Automation, now: number): { value: string; sub: string | null } {
   if (!a.enabled) return { value: 'Paused', sub: null }
   try {
     const next = nextSlot(parseCron(a.schedule.cron), a.schedule.tz, now)
     if (next === undefined) return { value: 'No upcoming run', sub: null }
-    return { value: formatWall(next, a.schedule.tz, true), sub: relativeUntil(next, now, a.schedule.tz) }
+    const { tz } = a.schedule
+    return { value: formatWall(next, tz, true), sub: daysAhead(next, now, tz) < 2 ? relativeUntil(next, now, tz) : null }
   } catch {
     return { value: 'Invalid schedule', sub: null }
   }
@@ -172,4 +182,28 @@ export function defaultPicker(kind: SchedulePicker['kind']): SchedulePicker {
   if (kind === 'hours') return { kind, every: 1, minute: 0 }
   if (kind === 'daily') return { kind, hour: 9, minute: 0 }
   return { kind, days: [1, 2, 3, 4, 5], hour: 9, minute: 0 }
+}
+
+/** The editor's schedule as it holds it: the cron line while `advanced`, else the picker. */
+export interface ScheduleChoice {
+  advanced: boolean
+  cron: string
+  picker: SchedulePicker
+}
+
+/** A cron line the pickers cannot write can only be edited as cron. */
+export function cronOnly(advanced: boolean, cron: string): boolean {
+  return advanced && pickerFromCron(cron) === null
+}
+
+/** The editor's schedule after a kind is picked from its row: one of the picker's, or cron. */
+export function chooseScheduleKind(state: ScheduleChoice, next: SchedulePicker['kind'] | 'cron'): ScheduleChoice {
+  if (next === 'cron') {
+    // The line starts as what the picker says; one already being edited is left alone.
+    return state.advanced ? state : { ...state, advanced: true, cron: cronFromPicker(state.picker) }
+  }
+  if (cronOnly(state.advanced, state.cron)) return state
+  // Leaving cron keeps the line's values where it is of this kind.
+  const from = state.advanced ? pickerFromCron(state.cron) : state.picker
+  return { ...state, advanced: false, picker: from?.kind === next ? from : defaultPicker(next) }
 }

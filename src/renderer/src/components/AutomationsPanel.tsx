@@ -320,7 +320,10 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
                     <StateMark state={state} />
                     <span className="ld-row-text">
                       <span className="ld-row-name">{a.name}</span>
-                      <span className={`ld-row-line automation-line ${line.tone}`}>{line.text}</span>
+                      {/* The line is cut short where the list is narrow: its title has it whole. */}
+                      <span className={`ld-row-line automation-line ${line.tone}`} title={line.text}>
+                        {line.text}
+                      </span>
                     </span>
                   </button>
                   <input type="checkbox" role="switch" className="plugin-switch" aria-label={`${a.name} enabled`} checked={a.enabled} disabled={offline} onChange={() => void toggle(a)} />
