@@ -3598,6 +3598,13 @@ button:disabled {
   font-size: 12px;
   color: var(--text-muted);
   cursor: pointer;
+  /* Wrapped under the description in a narrow pane, it stays at the right. */
+  margin-left: auto;
+}
+
+/* No working switch (not available, or a server older than plugins): the words are not a control's. */
+.plugins-detail-switch.static {
+  cursor: default;
 }
 
 /* The project's switch for the plugin: a checkbox drawn as a switch */
@@ -3651,8 +3658,12 @@ input.plugin-switch:checked {
   gap: 14px;
 }
 
-/* A plugin's section names itself; in the detail pane the head already does. Kept for screen readers. */
-.plugin-settings h3 {
+/*
+ * A plugin's section names itself; in the detail pane the head already does. Kept for screen
+ * readers, as is the list's own heading (the tab's name says it on screen).
+ */
+.plugin-settings h3,
+.plugins-heading {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -3663,13 +3674,23 @@ input.plugin-switch:checked {
 
 .plugin-settings .settings-row {
   cursor: default;
+  flex-wrap: wrap;
 }
 
 /*
- * A narrow panel (under 760px across: this container is the panel less its 18px padding each
- * side): the list fills the tab, and a row opens its detail with a way back.
+ * A row that starts with its words (a key, a picker): in a narrow pane its controls drop below
+ * the words instead of crushing them. Not a row that starts with a checkbox, whose words stay
+ * beside it at any width.
  */
-@container plugins (max-width: 723px) {
+.plugin-settings .settings-row > .settings-label:first-child {
+  flex: 1 1 260px;
+}
+
+/*
+ * The tab under 800px across (PLUGINS_ONE_PANE_BELOW_PX in pluginsTab.ts, the same number): the
+ * list fills the tab, and a row opens its detail with a way back.
+ */
+@container plugins (width < 800px) {
   .plugins-tab {
     display: block;
   }
