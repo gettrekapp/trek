@@ -6249,6 +6249,8 @@ body.resizing-row {
 .automation-footer .spacer { flex: 1; }
 .link-button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
 .error-text { color: var(--danger); }
+/* An automation's name in the missed-runs modal's list */
+.automation-name { font-weight: 600; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .missed-runs-list { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
 .missed-runs-list label { display: flex; gap: 8px; align-items: baseline; }
 

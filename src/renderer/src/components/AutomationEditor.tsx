@@ -45,7 +45,7 @@ const SCHEDULE_KINDS: { kind: SchedulePicker['kind'] | 'cron'; label: string }[]
   { kind: 'cron', label: 'Cron' }
 ]
 
-/** Name, prompt, schedule (picker or cron), timezone, agent and enabled; Save / Cancel / Delete. */
+/** Name, prompt, schedule (one of the picker's kinds, or cron) with its timezone, and agent; Save / Cancel / Delete. Shown in the Automations page's detail pane. */
 export function AutomationEditor({ automation, onDone }: Props): React.JSX.Element {
   const [name, setName] = useState(automation?.name ?? '')
   const [prompt, setPrompt] = useState(automation?.prompt ?? '')
