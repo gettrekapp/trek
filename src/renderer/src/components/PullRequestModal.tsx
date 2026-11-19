@@ -22,6 +22,11 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
   const providers = usePrProviders()
 
   const save = (): void => {
+    // An unchanged link closes as is, even one the window's providers can't read (stored before, or its provider is off).
+    if (currentUrl && input.trim() === currentUrl) {
+      onClose()
+      return
+    }
     const parsed = parsePrWith(providers, input)
     if (!parsed) {
       setError(

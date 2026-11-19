@@ -84,7 +84,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   }
 
   const createFromPr = async (): Promise<void> => {
-    if (!pr) return
+    // A second Enter while the first is in flight would create the worktree twice.
+    if (!pr || addingPr) return
     setAddingPr(true)
     setError(null)
     try {
