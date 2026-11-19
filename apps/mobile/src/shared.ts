@@ -1,5 +1,5 @@
-// What the phone takes from the repo's shared protocol code and from the ticket plugins' pure
-// shared files (Metro watches ../../src/shared and ../../plugins).
+// What the phone takes from the repo's shared protocol code and from the ticket and PR plugins'
+// pure shared files (Metro watches ../../src/shared and ../../plugins).
 // Keep in step with MOBILE_ENTRIES in scripts/sharedForMobile.test.mjs.
 export * from '../../../src/shared/client/index.ts'
 export type * from '../../../src/shared/model/topics.ts'
@@ -34,3 +34,7 @@ export { LINEAR_MANIFEST } from '../../../plugins/linear/manifest.ts'
 export { linearTickets } from '../../../plugins/linear/shared/ticket.ts'
 export { AZURE_DEVOPS_MANIFEST } from '../../../plugins/azure-devops/manifest.ts'
 export { azureDevOpsTickets } from '../../../plugins/azure-devops/shared/ticket.ts'
+export type { PrProvider } from '../../../src/shared/plugins/pullRequests.ts'
+export { genericPrLabel, parsePrWith, prOwner } from '../../../src/shared/plugins/pullRequests.ts'
+export { GITHUB_MANIFEST } from '../../../plugins/github/manifest.ts'
+export { githubPrs } from '../../../plugins/github/shared/pr.ts'

@@ -1,5 +1,5 @@
 // The phone (6a, apps/mobile) imports src/shared/client, src/shared/model and src/shared/protocolV2,
-// and the ticket plugins' pure shared files (plugins/<id>/manifest.ts, plugins/<id>/shared/ticket.ts),
+// and the ticket and PR plugins' pure shared files (plugins/<id>/manifest.ts, plugins/<id>/shared/{ticket,pr}.ts),
 // straight from the repo (Metro watchFolders). This walks the import graph from those entry points
 // and fails on anything React Native can't run: node:* and Node built-ins, electron, a package the
 // phone doesn't have, or the DOM's document/window globals.
@@ -35,13 +35,17 @@ export const MOBILE_ENTRIES = [
   'src/shared/plugins/manifest.ts',
   'src/shared/plugins/tickets.ts',
   'src/shared/tickets.ts',
+  // Pull requests: the PR providers' contract and helpers, and the GitHub plugin's pure links.
+  'src/shared/plugins/pullRequests.ts',
   // The Global agent a new Global session gets (the server's own rule, for its label).
   'src/shared/providers/selection.ts',
   'src/shared/providers/types.ts',
   'plugins/linear/manifest.ts',
   'plugins/linear/shared/ticket.ts',
   'plugins/azure-devops/manifest.ts',
-  'plugins/azure-devops/shared/ticket.ts'
+  'plugins/azure-devops/shared/ticket.ts',
+  'plugins/github/manifest.ts',
+  'plugins/github/shared/pr.ts'
 ]
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])

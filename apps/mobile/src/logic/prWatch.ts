@@ -2,7 +2,7 @@
 // offers the switch, what it and the pull request's label say, a notice's line and age, and which
 // Attention items can be dismissed. The rules are the desktop's (WorktreeDetail.tsx: watchingPr,
 // the chip's " · watching", the menu's item) and the server's (prWatch/prWatchHandlers.ts). Pure.
-import type { AttentionEntry, BranchData, PrNotice } from '../shared.ts'
+import { prOwner, type AttentionEntry, type BranchData, type PrNotice, type PrProvider } from '../shared.ts'
 import { ago } from './attention.ts'
 
 type Watched = Pick<BranchData, 'pr' | 'prWatch'> | undefined
@@ -17,8 +17,8 @@ export function isWatching(data: Watched): boolean {
 
 /**
  * Whether the pull request row offers the switch: a pull request is linked, and the server can
- * watch (`capable`: its welcome lists the `prWatch` capability now, which follows gh's sign-in) or
- * already does (so a watch can be stopped while gh is signed out).
+ * watch (`capable`: its welcome lists the `prWatch` capability now, which follows its host's sign-in)
+ * or already does (so a watch can be stopped while it is signed out).
  */
 export function watchOffered(data: Watched, capable: boolean): boolean {
   return !!data?.pr && (capable || isWatching(data))
@@ -26,11 +26,14 @@ export function watchOffered(data: Watched, capable: boolean): boolean {
 
 /**
  * What follows the pull request's label ("PR #42 · watching"): nothing when not watched; a watch
- * the server keeps but cannot poll while gh is signed out says so.
+ * the server keeps but cannot poll while its host's sign-in is missing says so, naming the sign-in
+ * of the provider that owns the link (`providers`: those on for the project).
  */
-export function watchSuffix(data: Watched, capable: boolean): string {
+export function watchSuffix(data: Watched, capable: boolean, providers: readonly PrProvider[]): string {
   if (!isWatching(data)) return ''
-  return capable ? ' · watching' : ' · watch paused, gh signed out'
+  if (capable) return ' · watching'
+  const name = (data?.pr && prOwner(providers, data.pr)?.signInName) || 'its host'
+  return ` · watch paused, ${name} isn't signed in`
 }
 
 /** The switch: its label, and the `watch` its tap sends with `branch.setPrWatch` (`{projectId, repoId, branch, watch}`). */

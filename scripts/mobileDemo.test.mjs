@@ -269,6 +269,24 @@ test('demo: custom tags, ticket, PR and its watch', async () => {
   }
 })
 
+test('demo: pr.resolve reads a GitHub link with no head branch, and refuses anything else', async () => {
+  const h = harness()
+  try {
+    await until(() => h.conn.status === 'connected')
+    assert.equal(h.conn.welcome.capabilities.includes('prResolve'), false)
+    assert.deepEqual(await h.conn.request('pr.resolve', { ...REPO, input: 'https://www.github.com/example/acme-web/pull/43/files' }), {
+      url: 'https://github.com/example/acme-web/pull/43',
+      number: 43,
+      label: '#43',
+      providerId: 'github',
+      headBranch: null
+    })
+    await assert.rejects(h.conn.request('pr.resolve', { ...REPO, input: 'https://example.com/x' }), { code: 'BAD_REQUEST' })
+  } finally {
+    h.close()
+  }
+})
+
 test('demo: review comments are added, edited and removed, with the revision going up', async () => {
   const h = harness()
   try {

@@ -10,6 +10,7 @@ import { CAPABILITY, DEFAULT_WORKTREE_TAGS, type Project, type Repository, type 
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink, type NoteEdit } from '../logic/branchDetails.ts'
 import { watchAction, watchOffered, watchSuffix } from '../logic/prWatch.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../logic/tickets.ts'
+import { activePrProviders } from '../logic/pullRequests.ts'
 import { historyRoute } from '../logic/routes.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
@@ -66,10 +67,11 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
   const tags: readonly Tag[] = settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS
   const customTags: readonly Tag[] = settings.customTags ?? []
   const trackers = activeTicketProviders(server?.connection.welcome, settings)
+  const prHosts = activePrProviders(server?.connection.welcome, settings)
   const ticket = data?.ticket ? ticketView(trackers, settings, data.ticket) : null
   const ticketLink = webLink(ticket?.url)
   const prLink = webLink(data?.pr)
-  // Whether the server can watch a pull request now (gh is signed in there), as its current welcome
+  // Whether the server can watch a pull request now (its host is signed in there), as its current welcome
   // says; while its connection is being made again the last answer holds, so a watch is not called
   // paused for a reconnect.
   const canWatch = useRef(false)
@@ -158,7 +160,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
   }
 
   const savePr = (): void => {
-    const parsed = pullRequestInput(text)
+    const parsed = pullRequestInput(prHosts, text)
     if (!parsed || running.current) return
     if ('error' in parsed) {
       setError(parsed.error)
@@ -286,7 +288,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
               value={text}
               onChangeText={type}
               autoFocus
-              placeholder="https://github.com/org/repo/pull/123"
+              placeholder={prHosts[0]?.hint ?? 'a pull request link'}
               placeholderTextColor={colors.placeholder}
               autoCapitalize="none"
               autoCorrect={false}
@@ -300,7 +302,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
           </>
         ) : (
           <>
-            {shown('pr', data?.pr ? `${pullRequestText(data.pr)}${watchSuffix(data, canWatch.current)}` : null, 'No pull request', prLink)}
+            {shown('pr', data?.pr ? `${pullRequestText(data.pr)}${watchSuffix(data, canWatch.current, prHosts)}` : null, 'No pull request', prLink)}
             {watchOffered(data, canWatch.current) ? (
               <View style={[ui.row, { marginTop: 6 }]}>
                 <Button ghost label={watch.label} disabled={off} onPress={() => void send((conn) => conn.request('branch.setPrWatch', { ...ref, watch: watch.watch }))} />

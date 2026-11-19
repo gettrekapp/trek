@@ -1,10 +1,10 @@
-// The demo's branch data, history and draft review (apps/mobile/src/demo): branch.*, prWatch.dismiss,
+// The demo's branch data, history and draft review (apps/mobile/src/demo): branch.*, pr.resolve, prWatch.dismiss,
 // history.list and review.add/edit/remove/clear, as the real server answers them. Differences: input
 // checking is lighter than the real server's (custom tags are not deduplicated, the history limit is
 // clamped, not refused, a pull request link is not checked as watchable, review path and line are not
 // checked), and note edits are not folded into one history entry within 5 minutes (the real server's
 // NOTE_COALESCE_MS): every edit adds an entry.
-import { DEFAULT_WORKTREE_TAGS, type BranchData, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
+import { DEFAULT_WORKTREE_TAGS, githubPrs, type BranchData, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
 import { DEMO_PROJECT_ID } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
@@ -73,6 +73,7 @@ type BranchMethods =
   | 'branch.setTicket'
   | 'branch.setPr'
   | 'branch.setPrWatch'
+  | 'pr.resolve'
   | 'prWatch.dismiss'
   | 'history.list'
   | 'review.add'
@@ -168,6 +169,15 @@ export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
     }
     ctx.server.changed()
     return null
+  },
+  // Only a link, through the GitHub provider; no head branch (the phone uses pr/<n>). The demo's
+  // welcome has no prResolve, so the phone does not send this; it is here for completeness.
+  'pr.resolve': (ctx, p) => {
+    checkProject(p.projectId)
+    findRepo(ctx.server.state.project, p.repoId)
+    const pr = typeof p.input === 'string' ? githubPrs.parse(p.input) : null
+    if (!pr) throw new DemoError('BAD_REQUEST', `Enter ${githubPrs.hint}`)
+    return { ...pr, providerId: githubPrs.id, headBranch: null }
   },
   'prWatch.dismiss': (ctx, p) => {
     const worktree = reviewWorktree(ctx, p)

@@ -1,11 +1,14 @@
-// Add a worktree to a repository: on a new or an existing branch, or from a GitHub pull request
-// (the desktop's Add Worktree dialog). The phone has no `gh`, so a pull request's branch is
-// pr/<n>. The new worktree's screen replaces this one; no session is started.
+// Add a worktree to a repository: on a new or an existing branch, or from a pull request through
+// the PR providers on for the project (the desktop's Add Worktree dialog). A pull request's branch
+// is its own when the server can name it (pr.resolve), else pr/<n>. The new worktree's screen
+// replaces this one; no session is started.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { branchSuggestions, parsePullRequestUrl, prBranch } from '../../../../../src/logic/worktrees.ts'
+import { branchSuggestions, prBranch } from '../../../../../src/logic/worktrees.ts'
+import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
+import { CAPABILITY, parsePrWith } from '../../../../../src/shared.ts'
 import { repoFolder, worktreeOnBranch } from '../../../../../src/logic/worktreeList.ts'
 import { worktreeRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
@@ -70,7 +73,11 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   }, [server, projectId, repoId])
 
   const branch = name.trim()
-  const pr = parsePullRequestUrl(prUrl)
+  const welcome = server?.connection.welcome
+  const providers = project ? activePrProviders(welcome, project.settings) : []
+  const pr = parsePrWith(providers, prUrl)
+  // Whether the server names a pull request's head branch (pr.resolve) and takes worktree.create's prUrl.
+  const canResolve = welcome?.capabilities.includes(CAPABILITY.prResolve) === true
   const suggestions = branchSuggestions(branches, name)
 
   /** One request at a time; its error shows on the screen and the form keeps what was typed. */
@@ -111,17 +118,27 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   const addPr = (): void => {
     if (!server || !repo || !pr) return
     const conn = server.connection
-    const prBranchName = prBranch(pr.number)
-    // The PR's branch may already be checked out: the PR is linked to that worktree.
-    const has = worktreeOnBranch(repo, prBranchName)
     void run('pr', async () => {
+      // The server's providers name the PR's head branch; null (or an older server) → pr/<n>. Its
+      // refusal (BAD_REQUEST: no provider there takes the link) shows under the button.
+      const resolved = canResolve ? await conn.request('pr.resolve', { projectId, repoId, input: pr.url }) : null
+      const prBranchName = resolved?.headBranch ?? prBranch(pr.number)
       const link = (): Promise<null> => conn.request('branch.setPr', { projectId, repoId, branch: prBranchName, pr: pr.url })
+      // The PR's branch may already be checked out: the PR is linked to that worktree.
+      const has = worktreeOnBranch(repo, prBranchName)
       if (has) {
         await link()
         await open(has.id)
         return
       }
-      const created = await conn.request('worktree.create', { projectId, repoId, branch: prBranchName, createBranch: false, fromPr: pr.number })
+      const created = await conn.request('worktree.create', {
+        projectId,
+        repoId,
+        branch: prBranchName,
+        createBranch: false,
+        fromPr: pr.number,
+        ...(canResolve ? { prUrl: pr.url } : {})
+      })
       try {
         await link()
       } catch (err) {
@@ -192,24 +209,30 @@ export default function AddWorktreeScreen(): React.JSX.Element {
           New worktrees are created next to the repository as {repo ? repoFolder(repo.path) : '<repository>'}-&lt;branch&gt;. New branches are cut from the latest master/main (fetched from origin first).
         </Text>
 
-        <Text style={ui.heading}>From a GitHub pull request</Text>
-        <TextInput
-          style={ui.input}
-          value={prUrl}
-          onChangeText={setPrUrl}
-          placeholder="https://github.com/org/repo/pull/123"
-          placeholderTextColor={colors.placeholder}
-          autoCapitalize="none"
-          autoCorrect={false}
-          spellCheck={false}
-          keyboardType="url"
-          accessibilityLabel="Pull request link"
-        />
-        {prUrl.trim() && !pr ? <Text style={ui.muted}>Not a GitHub pull request link</Text> : null}
-        <Button label={busy === 'pr' ? 'Adding…' : 'Add PR'} disabled={blocked || !pr} onPress={addPr} />
-        {error?.kind === 'pr' ? <Text style={ui.error}>{error.text}</Text> : null}
+        <Text style={ui.heading}>From a pull request</Text>
+        {project && welcome && providers.length === 0 ? (
+          <Text style={ui.muted}>No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins.</Text>
+        ) : (
+          <>
+            <TextInput
+              style={ui.input}
+              value={prUrl}
+              onChangeText={setPrUrl}
+              placeholder={providers[0]?.hint ?? 'a pull request link'}
+              placeholderTextColor={colors.placeholder}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              keyboardType="url"
+              accessibilityLabel="Pull request link"
+            />
+            {prUrl.trim() && !pr ? <Text style={ui.muted}>Not {providers.map((p) => p.hint).join(', or ')}</Text> : null}
+            <Button label={busy === 'pr' ? 'Adding…' : 'Add PR'} disabled={blocked || !pr} onPress={addPr} />
+            {error?.kind === 'pr' ? <Text style={ui.error}>{error.text}</Text> : null}
+          </>
+        )}
         <Text style={ui.muted}>
-          Checks out the pull request's branch into a new worktree and links the PR to it. On the phone the branch is {pr ? prBranch(pr.number) : 'pr/<number>'}.
+          Checks out the pull request's branch into a new worktree and links the PR to it. The branch is the pull request's own when the server can tell, else pr/&lt;number&gt;.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -2,7 +2,8 @@
 // edit with its compare-and-set and what a conflict does to it, what a pull request box takes, which
 // links are opened, and a tag chip's colours. The rules are the desktop's (backendV2.ts' branch
 // setCustomTag and setNote) and the server's (v2.ts' setBranchField, validate.ts' checkExpected). Pure.
-import { parsePullRequestUrl, pullRequestLabel } from './worktrees.ts'
+import { parsePrWith, type PrProvider } from '../shared.ts'
+import { pullRequestLabel } from './worktrees.ts'
 
 /**
  * A branch's custom tags after `id` is tapped: taken out when on, added at the end when off; null
@@ -55,11 +56,16 @@ export function isNoteConflict(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT'
 }
 
-/** What a pull request box holds: the canonical link to save, why not, or null for nothing typed. */
-export function pullRequestInput(input: string): { pr: string } | { error: string } | null {
+/**
+ * What a pull request box holds: the canonical link to save (through the PR providers on for the
+ * project), why not (naming what they take), or null for nothing typed. With no provider on, the
+ * phone says where one is turned on (not on the phone).
+ */
+export function pullRequestInput(providers: readonly PrProvider[], input: string): { pr: string } | { error: string } | null {
   if (!input.trim()) return null
-  const parsed = parsePullRequestUrl(input)
-  return parsed ? { pr: parsed.url } : { error: 'Not a GitHub pull request link' }
+  if (providers.length === 0) return { error: "No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins." }
+  const parsed = parsePrWith(providers, input)
+  return parsed ? { pr: parsed.url } : { error: `Not ${providers.map((p) => p.hint).join(', or ')}` }
 }
 
 /** "PR #42", or "PR" for a link without a number (as on the project screen's cards). */

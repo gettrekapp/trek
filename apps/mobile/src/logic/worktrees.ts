@@ -1,31 +1,12 @@
-// Adding and removing a worktree from the phone: pull request links, branch suggestions, and the
-// remove flow with its requests and questions injected (so it is tested in node). The rules are
-// the desktop's (AddWorktreeModal.tsx, store.ts' pullRequestLabel, backendV2.ts' worktree remove),
-// without what only the desktop can do: `gh`, and tearing down a dev stack or Docker VM. Pure.
+// Adding and removing a worktree from the phone: a pull request's label and fallback branch, branch
+// suggestions, and the remove flow with its requests and questions injected (so it is tested in
+// node). The rules are the desktop's (AddWorktreeModal.tsx, backendV2.ts' worktree remove), without
+// what only the desktop can do: tearing down a dev stack or Docker VM. Pure.
 
-export interface ParsedPullRequest {
-  owner: string
-  repo: string
-  number: number
-  /** Canonical link: what is saved */
-  url: string
-}
+/** "#12" from a pull request link, else "PR" (the desktop's generic label). */
+export { genericPrLabel as pullRequestLabel } from '../shared.ts'
 
-/** A github.com pull request link, as the desktop's Add Worktree dialog takes it; null otherwise. */
-export function parsePullRequestUrl(input: string): ParsedPullRequest | null {
-  const match = input.trim().match(/^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i)
-  if (!match) return null
-  const [, owner, repo, num] = match
-  return { owner, repo, number: Number(num), url: `https://github.com/${owner}/${repo}/pull/${num}` }
-}
-
-/** "#12" from a pull request link, else "PR" (the desktop's pullRequestLabel). */
-export function pullRequestLabel(url: string): string {
-  const match = url.match(/\/pull(?:request)?s?\/(\d+)/i)
-  return match ? `#${match[1]}` : 'PR'
-}
-
-/** The branch a PR's worktree gets on the phone (the desktop's fallback: it asks `gh` for the PR's own first). */
+/** The branch a PR's worktree gets when the server can't name the PR's own (pr.resolve's headBranch), as on the desktop. */
 export function prBranch(number: number): string {
   return `pr/${number}`
 }

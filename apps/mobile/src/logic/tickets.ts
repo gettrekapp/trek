@@ -37,7 +37,7 @@ const TRACKERS: ReadonlyArray<{ manifest: PluginManifest; provider: TicketProvid
  * - a server older than plugins (no list): it has the plugin's legacy capability, or had it built
  *   in (`legacyBuiltIn`); always on there, whatever the project's setting.
  */
-function pluginOn(manifest: PluginManifest, server: TicketServer, settings: ProjectSettings): boolean {
+export function pluginOn(manifest: PluginManifest, server: TicketServer, settings: ProjectSettings): boolean {
   if (!server.plugins) {
     const capability = !!manifest.legacyCapability && server.capabilities?.includes(manifest.legacyCapability) === true
     return capability || manifest.legacyBuiltIn === true

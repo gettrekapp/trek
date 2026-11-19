@@ -27,8 +27,9 @@ import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
-import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
+import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
@@ -675,17 +676,19 @@ test('quick buttons: the main checkout resolves its branch data; a worktree with
   for (const name of ['branch', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(none[name], undefined, name)
 })
 
-test('worktrees: a github.com pull request link, in its canonical form; its label and its branch', () => {
-  assert.deepEqual(parsePullRequestUrl('https://github.com/o/r/pull/42/files?x=1'), { owner: 'o', repo: 'r', number: 42, url: 'https://github.com/o/r/pull/42' })
-  assert.deepEqual(parsePullRequestUrl('  http://www.github.com/my-org/my.repo/pull/7  '), { owner: 'my-org', repo: 'my.repo', number: 7, url: 'https://github.com/my-org/my.repo/pull/7' })
-  assert.equal(parsePullRequestUrl('https://www.github.com/o/r/pull/1')?.number, 1)
-  for (const bad of ['https://gitlab.com/o/r/pull/1', 'github.com/o/r/pull/1', 'https://github.com/o/r/issues/1', 'https://github.com/o/r/pull/', '']) {
-    assert.equal(parsePullRequestUrl(bad), null, bad)
-  }
+test('worktrees: a pull request link\'s label and its fallback branch', () => {
   assert.equal(pullRequestLabel('https://github.com/o/r/pull/42'), '#42')
   assert.equal(pullRequestLabel('https://dev.azure.com/o/p/_git/r/pullrequest/9'), '#9')
   assert.equal(pullRequestLabel('https://github.com/o/r'), 'PR')
   assert.equal(prBranch(42), 'pr/42')
+})
+
+test('phone PR providers: github on where listed and on, on for an older server, off by the project setting', () => {
+  const settings = {}
+  assert.deepEqual(activePrProviders({ plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }] }, settings).map((p) => p.id), ['github'])
+  assert.deepEqual(activePrProviders({ capabilities: [] }, settings).map((p) => p.id), ['github'])
+  assert.deepEqual(activePrProviders({ plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }] }, { plugins: { github: { enabled: false } } }), [])
+  assert.deepEqual(activePrProviders(null, settings), [])
 })
 
 test('worktrees: branch suggestions contain the typed text, the exact match first, up to the limit', () => {
@@ -1285,15 +1288,27 @@ test("branch details: after a conflict the user's text stays, and the next save 
   assert.deepEqual(noteConflicted(conflicted, 'theirs again'), { text: 'mine', expected: 'theirs again', conflict: true })
 })
 
-test('branch details: a pull request box takes a github.com pull request link, saved in its canonical form', () => {
-  assert.deepEqual(pullRequestInput(' https://github.com/o/r/pull/42/files '), { pr: 'https://github.com/o/r/pull/42' })
-  assert.deepEqual(pullRequestInput('http://www.github.com/o/r/pull/7'), { pr: 'https://github.com/o/r/pull/7' })
+test('pullRequestInput: the canonical link through the providers; the error names what they take', () => {
+  const providers = activePrProviders({ capabilities: [] }, {})
+  assert.deepEqual(pullRequestInput(providers, 'https://www.github.com/a/b/pull/3/files'), { pr: 'https://github.com/a/b/pull/3' })
+  assert.deepEqual(pullRequestInput(providers, ' https://github.com/o/r/pull/42/files '), { pr: 'https://github.com/o/r/pull/42' })
+  assert.match(pullRequestInput(providers, 'https://example.com/x').error, /GitHub pull request link/)
   for (const bad of ['https://gitlab.com/o/r/pull/1', 'https://github.com/o/r/issues/1', '42', 'pr 42']) {
-    assert.deepEqual(pullRequestInput(bad), { error: 'Not a GitHub pull request link' }, bad)
+    assert.match(pullRequestInput(providers, bad).error, /^Not a GitHub pull request link/, bad)
   }
+  assert.deepEqual(pullRequestInput([], 'https://github.com/a/b/pull/3'), { error: "No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins." })
   // Nothing typed is nothing to save (Clear is what unlinks).
-  assert.equal(pullRequestInput(''), null)
-  assert.equal(pullRequestInput('   '), null)
+  assert.equal(pullRequestInput(providers, '  '), null)
+  assert.equal(pullRequestInput(providers, ''), null)
+})
+
+test('watchSuffix names the provider\'s sign-in', () => {
+  const providers = activePrProviders({ capabilities: [] }, {})
+  const data = { pr: 'https://github.com/a/b/pull/3', prWatch: {} }
+  assert.equal(watchSuffix(data, false, providers), " · watch paused, gh isn't signed in")
+  assert.equal(watchSuffix(data, true, providers), ' · watching')
+  // A link no provider on owns names no sign-in.
+  assert.equal(watchSuffix({ pr: 'https://example.com/pr/3', prWatch: {} }, false, providers), " · watch paused, its host isn't signed in")
 })
 
 test('branch details: a pull request reads "PR #<n>"; only a web link is opened', () => {
@@ -1861,13 +1876,14 @@ test('pr watch: the switch is offered for a linked pull request when gh is signe
     [{ pr }, false, false, '', { label: 'Watch', watch: true }],
     [{ pr }, true, true, '', { label: 'Watch', watch: true }],
     [{ pr, prWatch: {} }, true, true, ' · watching', { label: 'Stop watching', watch: false }],
-    [{ pr, prWatch: {} }, false, true, ' · watch paused, gh signed out', { label: 'Stop watching', watch: false }],
+    [{ pr, prWatch: {} }, false, true, " · watch paused, gh isn't signed in", { label: 'Stop watching', watch: false }],
     [{ prWatch: {} }, true, false, '', { label: 'Watch', watch: true }]
   ]
+  const providers = activePrProviders({ capabilities: [] }, {})
   for (const [data, capable, offered, suffix, action] of cases) {
     const what = `${JSON.stringify(data)} capable=${capable}`
     assert.equal(watchOffered(data, capable), offered, what)
-    assert.equal(watchSuffix(data, capable), suffix, what)
+    assert.equal(watchSuffix(data, capable, providers), suffix, what)
     assert.deepEqual(watchAction(data), action, what)
   }
 })
