@@ -43,6 +43,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * (`voice`), listed after the static ones, for clients older than plugins. `update` (after
  * `pairing`) on a server that can update itself (never the local one).
  * `pluginInstall` (after `update`): the server takes `plugins.install` and `plugins.remove` from a client.
+ * `prResolve` (after `pluginInstall`): a PR provider is registered, so `pr.resolve` and
+ * `worktree.create`'s `prUrl` work (plugins P3); signed in or not.
  */
 export function welcomeCapabilities(
   mcp: boolean,
@@ -52,7 +54,8 @@ export function welcomeCapabilities(
   platform: NodeJS.Platform = process.platform,
   update = false,
   pluginInstall = false,
-  phoneAccess = false
+  phoneAccess = false,
+  prResolve = false
 ): string[] {
   // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
   const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
@@ -63,6 +66,7 @@ export function welcomeCapabilities(
     CAPABILITY.pairing,
     ...(update && !local ? [CAPABILITY.update] : []),
     ...(pluginInstall ? [CAPABILITY.pluginInstall] : []),
+    ...(prResolve ? [CAPABILITY.prResolve] : []),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
     ...(local && phoneAccess ? [CAPABILITY.phoneAccess] : []),
     ...(local ? [CAPABILITY.local] : [])

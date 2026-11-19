@@ -97,6 +97,20 @@ function setup(initial = project(), ghAnswers = [], { providers } = {}) {
   return { history, hub, projects, saved, queued, calls, watcher, jobs, answers, fake, github, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
+/** A gh runner that gives `answers` in turn (an Error is thrown), recording each call's args. */
+function fakeRunner(answers) {
+  const calls = []
+  const left = [...answers]
+  const run = async (args) => {
+    calls.push(args)
+    if (left.length === 0) throw new Error('the test gave gh no more answers')
+    const next = left.shift()
+    if (next instanceof Error) throw next
+    return next
+  }
+  return { run, calls }
+}
+
 /** gh's answer to PR_QUERY (`gh api graphql`), from the flat fields the tests vary. */
 const view = (over = {}) => {
   const o = { number: 12, state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'aaa', author: { login: 'me' }, viewer: 'agent', statusCheckRollup: [], reviews: [], comments: [], ...over }
@@ -545,7 +559,8 @@ function ctxFor(initial, { available = true, providers } = {}) {
   const githubPrsServer = createGithubPrProvider(async () => '')
   const plugins = { prProviders: () => providers ?? [githubPrsServer] }
   const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, plugins, sessions: { refreshAttention() {} } })
-  return { call, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
+  const callAsync = (method, params) => Promise.resolve(call(method, params))
+  return { call, callAsync, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
 test('branch.setPrWatch: on needs a provider that owns the link, signed in; on twice keeps what it saw; off always works', () => {
@@ -751,4 +766,38 @@ test('branch.setPrWatch: a provider whose parse throws, or does not give the sto
     assert.equal(error?.code, 'BAD_REQUEST', String(parse))
     assert.equal(c.data().prWatch, undefined)
   }
+})
+
+test('pr.resolve: a link, a bare number from a linked PR, the head branch through the provider', async () => {
+  const gh = fakeRunner(['{"headRefName":"feat/x"}', '{"headRefName":"feat/y"}'])
+  const c = ctxFor(project(), { providers: [createGithubPrProvider(gh.run)] })
+  assert.deepEqual(await c.callAsync('pr.resolve', { repoId: 'r1', input: 'https://www.github.com/acme/app/pull/12/files' }),
+    { ok: true, result: { url: 'https://github.com/acme/app/pull/12', number: 12, label: '#12', providerId: 'github', headBranch: 'feat/x' } })
+  assert.deepEqual((await c.callAsync('pr.resolve', { repoId: 'r1', input: '#40' })).result.url, 'https://github.com/acme/app/pull/40')
+  assert.deepEqual(gh.calls[1], ['pr', 'view', 'https://github.com/acme/app/pull/40', '--json', 'headRefName'])
+})
+
+test('pr.resolve: no provider takes it → BAD_REQUEST naming what they take; none on → says so; a headBranch failure is null', async () => {
+  const gh = fakeRunner([new Error('boom')])
+  const c = ctxFor(project({ pr: null }), { providers: [createGithubPrProvider(gh.run)] })
+  const bad = await c.callAsync('pr.resolve', { repoId: 'r1', input: '40' })
+  assert.equal(bad.error.code, 'BAD_REQUEST')
+  assert.match(bad.error.message, /a GitHub pull request link/)
+  assert.equal((await c.callAsync('pr.resolve', { repoId: 'r1', input: 'https://github.com/a/b/pull/1' })).result.headBranch, null)
+  const none = ctxFor(project(), { providers: [] })
+  assert.match((await none.callAsync('pr.resolve', { repoId: 'r1', input: 'https://github.com/a/b/pull/1' })).error.message, /No pull request provider is on/)
+  assert.equal((await c.callAsync('pr.resolve', { repoId: 'r1' })).error.code, 'BAD_REQUEST', 'input is required')
+  assert.equal((await c.callAsync('pr.resolve', { repoId: 'nope', input: '1' })).error.code, 'NOT_FOUND')
+})
+
+test('pr.resolve: a head branch git would refuse (foo.lock, a//b, a trailing /) is null', async () => {
+  for (const name of ['foo.lock', 'a//b', 'feat/']) {
+    const c = ctxFor(project(), { providers: [createGithubPrProvider(fakeRunner([JSON.stringify({ headRefName: name })]).run)] })
+    assert.equal((await c.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null, name)
+  }
+})
+
+test('welcomeCapabilities lists prResolve whenever a PR provider is registered', () => {
+  assert.equal(welcomeCapabilities(false, false, false, [], 'darwin', false, false, false, true).includes('prResolve'), true)
+  assert.equal(welcomeCapabilities(false, false, false, [], 'darwin', false, false, false, false).includes('prResolve'), false)
 })

@@ -117,7 +117,7 @@ new optional field needs no capability: its absence says enough.
 | `linear` | The Linear plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the Linear plugin](plugins/linear/README.md)) |
 | `voice` | The voice plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the voice plugin](plugins/voice/README.md)) |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
-| `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
+| `prWatch` | a PR provider is signed in on the server's machine (GitHub: gh is installed and signed in), so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
@@ -128,6 +128,7 @@ new optional field needs no capability: its absence says enough.
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server; a phone reaches the local one only through its phone listener (`phoneAccess`) |
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
 | `pluginInstall` | The server takes `plugins.install` and `plugins.remove` from a client (see [Installed plugins](#installed-plugins)). Not listed when its config has `"plugins": {"remoteInstall": false}`; the local server lists it too. Read from the config as each welcome is sent |
+| `prResolve` | A pull request provider plugin is registered on the server (plugins P3; the built-in `github`), signed in or not: `pr.resolve`, and `worktree.create`'s `prUrl` (see [Pull request watch](#pull-request-watch)). Decided when the server starts |
 | `phoneAccess` | The local server only: its listener for phones on this machine's Tailscale address (see [Phone access on the local server](#phone-access-on-the-local-server)): `phoneAccess.get`, `phoneAccess.set`, `phoneAccess.revoke` and the `phoneAccess.changed` event, all for its own `local` token |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only unless phone access is on (see [Phone access on the local server](#phone-access-on-the-local-server)): it then also listens on this machine's Tailscale address, where the `local` token is refused, and a paired phone's token has the same any-path access. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
@@ -209,7 +210,7 @@ server restarts. A server without this field simply leaves it out.
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
 | Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize`; the Linear plugin's `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` (see [Plugins](#plugins)). Installed plugins: `plugins.bundle`, `plugins.install`, `plugins.remove` (see [Installed plugins](#installed-plugins)) |
 | Skills | `skills.list` |
-| Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
+| Pull request watch | `pr.resolve`, `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Automations | `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed` |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
 | Updating the server | `update.status`, `update.check`, `update.apply` (see [Updating the server](#updating-the-server)) |
@@ -279,7 +280,7 @@ list fails, is reported as a `REPO_UNAVAILABLE` health warning in the `server`
 topic until a list succeeds; worktree commands on an unregistered repository
 fail with `PATH_DENIED`.
 
-`worktree.create {projectId, repoId, branch, createBranch, path?, fromPr?}`
+`worktree.create {projectId, repoId, branch, createBranch, path?, fromPr?, prUrl?}`
 defaults `path` to `<repo>-<branch>` next to the repository, with each `/` in
 the branch replaced by `-`. The path must be under the allowlist
 (`PATH_DENIED`) and must not exist. It must not be a registered repository or
@@ -291,9 +292,19 @@ or `HEAD`; each of these is `BAD_REQUEST`. `createBranch: true` cuts the branch
 from the default branch (fetched first when it is on origin). With
 `createBranch: false` and no `fromPr`, the branch must already exist locally or
 on a remote; otherwise the result is `GIT_ERROR` "no branch named …". Tags and
-commit SHAs are not accepted. `fromPr: n` fetches GitHub PR #n's head into
-`branch` (works for fork PRs) and needs `createBranch: false`; the client
-supplies the branch name and sets the PR link with `branch.setPr`. The server
+commit SHAs are not accepted. `fromPr: n` fetches pull request #n's head (its
+provider's ref: `refs/pull/<n>/head` on GitHub) into `branch` (works for fork
+PRs) and needs `createBranch: false`; the client supplies the branch name and
+sets the PR link with `branch.setPr`. The provider is `prUrl`'s owner among the
+project's PR providers, else the project's only one (`BAD_REQUEST` when none
+owns `prUrl`, or without `prUrl` when not exactly one is on; servers before
+`prResolve` ignore `prUrl` and fetch from GitHub). A local `branch` that already
+exists is used only when it is the PR's own: at the PR head already, or
+origin's same-named branch is the PR head (a same-repository PR), or it is
+`pr/<n>`; then it is fast-forwarded, and checked out as it is when it cannot be.
+Any other (a fork PR's head is often `main`) is `BAD_REQUEST` and is never moved.
+When git refuses the fetch or the checkout, the branch this call fetched is
+deleted and the result is `GIT_ERROR`. The server
 symlinks the repository's `linkedDirs` into the new worktree and gives the
 branch the first workflow tag unless it has one, and only when the new worktree
 really has `branch` checked out. The response comes after the new row is in the
@@ -1201,6 +1212,7 @@ read: <reason>`, once, and the next good poll withdraws it.
 |---|---|---|
 | `branch.setPrWatch` | `{projectId, repoId, branch, watch}` | `null`. On needs `prWatch` (else `TOOL_ERROR`) and a linked github.com pull URL (else `BAD_REQUEST`); a watch already on keeps its `seen`; a new one is polled at once. Off always works |
 | `prWatch.dismiss` | `{projectId, worktreeId}` | `null`: the worktree's notice is cleared (`NOT_FOUND` for an unknown worktree) |
+| `pr.resolve` | `{projectId, repoId, input}` (`prResolve`) | `{url, number, label, providerId, headBranch}`: `input` (a link in any form a provider on for the project takes, or a number `12` / `#12` whose repository comes from a link already stored in the repository) read by the first provider that takes it, `url` its canonical link. `headBranch` is the PR's head branch, or `null` when the provider can't tell (GitHub: gh not signed in), git would refuse the name, or a local branch of that name exists and is not the PR's (see `worktree.create`'s `fromPr`); a client then names the branch `pr/<n>`. `BAD_REQUEST` naming what the providers take when none does, or when no PR provider is on for the project; `NOT_FOUND` for an unknown repository |
 
 `branch.setPr` with a different URL, or none, also removes the branch's watch: it watched the old
 pull request. The MCP tool `watch_pull_request` turns a watch on or off.

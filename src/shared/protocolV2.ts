@@ -288,7 +288,9 @@ export const CAPABILITY = {
   /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
   automations: 'automations',
   /** `plugins.install` and `plugins.remove`: a client may install a plugin on the server, or remove one (theme plugins) */
-  pluginInstall: 'pluginInstall'
+  pluginInstall: 'pluginInstall',
+  /** `pr.resolve` reads a pull request link or number through the project's PR providers, with its head branch; `worktree.create` takes `prUrl` (plugins P3) */
+  prResolve: 'prResolve'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
@@ -389,8 +391,10 @@ export interface MethodParamsV2 {
   // Worktrees
   /**
    * `path` defaults to `<repo>-<branch>` next to the repository, each `/` in the
-   * branch replaced by `-`. `fromPr`: fetch GitHub PR #n's head into `branch`
-   * and check it out (works for fork PRs); needs `createBranch: false`.
+   * branch replaced by `-`. `fromPr`: fetch pull request #n's head (the ref its provider names:
+   * `prUrl`'s owner, else the project's only PR provider) into `branch` and check it out; needs
+   * `createBranch: false`. A local `branch` that is not the PR's (neither at its head nor at
+   * origin's same-named branch, when that is the head) is refused, never moved; `pr/<n>` is the PR's own.
    * Not atomic: if git creates the worktree but the list cannot be re-read, the
    * call fails with GIT_ERROR and the worktree stays on disk.
    */
@@ -399,6 +403,8 @@ export interface MethodParamsV2 {
     createBranch: boolean
     path?: string
     fromPr?: number
+    /** The PR's link: its provider names the ref `fromPr` fetches (`prResolve`) */
+    prUrl?: string
   }
   /** Without `force`, a dirty worktree fails with GIT_ERROR; a loaded one is IN_USE */
   'worktree.remove': WorktreeRef & { force?: boolean }
@@ -481,6 +487,11 @@ export interface MethodParamsV2 {
   'branch.setPr': BranchRef & { pr: string | null }
   /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked github.com PR */
   'branch.setPrWatch': BranchRef & { watch: boolean }
+  /**
+   * A pull request link or number (`12`, `#12`, from a link already stored in the repository)
+   * through the project's PR providers, with its head branch (plugins P3, `prResolve`).
+   */
+  'pr.resolve': RepoRef & { input: string }
   'history.list': BranchRef & { before?: string; limit?: number }
   'mcpTools.list': { projectId: string; refresh?: boolean; servers?: boolean }
   /** Clears the worktree's pull request notice */
@@ -698,6 +709,8 @@ export interface MethodResultsV2 {
   'branch.setTicket': null
   'branch.setPr': null
   'branch.setPrWatch': null
+  /** `headBranch`: null when the provider can't tell, git would refuse the name, or a local branch of that name is not the PR's */
+  'pr.resolve': { url: string; number: number; label: string; providerId: string; headBranch: string | null }
   'history.list': HistoryPage
   'mcpTools.list': McpToolCatalog
   'prWatch.dismiss': null

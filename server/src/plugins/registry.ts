@@ -19,7 +19,7 @@ import { commandFromEnv, runCommand } from './run.ts'
 import type { TopicHub } from '../topicHub'
 
 /** Namespaces a plugin may not take, beside those of the core methods. */
-export const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp'])
+export const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp', 'pr'])
 
 /**
  * A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory), and

@@ -670,7 +670,7 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, installedPlugins !== undefined && remoteInstall(), phoneAccess !== undefined),
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, installedPlugins !== undefined && remoteInstall(), phoneAccess !== undefined, plugins !== undefined && plugins.allPrProviders().length > 0),
           ...platformInfo,
           ...(plugins ? { plugins: pluginPresence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})

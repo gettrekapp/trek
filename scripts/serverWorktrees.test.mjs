@@ -19,6 +19,7 @@ import { attentionEntries } from '../server/src/sessions/status.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDir } from './testPlatform.mjs'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
   ...process.env,
@@ -26,7 +27,7 @@ const gitEnv = {
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
-async function setup(t) {
+async function setup(t, { prProviders } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-wt-')))
   t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
@@ -45,7 +46,9 @@ async function setup(t) {
   const subscriber = { send: () => {} }
   const blocked = []
   const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } }, refreshAttention }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions })
+  // The project's PR providers (plugins P3): the github one by default, over a gh that is never run.
+  const plugins = { prProviders: () => prProviders ?? [createGithubPrProvider(async () => { throw new Error('no gh in these tests') })] }
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions, plugins })
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId
   await poller.refresh(a)
@@ -165,6 +168,129 @@ test('worktree.create fromPr checks out the PR head', async (t) => {
   const res = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'pr-1', createBranch: false, fromPr: 1 })
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.equal(git(s.worktree(res.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), sha)
+})
+
+/** A bare origin for repo `a`; `pr(ref, from)` pushes a new commit on `from` to `ref` and returns its sha. */
+function withOrigin(s) {
+  const origin = join(s.dir, 'origin.git')
+  execFileSync('git', ['init', '-q', '--bare', origin], { env: gitEnv })
+  git(s.a, 'remote', 'add', 'origin', origin)
+  const pr = (ref, from = 'main', message = 'pr work') => {
+    git(s.a, 'checkout', '-q', '--detach', from)
+    git(s.a, 'commit', '--allow-empty', '-q', '-m', message)
+    const sha = git(s.a, 'rev-parse', 'HEAD').trim()
+    git(s.a, 'push', '-q', 'origin', `${sha}:${ref}`)
+    git(s.a, 'checkout', '-q', 'main')
+    return sha
+  }
+  return { origin, pr }
+}
+
+/** A made-up provider whose fetch ref is refs/example/<n>. */
+const exampleProvider = {
+  id: 'example', hint: 'an Example link', signInName: 'example-cli',
+  parse: (i) => (i.startsWith('https://code.example/pr/') ? { url: i, number: Number(i.split('/').pop()), label: `!${i.split('/').pop()}` } : null),
+  owns: (u) => u.startsWith('https://code.example/pr/'),
+  available: async () => true,
+  read: async () => { throw new Error('not read here') },
+  headBranch: async () => null,
+  fetchRef: (n) => `refs/example/${n}`,
+  promptHint: { checks: 'c {url}', comments: 'm {url}' }
+}
+
+test("worktree.create with fromPr and prUrl fetches the provider's ref; with fromPr alone, the only provider's; none → BAD_REQUEST", async (t) => {
+  const github = createGithubPrProvider(async () => { throw new Error('no gh') })
+  const s = await setup(t, { prProviders: [github, exampleProvider] })
+  const { pr } = withOrigin(s)
+  const gh12 = pr('refs/pull/12/head', 'main', 'github 12')
+  const ex12 = pr('refs/example/12', 'main', 'example 12')
+  const base = { projectId: s.projectId, repoId: s.repoId, createBranch: false, fromPr: 12 }
+  const viaGithub = await s.call('worktree.create', { ...base, branch: 'gh-12', prUrl: 'https://github.com/acme/app/pull/12' })
+  assert.equal(viaGithub.ok, true, JSON.stringify(viaGithub))
+  assert.equal(git(s.worktree(viaGithub.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), gh12)
+  const viaExample = await s.call('worktree.create', { ...base, branch: 'ex-12', prUrl: 'https://code.example/pr/12' })
+  assert.equal(viaExample.ok, true, JSON.stringify(viaExample))
+  assert.equal(git(s.worktree(viaExample.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), ex12)
+  // Two providers on and no prUrl: which ref is not known.
+  const ambiguous = await s.call('worktree.create', { ...base, branch: 'which-12' })
+  assert.equal(ambiguous.error?.code, 'BAD_REQUEST')
+  assert.match(ambiguous.error.message, /pass prUrl/)
+  const unowned = await s.call('worktree.create', { ...base, branch: 'odd-12', prUrl: 'https://elsewhere.example/12' })
+  assert.equal(unowned.error?.code, 'BAD_REQUEST')
+  assert.equal(git(s.a, 'branch', '--list', 'which-12', 'odd-12').trim(), '')
+
+  const only = await setup(t, { prProviders: [exampleProvider] })
+  const o = withOrigin(only).pr('refs/example/12')
+  const alone = await only.call('worktree.create', { projectId: only.projectId, repoId: only.repoId, createBranch: false, fromPr: 12, branch: 'alone-12' })
+  assert.equal(alone.ok, true, JSON.stringify(alone))
+  assert.equal(git(only.worktree(alone.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), o)
+
+  const none = await setup(t, { prProviders: [] })
+  const refused = await none.call('worktree.create', { projectId: none.projectId, repoId: none.repoId, createBranch: false, fromPr: 1, branch: 'pr/1' })
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+})
+
+test('worktree.create fromPr never moves a local branch of the same name that is not the PR head (a fork\'s main)', async (t) => {
+  const s = await setup(t)
+  const { pr } = withOrigin(s)
+  git(s.a, 'branch', 'dev')
+  const dev = git(s.a, 'rev-parse', 'dev').trim()
+  git(s.a, 'push', '-q', 'origin', 'dev')
+  // A fork's PR whose head branch is also called dev: a fast-forward of the local dev, but not origin's dev.
+  pr('refs/pull/3/head', 'dev', 'fork work')
+  const res = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'dev', createBranch: false, fromPr: 3, prUrl: 'https://github.com/acme/app/pull/3' })
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+  assert.match(res.error.message, /already exists/)
+  assert.equal(git(s.a, 'rev-parse', 'dev').trim(), dev, 'dev is untouched')
+  assert.equal(git(s.a, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).length, 1)
+})
+
+test("worktree.create fromPr fast-forwards a stale local branch that is the PR's own (origin's branch is the PR head), and reuses pr/<n>", async (t) => {
+  const s = await setup(t)
+  const { pr } = withOrigin(s)
+  git(s.a, 'branch', 'feat')
+  const head = pr('refs/heads/feat', 'feat', 'more feat')
+  git(s.a, 'push', '-q', 'origin', `${head}:refs/pull/4/head`)
+  const res = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', createBranch: false, fromPr: 4, prUrl: 'https://github.com/acme/app/pull/4' })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(git(s.worktree(res.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), head)
+
+  // pr/<n>, Trek's own name for the PR, left from an earlier checkout: brought up to the PR head.
+  git(s.a, 'branch', 'pr/5')
+  const five = pr('refs/pull/5/head', 'pr/5', 'pr five')
+  const again = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'pr/5', createBranch: false, fromPr: 5, prUrl: 'https://github.com/acme/app/pull/5' })
+  assert.equal(again.ok, true, JSON.stringify(again))
+  assert.equal(git(s.worktree(again.result.worktreeId).path, 'rev-parse', 'HEAD').trim(), five)
+})
+
+test('worktree.create fromPr: a PR ref origin lacks is GIT_ERROR, with no branch or worktree left behind', async (t) => {
+  const s = await setup(t)
+  withOrigin(s)
+  const res = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'pr/99', createBranch: false, fromPr: 99, prUrl: 'https://github.com/acme/app/pull/99' })
+  assert.equal(res.error?.code, 'GIT_ERROR', JSON.stringify(res))
+  assert.equal(git(s.a, 'branch', '--list', 'pr/99').trim(), '')
+  assert.equal(git(s.a, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).length, 1)
+})
+
+test("pr.resolve: a head branch that names another local branch is null (the client falls back to pr/<n>); the PR's own is kept", async (t) => {
+  let name = 'dev'
+  const github = createGithubPrProvider(async () => JSON.stringify({ headRefName: name }))
+  const s = await setup(t, { prProviders: [github] })
+  const { pr } = withOrigin(s)
+  git(s.a, 'branch', 'dev')
+  git(s.a, 'push', '-q', 'origin', 'dev')
+  pr('refs/pull/3/head', 'dev', 'fork work')
+  const resolve = async () => (await s.call('pr.resolve', { projectId: s.projectId, repoId: s.repoId, input: 'https://github.com/acme/app/pull/3' })).result.headBranch
+  assert.equal(await resolve(), null, 'local dev is not the PR head')
+  name = 'fresh'
+  assert.equal(await resolve(), 'fresh', 'no local branch of that name')
+  name = 'main'
+  assert.equal(await resolve(), null, 'nor is main')
+  git(s.a, 'branch', 'feat')
+  const head = pr('refs/heads/feat', 'feat', 'more feat')
+  git(s.a, 'push', '-q', 'origin', `${head}:refs/pull/3/head`, '--force')
+  name = 'feat'
+  assert.equal(await resolve(), 'feat', "origin's feat is the PR head")
 })
 
 test('worktree.create reports a refresh that could not list the repo', async (t) => {

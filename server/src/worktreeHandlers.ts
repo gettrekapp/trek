@@ -16,6 +16,7 @@ import { assertNotPromoting } from './promote/changing.ts'
 import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
 import { isInside } from '../../src/host/pathContainment.ts'
+import { prOwner } from '../../src/shared/plugins/pullRequests.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -172,7 +173,24 @@ export const worktreeHandlers: Record<string, Handler> = {
       if (createBranch) throw bad('fromPr checks out the PR head into an existing or fetched branch; createBranch must be false')
       fromPr = p.fromPr
     }
-    const repo = repoIn(ctx.projects.require(p.projectId), p.repoId)
+    const project = ctx.projects.require(p.projectId)
+    let prRef: string | undefined
+    if (fromPr !== undefined) {
+      // The ref to fetch is the PR's provider's: prUrl's owner, else the project's only one.
+      const providers = ctx.plugins?.prProviders(project.id) ?? []
+      const prUrl = p.prUrl === undefined ? undefined : requireString(p.prUrl, 'prUrl')
+      const provider = prUrl !== undefined ? prOwner(providers, prUrl) : providers.length === 1 ? providers[0] : undefined
+      if (!provider) {
+        throw bad(prUrl !== undefined ? `no pull request provider is on for ${prUrl} in this project` : 'no single pull request provider is on in this project: pass prUrl')
+      }
+      try {
+        prRef = provider.fetchRef(fromPr)
+        gitService.assertPullRequestRef(prRef)
+      } catch (err) {
+        throw codedError('TOOL_ERROR', `pull request provider ${provider.id} gave no usable ref for #${fromPr}: ${(err as Error).message}`)
+      }
+    }
+    const repo = repoIn(project, p.repoId)
     findRegistered(ctx.store.config.repos, repo.path)
     const requested = p.path === undefined ? defaultWorktreePath(repo.path, branch) : requireAbsolutePath(p.path, 'path')
     const target = ctx.store.guard.check(requested)
@@ -184,20 +202,33 @@ export const worktreeHandlers: Record<string, Handler> = {
     }
     await checkBranchName(repo.path, branch, !createBranch && fromPr === undefined)
 
-    await viaGit(async () => {
-      if (fromPr === undefined) {
-        await gitService.addWorktree(repo.path, target, branch, createBranch)
-        return
+    if (prRef !== undefined && fromPr !== undefined) {
+      const ref = prRef
+      const existed = (await gitService.localBranchSha(repo.path, branch)) !== null
+      // A local branch of that name that is not the PR's (a fork PR's head is often main) is never
+      // fetched into or checked out for it. pr/<n> is Trek's own name for the PR.
+      if (existed && branch !== `pr/${fromPr}` && !(await viaGit(() => gitService.isPullRequestBranch(repo.path, ref, branch)))) {
+        throw bad(`a local branch named "${branch}" already exists and is not pull request #${fromPr}'s head; check the PR out as pr/${fromPr}`)
       }
-      try {
-        await gitService.fetchPullRequestHead(repo.path, fromPr, branch)
-      } catch (err) {
-        // A local branch that cannot fast-forward to the PR head can still be
-        // checked out; the user reconciles it in the worktree.
-        if (!(await gitService.listBranches(repo.path)).includes(branch)) throw err
-      }
-      await gitService.addWorktreeAt(repo.path, target, branch)
-    })
+      await viaGit(async () => {
+        try {
+          await gitService.fetchPullRequestHead(repo.path, ref, branch)
+        } catch (err) {
+          // The PR's own local branch that cannot fast-forward to its head can still be
+          // checked out; the user reconciles it in the worktree.
+          if (!existed) throw err
+        }
+        try {
+          await gitService.addWorktreeAt(repo.path, target, branch)
+        } catch (err) {
+          // The branch this call fetched goes with the worktree git refused.
+          if (!existed) await gitService.git(repo.path, ['branch', '-D', '--', branch]).catch(() => {})
+          throw err
+        }
+      })
+    } else {
+      await viaGit(() => gitService.addWorktree(repo.path, target, branch, createBranch))
+    }
     const linkWarnings = await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
     const listed = await ctx.poller.refresh(repo.path)
     if (!listed) {

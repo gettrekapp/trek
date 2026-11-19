@@ -760,22 +760,67 @@ export async function fetchBranch(repoPath: string, branch: string): Promise<voi
 }
 
 /**
- * Fetch a GitHub pull request's head into a local branch so it can be checked
- * out as a worktree. refs/pull/<n>/head resolves even for fork PRs, where the
- * head branch doesn't exist on origin. Fast-forward only, like fetchBranch.
- * Tracking is set up even when the fast-forward fails, since the branch is
- * still checked out.
+ * A pull request's fetch ref, as its provider names it ('refs/pull/12/head'): a full ref, no `..`,
+ * so it can only be read as a ref on git's command line.
+ */
+export function assertPullRequestRef(ref: string): void {
+  if (typeof ref !== 'string' || !/^refs\/[\w./-]+$/.test(ref) || ref.includes('..')) throw new Error('not a pull request ref')
+}
+
+/** The sha of local branch `branch`; null when there is none (or the repository can't be read). */
+export async function localBranchSha(repoPath: string, branch: string): Promise<string | null> {
+  assertSafeBranch(branch)
+  return git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]).then(
+    (out) => out.trim() || null,
+    () => null
+  )
+}
+
+/** origin's shas for `ref` and its `refs/heads/<branch>` (either missing when origin has no such ref). */
+async function originShas(repoPath: string, ref: string, branch: string): Promise<{ pr?: string; branch?: string }> {
+  const branchRef = `refs/heads/${branch}`
+  const shas = new Map(
+    (await git(repoPath, ['ls-remote', 'origin', '--', ref, branchRef]))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => line.split('\t').reverse() as [string, string])
+  )
+  return { pr: shas.get(ref), branch: shas.get(branchRef) }
+}
+
+/**
+ * Whether an existing local `branch` is the pull request's own, so fetching its head into it can't
+ * move an unrelated branch (a fork PR's head is often `main`): it is at the PR head already, or
+ * origin's same-named branch is the PR head (a same-repository PR). Rejects when origin can't be read.
+ */
+export async function isPullRequestBranch(repoPath: string, ref: string, branch: string): Promise<boolean> {
+  assertSafeBranch(branch)
+  assertPullRequestRef(ref)
+  const local = await localBranchSha(repoPath, branch)
+  const origin = await originShas(repoPath, ref, branch)
+  if (!origin.pr) return false
+  return local === origin.pr || origin.branch === origin.pr
+}
+
+/**
+ * Fetch a pull request's head (`ref`, from its provider: refs/pull/<n>/head on GitHub) into a
+ * local branch so it can be checked out as a worktree. The ref resolves even for fork PRs, where
+ * the head branch doesn't exist on origin. Fast-forward only, like fetchBranch. Tracking is set up
+ * even when the fast-forward fails, since the branch is still checked out. Callers check first that
+ * an existing `branch` is the PR's (isPullRequestBranch).
  */
 export async function fetchPullRequestHead(
   repoPath: string,
-  prNumber: number,
+  ref: string,
   branch: string
 ): Promise<void> {
   assertSafeBranch(branch)
+  assertPullRequestRef(ref)
   try {
-    await git(repoPath, ['fetch', 'origin', '--', `refs/pull/${prNumber}/head:refs/heads/${branch}`])
+    await git(repoPath, ['fetch', 'origin', '--', `${ref}:refs/heads/${branch}`])
   } finally {
-    await trackPullRequestBranch(repoPath, prNumber, branch).catch(() => {})
+    await trackPullRequestBranch(repoPath, ref, branch).catch(() => {})
   }
 }
 
@@ -786,19 +831,14 @@ export async function fetchPullRequestHead(
  */
 async function trackPullRequestBranch(
   repoPath: string,
-  prNumber: number,
+  ref: string,
   branch: string
 ): Promise<void> {
   assertSafeBranch(branch)
-  const prRef = `refs/pull/${prNumber}/head`
+  assertPullRequestRef(ref)
+  const origin = await originShas(repoPath, ref, branch)
+  if (!origin.branch || origin.branch !== origin.pr) return
   const branchRef = `refs/heads/${branch}`
-  const shas = new Map(
-    (await git(repoPath, ['ls-remote', 'origin', '--', prRef, branchRef]))
-      .trim()
-      .split('\n')
-      .map((line) => line.split('\t').reverse() as [string, string])
-  )
-  if (!shas.get(branchRef) || shas.get(branchRef) !== shas.get(prRef)) return
   await git(repoPath, ['fetch', 'origin', '--', `+${branchRef}:refs/remotes/origin/${branch}`])
   await git(repoPath, ['branch', `--set-upstream-to=origin/${branch}`, '--', branch])
 }
