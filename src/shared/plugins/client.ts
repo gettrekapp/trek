@@ -14,6 +14,25 @@ import type { TicketInfo, TicketProvider } from './tickets.ts'
 
 export type { PluginPrefValue }
 
+/** A session's status, as the window tracks it */
+export type PluginSessionStatus = 'starting' | 'working' | 'attention' | 'done' | 'complete' | 'idle' | 'exited'
+
+/** One of the window's project's sessions, as a plugin sees it (read-only) */
+export interface PluginSession {
+  terminalId: string
+  /** The tab's title ("Claude 2") */
+  label: string
+  /** The agent: 'claude' | 'codex' | 'gemini' | 'grok' | 'local' */
+  provider: string
+  status: PluginSessionStatus
+  /** It asked the user to make a call (request_decision) and is waiting */
+  decision: boolean
+  /** null: a Global session */
+  worktreeId: string | null
+  worktreeName: string | null
+  branch: string | null
+}
+
 export interface ClientPluginHost {
   readonly id: string
   /** The window's project */
@@ -52,6 +71,24 @@ export interface ClientPluginHost {
   ticketIds(): string[]
   /** Called when that set changes; returns the unsubscribe */
   onTicketIdsChanged(listener: () => void): () => void
+  /** The project's sessions in the project's worktree order (worktrees, then Global); the same array until something changes */
+  sessions(): readonly PluginSession[]
+  /** Called when that list, a session's status or decision, or the selected session changes; returns the unsubscribe */
+  onSessionsChanged(listener: () => void): () => void
+  /** The session the window shows (the Global panel's while it is open), or null */
+  selectedTerminalId(): string | null
+  /** Shows that session: selects its worktree (or opens the Global panel) and its tab. Unknown ids do nothing. */
+  focusSession(terminalId: string): void
+}
+
+export interface SessionIndicatorProps {
+  terminalId: string
+  /**
+   * The tab's status as the window tracks it (null: not known yet). The tab can exist before, or
+   * after, `sessions()` lists its session: draw from this then, so the tab is never blank.
+   */
+  status: PluginSessionStatus | null
+  onToggleComplete?: () => void
 }
 
 export interface ClientPlugin {
@@ -69,6 +106,16 @@ export interface ClientPlugin {
     sidebarToolbar?: FC
     /** Over the window (a floating bubble) */
     overlay?: FC
+    /**
+     * On each session tab (a worktree's and the Global panel's), in place of the core status badge.
+     * Only the first active plugin that fills it is used. `onToggleComplete`: the badge's
+     * mark-complete click (absent while offline).
+     */
+    sessionIndicator?: FC<SessionIndicatorProps>
+    /** In each terminal pane's corner; the wrapper takes no clicks and dims while the user types or scrolls back */
+    terminalOverlay?: FC<{ terminalId: string }>
+    /** A strip along the bottom of the project window, above the Global bar; the plugin sets its height */
+    bottomBar?: FC
   }
   /**
    * A theme plugin's look (theme plugins; `manifest.type: 'theme'`), applied while it is the
@@ -81,6 +128,9 @@ export interface ClientPlugin {
 }
 
 export type PluginSlotName = keyof NonNullable<ClientPlugin['slots']>
+
+/** A slot's props (`{}` for the slots that take none) */
+export type PluginSlotProps<N extends PluginSlotName> = NonNullable<ClientPlugin['slots']>[N] extends FC<infer P> | undefined ? P : never
 
 /** Types a plugin's client half. */
 export const defineClientPlugin = (plugin: ClientPlugin): ClientPlugin => plugin

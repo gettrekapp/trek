@@ -1834,6 +1834,20 @@ button:disabled {
   flex-direction: column;
 }
 
+/* A plugin's corner of the terminal (campsite's hiker): over the output and the exited scrim; under the
+   quick-button bar, its menus and the offline overlay (equal z-index, earlier in the DOM); takes no clicks */
+.plugin-terminal-overlay {
+  position: absolute;
+  right: 22px;
+  bottom: 48px;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+.plugin-terminal-overlay.dimmed {
+  opacity: 0.3;
+}
+
 .terminal-host {
   flex: 1;
   min-height: 0;

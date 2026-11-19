@@ -1,0 +1,304 @@
+/* The campsite plugin. Every class starts with cs- or campsite. */
+.cs-hiker {
+  overflow: visible;
+  flex: none;
+  display: block;
+}
+.cs-grey {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+.cs-frame-0 {
+  animation: cs-frame-a 0.5s steps(1) infinite;
+}
+.cs-frame-1 {
+  visibility: hidden;
+  animation: cs-frame-b 0.5s steps(1) infinite;
+}
+@keyframes cs-frame-a {
+  0% { visibility: visible; }
+  50% { visibility: hidden; }
+}
+@keyframes cs-frame-b {
+  0% { visibility: hidden; }
+  50% { visibility: visible; }
+}
+.cs-bob { animation: cs-bob 1.4s ease-in-out infinite; }
+.cs-wave { animation: cs-bob 0.5s ease-in-out infinite; }
+.cs-hop { animation: cs-hop 0.9s ease-in-out infinite; }
+.cs-breathe { animation: cs-breathe 3s ease-in-out infinite; transform-origin: bottom center; }
+.cs-step { animation: cs-bob 0.35s steps(2) infinite; }
+.cs-sign { animation: cs-pulse 1s steps(2) infinite; }
+@keyframes cs-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes cs-hop {
+  0%, 100% { transform: translateY(0); }
+  40%, 60% { transform: translateY(-4px); }
+}
+@keyframes cs-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.03, 0.97); }
+}
+@keyframes cs-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-hiker,
+  .cs-hiker *,
+  .campsite,
+  .campsite * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .cs-frame-1 {
+    visibility: hidden;
+  }
+}
+
+.cs-indicator {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 16px;
+  margin-right: 4px;
+}
+.cs-indicator.clickable {
+  cursor: pointer;
+}
+.cs-terminal-hiker {
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.5));
+}
+
+.campsite {
+  position: relative;
+  flex: none;
+  height: 110px;
+  overflow: hidden;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: #121726;
+  user-select: none;
+}
+.campsite.collapsed {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 28px;
+}
+.cs-paused,
+.cs-paused * {
+  animation-play-state: paused !important;
+}
+.cs-scene {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.cs-chevron {
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  z-index: 5;
+  background: none;
+  border: none;
+  color: #9aa4b8;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.cs-waiting-chip {
+  background: #ffb020;
+  color: #111111;
+  border: none;
+  font: 700 10px monospace;
+  padding: 0 5px;
+  cursor: pointer;
+}
+.cs-fire {
+  position: absolute;
+  bottom: 12px;
+  width: 20px;
+  height: 22px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  z-index: 1;
+}
+.cs-fire span {
+  display: block;
+  width: 6px;
+  background: #ff9a3c;
+  transform-origin: bottom;
+  animation: cs-flick 0.3s steps(2) infinite;
+}
+.cs-fire span:nth-child(1) { height: 12px; background: #ff5a2a; }
+.cs-fire span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
+.cs-fire span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
+@keyframes cs-flick {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.25); }
+}
+.cs-glow {
+  position: absolute;
+  bottom: -40px;
+  width: 140px;
+  height: 100px;
+  background: radial-gradient(rgba(255, 154, 60, 0.2), transparent 70%);
+  pointer-events: none;
+}
+.cs-log {
+  position: absolute;
+  bottom: 10px;
+  /* width: LOG_W, inline (Tent.tsx) */
+  height: 6px;
+  background: #5a3a22;
+  border-radius: 3px;
+  z-index: 1;
+}
+.cs-log .cs-camp-badge {
+  top: auto;
+  bottom: 10px;
+}
+.cs-tent {
+  position: absolute;
+  bottom: 18px;
+  /* width: TENT_W, inline (Tent.tsx) */
+  z-index: 1;
+}
+.cs-tent svg {
+  display: block;
+}
+.cs-tent-sign {
+  position: absolute;
+  left: 56px;
+  /* On its post, 56 px above the strip's bottom: clear of a 2.5× hiker (40 px, standing at 10 px) */
+  bottom: 38px;
+  background: #7a5230;
+  color: #f1e6cc;
+  font: 9px ui-monospace, Menlo, monospace;
+  padding: 1px 3px;
+  white-space: nowrap;
+}
+.cs-camp-badge {
+  position: absolute;
+  left: 50%;
+  /* Above the tent's peak and its sign */
+  top: -18px;
+  transform: translateX(-50%);
+  background: #1d2433;
+  color: #dfe5ee;
+  border: 1px solid #3a4356;
+  font: 10px ui-monospace, Menlo, monospace;
+  padding: 0 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-camp-badge.waiting {
+  border-color: #ffb020;
+  color: #ffb020;
+}
+/* A child of .campsite (no z-index), placed from its badge's rect when it opens */
+.cs-tent-popover {
+  position: fixed;
+  transform: translateY(-100%);
+  max-width: calc(100vw - 16px);
+  background: #1d2433;
+  border: 1px solid #3a4356;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+}
+.cs-tent-popover button {
+  background: none;
+  border: none;
+  color: #dfe5ee;
+  text-align: left;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cs-tent-popover button:hover {
+  background: #2a3346;
+}
+.cs-camp-hiker {
+  position: absolute;
+  left: 0;
+  bottom: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+  transition: transform 1.2s linear;
+}
+/* The flip is on a wrapper: the hiker's own animations (the walk's bob) set its transform */
+.cs-facing {
+  display: block;
+}
+.cs-camp-hiker.left .cs-facing {
+  transform: scaleX(-1);
+}
+.cs-camp-hiker.inside {
+  z-index: 0;
+  bottom: 20px;
+}
+.cs-camp-hiker.selected::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 44px;
+  height: 24px;
+  transform: translateX(-50%);
+  background: radial-gradient(rgba(255, 230, 128, 0.35), transparent 70%);
+  pointer-events: none;
+}
+.cs-camp-hiker:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 2px;
+}
+.cs-more,
+.cs-empty {
+  position: absolute;
+  bottom: 40px;
+  color: #9aa4b8;
+  font: 11px ui-monospace, Menlo, monospace;
+}
+.cs-more {
+  right: 12px;
+  z-index: 3;
+  padding: 0 4px;
+  background: rgba(18, 23, 38, 0.85);
+}
+/* Waiting hikers the fire has no room for: just above it */
+.cs-more-waiting {
+  right: auto;
+  transform: translateX(-50%);
+  border: none;
+  color: #ffb020;
+  cursor: pointer;
+  white-space: nowrap;
+  z-index: 3;
+}
+.cs-empty {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 44px;
+}
+
+.cs-chevron:focus-visible,
+.cs-camp-badge:focus-visible,
+.cs-waiting-chip:focus-visible,
+.cs-more-waiting:focus-visible,
+.cs-tent-popover button:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 1px;
+}

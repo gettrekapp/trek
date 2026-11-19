@@ -16,7 +16,7 @@ import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../te
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { branchLabel, splitBranch } from './Sidebar'
-import { StatusBadge } from './StatusBadge'
+import { SessionIndicator } from '../plugins/SessionIndicator'
 import { DecisionIcon } from './DecisionIcon'
 import { SkillMenu } from './SkillMenu'
 import { NewSessionMenu } from './NewSessionMenu'
@@ -837,7 +837,8 @@ export function WorktreeDetail({
                   if (e.button === 1 && !offline) void getBackend().sessions.close(id)
                 }}
               >
-                <StatusBadge
+                <SessionIndicator
+                  terminalId={id}
                   status={meta.status}
                   onToggleComplete={offline ? undefined : () => toggleTerminalComplete(id)}
                 />

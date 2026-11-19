@@ -227,3 +227,30 @@ test("pluginStatus: an installed plugin's entry with a built-in's id is not the 
   const hashOnly = { plugins: [{ id: 'voice', version: '9.0.0', defaultEnabled: true, sha256: 'a'.repeat(64) }], capabilities: [] }
   assert.equal(pluginStatus(voice, hashOnly, undefined), 'missing')
 })
+
+test('host (campsite): the session view and focusSession go through the deps; without them it is empty', () => {
+  const fake = fakeBackend()
+  const list = [{ terminalId: 't1' }]
+  const focused = []
+  const host = createClientHost(voice, fake.backend, {
+    appSettings: fakeAppSettings(),
+    terminalLabel: String,
+    currentBackend: () => fake.backend,
+    sessions: () => list,
+    onSessionsChanged: (l) => (l(), () => {}),
+    selectedTerminalId: () => 't1',
+    focusSession: (id) => focused.push(id)
+  })
+  assert.equal(host.sessions(), list)
+  let heard = 0
+  host.onSessionsChanged(() => heard++)
+  assert.equal(heard, 1)
+  assert.equal(host.selectedTerminalId(), 't1')
+  host.focusSession('t1')
+  assert.deepEqual(focused, ['t1'])
+  const bare = createClientHost(voice, fake.backend, { appSettings: fakeAppSettings(), terminalLabel: String, currentBackend: () => fake.backend })
+  assert.deepEqual(bare.sessions(), [])
+  assert.equal(bare.selectedTerminalId(), null)
+  assert.equal(typeof bare.onSessionsChanged(() => {}), 'function')
+  bare.focusSession('x')
+})

@@ -8,6 +8,7 @@ import { getProvider } from '../../../shared/providers/registry'
 import { v2GlobalLabel } from '../v2/sessionChoices'
 import { describeLlm } from '../../../shared/providers/selection'
 import { StatusBadge } from './StatusBadge'
+import { SessionIndicator } from '../plugins/SessionIndicator'
 import { DecisionIcon } from './DecisionIcon'
 import { TerminalPane } from './TerminalPane'
 
@@ -207,7 +208,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
                 }}
                 title="Double-click to rename"
               >
-                <StatusBadge status={meta.status} />
+                <SessionIndicator terminalId={id} status={meta.status} />
                 <DecisionIcon terminalId={id} />
                 {editingId === id ? (
                   <input

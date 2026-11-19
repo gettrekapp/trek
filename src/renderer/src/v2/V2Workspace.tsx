@@ -13,6 +13,7 @@ import { MissedRunsModal } from '../components/MissedRunsModal'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { AllNotesPanel } from '../components/AllNotesPanel'
 import { AutomationsPanel } from '../components/AutomationsPanel'
+import { PluginSlot } from '../plugins/PluginHost'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
 /**
@@ -89,6 +90,7 @@ export function V2Workspace(): React.JSX.Element {
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
         <RepoPathPrompt />
       </div>
+      <PluginSlot name="bottomBar" />
       {globalMode !== 'hidden' && <GlobalClaude readOnly={globalMode === 'readOnly'} />}
       {features.automations && <MissedRunsModal />}
     </>

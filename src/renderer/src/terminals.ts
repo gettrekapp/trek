@@ -249,6 +249,22 @@ export function focusTerminal(id: string): void {
   useAppStore.getState().clearTerminalAttention(id)
 }
 
+/**
+ * Whether the terminal is scrolled back from the bottom, now and on each scroll; returns the unsubscribe.
+ * Reads the entry once, at subscribe time: like attachTerminal, it assumes the entry exists when the pane mounts.
+ */
+export function onTerminalScroll(id: string, listener: (scrolledUp: boolean) => void): () => void {
+  const entry = entries.get(id)
+  if (!entry) return () => {}
+  const check = (): void => {
+    const buffer = entry.term.buffer.active
+    listener(buffer.viewportY < buffer.baseY)
+  }
+  const disposable = entry.term.onScroll(check)
+  check()
+  return () => disposable.dispose()
+}
+
 /** Whether tab shortcuts should act on the global panel rather than the worktree. */
 export function focusInGlobalPanel(): boolean {
   return (

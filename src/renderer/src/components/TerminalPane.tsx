@@ -23,6 +23,9 @@ import {
   sendV2Size,
   subscribeForeignSize
 } from '../terminals'
+import { PluginSlot, usePluginEntries } from '../plugins/PluginHost'
+import { activeSlotEntries } from '../plugins/slots.ts'
+import { useOverlayDim } from '../plugins/useOverlayDim'
 import { getBackend } from '../backend'
 import { QueueChip, QueuePanel } from './QueuePanel'
 import { moreLabel, moveButton, overflowCount, splitOverflow } from '../quickButtonRow'
@@ -70,6 +73,9 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     plan: QuickButtonPlan
     builtins: BuiltinValues
   } | null>(null)
+  // The plugin overlay steps back while the user types here or scrolls back (campsite's hiker).
+  const overlayFilled = activeSlotEntries(usePluginEntries(), 'terminalOverlay').length > 0
+  const overlay = useOverlayDim(terminalId, visible, overlayFilled)
 
   const send = (text: string): void => {
     const backend = getBackend()
@@ -233,6 +239,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
         className="terminal-pane"
         style={{ display: visible ? 'flex' : 'none' }}
         onMouseDown={() => focusTerminal(terminalId)}
+        onKeyDownCapture={overlay.onKey}
       >
         <div className="terminal-main">
           {foreign && !offline && (
@@ -252,6 +259,9 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
             </div>
           )}
           <div ref={ref} className="terminal-host" />
+          <div className={`plugin-terminal-overlay${overlay.dimmed ? ' dimmed' : ''}`}>
+            <PluginSlot name="terminalOverlay" props={{ terminalId }} />
+          </div>
           {/* Over the exited overlay (not the offline one): editing needs no live session */}
           <div className={`quick-buttons${exited && !offline ? ' exited' : ''}`}>
             {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}

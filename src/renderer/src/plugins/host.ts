@@ -1,7 +1,7 @@
 // A plugin's host in a project window (plugin system phase 1): its `<id>.*` requests and events
-// on the window's backend, its per-app preferences in the app settings, and the window's session
-// labels. One per (backend, plugin): a window that moves to another server or project gets new ones.
-import type { ClientPluginHost } from '../../../shared/plugins/client.ts'
+// on the window's backend, its per-app preferences in the app settings, the window's session
+// labels, and its read-only session view (campsite). One per (backend, plugin): a window that moves to another server or project gets new ones.
+import type { ClientPluginHost, PluginSession } from '../../../shared/plugins/client.ts'
 import type { PluginManifest, PluginPrefValue } from '../../../shared/plugins/manifest.ts'
 import type { AppSettings, AppSettingsPatch } from '../../../shared/appSettings.ts'
 import type { WindowBackend } from '../backend'
@@ -24,6 +24,11 @@ export interface HostDeps {
   /** The project's linked ticket ids, and their changes (default: none) */
   ticketIds?: () => string[]
   onTicketIdsChanged?: (listener: () => void) => () => void
+  /** The window's session view (campsite); absent: no sessions */
+  sessions?: () => readonly PluginSession[]
+  onSessionsChanged?: (listener: () => void) => () => void
+  selectedTerminalId?: () => string | null
+  focusSession?: (terminalId: string) => void
 }
 
 const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefValue> =>
@@ -31,6 +36,9 @@ const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefVa
 
 /** A plugin's prefs as a value to compare: its entries sorted by key. */
 const prefsKey = (prefs: Record<string, PluginPrefValue>): string => JSON.stringify(Object.entries(prefs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+
+/** A constant, so useSyncExternalStore gets a stable empty snapshot */
+const NO_SESSIONS: readonly PluginSession[] = []
 
 export function createClientHost(manifest: PluginManifest, backend: WindowBackend, deps: HostDeps): ClientPluginHost {
   const { id } = manifest
@@ -87,6 +95,10 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     // A stale host (the window moved on) publishes under its own backend, which nobody reads.
     setTicketInfo: (info) => (deps.ticketInfo ?? ticketInfoStore).set(backend, id, info),
     ticketIds: () => deps.ticketIds?.() ?? [],
-    onTicketIdsChanged: (listener) => deps.onTicketIdsChanged?.(listener) ?? (() => {})
+    onTicketIdsChanged: (listener) => deps.onTicketIdsChanged?.(listener) ?? (() => {}),
+    sessions: () => deps.sessions?.() ?? NO_SESSIONS,
+    onSessionsChanged: (listener) => deps.onSessionsChanged?.(listener) ?? (() => {}),
+    selectedTerminalId: () => deps.selectedTerminalId?.() ?? null,
+    focusSession: (terminalId) => deps.focusSession?.(terminalId)
   }
 }
