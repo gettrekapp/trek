@@ -1,6 +1,6 @@
 // Worktree teardown on the server (plugins E1): before a worktree is removed, promoted or moved,
-// the participants (core's dev stack and Colima VM, participants.ts, and each plugin on in the
-// project with a worktreeLifecycle) say what they would tear down (`worktree.teardownPlan`), and the
+// the participants (core's dev stack, participants.ts, and each plugin on in the project with a
+// worktreeLifecycle: the Colima VM is the env plugin's since plugins E2) say what they would tear down (`worktree.teardownPlan`), and the
 // request that does the operation runs the items the client chose, in participant order, before it.
 // A participant whose plan throws or takes over TEARDOWN_PLAN_TIMEOUT_MS is left out (logged); one
 // whose teardown throws, or runs past the whole teardown's deadline (TEARDOWN_RUN_TIMEOUT_MS, shared

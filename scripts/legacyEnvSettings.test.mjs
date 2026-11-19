@@ -263,7 +263,7 @@ test("the old fields are the Colima plugin's settings, kind for kind (the mirror
   assert.deepEqual(COLIMA_MANIFEST.repoSettings, LEGACY_ENV_REPO_FIELDS)
   assert.deepEqual(COLIMA_MANIFEST.branchSettings, { [LEGACY_ENV_BRANCH_FIELD]: 'text' })
   assert.deepEqual([COLIMA_MANIFEST.platforms, COLIMA_MANIFEST.legacyCapability, COLIMA_MANIFEST.legacyBuiltIn, COLIMA_MANIFEST.defaultEnabled], [['darwin', 'linux'], ['env'], true, true])
-  // And the registry would take the manifest (its id and field declarations; it registers in Task 8).
+  // And the registry takes the manifest (its id and field declarations; it is a built-in since plugins E2).
   assert.ok(isUsablePluginId(COLIMA_MANIFEST.id))
   assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.repoSettings), null)
   assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.branchSettings), null)

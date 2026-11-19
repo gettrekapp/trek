@@ -5,8 +5,10 @@
 // plugin's take-over (plugins/colima/server/seed.ts).
 //
 // `trek-server start --local --import-env-from <userData>` runs it before the server serves
-// anything, once: a marker (<dataDir>/stacks.seeded) says it ran. (Before E2 the registry said so; a
-// Local server that took over before E2 runs this once more, which replaces nothing.)
+// anything, once: a marker (<dataDir>/stacks.seeded) says it ran. Before E2 the server's registry
+// (<dataDir>/environments.json) said so: a data dir that has it took over before E2, so it only gets
+// the marker. Its app pid files are months old by now, and a reused pid would make stack.down,
+// stack.destroy and the teardown Ctrl-C an unrelated process tree.
 //
 // The app's pid files are copied and left as they were (a dev build and the installed app share
 // that userData, and each Local profile takes its own copy). A stack's log is shared, as a hard
@@ -24,6 +26,8 @@ const PID_RE = /^\s*([1-9][0-9]{0,9})\s*$/
 
 /** `<dataDir>/stacks.seeded`: the take-over ran */
 export const STACK_SEED_MARKER = 'stacks.seeded'
+/** `<dataDir>/environments.json`: the server's registry, which said the take-over ran before E2 */
+const LEGACY_SEED_MARKER = 'environments.json'
 
 export interface StackSeedResult {
   /** Whether this start took the app's stack files over (false: it ran before) */
@@ -114,6 +118,11 @@ export function seedStacksFromApp(appDir: string, dataDir: string): StackSeedRes
   const marker = join(dataDir, STACK_SEED_MARKER)
   if (present(marker)) return result
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+  // Taken over before E2 (5a's marker): never again.
+  if (present(join(dataDir, LEGACY_SEED_MARKER))) {
+    writeFileSync(marker, '', { mode: 0o600 })
+    return result
+  }
   seedStackFiles(join(appDir, STACKS_DIR), join(dataDir, STACKS_DIR), result)
   writeFileSync(marker, '', { mode: 0o600 })
   result.seeded = true

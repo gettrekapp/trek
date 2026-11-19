@@ -42,6 +42,20 @@ test("copies the app's stack files into the data dir once (a marker says so), an
   assert.equal(existsSync(join(data, 'stacks', 'later.log')), false)
 })
 
+test("a data dir that took over before E2 (its environments.json, 5a's marker) never takes the app's stacks again: it gets the marker", (t) => {
+  const { app, data } = dirs(t)
+  mkdirSync(data, { recursive: true })
+  writeFileSync(join(data, 'environments.json'), '{}')
+  // A months-old pid file: its pid may be another process's by now.
+  writeFileSync(join(app, 'stacks', 'app-feature-x.pid'), String(process.pid))
+  writeFileSync(join(app, 'stacks', 'app-feature-x.log'), '$ stack.sh up\n')
+  assert.deepEqual(seedStacksFromApp(app, data), { seeded: false, stackFiles: 0, skipped: [] })
+  assert.equal(existsSync(join(data, 'stacks')), false)
+  assert.equal(existsSync(join(data, 'stacks.seeded')), true)
+  if (posix) assert.equal(statSync(join(data, 'stacks.seeded')).mode & 0o777, 0o600)
+  assert.deepEqual(seedStacksFromApp(app, data), { seeded: false, stackFiles: 0, skipped: [] })
+})
+
 test('stack files: only regular files, a live pid as the stack service writes it, nothing already there replaced', (t) => {
   const { app, data } = dirs(t)
   writeFileSync(join(app, 'stacks', 'a.pid'), ` ${process.pid}\n`)
