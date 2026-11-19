@@ -112,7 +112,7 @@ export function EnvironmentPanel({ visible, worktree }: Props): React.JSX.Elemen
 
   // Discover compose files whenever the panel is shown.
   useEffect(() => {
-    if (!visible) return undefined
+    if (!visible || !info.id) return undefined
     let disposed = false
     envApi(host)
       .composeFiles(info)
@@ -125,11 +125,11 @@ export function EnvironmentPanel({ visible, worktree }: Props): React.JSX.Elemen
     return () => {
       disposed = true
     }
-  }, [visible, info.path])
+  }, [visible, info.id, info.path])
 
   // Service status only matters while the panel is open and the VM is up.
   useEffect(() => {
-    if (!visible || !running || !profile) return undefined
+    if (!visible || !running || !profile || !info.id) return undefined
     let disposed = false
     const poll = async (): Promise<void> => {
       try {
@@ -145,10 +145,10 @@ export function EnvironmentPanel({ visible, worktree }: Props): React.JSX.Elemen
       disposed = true
       clearInterval(interval)
     }
-  }, [visible, running, profile, info.path, composeFile])
+  }, [visible, running, profile, info.id, info.path, composeFile])
 
   useEffect(() => {
-    if (!visible || !running || !profile || !logsService) return undefined
+    if (!visible || !running || !profile || !logsService || !info.id) return undefined
     let disposed = false
     const fetchLogs = async (): Promise<void> => {
       try {
@@ -164,7 +164,7 @@ export function EnvironmentPanel({ visible, worktree }: Props): React.JSX.Elemen
       disposed = true
       clearInterval(interval)
     }
-  }, [visible, running, profile, logsService, info.path, composeFile])
+  }, [visible, running, profile, logsService, info.id, info.path, composeFile])
 
   useEffect(() => {
     const el = serviceLogRef.current

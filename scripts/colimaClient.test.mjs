@@ -101,6 +101,21 @@ test("withBranchVars: the branch's values with its .env text set, '' included (t
   assert.deepEqual(withBranchVars(undefined, 'feat', 'C=3'), { env: 'C=3' })
 })
 
+test("the Env panel's clear, end to end: withBranchVars's `env: ''` over a .env held only in the old field goes through branch.setEnv as null, guarded by the old text", () => {
+  const big = 'A=' + 'x'.repeat(100_001)
+  const mirror = { id: 'p', name: 'P', settings: {}, globalSessions: [], repositories: [{ id: 'r1', name: 'alpha', path: '/a', branchData: { feat: { env: big } }, worktrees: [] }] }
+  const calls = []
+  const record = (name) => async (...args) => void calls.push([name, ...args])
+  const requests = Object.fromEntries(['updateSettings', 'rename', 'setLinkedDirs', 'setEnvironments', 'setBranchEnv', 'setRepoPluginSettings', 'setBranchPluginSettings'].map((n) => [n, record(n)]))
+  const writer = createSettingsWriter({ project: () => mirror, changed: () => {}, askConflict: async () => 'reload', reload: () => {}, reportEdit: () => {} })
+  const o = v2SettingsOverrides(writer, requests, () => mirror)
+  const { slice } = projectV2(mirror)
+  const [shown] = pluginReposOf(slice.project, slice.hostWorktrees, 'env', () => undefined)
+  assert.equal(branchVars(shown, 'feat'), big, 'the panel shows the old text')
+  o.setPluginBranchSettings('env', 'r1', 'feat', withBranchVars(shown, 'feat', ''), 'Colima environments')
+  assert.deepEqual(calls, [['setBranchEnv', 'r1', 'feat', null, big]])
+})
+
 test("envPanelEntry: the Env entry where the repository has environments on and the worktree is on a branch; its dot from the poll's VM and its operation", () => {
   const store = useColimaStore.getState()
   store.reset()

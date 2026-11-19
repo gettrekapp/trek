@@ -33,7 +33,8 @@ export const colimaLegacyTeardown: LegacyTeardownSlot = {
       await envApi(host).destroy(env.profile)
       return undefined
     } catch (err) {
-      return `Failed to remove environment VM "${env.profile}": ${String(err)}. It is listed under Orphaned environments in Settings.`
+      // One sentence's end, not two: an error that ends with its own period keeps just that one.
+      return `Failed to remove environment VM "${env.profile}": ${String(err).replace(/\.$/, '')}. It is listed under Orphaned environments in Settings.`
     } finally {
       useColimaStore.getState().setBusy(env.profile, null)
       void refreshEnvironments(host)
