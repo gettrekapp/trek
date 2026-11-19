@@ -1,9 +1,9 @@
 // The campsite strip along the bottom of the window: a night scene with the fire in the middle, a
 // tent per worktree with sessions, Global on a log, and every session's hiker. Click a hiker to
-// show its session. Collapsed, it is a thin bar of "!" for those waiting.
+// show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
-import { campLayout, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
+import { campLayout, campSummary, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
 import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
@@ -65,17 +65,32 @@ export function Campsite(): React.JSX.Element | null {
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       <CampScene />
-      <button className="cs-chevron" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => setPref('campsiteCollapsed', true)}>
-        ▾
-      </button>
+      <div className="cs-header">
+        <button className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => setPref('campsiteCollapsed', true)}>
+          <Chevron />
+        </button>
+        <span className="cs-summary">{campSummary(sessions)}</span>
+      </div>
       {width > 0 && (
-        <>
-          <div className="cs-fire" style={{ left: layout.fireX - 10 }} aria-hidden="true">
-            <span />
-            <span />
-            <span />
+        <div className="cs-stage">
+          {/* Out with no sessions: stones and logs, no flames or glow */}
+          <div className={`cs-fire${sessions.length === 0 ? ' cold' : ''}`} style={{ left: layout.fireX - 23 }} aria-hidden="true">
+            <i className="cs-ember a" />
+            <i className="cs-ember b" />
+            <div className="cs-flames">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="cs-hearth">
+              <b />
+              <b />
+              <em />
+              <b />
+              <b />
+            </div>
           </div>
-          <div className="cs-glow" style={{ left: layout.fireX - 70 }} aria-hidden="true" />
+          {sessions.length > 0 && <div className="cs-glow" style={{ left: layout.fireX - 70 }} aria-hidden="true" />}
           {layout.moreWaiting > 0 && (
             <button
               className="cs-more cs-more-waiting"
@@ -83,7 +98,7 @@ export function Campsite(): React.JSX.Element | null {
               title={unspottedWaiting ? `Show ${hikerLabel(unspottedWaiting)}` : undefined}
               onClick={() => unspottedWaiting && host.focusSession(unspottedWaiting.terminalId)}
             >
-              +{layout.moreWaiting} waving
+              +{layout.moreWaiting} waiting
             </button>
           )}
           {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el, 'left')} />}
@@ -108,7 +123,7 @@ export function Campsite(): React.JSX.Element | null {
               }}
             />
           )}
-          {layout.moreTents > 0 && <span className="cs-more">+{layout.moreTents} more camps</span>}
+          {layout.moreTents > 0 && <span className="cs-more cs-more-camps">+{layout.moreTents} camps</span>}
           {layout.hikers.map((h) => {
             const s = byId.get(h.terminalId)
             if (!s) return null
@@ -130,8 +145,8 @@ export function Campsite(): React.JSX.Element | null {
           {departing.map((d) => (
             <CampHiker key={`gone:${d.seq}`} session={d.session} x={d.x} startX={d.from} place="tent" width={width} chore="map" selected={false} leaving />
           ))}
-          {sessions.length === 0 && <span className="cs-empty">No one&apos;s at camp yet</span>}
-        </>
+          {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
+        </div>
       )}
     </div>
   )
@@ -226,4 +241,12 @@ function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): vo
       window.removeEventListener('resize', onResize)
     }
   }, [open, close])
+}
+
+function Chevron({ up = false }: { up?: boolean }): React.JSX.Element {
+  return (
+    <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={up ? 'M2.5 7.5 6 4l3.5 3.5' : 'M2.5 4.5 6 8l3.5-3.5'} />
+    </svg>
+  )
 }

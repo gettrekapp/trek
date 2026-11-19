@@ -172,17 +172,42 @@
   height: 3px;
   background: #221e2a;
 }
-.cs-chevron {
+/* Clips hikers walking in from off-stage; the header and popovers sit outside it */
+.cs-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.cs-header {
   position: absolute;
   left: 6px;
-  top: 2px;
+  top: 6px;
   z-index: 5;
-  background: none;
-  border: none;
-  color: #9aa4b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cs-toggle {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #ededf0;
   cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
+}
+/* On the sky's color, so it stays legible over a tent's sign at a narrow window */
+.cs-summary {
+  padding: 0 4px;
+  background: rgba(26, 22, 34, 0.85);
+  color: #9a9aa2;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
 }
 .cs-waiting-chip {
   background: var(--attention, #e2a336);
@@ -194,25 +219,63 @@
 }
 .cs-fire {
   position: absolute;
-  bottom: 12px;
-  width: 20px;
-  height: 22px;
+  bottom: 10px;
+  width: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+}
+.cs-flames {
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 1px;
-  z-index: 1;
+  height: 22px;
 }
-.cs-fire span {
+.cs-flames span {
   display: block;
   width: 6px;
   background: #ff9a3c;
   transform-origin: bottom;
   animation: cs-flick 0.3s steps(2) infinite;
 }
-.cs-fire span:nth-child(1) { height: 12px; background: #ff5a2a; }
-.cs-fire span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
-.cs-fire span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
+.cs-flames span:nth-child(1) { height: 12px; background: #ff5a2a; }
+.cs-flames span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
+.cs-flames span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
+/* A ring of stones either side of the logs */
+.cs-hearth {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+.cs-hearth b {
+  width: 4px;
+  height: 4px;
+  background: #55555e;
+}
+.cs-hearth b:nth-child(2),
+.cs-hearth b:nth-child(4) {
+  height: 6px;
+  background: #44444c;
+}
+.cs-hearth em {
+  width: 26px;
+  height: 4px;
+  background: #5a3a22;
+}
+.cs-ember {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  height: 2px;
+}
+.cs-ember.a { top: -7px; margin-left: 6px; background: #ffb347; }
+.cs-ember.b { top: -14px; margin-left: -6px; background: #ff7a3c; }
+.cs-fire.cold .cs-flames,
+.cs-fire.cold .cs-ember {
+  display: none;
+}
 @keyframes cs-flick {
   0%, 100% { transform: scaleY(1); }
   50% { transform: scaleY(1.25); }
@@ -329,15 +392,17 @@
   z-index: 0;
   bottom: 20px;
 }
+/* The lantern: a flat pool of light under the shown session's hiker */
 .cs-camp-hiker.selected::after {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: -6px;
-  width: 44px;
-  height: 24px;
+  bottom: -3px;
+  width: 40px;
+  height: 6px;
   transform: translateX(-50%);
-  background: radial-gradient(rgba(255, 230, 128, 0.35), transparent 70%);
+  border-radius: 50%;
+  background: rgba(255, 230, 128, 0.5);
   pointer-events: none;
 }
 .cs-camp-hiker:focus-visible {
@@ -355,7 +420,7 @@
   right: 12px;
   z-index: 3;
   padding: 0 4px;
-  background: rgba(18, 23, 38, 0.85);
+  background: rgba(26, 22, 34, 0.85);
 }
 /* Waiting hikers the fire has no room for: just above it */
 .cs-more-waiting {
@@ -367,13 +432,20 @@
   white-space: nowrap;
   z-index: 3;
 }
+/* Camps the strip has no room for: top right, opposite the header */
+.cs-more-camps {
+  top: 10px;
+  bottom: auto;
+}
 .cs-empty {
   left: 50%;
   transform: translateX(-50%);
-  bottom: 44px;
+  top: 30px;
+  bottom: auto;
+  white-space: nowrap;
 }
 
-.cs-chevron:focus-visible,
+.cs-toggle:focus-visible,
 .cs-camp-badge:focus-visible,
 .cs-waiting-chip:focus-visible,
 .cs-more-waiting:focus-visible,
