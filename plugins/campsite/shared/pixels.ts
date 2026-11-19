@@ -84,12 +84,13 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   } else {
     r(4, 4 + d, 1, 1, EYE)
     r(7, 4 + d, 1, 1, EYE)
-    if (pose === 'cheer') r(5, 6 + d, 2, 1, EYE)
   }
   if (look.beard) {
     r(3, 6 + d, 6, 1, look.hair)
     r(4, 7 + d, 4, 1, look.hair)
   }
+  // After the beard, so a bearded hiker's smile shows
+  if (pose === 'cheer') r(5, 6 + d, 2, 1, EYE)
 
   // Hat
   if (look.hat === 'beanie') {

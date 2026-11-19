@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -157,6 +157,31 @@ test('choreFor: stable for at least 20 s at a time, and it changes over ten minu
     if (seen.size > 1) changing++
   }
   assert.ok(changing >= 15, `${changing} of 20 hikers changed chores`)
+})
+
+test('pixels: every hat, beard, gear, pose and frame stays on the 12×16 grid', () => {
+  const base = lookFor('sweep', 'claude')
+  for (const hat of HATS)
+    for (const beard of [false, true])
+      for (const gear of [undefined, 'none', 'pole', 'map', 'mug', 'compass'])
+        for (const pose of POSES)
+          for (let frame = 0; frame < FRAMES[pose]; frame++)
+            for (const r of pixels({ ...base, hat, beard }, pose, frame, gear)) assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= 12 && r.y + r.h <= 16, `${hat}/${beard}/${gear}/${pose}/${frame}: ${JSON.stringify(r)}`)
+})
+
+test("pixels: a bearded hiker's cheer still smiles (the mouth is drawn over the beard)", () => {
+  const rects = pixels({ ...lookFor('smile', 'claude'), beard: true }, 'cheer', 0)
+  const over = (x, y) => rects.filter((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).at(-1).fill
+  assert.equal(over(5, 6), '#111111')
+  assert.equal(over(6, 6), '#111111')
+})
+
+test('stanceFor and indicatorTitle: a decision on a finished or exited session still waves, in color, and the title says so', () => {
+  assert.deepEqual(stanceFor(session({ status: 'done', decision: true }), 'map'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'exited', decision: true }), 'map'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.equal(indicatorTitle({ status: 'working', decision: true }, false), 'Agent is waiting on your decision')
+  assert.equal(indicatorTitle({ status: 'attention', decision: false }, false), 'Agent needs your attention')
+  assert.equal(indicatorTitle({ status: 'done', decision: false }, true), 'Agent finished — click to mark fully complete')
 })
 
 test('labels: the aria label, the badge titles, the tooltip', () => {

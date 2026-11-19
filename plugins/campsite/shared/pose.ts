@@ -114,6 +114,11 @@ export function statusTitle(status: PluginSessionStatus, clickable: boolean): st
   return title
 }
 
+/** A tab's indicator's title: a pending decision says so (the chip's "?" has no words of its own); else the status's */
+export function indicatorTitle(state: Pick<PluginSession, 'status' | 'decision'>, clickable: boolean): string {
+  return state.decision ? 'Agent is waiting on your decision' : statusTitle(state.status, clickable)
+}
+
 export function hikerTooltip(session: PluginSession, chore: Chore): string {
   const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
   const parts = [session.label, where, statusText(session)]
