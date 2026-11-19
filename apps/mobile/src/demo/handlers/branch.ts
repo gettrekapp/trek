@@ -4,7 +4,7 @@
 // clamped, not refused, a pull request link is not checked as watchable, review path and line are not
 // checked), and note edits are not folded into one history entry within 5 minutes (the real server's
 // NOTE_COALESCE_MS): every edit adds an entry.
-import { DEFAULT_WORKTREE_TAGS, githubPrs, type BranchData, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
+import { DEFAULT_WORKTREE_TAGS, githubPrs, resolvePrInput, type BranchData, projectTopic, type HistoryEvent, type HistoryValue, type ReviewDraft, type Worktree, type WorktreeTag } from '../../shared.ts'
 import { DEMO_PROJECT_ID } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
@@ -175,9 +175,9 @@ export const BRANCH_HANDLERS: DemoHandlers<BranchMethods> = {
   'pr.resolve': (ctx, p) => {
     checkProject(p.projectId)
     findRepo(ctx.server.state.project, p.repoId)
-    const pr = typeof p.input === 'string' ? githubPrs.parse(p.input) : null
-    if (!pr) throw new DemoError('BAD_REQUEST', `Enter ${githubPrs.hint}`)
-    return { ...pr, providerId: githubPrs.id, headBranch: null }
+    const resolved = resolvePrInput([githubPrs], typeof p.input === 'string' ? p.input : '', [])
+    if (!resolved.ok) throw new DemoError('BAD_REQUEST', resolved.problem)
+    return { ...resolved.pr, headBranch: null }
   },
   'prWatch.dismiss': (ctx, p) => {
     const worktree = reviewWorktree(ctx, p)

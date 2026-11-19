@@ -689,6 +689,12 @@ test('phone PR providers: github on where listed and on, on for an older server,
   assert.deepEqual(activePrProviders({ capabilities: [] }, settings).map((p) => p.id), ['github'])
   assert.deepEqual(activePrProviders({ plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }] }, { plugins: { github: { enabled: false } } }), [])
   assert.deepEqual(activePrProviders(null, settings), [])
+  // A released server (0.3–0.10) lists its plugins, but GitHub was core there: on, whatever the setting.
+  const released = { capabilities: [], plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: true }] }
+  assert.deepEqual(activePrProviders(released, settings).map((p) => p.id), ['github'])
+  assert.deepEqual(activePrProviders(released, { plugins: { github: { enabled: false } } }).map((p) => p.id), ['github'])
+  // A P3+ server (prResolve) that leaves it out does not have it.
+  assert.deepEqual(activePrProviders({ ...released, capabilities: ['prResolve'] }, settings), [])
 })
 
 test('worktrees: branch suggestions contain the typed text, the exact match first, up to the limit', () => {
@@ -1097,9 +1103,11 @@ test("tickets: the providers on for the project, by the server's plugin list and
   const offByDefault = tkServer({ plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: false }, { id: 'azure-devops', version: '1.0.0', defaultEnabled: true }] })
   assert.deepEqual(tkIds(offByDefault), ['azure-devops'])
   assert.deepEqual(tkIds(offByDefault, { plugins: { linear: { enabled: true } } }), ['linear', 'azure-devops'])
-  // A server that lists plugins but not this one does not have it.
-  assert.deepEqual(tkIds(tkServer({ plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: true }] })), ['linear'])
-  assert.deepEqual(tkIds(tkServer({ plugins: [] })), [])
+  // A P3+ server (prResolve) that lists plugins but not this one does not have it.
+  assert.deepEqual(tkIds(tkServer({ capabilities: ['prResolve'], plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: true }] })), ['linear'])
+  assert.deepEqual(tkIds(tkServer({ capabilities: ['prResolve'], plugins: [] })), [])
+  // One older than P3 had Azure DevOps built in (legacyBuiltIn); Linear was never core.
+  assert.deepEqual(tkIds(tkServer({ plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: false }] })), ['azure-devops'])
   // No welcome yet.
   assert.deepEqual(tkIds(undefined), [])
   assert.deepEqual(tkIds(null), [])

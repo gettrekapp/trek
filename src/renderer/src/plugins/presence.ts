@@ -1,5 +1,6 @@
 // Which plugins a project window shows (plugin system phase 1). Pure: imported by tests.
 import { pluginEnabled, type PluginManifest, type PluginPresence, type ProjectPluginSettings } from '../../../shared/plugins/manifest.ts'
+import { CAPABILITY } from '../../../shared/protocolV2.ts'
 
 /** What the window's server said in its welcome. */
 export interface PluginWelcome {
@@ -12,11 +13,21 @@ export interface PluginWelcome {
  * How a plugin the app knows stands on the window's server:
  * - `on`/`off`: the server has it, and it is on or off for the project;
  * - `legacy`: a server older than plugins that has it (its legacy capability, or built in there:
- *   `legacyBuiltIn`), always on there;
- * - `missing`: the server lists plugins but not this one (too old for it, or its setup failed there);
+ *   `legacyBuiltIn`), always on there; also a `legacyBuiltIn` plugin a server lists plugins without,
+ *   when that server predates plugins P3 (no `prResolve`): GitHub was core in releases 0.3–0.10;
+ * - `missing`: the server lists plugins but not this one (too old for it, or its setup failed there:
+ *   a P3+ server leaves out a built-in whose setup failed, so a `legacyBuiltIn` one is missing only there);
  * - `unknown`: no welcome yet (or no project).
  */
 export type PluginStatus = 'on' | 'off' | 'legacy' | 'missing' | 'unknown'
+
+/**
+ * Whether a server's leaving a built-in out of its plugin list means it doesn't have it: true from
+ * plugins P3 on (it says `prResolve` whenever a PR provider is registered). An older server that
+ * lists plugins (0.3–0.10) had GitHub in core, so its absence there is no answer.
+ * (Residual: a P3+ server where every PR provider failed to set up has no `prResolve` either.)
+ */
+const listsAllItHas = (welcome: PluginWelcome): boolean => welcome.capabilities?.includes(CAPABILITY.prResolve) === true
 
 export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | undefined, settings: ProjectPluginSettings | undefined): PluginStatus {
   if (!welcome) return 'unknown'
@@ -26,7 +37,7 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
   }
   // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
   const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
-  if (!listed) return 'missing'
+  if (!listed) return manifest.legacyBuiltIn === true && !listsAllItHas(welcome) ? 'legacy' : 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
   return pluginEnabled(settings, { id: manifest.id, defaultEnabled: listed.defaultEnabled }) ? 'on' : 'off'
 }

@@ -97,10 +97,13 @@ test("the client host's setTicketInfo publishes under its backend and plugin", (
   assert.equal(store.get(backend, 'dash', 'AB-1').title, 'T')
 })
 
-test('pluginStatus: a legacyBuiltIn plugin is legacy on a server older than plugins, missing on one that lists others', () => {
+test('pluginStatus: a legacyBuiltIn plugin is legacy on a server older than plugins or than P3, missing on a P3+ one that lists others', () => {
   const ado = { id: 'azure-devops', version: '1', name: 'Azure DevOps', description: '', defaultEnabled: true, legacyBuiltIn: true }
   assert.equal(pluginStatus(ado, { capabilities: [] }, undefined), 'legacy')
-  assert.equal(pluginStatus(ado, { plugins: [], capabilities: [] }, undefined), 'missing')
+  // A server that lists plugins but predates P3 (no prResolve) had its built-ins in core.
+  assert.equal(pluginStatus(ado, { plugins: [], capabilities: [] }, undefined), 'legacy')
+  // A P3+ server (prResolve) that leaves it out does not have it (too old for it, or its setup failed).
+  assert.equal(pluginStatus(ado, { plugins: [], capabilities: ['prResolve'] }, undefined), 'missing')
   assert.equal(pluginStatus(ado, { plugins: [{ id: 'azure-devops', version: '1', defaultEnabled: true }], capabilities: [] }, { 'azure-devops': { enabled: false } }), 'off')
 })
 

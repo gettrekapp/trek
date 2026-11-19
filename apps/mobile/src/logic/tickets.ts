@@ -5,6 +5,7 @@
 // pasted URL implies (the desktop's ticket dialog does). Pure.
 import {
   AZURE_DEVOPS_MANIFEST,
+  CAPABILITY,
   azureDevOpsTickets,
   LINEAR_MANIFEST,
   linearTickets,
@@ -35,7 +36,10 @@ const TRACKERS: ReadonlyArray<{ manifest: PluginManifest; provider: TicketProvid
  * - a server that lists its plugins: this one is listed, and enabled by the project's `plugins`
  *   setting or, with none, the server's default for it (not the manifest's);
  * - a server older than plugins (no list): it has the plugin's legacy capability, or had it built
- *   in (`legacyBuiltIn`); always on there, whatever the project's setting.
+ *   in (`legacyBuiltIn`); always on there, whatever the project's setting;
+ * - a server that lists plugins but not this `legacyBuiltIn` one, and predates plugins P3 (no
+ *   `prResolve`): it was core there (GitHub in releases 0.3–0.10); always on there too. A P3+
+ *   server leaves out a built-in whose setup failed, so there it is off.
  */
 export function pluginOn(manifest: PluginManifest, server: TicketServer, settings: ProjectSettings): boolean {
   if (!server.plugins) {
@@ -43,7 +47,8 @@ export function pluginOn(manifest: PluginManifest, server: TicketServer, setting
     return capability || manifest.legacyBuiltIn === true
   }
   const listed = server.plugins.find((p) => p.id === manifest.id)
-  return !!listed && pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })
+  if (!listed) return manifest.legacyBuiltIn === true && server.capabilities?.includes(CAPABILITY.prResolve) !== true
+  return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })
 }
 
 /** The ticket providers on for the project; none before the server's welcome. */

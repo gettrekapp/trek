@@ -226,7 +226,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
               keyboardType="url"
               accessibilityLabel="Pull request link"
             />
-            {prUrl.trim() && !pr ? <Text style={ui.muted}>Not {providers.map((p) => p.hint).join(', or ')}</Text> : null}
+            {prUrl.trim() && !pr && providers.length > 0 ? <Text style={ui.muted}>Not {providers.map((p) => p.hint).join(', or ')}</Text> : null}
             <Button label={busy === 'pr' ? 'Adding…' : 'Add PR'} disabled={blocked || !pr} onPress={addPr} />
             {error?.kind === 'pr' ? <Text style={ui.error}>{error.text}</Text> : null}
           </>
