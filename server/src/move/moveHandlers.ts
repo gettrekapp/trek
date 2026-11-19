@@ -327,7 +327,13 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
   if (incoming.ticket) data.ticket = incoming.ticket
   if (incoming.env) data.env = incoming.env
   // Each incoming plugin's values replace that plugin's here; the target's other plugins' stay.
-  if (incoming.pluginSettings) data.pluginSettings = { ...(data.pluginSettings ?? {}), ...incoming.pluginSettings }
+  if (incoming.pluginSettings) {
+    const merged = { ...(data.pluginSettings ?? {}), ...incoming.pluginSettings }
+    // Together they must still be a map a later move or import takes (at most 1 MB of text in all).
+    const problem = pluginSettingsShapeProblem(merged)
+    if (problem) throw bad(`branchData.pluginSettings, with this branch's here, ${problem}`)
+    data.pluginSettings = merged
+  }
   if (incoming.pr) {
     if (data.pr !== incoming.pr) delete data.prWatch
     data.pr = incoming.pr

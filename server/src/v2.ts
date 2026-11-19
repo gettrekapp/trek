@@ -15,7 +15,7 @@ import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
-import { pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
+import { pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
@@ -198,11 +198,17 @@ function pluginSettingsOf(ctx: V2Context, p: any, scope: 'repo' | 'branch'): { p
   return { pluginId, values: values as PluginSettingValues }
 }
 
-/** A pluginSettings map with one plugin's entry set (or, with no values, removed); undefined when that leaves it empty. */
+/**
+ * A pluginSettings map with one plugin's entry set (or, with no values, removed); undefined when
+ * that leaves it empty. BAD_REQUEST, inside the caller's apply so nothing is kept, when the map
+ * would be one a move or an import refuses (over 1 MB of text in all, say).
+ */
 function withPluginValues(map: Record<string, PluginSettingValues> | undefined, pluginId: string, values: PluginSettingValues): Record<string, PluginSettingValues> | undefined {
   const next = { ...(map ?? {}) }
   if (Object.keys(values).length === 0) delete next[pluginId]
   else next[pluginId] = { ...values }
+  const problem = pluginSettingsShapeProblem(next)
+  if (problem) throw codedError('BAD_REQUEST', `pluginSettings ${problem}`)
   return Object.keys(next).length > 0 ? next : undefined
 }
 

@@ -26,6 +26,10 @@ test('pluginFieldsProblem: field names to string, number, boolean or text', () =
   assert.match(pluginFieldsProblem({ '': 'string' }), /is not a field name/)
   assert.match(pluginFieldsProblem({ __proto__x: 'string' }), /is not a field name/)
   assert.match(pluginFieldsProblem(['string']), /must be an object/)
+  // At most 100 fields, as stored settings (pluginSettingsShapeProblem) hold at most 100 values a plugin.
+  const fields = (n) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`f${i}`, 'boolean']))
+  assert.equal(pluginFieldsProblem(fields(100)), null)
+  assert.match(pluginFieldsProblem(fields(101)), /declares more than 100 fields/)
 })
 
 test('pluginValuesProblem: only declared fields, each of its kind; a string is one line, text may be many', () => {

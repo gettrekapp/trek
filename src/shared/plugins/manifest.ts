@@ -83,6 +83,8 @@ export function legacyCapabilitiesOf(manifest: Pick<PluginManifest, 'legacyCapab
 export function pluginFieldsProblem(fields: unknown): string | null {
   if (fields === undefined) return null
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return 'must be an object of field names to kinds'
+  // Stored settings hold at most 100 values a plugin (pluginSettingsShapeProblem), so a move or an import takes them.
+  if (Object.keys(fields).length > 100) return 'declares more than 100 fields'
   for (const [key, kind] of Object.entries(fields)) {
     const nameProblem = fieldNameProblem(key)
     if (nameProblem) return nameProblem

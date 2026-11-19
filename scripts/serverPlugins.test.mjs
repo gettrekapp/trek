@@ -750,7 +750,7 @@ test('repo.setPluginSettings and branch.setPluginSettings (plugins E1): checked 
   const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
   const repoId = projects.require(projectId).repositories[0].id
   let host
-  const envy = { manifest: manifest('envy', { repoSettings: { enabled: 'boolean', cpu: 'number' }, branchSettings: { env: 'text' } }), setup: (h) => ((host = h), { handlers: {} }) }
+  const envy = { manifest: manifest('envy', { repoSettings: { enabled: 'boolean', cpu: 'number', label: 'string' }, branchSettings: { env: 'text' } }), setup: (h) => ((host = h), { handlers: {} }) }
   // Not for this server's OS: listed available: false, never set up, so no settingFields and no writes.
   const elsewhere = { manifest: manifest('elsewhere', { platforms: [process.platform === 'win32' ? 'darwin' : 'win32'], repoSettings: { on: 'boolean' } }), setup: () => ({ handlers: {} }) }
   const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-settings-'))
@@ -771,22 +771,48 @@ test('repo.setPluginSettings and branch.setPluginSettings (plugins E1): checked 
     ['repo.setPluginSettings', { pluginId: 'elsewhere', values: { on: true } }, /no plugin "elsewhere"/],
     ['repo.setPluginSettings', { pluginId: 'toString', values: {} }, /no plugin "toString"/],
     ['branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { enabled: true } }, /values\.enabled is not one of its settings/],
-    ['branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'A' }, repoId: 'nope' }, /./],
+    ['repo.setPluginSettings', { pluginId: 'envy', values: { label: 'a\nb' } }, /values\.label must be one line/],
+    ['branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'x'.repeat(100_001) } }, /values\.env must be text of at most 100000 characters/],
     ['repo.setPluginSettings', { pluginId: 'envy', values: 'x' }, /values must be an object/],
     ['repo.setPluginSettings', { pluginId: 'envy', values: [true] }, /values must be an object/],
     ['repo.setPluginSettings', { pluginId: 'envy', values: null }, /values must be an object/]
   ]) {
     const res = await call(method, params)
-    if (params.repoId === 'nope') {
-      assert.equal(res.ok, false, 'an unknown repository is refused')
-      continue
-    }
     assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(params))
     assert.match(res.error.message, pattern)
   }
   assert.deepEqual(repo().pluginSettings, { envy: { enabled: true, cpu: 4 } }, 'a refused write changes nothing')
+  const unknownRepo = await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'A' }, repoId: 'nope' })
+  assert.equal(unknownRepo.error?.code, 'NOT_FOUND', JSON.stringify(unknownRepo))
   await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: {} })
   await call('repo.setPluginSettings', { pluginId: 'envy', values: {} })
   assert.equal(repo().pluginSettings, undefined)
   assert.equal(repo().branchData.feat, undefined, 'an emptied branch entry goes')
+})
+
+test('a plugin settings write (plugins E1) that would leave the map unmovable (over 1 MB in all) is refused, and nothing changes', async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const { MAX_PLUGIN_TEXT } = await import('../src/shared/plugins/manifest.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  const repoId = projects.require(projectId).repositories[0].id
+  const fields = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`f${i}`, 'text']))
+  const big = { manifest: manifest('big', { repoSettings: fields, branchSettings: fields }), setup: () => ({ handlers: {} }) }
+  const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-settings-'))
+  t.after(() => removeDir(dir))
+  const registry = createPluginRegistry({ plugins: [big], secretsFile: join(dir, 'secrets.json'), dataDir: join(dir, 'data'), hub, projects, isCoreMethod, coreToolNames: [], warn: () => {} })
+  const call = (method, params) => dispatchV2(method, { projectId, repoId, ...params }, { projects, hub, plugins: registry })
+  const repo = () => projects.require(projectId).repositories[0]
+  const full = Object.fromEntries(Object.keys(fields).map((k) => [k, 'x'.repeat(MAX_PLUGIN_TEXT)]))
+  assert.deepEqual(await call('repo.setPluginSettings', { pluginId: 'big', values: { f0: 'small' } }), { ok: true, result: null })
+  assert.deepEqual(await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'big', values: { f0: 'small' } }), { ok: true, result: null })
+  for (const [method, params] of [['repo.setPluginSettings', {}], ['branch.setPluginSettings', { branch: 'feat' }]]) {
+    const res = await call(method, { ...params, pluginId: 'big', values: full })
+    assert.equal(res.error?.code, 'BAD_REQUEST', method)
+    assert.match(res.error.message, /pluginSettings holds more than 1 MB of text in all/)
+  }
+  assert.deepEqual(repo().pluginSettings, { big: { f0: 'small' } }, 'the earlier values stay')
+  assert.deepEqual(repo().branchData.feat, { pluginSettings: { big: { f0: 'small' } } })
 })

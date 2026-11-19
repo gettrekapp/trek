@@ -272,4 +272,7 @@ test("plugin settings (plugins E1): a repository's and a branch's are kept when 
   const badBranch = project()
   badBranch.repositories[0].branchData.main.pluginSettings = { 'Bad Id': {} }
   assert.throws(() => checkImport(badBranch, ctx), /branchData\["main"\]\.pluginSettings "Bad Id" is not a plugin id/)
+  const nestedBranch = project()
+  nestedBranch.repositories[0].branchData.main.pluginSettings = { env: { env: { text: 'A=1' } } }
+  assert.throws(() => checkImport(nestedBranch, ctx), /branchData\["main"\]\.pluginSettings env\.env must be a string, a finite number or a boolean/)
 })

@@ -1054,8 +1054,11 @@ plugin didn't load, so an older project still imports.
 line of at most 2000 characters; `text`: at most 100 000; `number`: finite; `boolean`). They are
 kept in the project, so every client sees them in its snapshot: `Repository.pluginSettings[<id>]`
 and `BranchData.pluginSettings[<id>]`. A branch's move with the branch, and both come with
-`project.import` (checked by shape only there and in `move.receive`). No history is recorded for
-them. Only a plugin set up on this server takes writes: one registered for another platform
+`project.import` (checked by shape only there and in `move.receive`). In a move, each incoming
+plugin's entry replaces that plugin's on the target, and the target's entries for other plugins
+stay. A map that would pass the stored limits (more than 1 MB of text in all, or more than 100
+values for a plugin; a manifest declares at most 100 fields) is `BAD_REQUEST`, whether a move's
+merge or a write would make it. No history is recorded for them. Only a plugin set up on this server takes writes: one registered for another platform
 (listed `available: false`) is refused, but its values still come with an import or a move, so
 nothing is lost when the project reaches a server where it runs.
 

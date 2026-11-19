@@ -902,3 +902,21 @@ test("a branch's plugin settings move with it (plugins E1), over the target's ow
   assert.equal(bad.error?.code, 'BAD_REQUEST')
   assert.match(bad.error.message, /branchData\.pluginSettings "Bad Id" is not a plugin id/)
 })
+
+test("a move whose plugin settings, with the target's own, would pass 1 MB is refused, and the target keeps what it had", async (t) => {
+  const s = await setup(t)
+  const kept = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, 'x'.repeat(100_000)]))
+  s.A.projects.apply(s.A.projectId, (d) => {
+    d.repositories[0].branchData.feat.pluginSettings = { env: { env: 'y'.repeat(60_000) } }
+  })
+  s.B.projects.apply(s.B.projectId, (d) => {
+    d.repositories[0].branchData.feat = { pluginSettings: { kept } }
+  })
+  const { received } = await move(s)
+  assert.equal(received.error?.code, 'BAD_REQUEST', JSON.stringify(received).slice(0, 300))
+  assert.match(received.error.message, /branchData\.pluginSettings.*holds more than 1 MB of text in all/)
+  const repo = s.B.project().repositories[0]
+  assert.deepEqual(repo.branchData.feat, { pluginSettings: { kept } })
+  assert.equal(repo.worktrees.some((w) => w.branch === 'feat'), false, 'the worktree it began is undone')
+  assert.equal(s.A.project().repositories[0].worktrees.some((w) => w.id === s.worktreeId), true, 'the source keeps its worktree')
+})
