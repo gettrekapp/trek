@@ -8,8 +8,9 @@
 //   - the sidebar: a section per repository, one primary per section, one row selected; the
 //     detail: the branch name, the Clean chip, the empty state;
 //   - a session (a fake agent the server runs): its tab; output with the working marker makes
-//     the row's dot run and the footer count it; quiet, it is done, and a click on the badge marks
-//     it complete; a bell puts the row in attention (on the server too); showing the session
+//     the row's dot run and the footer count it; quiet, it is done; with the campsite plugin off
+//     for the project, a click on the core badge marks it complete (and another resumes); back on,
+//     a click on the tab's hiker marks it complete; a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -318,8 +319,29 @@ try {
   await type('work')
   check("the working marker runs the row's dot, and the footer counts it", [await until(() => sw.locator('.sidebar-list .wt-dot.running').count(), 1), (await sw.locator('.sidebar-footer').innerText()).includes('1 session running')], [1, true])
   check('quiet, it is done', await until(status, 'done'), 'done')
+  // The campsite plugin (on by default) draws a hiker in place of the core badge. Off for the
+  // project (the Plugins switch's path), the core badge is back and toggles complete.
+  const campsiteEnabled = async () => (await project()).settings.plugins?.campsite?.enabled ?? true
+  const tabHiker = detail.locator('.session-tab .cs-indicator')
+  check('the campsite draws a hiker on the tab, in place of the badge', [await until(() => tabHiker.count(), 1), await detail.locator('.session-tab .badge').count()], [1, 0])
+  await win.evaluate(() => window.__store.getState().setPluginEnabled('campsite', false))
+  check('the campsite turned off for the project, on the server', await until(campsiteEnabled, false), false)
+  check('and the tab shows the core badge again', [await until(() => detail.locator('.session-tab .badge-done').count(), 1), await tabHiker.count()], [1, 0])
   await detail.locator('.session-tab .badge-done').click()
-  check('a click on the badge marks it complete, on the server', [await until(status, 'complete'), await until(() => detail.locator('.session-tab .badge-complete').count(), 1)], ['complete', 1])
+  check('a click on the badge marks it complete, on the server', [await until(status, 'complete'), await until(serverStatus, 'complete'), await until(() => detail.locator('.session-tab .badge-complete').count(), 1)], ['complete', 'complete', 1])
+  await detail.locator('.session-tab .badge-complete').click()
+  check('and another resumes tracking', await until(serverStatus, 'idle'), 'idle')
+  // Back on, the hiker toggles it the same way, and its title says so (once it is done again).
+  await win.evaluate(() => window.__store.getState().setPluginEnabled('campsite', true))
+  check('the campsite back on, on the server', await until(campsiteEnabled, true), true)
+  await type('work')
+  check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
+  await detail.locator('.session-tab .cs-indicator.clickable').click()
+  check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
+    await until(status, 'complete'),
+    await until(serverStatus, 'complete'),
+    await until(() => tabHiker.getAttribute('title'), 'Marked complete — status tracking paused — click to resume tracking')
+  ], ['complete', 'complete', 'Marked complete — status tracking paused — click to resume tracking'])
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 
