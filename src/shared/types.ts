@@ -313,7 +313,7 @@ export interface Repository {
    * issue identifier ("TOW-123") or a numeric Azure DevOps work item id.
    */
   branchTickets?: Record<string, string>
-  /** GitHub pull request URLs, keyed by branch name (survives promote/delete) */
+  /** Pull request links (a PR provider's canonical form, or any http(s) link), keyed by branch name (survives promote/delete) */
   branchPullRequests?: Record<string, string>
   /** Branches whose linked PR the server watches (5c-1) */
   branchPrWatches?: Record<string, true>

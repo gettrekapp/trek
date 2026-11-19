@@ -64,7 +64,7 @@ export interface BranchData {
   note?: string
   /** Linear issue identifier ("TOW-123") or Azure DevOps work item id */
   ticket?: string
-  /** GitHub pull request URL */
+  /** Pull request link: a PR provider's canonical form, or any http(s) link (generic chip, no watch) */
   pr?: string
   /** .env-style text for the branch's Docker environment */
   env?: string
@@ -81,9 +81,9 @@ export interface PrWatch {
 export interface PrSeen {
   /** `<head commit> <checks state>`: a new push, or the same run settling, is a new moment */
   checks: string
-  /** GitHub last said the PR conflicts with its base (UNKNOWN keeps the previous answer) */
+  /** The PR's host last said it conflicts with its base (UNKNOWN keeps the previous answer) */
   conflict: boolean
-  /** ISO time of the newest review or comment by someone other than the PR's author or gh's signed-in user */
+  /** ISO time of the newest review or comment by someone other than the PR's author or the provider's signed-in user (GitHub: gh's) */
   commentsAt?: string
   /** How many of those were at `commentsAt` (times are to the second), so one more in the same second still counts */
   commentsAtCount?: number

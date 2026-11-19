@@ -84,7 +84,7 @@ export type WireErrorCode =
    * `missing`: the tool is not on the server's PATH (not installed there); `registry`: the
    * server's environments registry cannot be read (env.list only: env.up and env.destroy resolve -1 instead; nothing written).
    * Also what the server answers when something else it reaches for the caller fails: a plugin's
-   * service (Linear, ElevenLabs), gh, and `update.check` when the release feed cannot be read or verified.
+   * service (Linear, ElevenLabs), a PR provider's command (GitHub: gh), and `update.check` when the release feed cannot be read or verified.
    */
   | 'TOOL_ERROR'
 
@@ -230,7 +230,7 @@ export const CAPABILITY = {
   /** `skills.list` lists a worktree's Claude Code skills and commands on the server's disk */
   skills: 'skills',
   /**
-   * gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's
+   * A PR provider is signed in on the server's machine (GitHub: gh), so `branch.setPrWatch` can turn a branch's
    * pull request watch on (5c-1). Checked at start, every ~10 minutes after that (listed or not), and
    * after a poll fails like a sign-in error; a change is pushed to every authenticated connection as
    * `integrations.changed` `{prWatch}`, which the client SDK applies to `welcome.capabilities`.
@@ -485,7 +485,7 @@ export interface MethodParamsV2 {
   'branch.setNote': BranchRef & { note: string | null; expected?: string | null }
   'branch.setTicket': BranchRef & { ticket: string | null }
   'branch.setPr': BranchRef & { pr: string | null }
-  /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked github.com PR */
+  /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked pull request link owned by a PR provider on for the project */
   'branch.setPrWatch': BranchRef & { watch: boolean }
   /**
    * A pull request link or number (`12`, `#12`, from a link already stored in the repository)
@@ -822,7 +822,7 @@ export interface EventPayloadsV2 {
   /**
    * For clients older than plugins: a plugin with a legacy capability's server-wide change (the
    * Linear or voice key or settings), as `{ <capability>: true }`, beside its `plugins.changed`; and
-   * gh's sign-in (`prWatch`). To every authenticated connection.
+   * a PR provider's sign-in (`prWatch`). To every authenticated connection.
    */
   'integrations.changed': IntegrationsChangedEvent
   /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
@@ -848,7 +848,7 @@ export interface IntegrationsChangedEvent {
   /** The voice plugin's legacy capability: its key or settings changed */
   voice?: true
   /**
-   * gh's sign-in on the server's machine changed (5c-1): the `prWatch` capability is now listed
+   * A PR provider's sign-in on the server's machine changed (5c-1; GitHub: gh): the `prWatch` capability is now listed
    * (true) or not (false). The client SDK applies it to `welcome.capabilities`.
    */
   prWatch?: boolean

@@ -6,17 +6,17 @@ import type { PrSeen } from './model/types.ts'
 
 export type ChecksState = 'none' | 'pending' | 'passing' | 'failing'
 
-/** A pull request as the watcher sees it: the parts of gh's answer it compares. */
+/** A pull request as the watcher sees it: the parts of its provider's answer it compares. */
 export interface PrView {
   number: number
   state: 'OPEN' | 'MERGED' | 'CLOSED'
-  /** UNKNOWN while GitHub is still working it out */
+  /** UNKNOWN while the host is still working it out */
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
   headSha: string
   checks: ChecksState
-  /** The failed checks' names, in gh's order, each one line (checkName) */
+  /** The failed checks' names, in the provider's order, each one line (checkName) */
   failed: string[]
-  /** ISO times of the reviews and comments by anyone but the PR's author and gh's signed-in user, oldest first */
+  /** ISO times of the reviews and comments by anyone but the PR's author and the provider's signed-in user (GitHub: gh's), oldest first */
   commentTimes: string[]
 }
 
@@ -63,7 +63,7 @@ const checksKey = (view: PrView): string => `${view.headSha} ${view.checks}`
  * checks state is reported once per head commit: failing (with the names) or
  * passing; pending and none are not reported. New reviews and comments are
  * those after the newest one seen, and those at that same time beyond the
- * number seen there (GitHub's times are to the second).
+ * number seen there (times may be to the second only, as GitHub's are).
  */
 export function watchStep(prev: PrSeen | undefined, view: PrView): WatchStep {
   const newest = view.commentTimes.length > 0 ? view.commentTimes[view.commentTimes.length - 1] : undefined
