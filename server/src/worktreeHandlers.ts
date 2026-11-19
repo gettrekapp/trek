@@ -346,17 +346,22 @@ export const worktreeHandlers: Record<string, Handler> = {
     })
 
     // The poller keeps a vanished row that has sessions (as missing); an explicit remove drops it.
-    ctx.projects.apply(p.projectId, (d) => {
-      const r = d.repositories.find((x) => x.id === repo.id)
-      if (!r) return
-      r.worktrees = r.worktrees.filter((w) => w.id !== worktree.id)
-      const orderKey = `${repo.id} ${worktree.path}`
-      if (d.settings.worktreeOrder) {
-        const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
-        if (order.length > 0) d.settings.worktreeOrder = order
-        else delete d.settings.worktreeOrder
-      }
-    })
+    // A failure here comes after the teardown too: its error says what was torn down.
+    try {
+      ctx.projects.apply(p.projectId, (d) => {
+        const r = d.repositories.find((x) => x.id === repo.id)
+        if (!r) return
+        r.worktrees = r.worktrees.filter((w) => w.id !== worktree.id)
+        const orderKey = `${repo.id} ${worktree.path}`
+        if (d.settings.worktreeOrder) {
+          const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
+          if (order.length > 0) d.settings.worktreeOrder = order
+          else delete d.settings.worktreeOrder
+        }
+      })
+    } catch (err) {
+      throw withTornDown(err, tornDown)
+    }
     // The `attention` topic lists the row's PR notice (5c-1), if it had one.
     ctx.sessions.refreshAttention()
     recordHistory(ctx, requireString(p.projectId, 'projectId'), repo.id, worktree.branch, [{ kind: 'removed', from: { text: worktree.path } }])

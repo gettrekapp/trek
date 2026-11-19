@@ -696,6 +696,27 @@ test('worktree.remove {teardown}: git refusing changes that appeared during the 
   assert.equal(existsSync(s.feature), true)
 })
 
+test('worktree.remove {teardown}: the project write failing after the removal carries what was torn down', { skip }, async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  let tore = false
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => void (tore = true)
+  }
+  // The handler's own write of the project, once the teardown has run, fails.
+  const projects = Object.create(s.ctx.projects)
+  projects.apply = (...args) => {
+    if (tore) throw new Error('disk full')
+    return s.ctx.projects.apply(...args)
+  }
+  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, projects, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => [] } })
+  assert.equal(res.ok, false)
+  assert.match(res.error.message, /disk full/)
+  assert.deepEqual(res.error.details, { tornDown: ['Stop the VM'] })
+})
+
 test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs, with the reason; allowed once it is stopped', { skip }, async (t) => {
   const s = await setup(t)
   s.ctx.sessions.forgetRepo = () => {}
