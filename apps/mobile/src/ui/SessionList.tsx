@@ -1,6 +1,6 @@
 // A list of sessions (a worktree's, or the project's Global ones): each a row with its state mark,
 // title, status or decision and queue count, the decision answered in place, and Restart and Close
-// behind its ⋯, so a row is one tap target and they are not hit by mistake. A tap opens the session.
+// behind its ⋯ (sessionMenu, also the Global tray's long press), so a row is one tap target and they are not hit by mistake. A tap opens the session.
 import { Alert, Pressable, Text, View } from 'react-native'
 import { router } from 'expo-router'
 import type { MethodParamsV2, Session } from '../shared.ts'
@@ -31,20 +31,31 @@ export interface SessionListProps {
   request: <M extends SessionMethod>(method: M, params: MethodParamsV2[M]) => Promise<unknown>
 }
 
-export function SessionList({ serverId, projectId, sessions, running, disabled, run, request }: SessionListProps): React.JSX.Element {
-  const confirmClose = (sessionId: string, title: string): void => {
+export interface SessionMenuArgs {
+  serverId: string
+  projectId: string
+  sessionId: string
+  title: string
+  run: SessionListProps['run']
+  request: SessionListProps['request']
+}
+
+/** A session's Restart and Close… (Close asks first): a row's ⋯, and a long press on a Global tray tab. */
+export function sessionMenu({ serverId, projectId, sessionId, title, run, request }: SessionMenuArgs): void {
+  const confirmClose = (): void => {
     Alert.alert(`Close ${title}?`, 'The session stops. Its history stays on the server.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Close', style: 'destructive', onPress: () => void run(() => request('session.close', { projectId, sessionId })) }
     ])
   }
-  const sessionMenu = (sessionId: string, title: string): void => {
-    Alert.alert(title, undefined, [
-      { text: 'Restart', onPress: () => void run(() => request('session.restart', { projectId, sessionId, ...restartSize(serverId, sessionId) })) },
-      { text: 'Close…', style: 'destructive', onPress: () => confirmClose(sessionId, title) },
-      { text: 'Cancel', style: 'cancel' }
-    ])
-  }
+  Alert.alert(title, undefined, [
+    { text: 'Restart', onPress: () => void run(() => request('session.restart', { projectId, sessionId, ...restartSize(serverId, sessionId) })) },
+    { text: 'Close…', style: 'destructive', onPress: confirmClose },
+    { text: 'Cancel', style: 'cancel' }
+  ])
+}
+
+export function SessionList({ serverId, projectId, sessions, running, disabled, run, request }: SessionListProps): React.JSX.Element {
   return (
     <>
       {sessions.map((s) => {
@@ -80,7 +91,7 @@ export function SessionList({ serverId, projectId, sessions, running, disabled, 
                 </View>
               ) : null}
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel={`${s.title}: restart or close`} disabled={disabled} onPress={() => sessionMenu(s.id, s.title)} style={{ paddingHorizontal: 16, paddingVertical: 12, opacity: disabled ? 0.4 : 1 }}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${s.title}: restart or close`} disabled={disabled} onPress={() => sessionMenu({ serverId, projectId, sessionId: s.id, title: s.title, run, request })} style={{ paddingHorizontal: 16, paddingVertical: 12, opacity: disabled ? 0.4 : 1 }}>
               <Text style={{ color: colors.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
             </Pressable>
           </View>
