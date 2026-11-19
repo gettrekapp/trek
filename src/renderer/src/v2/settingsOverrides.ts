@@ -25,6 +25,8 @@ import type { EnvironmentSettings } from '../../../shared/types'
 import type { AppState, SettingsSetter } from '../store'
 import { sameSetting, type Rebased, type SettingsField, type SettingsWriter } from './settingsWriter.ts'
 import { withPluginEnabled } from '../plugins/presence.ts'
+import type { PluginSettingValues } from '../../../shared/plugins/manifest.ts'
+import { LEGACY_ENV_BRANCH_FIELD, LEGACY_ENV_PLUGIN, legacyFromRepoValues } from '../../../shared/legacyEnvFields.ts'
 
 export type SettingsOverrides = Pick<AppState, SettingsSetter>
 
@@ -39,6 +41,10 @@ export interface SettingsRequests {
   setEnvironments(repoId: string, environments: EnvironmentSettings | null, expected: EnvironmentSettings | null): Promise<void>
   /** `branch.setEnv` with `expected` */
   setBranchEnv(repoId: string, branch: string, env: string | null, expected: string | null): Promise<void>
+  /** `repo.setPluginSettings` with `expected` (plugins E3): `values` replaces the plugin's; {} clears them */
+  setRepoPluginSettings(repoId: string, pluginId: string, values: PluginSettingValues, expected: PluginSettingValues | null): Promise<void>
+  /** `branch.setPluginSettings` with `expected` (plugins E3) */
+  setBranchPluginSettings(repoId: string, branch: string, pluginId: string, values: PluginSettingValues, expected: PluginSettingValues | null): Promise<void>
 }
 
 const SAVE_FAILED = 'Could not save the setting'
@@ -138,6 +144,90 @@ export function branchEnvField(repoId: string, branch: string, requests: Setting
   }
 }
 
+/** A plugin's own entry in a pluginSettings map (an own key only), exactly as kept; null when it has none. */
+function pluginValuesIn(map: Record<string, PluginSettingValues> | undefined, pluginId: string): PluginSettingValues | null {
+  return map && Object.hasOwn(map, pluginId) ? map[pluginId] : null
+}
+
+/** `map` with the plugin's entry set to `value` (null removes it); undefined when that leaves it empty. */
+function withPluginValues(map: Record<string, PluginSettingValues> | undefined, pluginId: string, value: unknown): Record<string, PluginSettingValues> | undefined {
+  const next = { ...(map ?? {}) }
+  if (value === null) delete next[pluginId]
+  else next[pluginId] = value as PluginSettingValues
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+/**
+ * A plugin's settings for a repository (plugins E1, E3): `repo.setPluginSettings` with `expected`
+ * (the plugin's entry as read, unknown keys included; null for none). A value set is an operation
+ * on the plugin's fields: another client's other fields are kept (rebaseObject).
+ */
+export function pluginRepoField(repoId: string, pluginId: string, label: string, requests: SettingsRequests): SettingsField {
+  return {
+    key: `repo:${repoId}.plugin:${pluginId}`,
+    label,
+    title: SAVE_FAILED,
+    current: (project) => pluginValuesIn(project.repositories.find((r) => r.id === repoId)?.pluginSettings, pluginId),
+    apply: (project, value) => ({
+      ...project,
+      repositories: project.repositories.map((r) => {
+        if (r.id !== repoId) return r
+        const { pluginSettings: _old, ...rest } = r
+        const pluginSettings = withPluginValues(r.pluginSettings, pluginId, value)
+        return pluginSettings ? { ...rest, pluginSettings } : rest
+      })
+    }),
+    send: (value, expected) => requests.setRepoPluginSettings(repoId, pluginId, (value as PluginSettingValues | null) ?? {}, expected as PluginSettingValues | null),
+    rebase: rebaseObject
+  }
+}
+
+/** A plugin's settings for a branch (plugins E1, E3): `branch.setPluginSettings` with `expected`; an emptied branch entry goes. */
+export function pluginBranchField(repoId: string, branch: string, pluginId: string, label: string, requests: SettingsRequests): SettingsField {
+  return {
+    key: `branch:${repoId}/${branch}.plugin:${pluginId}`,
+    label,
+    title: SAVE_FAILED,
+    current: (project) => {
+      const data = project.repositories.find((r) => r.id === repoId)?.branchData
+      return pluginValuesIn(data && Object.hasOwn(data, branch) ? data[branch].pluginSettings : undefined, pluginId)
+    },
+    apply: (project, value) => ({
+      ...project,
+      repositories: project.repositories.map((r) => {
+        if (r.id !== repoId) return r
+        const before = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : {}
+        const { pluginSettings: _old, ...data } = before
+        const pluginSettings = withPluginValues(before.pluginSettings, pluginId, value)
+        const next = pluginSettings ? { ...data, pluginSettings } : data
+        const branchData = { ...r.branchData }
+        if (Object.keys(next).length === 0) delete branchData[branch]
+        else branchData[branch] = next
+        return { ...r, branchData }
+      })
+    }),
+    send: (value, expected) =>
+      requests.setBranchPluginSettings(repoId, branch, pluginId, (value as PluginSettingValues | null) ?? {}, expected as PluginSettingValues | null),
+    rebase: rebaseObject
+  }
+}
+
+/**
+ * Whether a branch's .env is held only in the old field (`BranchData.env`), not in the env plugin's
+ * copy: one over the plugin's limit, which the server keeps but doesn't mirror (legacyEnv.ts's
+ * migrateBranchEnv). The window shows it from there (projector.ts), so it is written back there:
+ * `branch.setEnv`, guarded by that text. A plugin write would clear it unread (its mirror is made
+ * from the plugin's copy), with `expected` blind to it.
+ */
+function envOnlyInOldField(project: Project | undefined, repoId: string, branch: string): boolean {
+  const data = project?.repositories.find((r) => r.id === repoId)?.branchData
+  if (!data || !Object.hasOwn(data, branch)) return false
+  const { env, pluginSettings } = data[branch]
+  if (typeof env !== 'string' || env === '') return false
+  const entry = pluginValuesIn(pluginSettings, LEGACY_ENV_PLUGIN)
+  return !entry || !Object.hasOwn(entry, LEGACY_ENV_BRANCH_FIELD)
+}
+
 /**
  * A set's change from `base` to `wanted` (items added, items removed) applied
  * to `latest`, sorted; null when empty. Never a clash: each item is its own toggle.
@@ -178,12 +268,15 @@ const promptOrNull = (prompt: string): string | null => (prompt.trim() ? prompt 
 
 /**
  * `shown` is the mirror's project (undefined before it has one): the setters
- * that build on a value read it with the pending edits applied.
+ * that build on a value read it with the pending edits applied. `listsPlugin`
+ * says whether the server lists a built-in plugin (plugins E3): a server before
+ * plugins E2 has no `env` plugin, and keeps its settings as core's old fields.
  */
 export function v2SettingsOverrides(
   writer: SettingsWriter,
   requests: SettingsRequests,
-  shown: () => Project | undefined
+  shown: () => Project | undefined,
+  listsPlugin: (pluginId: string) => boolean = () => true
 ): SettingsOverrides {
   const fields = new Map<string, SettingsField>()
   const setting = (key: string, label: string): SettingsField => {
@@ -236,6 +329,23 @@ export function v2SettingsOverrides(
       else favorites.add(containerName)
       writer.write(favoritesField, listOrNull([...favorites].sort()))
     },
-    setBranchEnvVars: (repoId, branch, text) => writer.write(branchEnvField(repoId, branch, requests), text || null)
+    setBranchEnvVars: (repoId, branch, text) => writer.write(branchEnvField(repoId, branch, requests), text || null),
+    // A plugin's settings (plugins E3): `values` replaces the plugin's ({} clears them), named in a
+    // dialog by `label` (its name). A server before plugins E2 keeps the env plugin's as core's old
+    // fields (legacyEnvFields.ts): they go there, compare-and-set as ever. So does a branch's .env
+    // held only in the old field (envOnlyInOldField). The env plugin's only branch setting is that text.
+    setPluginRepoSettings: (pluginId, repoId, values, label) => {
+      if (!overlaid()?.repositories.some((r) => r.id === repoId)) return
+      if (pluginId === LEGACY_ENV_PLUGIN && !listsPlugin(pluginId)) writer.write(environmentsField(repoId, requests), legacyFromRepoValues(values) ?? null)
+      else writer.write(pluginRepoField(repoId, pluginId, label ?? pluginId, requests), Object.keys(values).length > 0 ? { ...values } : null)
+    },
+    setPluginBranchSettings: (pluginId, repoId, branch, values, label) => {
+      if (pluginId === LEGACY_ENV_PLUGIN && (!listsPlugin(pluginId) || envOnlyInOldField(overlaid(), repoId, branch))) {
+        const text = values[LEGACY_ENV_BRANCH_FIELD]
+        writer.write(branchEnvField(repoId, branch, requests), typeof text === 'string' && text !== '' ? text : null)
+        return
+      }
+      writer.write(pluginBranchField(repoId, branch, pluginId, `${label ?? pluginId} of ${branch}`, requests), Object.keys(values).length > 0 ? { ...values } : null)
+    }
   }
 }

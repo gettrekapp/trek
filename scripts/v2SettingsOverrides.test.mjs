@@ -10,20 +10,22 @@ const project = () => ({
   settings: { audioAlerts: false, sessionSystemPrompt: 'Run the tests', worktreeTags: [{ id: 'todo', name: 'To do', color: '#fff' }], dockerFavorites: ['db'] },
   repositories: [
     { id: 'r1', name: 'alpha', path: '/a', linkedDirs: ['.trek'], branchData: {}, worktrees: [] },
-    { id: 'r2', name: 'beta', path: '/b', environments: { enabled: true, cpu: 4 }, branchData: {}, worktrees: [] }
+    { id: 'r2', name: 'beta', path: '/b', environments: { enabled: true, cpu: 4 }, pluginSettings: { env: { enabled: true, cpu: 4 }, other: { on: true } }, branchData: {}, worktrees: [] }
   ],
   globalSessions: []
 })
 
 /** Overrides over a real writer whose requests are recorded and resolve at once. */
-function setup() {
+function setup({ listsPlugin } = {}) {
   const calls = []
   const requests = {
     updateSettings: async (settings, expected) => void calls.push(['updateSettings', settings, expected]),
     rename: async (name, expected) => void calls.push(['rename', name, expected]),
     setLinkedDirs: async (repoId, dirs, expected) => void calls.push(['setLinkedDirs', repoId, dirs, expected]),
     setEnvironments: async (repoId, environments, expected) => void calls.push(['setEnvironments', repoId, environments, expected]),
-    setBranchEnv: async (repoId, branch, env, expected) => void calls.push(['setBranchEnv', repoId, branch, env, expected])
+    setBranchEnv: async (repoId, branch, env, expected) => void calls.push(['setBranchEnv', repoId, branch, env, expected]),
+    setRepoPluginSettings: async (repoId, pluginId, values, expected) => void calls.push(['setRepoPluginSettings', repoId, pluginId, values, expected]),
+    setBranchPluginSettings: async (repoId, branch, pluginId, values, expected) => void calls.push(['setBranchPluginSettings', repoId, branch, pluginId, values, expected])
   }
   const mirror = project()
   const writer = createSettingsWriter({
@@ -33,7 +35,7 @@ function setup() {
     reload: () => {},
     reportEdit: () => {}
   })
-  return { o: v2SettingsOverrides(writer, requests, () => mirror), calls, writer, mirror }
+  return { o: v2SettingsOverrides(writer, requests, () => mirror, listsPlugin), calls, writer, mirror }
 }
 
 /** The store's SettingsSetter names (store.ts). */
@@ -58,7 +60,9 @@ const SETTINGS_SETTERS = [
   'setLinkedDirs',
   'setEnvironmentSettings',
   'toggleDockerFavorite',
-  'setBranchEnvVars'
+  'setBranchEnvVars',
+  'setPluginRepoSettings',
+  'setPluginBranchSettings'
 ]
 
 test("gives exactly the store's settings setters", () => {
@@ -129,7 +133,9 @@ test("a CONFLICT on plugins rebases per plugin: another window's switch is kept"
     rename: async () => {},
     setLinkedDirs: async () => {},
     setEnvironments: async () => {},
-    setBranchEnv: async () => {}
+    setBranchEnv: async () => {},
+    setRepoPluginSettings: async () => {},
+    setBranchPluginSettings: async () => {}
   }
   const asked = []
   const writer = createSettingsWriter({ project: () => mirror, changed: () => {}, askConflict: async (q) => (asked.push(q), 'reload'), reload: () => {}, reportEdit: () => {} })
@@ -209,7 +215,7 @@ const tick = () => new Promise((r) => setImmediate(r))
  * into the mirror (as its patch would), `conflict(edit)` first lets another
  * client's edit land, then answers CONFLICT.
  */
-function pendingSetup() {
+function pendingSetup({ listsPlugin } = {}) {
   const sends = []
   const asked = []
   const mirror = project()
@@ -246,6 +252,23 @@ function pendingSetup() {
       open('setBranchEnv', [repoId, branch, env, expected], () => {
         const repo = mirror.repositories.find((r) => r.id === repoId)
         repo.branchData[branch] = { ...repo.branchData[branch], env: env ?? undefined }
+      }),
+    setRepoPluginSettings: (repoId, pluginId, values, expected) =>
+      open('setRepoPluginSettings', [repoId, pluginId, values, expected], () => {
+        const repo = mirror.repositories.find((r) => r.id === repoId)
+        const next = { ...(repo.pluginSettings ?? {}) }
+        if (Object.keys(values).length > 0) next[pluginId] = values
+        else delete next[pluginId]
+        repo.pluginSettings = next
+      }),
+    setBranchPluginSettings: (repoId, branch, pluginId, values, expected) =>
+      open('setBranchPluginSettings', [repoId, branch, pluginId, values, expected], () => {
+        const repo = mirror.repositories.find((r) => r.id === repoId)
+        const data = { ...(repo.branchData[branch] ?? {}) }
+        const next = { ...(data.pluginSettings ?? {}) }
+        if (Object.keys(values).length > 0) next[pluginId] = values
+        else delete next[pluginId]
+        repo.branchData[branch] = { ...data, pluginSettings: next }
       })
   }
   const choices = []
@@ -259,7 +282,7 @@ function pendingSetup() {
     reload: () => {},
     reportEdit: () => {}
   })
-  return { o: v2SettingsOverrides(writer, requests, () => mirror), sends, asked, choices, writer, mirror }
+  return { o: v2SettingsOverrides(writer, requests, () => mirror, listsPlugin), sends, asked, choices, writer, mirror }
 }
 
 test('rebaseSet: the items added and removed are applied to the newer set, never a clash', () => {
@@ -351,4 +374,125 @@ test("a branch's environment variables changed elsewhere: the CONFLICT asks Relo
   await tick()
   assert.deepEqual(asked, ['Environment variables of feat'])
   assert.deepEqual(sends[1].args, ['r1', 'feat', 'A=1', 'B=2'])
+})
+
+test("a plugin's repository settings (plugins E3): repo.setPluginSettings with the plugin's values as expected, shown pending; an unknown repository sends nothing", () => {
+  const { o, calls, writer, mirror } = setup()
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 2 }, 'Colima environments')
+  o.setPluginRepoSettings('env', 'r1', { enabled: true }, 'Colima environments')
+  o.setPluginRepoSettings('other', 'r2', {}, 'Other')
+  o.setPluginRepoSettings('env', 'nope', { enabled: true })
+  // Clearing what is not there is no change: the writer sends nothing.
+  o.setPluginRepoSettings('third', 'r1', {})
+  assert.deepEqual(calls, [
+    ['setRepoPluginSettings', 'r2', 'env', { enabled: true, cpu: 2 }, { enabled: true, cpu: 4 }],
+    ['setRepoPluginSettings', 'r1', 'env', { enabled: true }, null],
+    ['setRepoPluginSettings', 'r2', 'other', {}, { on: true }]
+  ])
+  assert.deepEqual(writer.overlay(mirror).repositories[1].pluginSettings, { env: { enabled: true, cpu: 2 } })
+  assert.deepEqual(mirror.repositories[1].pluginSettings.env, { enabled: true, cpu: 4 }, 'the mirror itself is untouched')
+  o.setPluginRepoSettings('env', 'r2', {}, 'Colima environments')
+  assert.equal('pluginSettings' in writer.overlay(mirror).repositories[1], false, 'emptied, the map goes')
+})
+
+test("a plugin's branch settings (plugins E3): branch.setPluginSettings with expected, shown pending; cleared, the emptied entry goes", async () => {
+  const { o, sends, writer, mirror } = pendingSetup()
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
+  assert.deepEqual(sends[0].args, ['r1', 'feat', 'env', { env: 'A=1' }, null])
+  assert.deepEqual(writer.overlay(mirror).repositories[0].branchData.feat, { pluginSettings: { env: { env: 'A=1' } } })
+  o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
+  assert.equal('feat' in writer.overlay(mirror).repositories[0].branchData, false)
+  sends[0].ok()
+  await tick()
+  assert.deepEqual(sends[1].args, ['r1', 'feat', 'env', {}, { env: 'A=1' }])
+})
+
+test("a plugin's setting changed elsewhere meanwhile (plugins E3): another field of it is kept, silently", async () => {
+  const { o, sends, asked } = pendingSetup()
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 4, memory: 16 }, 'Colima environments')
+  sends[0].conflict((m) => (m.repositories[1].pluginSettings = { env: { enabled: true, cpu: 8, disk: 100 } }))
+  await tick()
+  assert.deepEqual(asked, [])
+  assert.deepEqual(sends[1].args, ['r2', 'env', { enabled: true, cpu: 8, disk: 100, memory: 16 }, { enabled: true, cpu: 8, disk: 100 }])
+})
+
+test("a plugin's setting the other client changed too (plugins E3): asked by the plugin's name; Keep Mine keeps its other fields", async () => {
+  const { o, sends, asked, choices } = pendingSetup()
+  choices.push('keep')
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 2 }, 'Colima environments')
+  sends[0].conflict((m) => (m.repositories[1].pluginSettings = { env: { enabled: true, cpu: 8, disk: 100 } }))
+  await tick()
+  await tick()
+  assert.deepEqual(asked, ['Colima environments'])
+  assert.deepEqual(sends[1].args, ['r2', 'env', { enabled: true, cpu: 2, disk: 100 }, { enabled: true, cpu: 8, disk: 100 }])
+})
+
+test('on a server without the env plugin (before plugins E2), the env plugin\'s settings go to the old fields: repo.update\'s environments, branch.setEnv', () => {
+  const { o, calls, mirror } = setup({ listsPlugin: () => false })
+  mirror.repositories[0].environments = { enabled: false, cpu: 1 }
+  mirror.repositories[0].branchData = { main: { env: 'M=1' } }
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 2 }, 'Colima environments')
+  o.setPluginRepoSettings('env', 'r1', {}, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'main', {}, 'Colima environments')
+  assert.deepEqual(calls, [
+    ['setEnvironments', 'r2', { enabled: true, cpu: 2 }, { enabled: true, cpu: 4 }],
+    ['setEnvironments', 'r1', null, { enabled: false, cpu: 1 }],
+    ['setBranchEnv', 'r1', 'feat', 'A=1', null],
+    ['setBranchEnv', 'r1', 'main', null, 'M=1']
+  ])
+  // Another plugin's settings go as they would anywhere.
+  const other = setup({ listsPlugin: () => false })
+  other.o.setPluginRepoSettings('other', 'r2', { on: false })
+  assert.deepEqual(other.calls, [['setRepoPluginSettings', 'r2', 'other', { on: false }, { on: true }]])
+})
+
+test('on a server without the env plugin, a set meets a CONFLICT on the old field: re-applied over the other sub-fields, silently', async () => {
+  const { o, sends, asked } = pendingSetup({ listsPlugin: () => false })
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 4, memory: 16 })
+  sends[0].conflict((m) => (m.repositories[1].environments = { enabled: true, cpu: 8, disk: 100 }))
+  await tick()
+  assert.deepEqual(asked, [])
+  assert.deepEqual(sends[1].args, ['r2', { enabled: true, cpu: 8, disk: 100, memory: 16 }, { enabled: true, cpu: 8, disk: 100 }])
+})
+
+test("expected is exactly the plugin's entry as the window read it (plugins E3): keys the window does not know included; null, never {}, when there is none", () => {
+  const { o, calls, mirror } = setup()
+  mirror.repositories[1].pluginSettings = { env: { enabled: true, cpu: 4, future: 'x' }, other: { on: true } }
+  mirror.repositories[0].branchData = { feat: { note: 'n', pluginSettings: { env: { env: 'A=1', later: [1] } } }, bare: { note: 'b' } }
+  o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 2, future: 'x' }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'B=2', later: [1] }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'bare', { env: 'C=3' }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'nobranch', { env: 'D=4' }, 'Colima environments')
+  o.setPluginRepoSettings('third', 'r1', { on: true })
+  assert.deepEqual(calls, [
+    ['setRepoPluginSettings', 'r2', 'env', { enabled: true, cpu: 2, future: 'x' }, { enabled: true, cpu: 4, future: 'x' }],
+    ['setBranchPluginSettings', 'r1', 'feat', 'env', { env: 'B=2', later: [1] }, { env: 'A=1', later: [1] }],
+    ['setBranchPluginSettings', 'r1', 'bare', 'env', { env: 'C=3' }, null],
+    ['setBranchPluginSettings', 'r1', 'nobranch', 'env', { env: 'D=4' }, null],
+    ['setRepoPluginSettings', 'r1', 'third', { on: true }, null]
+  ])
+})
+
+test("a branch's .env the plugin's copy lacks (over its limit, kept only in the old field) is written through branch.setEnv, guarded by that text (plugins E3)", async () => {
+  const { o, sends, writer, mirror } = pendingSetup()
+  const big = 'A=' + 'x'.repeat(100_001)
+  mirror.repositories[0].branchData = { feat: { env: big, note: 'n' } }
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
+  assert.equal(sends[0].name, 'setBranchEnv')
+  assert.deepEqual(sends[0].args, ['r1', 'feat', 'A=1', big])
+  assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, 'A=1')
+  // Cleared, the old text goes the same way: never a plugin write that would drop it unseen.
+  o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
+  sends[0].ok()
+  await tick()
+  assert.equal(sends[1].name, 'setBranchEnv')
+  assert.deepEqual(sends[1].args, ['r1', 'feat', null, 'A=1'])
+  // Once the plugin's copy holds the .env (the server mirrors it), the plugin's method again.
+  sends[1].ok()
+  await tick()
+  mirror.repositories[0].branchData.feat = { env: 'E=5', pluginSettings: { env: { env: 'E=5' } } }
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'F=6' }, 'Colima environments')
+  assert.equal(sends[2].name, 'setBranchPluginSettings')
+  assert.deepEqual(sends[2].args, ['r1', 'feat', 'env', { env: 'F=6' }, { env: 'E=5' }])
 })

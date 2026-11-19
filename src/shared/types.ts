@@ -1,4 +1,4 @@
-import type { ProjectPluginSettings } from './plugins/manifest.ts'
+import type { PluginSettingValues, ProjectPluginSettings } from './plugins/manifest.ts'
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
@@ -335,6 +335,10 @@ export interface Repository {
   linkedDirs?: string[]
   /** Per-worktree isolated Docker environments (Colima VMs) */
   environments?: EnvironmentSettings
+  /** The plugins' settings for the repository, by plugin id (plugins E1; shown to their client halves since E3) */
+  pluginSettings?: Record<string, PluginSettingValues>
+  /** The plugins' settings for each branch: branch → plugin id → values (plugins E1, E3) */
+  branchPluginSettings?: Record<string, Record<string, PluginSettingValues>>
 }
 
 export interface BotSettings {

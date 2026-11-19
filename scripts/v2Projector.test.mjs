@@ -187,6 +187,53 @@ test('branch data becomes the six legacy maps; empty values are left out', () =>
   assert.equal('serverPaths' in one, false)
 })
 
+test("the plugins' settings (plugins E3): the repository's and each branch's; the env plugin's made from the old fields on a server before plugins E2", () => {
+  const p = fixture()
+  // Before E2: only the old fields (the .env is fixture()'s branchData.feat.env).
+  p.repositories[0].environments = { enabled: true, cpu: 3 }
+  p.repositories[0].pluginSettings = { other: { on: true } }
+  // E2 on: both, kept in step by the server; the plugin's own entry counts.
+  p.repositories[1].environments = { enabled: true }
+  p.repositories[1].pluginSettings = { env: { enabled: false } }
+  const [one, two] = projectV2(p).slice.project.repositories
+  assert.deepEqual(one.pluginSettings, { other: { on: true }, env: { enabled: true, cpu: 3 } })
+  assert.deepEqual(one.branchPluginSettings, { feat: { env: { env: 'A=1' } } })
+  assert.deepEqual(two.pluginSettings, { env: { enabled: false } })
+  assert.equal(two.branchPluginSettings, undefined)
+})
+
+test("the plugins' settings are projected as the server keeps them (plugins E3): a plugin-only key kept, no entry filled with {}", () => {
+  const p = fixture()
+  // A later plugin version's key, which the old fields cannot hold, came in by a move or an import.
+  p.repositories[0].environments = { enabled: true, cpu: 2 }
+  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2, future: 'x' }, other: { on: true, deep: 'y' } }
+  p.repositories[0].branchData.feat.pluginSettings = { env: { env: 'A=1', later: true } }
+  const [one, two] = projectV2(p).slice.project.repositories
+  assert.deepEqual(one.pluginSettings, { env: { enabled: true, cpu: 2, future: 'x' }, other: { on: true, deep: 'y' } })
+  assert.deepEqual(one.branchPluginSettings, { feat: { env: { env: 'A=1', later: true } } })
+  // Neither the old fields nor the plugin's: no map, no `{}` entry.
+  assert.equal('pluginSettings' in two, false)
+  assert.equal('branchPluginSettings' in two, false)
+  const bare = fixture()
+  bare.repositories[0].branchData.feat.env = ''
+  bare.repositories[0].environments = { extra: 1 }
+  const [b] = projectV2(bare).slice.project.repositories
+  assert.equal('pluginSettings' in b, false, 'an old object with none of its fields is no entry')
+  assert.equal('branchPluginSettings' in b, false, 'an empty .env is no entry')
+})
+
+test("a branch's .env the plugin's copy lacks (over its 100 000 characters, kept only in the old field) is shown from the old field (plugins E3)", () => {
+  const p = fixture()
+  const big = 'A=' + 'x'.repeat(100_001)
+  p.repositories[0].pluginSettings = { env: { enabled: true } }
+  p.repositories[0].environments = { enabled: true }
+  p.repositories[0].branchData.feat.env = big
+  p.repositories[0].branchData.main = { env: big, pluginSettings: { env: { later: 1 }, other: { on: true } } }
+  const [one] = projectV2(p).slice.project.repositories
+  assert.deepEqual(one.branchPluginSettings.feat, { env: { env: big } })
+  assert.deepEqual(one.branchPluginSettings.main, { env: { later: 1, env: big }, other: { on: true } })
+})
+
 test("a watched PR (5c-1): the branch's watch, and its worktree's notice by the worktree's path", () => {
   const p = fixture()
   const repo = p.repositories[0]

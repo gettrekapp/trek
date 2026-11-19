@@ -22,6 +22,8 @@ import type {
   WorktreeInstance
 } from '../../../shared/types'
 import type { PendingDecision, SelectedWorktree, TerminalMeta } from '../store'
+import { LEGACY_ENV_BRANCH_FIELD, LEGACY_ENV_PLUGIN, repoValuesFromLegacy } from '../../../shared/legacyEnvFields.ts'
+import type { PluginSettingValues } from '../../../shared/plugins/manifest.ts'
 
 /** store.ts's GLOBAL_WORKTREE_ID; applyProjection.ts fails to typecheck if they drift. */
 export const V2_GLOBAL_WORKTREE_ID = '__global__'
@@ -200,6 +202,39 @@ function branchMaps(repo: V2Repository): BranchMaps {
   return maps
 }
 
+type PluginMap = Record<string, PluginSettingValues>
+const ownsEnv = (map: PluginMap | undefined): boolean => !!map && Object.hasOwn(map, LEGACY_ENV_PLUGIN)
+
+/**
+ * The repository's plugin settings and its branches' (plugins E1), for the plugins' client halves
+ * (plugins E3), each entry as the server keeps it (keys this window doesn't know included; no
+ * entry is made up as {}): a write sends the entry it read as `expected`. A server before plugins
+ * E2 keeps the env plugin's only under their old names (`environments`, `branchData[branch].env`):
+ * its values are made from those there. From E2 on the server keeps both in step, so the plugin's
+ * own entry is what counts, but for a branch's .env over the plugin's limit, which the server keeps
+ * only in the old field (legacyEnv.ts's migrateBranchEnv): it is shown from there, so it is never
+ * shown empty (settingsOverrides.ts writes it back through the old field).
+ */
+function pluginMaps(repo: V2Repository): Pick<Repository, 'pluginSettings' | 'branchPluginSettings'> {
+  const own: PluginMap = { ...(repo.pluginSettings ?? {}) }
+  if (!ownsEnv(repo.pluginSettings) && repo.environments) {
+    const values = repoValuesFromLegacy(repo.environments)
+    if (Object.keys(values).length > 0) own[LEGACY_ENV_PLUGIN] = values
+  }
+  const branches: Record<string, PluginMap> = {}
+  for (const [branch, data] of Object.entries(repo.branchData)) {
+    const map: PluginMap = { ...(data.pluginSettings ?? {}) }
+    const entry = ownsEnv(data.pluginSettings) ? data.pluginSettings![LEGACY_ENV_PLUGIN] : undefined
+    const unmirrored = !entry || !Object.hasOwn(entry, LEGACY_ENV_BRANCH_FIELD)
+    if (unmirrored && typeof data.env === 'string' && data.env !== '') map[LEGACY_ENV_PLUGIN] = { ...entry, [LEGACY_ENV_BRANCH_FIELD]: data.env }
+    if (Object.keys(map).length > 0) branches[branch] = map
+  }
+  return {
+    ...(Object.keys(own).length > 0 ? { pluginSettings: own } : {}),
+    ...(Object.keys(branches).length > 0 ? { branchPluginSettings: branches } : {})
+  }
+}
+
 export function projectV2(project: Project): V2Projection {
   const ids: V2IdMap = { worktrees: {}, worktreeByPath: {}, sessions: {}, legacyByWorktree: {} }
   const hostWorktrees: Record<string, GitWorktreeInfo[]> = {}
@@ -264,7 +299,8 @@ export function projectV2(project: Project): V2Projection {
       ...(primaryTerminals ? { primaryTerminals } : {}),
       ...branchMaps(repo),
       ...(repo.linkedDirs ? { linkedDirs: [...repo.linkedDirs] } : {}),
-      ...(repo.environments ? { environments: repo.environments } : {})
+      ...(repo.environments ? { environments: repo.environments } : {}),
+      ...pluginMaps(repo)
     }
   })
 

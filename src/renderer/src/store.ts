@@ -8,6 +8,7 @@ import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
 import type { SessionContext } from '../../shared/model/types'
+import type { PluginSettingValues } from '../../shared/plugins/manifest.ts'
 import { viaServerAll } from './projectSetters.ts'
 import { nextProjectPage, type ProjectPage } from './projectPage.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
@@ -255,6 +256,10 @@ export interface AppState {
   setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
   /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`); '' removes it; `label` names it in a failure */
   setPluginSetting: (key: string, value: string, label?: string) => void
+  /** A plugin's settings for a repository (plugins E3): `values` replaces them ({} clears); `label` names them in a dialog */
+  setPluginRepoSettings: (pluginId: string, repoId: string, values: PluginSettingValues, label?: string) => void
+  /** A plugin's settings for a branch (plugins E3), as setPluginRepoSettings */
+  setPluginBranchSettings: (pluginId: string, repoId: string, branch: string, values: PluginSettingValues, label?: string) => void
   setBranchNote: (repoId: string, branch: string, text: string) => void
   setBranchEnvVars: (repoId: string, branch: string, text: string) => void
   setBranchTag: (repoId: string, branch: string, tagId: string | null) => void
@@ -339,7 +344,9 @@ const SETTINGS_SETTERS = [
   'setLinkedDirs',
   'setEnvironmentSettings',
   'toggleDockerFavorite',
-  'setBranchEnvVars'
+  'setBranchEnvVars',
+  'setPluginRepoSettings',
+  'setPluginBranchSettings'
 ] as const
 export type SettingsSetter = (typeof SETTINGS_SETTERS)[number]
 

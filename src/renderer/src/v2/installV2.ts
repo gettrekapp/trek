@@ -199,8 +199,19 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     setBranchEnv: async (repoId, branch, env, expected) => {
       const { rev } = await requestWithRev('branch.setEnv', { projectId, repoId, branch, env, expected })
       if (rev) await whenProjected(() => true, rev)
+    },
+    setRepoPluginSettings: async (repoId, pluginId, values, expected) => {
+      const { rev } = await requestWithRev('repo.setPluginSettings', { projectId, repoId, pluginId, values, expected })
+      if (rev) await whenProjected(() => true, rev)
+    },
+    setBranchPluginSettings: async (repoId, branch, pluginId, values, expected) => {
+      const { rev } = await requestWithRev('branch.setPluginSettings', { projectId, repoId, branch, pluginId, values, expected })
+      if (rev) await whenProjected(() => true, rev)
     }
   }
+  // Whether the window's server lists a built-in plugin, set up for its platform (plugins E3): a server before E2 has no `env` one.
+  const listsPlugin = (id: string): boolean =>
+    registered()?.connection.welcome?.plugins?.some((p) => p.id === id && p.type === undefined && p.sha256 === undefined && p.available !== false) === true
   const askConflict = async (label: string): Promise<ConflictChoice> => {
     if (left) return 'reload'
     const keep = await window.api.confirm({
@@ -291,7 +302,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // The store's project setters send to this server from now on.
   setProjectSetters({
     ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
-    ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject)
+    ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject, listsPlugin)
   })
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
   useAppStore.setState(INSTALL_PATCH)

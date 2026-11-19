@@ -268,3 +268,12 @@ test("the old fields are the Colima plugin's settings, kind for kind (the mirror
   assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.repoSettings), null)
   assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.branchSettings), null)
 })
+
+test("the window and the server's mirror share one list of the old fields (src/shared/legacyEnvFields.ts, plugins E3)", async () => {
+  const shared = await import('../src/shared/legacyEnvFields.ts')
+  assert.equal(LEGACY_ENV_PLUGIN, shared.LEGACY_ENV_PLUGIN)
+  assert.equal(LEGACY_ENV_BRANCH_FIELD, shared.LEGACY_ENV_BRANCH_FIELD)
+  assert.equal(LEGACY_ENV_REPO_FIELDS, shared.LEGACY_ENV_REPO_FIELDS)
+  assert.equal(repoValuesFromLegacy, shared.repoValuesFromLegacy)
+  assert.equal(legacyFromRepoValues, shared.legacyFromRepoValues)
+})
