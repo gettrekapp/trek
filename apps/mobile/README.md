@@ -382,8 +382,13 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - Opening Changes before the server has connected shows "Loading…" (with the connection's
      notice, if any) until it has, never the read-only screen first on a server with `review`.
 7. **Promote:**
-   - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
-   - With the worktree's stack running, the phone says to confirm on the desktop.
+   - With the project open, an agent's `promote_to_primary` shows the confirmation, with the desktop's text (sessions that move or close, a dropped review draft, ignored files). **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
+   - On a server older than plugins E1, with the worktree's stack running, the phone says to confirm on the desktop.
+   - **Promote to primary…** in a worktree's Worktree list (not on the main checkout, a missing worktree, or a server without `promote`): the question names what moves and what the server tears down first. **Promote** shows "Promoting…" with the other rows disabled, then the main checkout's screen replaces this one; Back goes to the project, not to the removed worktree.
+   - With a dirty main checkout the promote is refused before any question, and the reason shows in red.
+   - **Promote branch to worktree…** on the main checkout: after **Move to Worktree** the new worktree's screen shows (not "This worktree is gone."), and the main checkout is on the default branch.
+   - A promote that closes a session shows "Promoted, with notes" before the screen changes.
+   - On a tablet, both run in the detail pane and the sidebar selection follows to the resulting checkout.
 8. **Add worktree** (a repository's **Add worktree** on the project screen):
    - Typing in the branch field lists up to 8 branches containing the text; tapping one fills
      the field and turns **Use existing branch** on.
