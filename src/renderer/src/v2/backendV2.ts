@@ -67,9 +67,11 @@ export interface ConfirmPrompt {
 }
 
 /**
- * The teardown on the server's machine before a worktree is removed (worktreeTeardown.ts). Used
- * only on a server without `worktreeTeardown`: the plugins' parts (their legacyTeardown), and with `stacks` the dev stack. Each call that reaches the
- * server gets `backend`, the one doing the remove, and sends through it alone.
+ * The teardown around a worktree's removal (worktreeTeardown.ts). `confirmPlan` asks about the
+ * server's plan on a server with `worktreeTeardown`; the other members are the old-server fallback
+ * (no `worktreeTeardown`): the plugins' parts (their legacyTeardown), and with `stacks` the dev
+ * stack. Each call that reaches the server gets `backend`, the one doing the remove, and sends
+ * through it alone.
  */
 export interface WorktreeTeardown {
   /** What the plugins tear down themselves (their legacyTeardown: the Colima VM): the confirm's sentence; undefined for nothing */
@@ -169,7 +171,7 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
-  /** The server machine's teardown for a removed worktree, on a server without worktreeTeardown */
+  /** The teardown for a removed worktree: the plan's confirm, and the old-server fallback */
   teardown: WorktreeTeardown
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void

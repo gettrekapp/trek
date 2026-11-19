@@ -333,7 +333,7 @@ export interface Repository {
    * backups and secrets that aren't committed.
    */
   linkedDirs?: string[]
-  /** Per-worktree isolated Docker environments (Colima VMs) */
+  /** Per-worktree Colima VMs: the old field (v1 files, the settings overlay); the window reads `pluginSettings.env` */
   environments?: EnvironmentSettings
   /** The plugins' settings for the repository, by plugin id (plugins E1; shown to their client halves since E3) */
   pluginSettings?: Record<string, PluginSettingValues>

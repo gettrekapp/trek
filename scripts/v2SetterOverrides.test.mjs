@@ -32,7 +32,7 @@ function fakeBackend(fail) {
     calls,
     backend: {
       sessions: group('sessions', ['rename', 'markComplete', 'seen', 'setQueue', 'enqueue', 'dequeue', 'dismissDecision']),
-      branch: group('branch', ['setTag', 'setCustomTag', 'setNote', 'setTicket', 'setPullRequest', 'setEnvVars']),
+      branch: group('branch', ['setTag', 'setCustomTag', 'setNote', 'setTicket', 'setPullRequest']),
       worktrees: group('worktrees', ['setOrder'])
     }
   }
