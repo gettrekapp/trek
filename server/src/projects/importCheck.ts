@@ -10,6 +10,7 @@ import type { PathGuard } from '../paths.ts'
 import { checkQueue, checkTitle } from '../sessions/limits.ts'
 import { realOrResolved } from '../repos.ts'
 import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
+import { migrateProjectEnv } from './legacyEnv.ts'
 import { assertNotRepository, findRegistered, resetRuntime } from './model.ts'
 import { PLUGIN_OWNED_SETTINGS, validateSettings, type PluginSettingRules } from './settings.ts'
 
@@ -132,5 +133,10 @@ export function checkImport(raw: unknown, ctx: ImportContext): Project {
   const used = new Set<string>()
   const repositories = raw.repositories.map((r, i) => checkRepository(r, `project.repositories[${i}]`, ctx, seen, used))
   const globalSessions = raw.globalSessions.map((s, i) => checkSession(s, `project.globalSessions[${i}]`, seen, ctx.existingIds))
-  return resetRuntime(structuredClone({ id: ctx.projectId, name, settings, repositories, globalSessions }))
+  // An older Trek's environments and .env (the file's, the importer's profileKey) become the env
+  // plugin's settings (plugins E2), held to the same caps as the plugin settings checked above.
+  const project = migrateProjectEnv(structuredClone({ id: ctx.projectId, name, settings, repositories, globalSessions }), (where, problem) => {
+    throw bad(`project.${where} ${problem}`)
+  })
+  return resetRuntime(project)
 }

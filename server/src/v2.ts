@@ -15,7 +15,8 @@ import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
-import { pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
+import { MAX_PLUGIN_TEXT, pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
+import { LEGACY_ENV_PLUGIN, mirrorBranch, mirrorRepo, repoValuesWithLegacy, setBranchEnv, setRepoEnv } from './projects/legacyEnv.ts'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
@@ -372,8 +373,13 @@ const handlers: Record<string, Handler> = {
       if (name !== undefined) repo.name = name
       if (linkedDirs === null) delete repo.linkedDirs
       else if (linkedDirs !== undefined) repo.linkedDirs = linkedDirs
-      if (environments === null) delete repo.environments
-      else if (environments !== undefined) repo.environments = environments as Repository['environments']
+      // The env plugin's settings under their old name (plugins E2): both are written (legacyEnv.ts),
+      // the plugin's fields only, each of the right kind; a value the old field cannot hold is kept.
+      if (environments !== undefined) {
+        const current = Object.hasOwn(repo.pluginSettings ?? {}, LEGACY_ENV_PLUGIN) ? repo.pluginSettings![LEGACY_ENV_PLUGIN] : undefined
+        const problem = setRepoEnv(repo, repoValuesWithLegacy(current, environments ?? {}))
+        if (problem) throw codedError('BAD_REQUEST', `pluginSettings ${problem}`)
+      }
     })
     return null
   },
@@ -386,6 +392,8 @@ const handlers: Record<string, Handler> = {
       const next = withPluginValues(repo.pluginSettings, pluginId, values)
       if (next) repo.pluginSettings = next
       else delete repo.pluginSettings
+      // Its old name too (plugins E2, legacyEnv.ts).
+      if (pluginId === LEGACY_ENV_PLUGIN) mirrorRepo(repo)
     })
     return null
   },
@@ -434,7 +442,23 @@ const handlers: Record<string, Handler> = {
     if (ended !== undefined) ctx.prWatch?.forget(projectId, ended, branch)
     return null
   },
-  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),
+  // The env plugin's branch setting under its old name (plugins E2): both are written (legacyEnv.ts),
+  // held to the plugin's limits. No history is recorded, as before.
+  'branch.setEnv': (p, ctx) => {
+    const env = clearableString(p.env, 'env')
+    if (env !== null && env.length > MAX_PLUGIN_TEXT) throw codedError('BAD_REQUEST', `env must be at most ${MAX_PLUGIN_TEXT} characters`)
+    const branch = requireBranch(p.branch)
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      checkExpected('branchData.env', data.env, p.expected)
+      const problem = setBranchEnv(data, env)
+      if (problem) throw codedError('BAD_REQUEST', `pluginSettings ${problem}`)
+      if (Object.keys(data).length === 0) delete repo.branchData[branch]
+      else repo.branchData[branch] = data
+    })
+    return null
+  },
   // A plugin's per-branch settings (plugins E1), kept with the branch's data: they outlive the worktree and move with it.
   // No history is recorded, as for setEnv.
   'branch.setPluginSettings': (p, ctx) => {
@@ -446,6 +470,8 @@ const handlers: Record<string, Handler> = {
       const next = withPluginValues(data.pluginSettings, pluginId, values)
       if (next) data.pluginSettings = next
       else delete data.pluginSettings
+      // Its old name too (plugins E2, legacyEnv.ts).
+      if (pluginId === LEGACY_ENV_PLUGIN) mirrorBranch(data)
       if (Object.keys(data).length === 0) delete repo.branchData[branch]
       else repo.branchData[branch] = data
     })

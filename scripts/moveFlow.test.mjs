@@ -188,6 +188,14 @@ test("the branch's .env goes only to a target with environments", async () => {
   assert.ok(result.notes.some((n) => n.includes('.env was not carried')))
 })
 
+test("a target without environments (plugins E2) gets neither the .env nor the env plugin's copy of it; other plugins' settings go", async () => {
+  const withEnv = { ...EXPORT, branchData: { note: 'n', env: 'A=1', pluginSettings: { env: { env: 'A=1' }, other: { on: true } } } }
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } })
+  const result = await run(src({ 'move.export': withEnv }), target, { targetCapabilities: ['move'] }).outcome
+  assert.deepEqual(target.calls.find(([m]) => m === 'move.receive')[1].branchData, { note: 'n', pluginSettings: { other: { on: true } } })
+  assert.ok(result.notes.some((n) => n.includes('.env was not carried')))
+})
+
 test('a failed upload, or a cancel between chunks, drops the staged transfer and loads the source again', async () => {
   const source = src()
   const target = tgt({ 'move.upload': new ClientError('BAD_REQUEST', 'too big') })

@@ -276,3 +276,21 @@ test("plugin settings (plugins E1): a repository's and a branch's are kept when 
   nestedBranch.repositories[0].branchData.main.pluginSettings = { env: { env: { text: 'A=1' } } }
   assert.throws(() => checkImport(nestedBranch, ctx), /branchData\["main"\]\.pluginSettings env\.env must be a string, a finite number or a boolean/)
 })
+
+test("an import from an older Trek (plugins E2): its environments, with the profileKey the importer kept, and its .env land in the env plugin's settings", (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.repositories[0].environments = { enabled: true, cpu: 4, profileKey: '/Users/me/old/repo' }
+  p.repositories[0].branchData.main.env = 'FOO=bar\n'
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })
+  assert.deepEqual(out.repositories[0].pluginSettings, { env: { enabled: true, cpu: 4, profileKey: '/Users/me/old/repo' } })
+  assert.deepEqual(out.repositories[0].environments, { enabled: true, cpu: 4, profileKey: '/Users/me/old/repo' })
+  assert.deepEqual(out.repositories[0].branchData.main, { note: 'n', env: 'FOO=bar\n', pluginSettings: { env: { env: 'FOO=bar\n' } } })
+})
+
+test("an import whose old .env, with the branch's plugin settings, would pass 1 MB is refused (plugins E2)", (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.repositories[0].branchData.main = { env: 'y'.repeat(60_000), pluginSettings: { kept: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, 'x'.repeat(100_000)])) } }
+  assert.throws(() => checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' }), /branchData\["main"\]\.pluginSettings.*1 MB/)
+})

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import type { HealthWarning, Project } from '../../../src/shared/model/types'
 import { writeFileAtomic } from '../../../src/host/atomicWrite.ts'
 import { isRecord } from '../validate.ts'
+import { migrateProjectEnv } from './legacyEnv.ts'
 import { collectIds, resetRuntime } from './model.ts'
 
 export const STORE_SCHEMA = 1
@@ -35,7 +36,9 @@ function decode(raw: unknown, file: string): Project {
   }
   if (`${p.id}.json` !== file) throw new Error(`holds project ${p.id}`)
   try {
-    return resetRuntime(p as unknown as Project)
+    // An older Trek's environments and .env become the env plugin's settings (plugins E2); a part
+    // that would break the plugin settings' caps is left as it was, not the project refused.
+    return resetRuntime(migrateProjectEnv(p as unknown as Project))
   } catch (err) {
     throw new Error(`project has the wrong shape: ${(err as Error).message}`)
   }

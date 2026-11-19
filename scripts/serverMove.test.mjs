@@ -244,7 +244,7 @@ test('a move builds the worktree on the target and removes the source', async (t
   assert.notEqual(row.sessions[0].id, CLAUDE_ID, 'a new server id')
   assert.equal(readFileSync(join(projectDir(target), `${CLAUDE_ID}.jsonl`), 'utf8'), '{"type":"user"}\n')
   const data = s.B.project().repositories[0].branchData.feat
-  assert.deepEqual({ ...data, prWatch: !!data.prWatch }, { tag: 'b-review', note: 'the note', ticket: 'TOW-1', env: 'PORT=1\n', pr: 'https://github.com/o/r/pull/3', prWatch: true })
+  assert.deepEqual({ ...data, prWatch: !!data.prWatch }, { tag: 'b-review', note: 'the note', ticket: 'TOW-1', env: 'PORT=1\n', pluginSettings: { env: { env: 'PORT=1\n' } }, pr: 'https://github.com/o/r/pull/3', prWatch: true }, 'the .env lands in the env plugin\'s settings too (plugins E2)')
   assert.deepEqual(received.result.dropped, [])
   assert.equal(s.B.polled.length, 1, 'the watch polls soon on the target')
   // The source: gone from git and the project, its watch ended, its history kept (copied, not moved).
@@ -906,6 +906,8 @@ test('history: without server names, moved.in and moved.out name no server', asy
 test("a branch's plugin settings move with it (plugins E1), over the target's own; a bad one is refused", async (t) => {
   const s = await setup(t)
   s.A.projects.apply(s.A.projectId, (d) => {
+    // In step with the old field, as every write keeps them since plugins E2.
+    d.repositories[0].branchData.feat.env = 'PORT=2\n'
     d.repositories[0].branchData.feat.pluginSettings = { env: { env: 'PORT=2\n' }, other: { on: true } }
   })
   s.B.projects.apply(s.B.projectId, (d) => {
@@ -917,6 +919,21 @@ test("a branch's plugin settings move with it (plugins E1), over the target's ow
   const bad = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'other', head: 'a'.repeat(40), branchData: { pluginSettings: { 'Bad Id': {} } } })
   assert.equal(bad.error?.code, 'BAD_REQUEST')
   assert.match(bad.error.message, /branchData\.pluginSettings "Bad Id" is not a plugin id/)
+})
+
+test("an older source's .env alone (plugins E2) lands in the env plugin's settings too, over the target's own", async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => {
+    d.repositories[0].branchData.feat.env = 'FROM=old-source\n'
+    delete d.repositories[0].branchData.feat.pluginSettings
+  })
+  s.B.projects.apply(s.B.projectId, (d) => {
+    d.repositories[0].branchData.feat = { env: 'MINE=1\n', pluginSettings: { env: { env: 'MINE=1\n' }, kept: { n: 1 } } }
+  })
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const feat = s.B.project().repositories[0].branchData.feat
+  assert.deepEqual([feat.env, feat.pluginSettings], ['FROM=old-source\n', { env: { env: 'FROM=old-source\n' }, kept: { n: 1 } }])
 })
 
 test("a move whose plugin settings, with the target's own, would pass 1 MB is refused, and the target keeps what it had", async (t) => {

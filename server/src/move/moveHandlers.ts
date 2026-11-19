@@ -36,6 +36,7 @@ import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { MAX_HISTORY_PER_BRANCH, sanitizeHistoryEvent, type HistoryEvent } from '../../../src/shared/model/history.ts'
 import { pluginSettingsShapeProblem, type PluginSettingValues } from '../../../src/shared/plugins/manifest.ts'
+import { LEGACY_ENV_PLUGIN, migrateBranchEnv } from '../projects/legacyEnv.ts'
 import { codedError } from '../errors.ts'
 import { recordHistory } from '../history/record.ts'
 import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
@@ -331,7 +332,10 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
   const data: BranchData = { ...(existing ?? {}) }
   if (incoming.note) data.note = incoming.note
   if (incoming.ticket) data.ticket = incoming.ticket
+  // The env plugin's .env (plugins E2): the source's old field wins (an older server sends only it);
+  // with only the plugin's value, the target's own mirror goes and is made again below.
   if (incoming.env) data.env = incoming.env
+  else if (incoming.pluginSettings && Object.hasOwn(incoming.pluginSettings, LEGACY_ENV_PLUGIN)) delete data.env
   // Each incoming plugin's values replace that plugin's here; the target's other plugins' stay.
   if (incoming.pluginSettings) {
     const merged = { ...(data.pluginSettings ?? {}), ...incoming.pluginSettings }
@@ -363,6 +367,9 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
     if (problem === null) data.prWatch ??= {}
     else dropped.push(`The pull request is not watched here: ${problem}`)
   }
+  // The two copies of the .env in step, still a map a later move or import takes.
+  const envProblem = migrateBranchEnv(data)
+  if (envProblem) throw bad(`branchData.pluginSettings, with this branch's here, ${envProblem}`)
   return data
 }
 

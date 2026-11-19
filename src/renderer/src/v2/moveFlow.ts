@@ -185,9 +185,12 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   try {
     const { branch, head, patch, sessions, history, serverName } = exported
     let { branchData } = exported
-    if (branchData.env && !deps.targetCapabilities.includes('env')) {
-      const { env: _env, ...rest } = branchData
-      branchData = rest
+    // The .env travels as `env` and, since plugins E2, as the env plugin's branch setting too.
+    const carriesEnv = !!branchData.env || (branchData.pluginSettings !== undefined && Object.hasOwn(branchData.pluginSettings, 'env'))
+    if (carriesEnv && !deps.targetCapabilities.includes('env')) {
+      const { env: _env, pluginSettings, ...rest } = branchData
+      const { env: _plugin, ...others } = pluginSettings ?? {}
+      branchData = { ...rest, ...(Object.keys(others).length > 0 ? { pluginSettings: others } : {}) }
       kept.push("The branch's Docker .env was not carried: the target server has no environments")
     }
     // Longer than the target's own fetch limit, so a slow fetch is the target's answer, not a lost one.

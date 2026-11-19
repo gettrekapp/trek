@@ -502,7 +502,9 @@ test('branch.* set and clear branch data; an empty entry disappears', async (t) 
   await call('branch.setPr', { ...ref, pr: 'https://github.com/o/r/pull/1' })
   await call('branch.setEnv', { ...ref, env: 'A=1' })
   assert.deepEqual((await snap()).repositories[0].branchData['feature/x'], {
-    tag: 'review', customTags: ['ui'], note: 'hello', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/1', env: 'A=1'
+    tag: 'review', customTags: ['ui'], note: 'hello', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/1', env: 'A=1',
+    // The env plugin's copy (plugins E2, legacyEnv.ts).
+    pluginSettings: { env: { env: 'A=1' } }
   })
   assert.equal((await call('branch.setNote', { ...ref, note: 'x', expected: 'stale' })).error.code, 'CONFLICT')
   // branch.setEnv is a compare-and-set too: a stale guard changes nothing, a current one writes.
