@@ -58,9 +58,14 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
   // The tray's height in points, animated to the chosen height's, and followed by a drag.
   const anim = useRef(new Animated.Value(heights[height])).current
   const dragFrom = useRef(0)
+  // Hidden (a collapsed bar while a screen's keyboard is up), the tray is not rendered, and a value
+  // that loses its last view stops its animation: a spring started as the tray hides (collapsing
+  // from an open tray whose keyboard is up) would freeze part way, leaving the bar high once the
+  // keyboard is down. So a hidden tray is set to its height outright.
   useEffect(() => {
-    Animated.spring(anim, { toValue: heights[height], useNativeDriver: false, bounciness: 0, speed: 20 }).start()
-  }, [anim, heights, height])
+    if (hidden) anim.setValue(heights[height])
+    else Animated.spring(anim, { toValue: heights[height], useNativeDriver: false, bounciness: 0, speed: 20 }).start()
+  }, [anim, heights, height, hidden])
   const latest = useRef({ heights, height, tray })
   latest.current = { heights, height, tray }
   const pan = useMemo(() => {
