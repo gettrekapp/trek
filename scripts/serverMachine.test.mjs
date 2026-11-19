@@ -737,6 +737,22 @@ test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs,
   assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
 })
 
+test('repo.remove (plugins E1): a repository the environments registry has no VM for runs no colima', { skip }, async (t) => {
+  const s = await setup(t)
+  s.ctx.sessions.forgetRepo = () => {}
+  s.ctx.sessions.forgetGlobal = () => {}
+  // A second repository: the project's last one can't leave.
+  const b = join(s.dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', '-b', 'main', b], { env: gitEnv })
+  git(b, 'commit', '--allow-empty', '-q', '-m', 'init')
+  s.store.addRepo(b, { id: 'b' })
+  assert.equal((await s.call('repo.add', { projectId: s.projectId, path: b })).ok, true)
+  resetCalls()
+  const res = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(calls().filter((c) => c.startsWith('colima|')), [])
+})
+
 /** A plugin participant (plugins E1) that records its teardowns. */
 function probeLifecycle(log) {
   return {

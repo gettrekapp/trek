@@ -70,6 +70,8 @@ export interface EnvironmentService {
   logs(profile: string, worktreePath: string, composeFile: string | undefined, service: string, tail: number): Promise<string>
   /** Whether the registry knows the profile */
   known(profile: string): Promise<boolean>
+  /** Whether the registry has any VM of the repository (`repoKey`, envRepoKey's); an unreadable registry throws, as `list` does */
+  knownRepo(repoKey: string): Promise<boolean>
 }
 
 const exists = (path: string): Promise<boolean> =>
@@ -197,6 +199,10 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
 
     async known(profile) {
       return entryOf(await readRegistry(), profile) !== undefined
+    },
+
+    async knownRepo(repoKey) {
+      return Object.values(await readRegistry(true)).some((entry) => entry?.repoPath === repoKey)
     },
 
     async list(repoKey) {

@@ -79,8 +79,11 @@ export function envParticipant(ctx: Pick<V2Context, 'store' | 'events'>, machine
     },
     // A VM of one of its worktrees, running, even when the worktree's folder is gone (orphaned);
     // not a twb- leftover no record names (worktreePath ''), which env.list lists for every repository.
-    beforeRepoRemove: async (_project, repo) =>
-      (await vmsOf(machine, repo)).some((e) => e.vmState === 'running' && e.worktreePath !== '') ? 'It has a running environment. Stop it in the Env tab first.' : null
+    // The registry first, as the plan does: a repository that never had a VM runs no colima.
+    beforeRepoRemove: async (_project, repo) => {
+      if (!(await machine.env.knownRepo(envRepoKey(repo)))) return null
+      return (await vmsOf(machine, repo)).some((e) => e.vmState === 'running' && e.worktreePath !== '') ? 'It has a running environment. Stop it in the Env tab first.' : null
+    }
   }
 }
 

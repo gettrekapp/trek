@@ -388,3 +388,15 @@ test('the core participants say whether their stack or VM is running (plugins E1
   assert.deepEqual((await envOf('running').plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', true]])
   for (const state of ['stopped', 'missing']) assert.deepEqual((await envOf(state).plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', undefined]], state)
 })
+
+test("the VM participant's repository check asks the registry first: no VM of the repository, no colima list", async () => {
+  const ctx = { store: { guard: { check: () => {} } } }
+  const { envRepoKey } = await import('../src/shared/environments.ts')
+  let listed = 0
+  const envWith = (repoKeys) =>
+    envParticipant(ctx, { env: { knownRepo: async (key) => repoKeys.includes(key), list: async () => (listed++, [{ profile: 'twb-x', vmState: 'running', worktreePath: target.worktree.path }]) } })
+  assert.equal(await envWith([]).beforeRepoRemove(target.project, target.repo), null)
+  assert.equal(listed, 0)
+  assert.equal(await envWith([envRepoKey(target.repo)]).beforeRepoRemove(target.project, target.repo), 'It has a running environment. Stop it in the Env tab first.')
+  assert.equal(listed, 1)
+})
