@@ -5,7 +5,7 @@
 import { useMemo } from 'react'
 import { usePluginHost, type SessionIndicatorProps } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
-import { choreFor, indicatorState, stanceFor, statusText, statusTitle } from '../shared/pose.ts'
+import { SIGN_TEXT, choreFor, indicatorState, indicatorTitle, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
 import { useNow, useSession } from './hooks.ts'
 
@@ -21,7 +21,7 @@ export function SessionIndicator({ terminalId, status, onToggleComplete }: Sessi
   return (
     <span
       className={`cs-indicator${toggle ? ' clickable' : ''}`}
-      title={statusTitle(state.status, !!toggle)}
+      title={indicatorTitle(state, !!toggle)}
       onClick={
         toggle
           ? (e) => {
@@ -31,7 +31,12 @@ export function SessionIndicator({ terminalId, status, onToggleComplete }: Sessi
           : undefined
       }
     >
-      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} sign={stance.sign} scale={1} label={`${session?.label ?? host.terminalLabel(terminalId)}, ${statusText(state)}`} decorative />
+      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} scale={1} label={`${session?.label ?? host.terminalLabel(terminalId)}, ${statusText(state)}`} decorative />
+      {stance.sign && (
+        <span className={`cs-tab-sign ${stance.sign}`} aria-hidden="true">
+          {SIGN_TEXT[stance.sign]}
+        </span>
+      )}
     </span>
   )
 }

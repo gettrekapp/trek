@@ -13,7 +13,7 @@ const HALF = 6 * SCALE
 /** Matches .cs-camp-hiker's transform transition */
 export const WALK_MS = 1200
 
-const WALK: Stance = { pose: 'walk', grey: false, sign: false }
+const WALK: Stance = { pose: 'walk', grey: false, sign: null }
 
 /** Off the strip, past the edge nearer `x` */
 export const offstage = (x: number, width: number): number => (x < width / 2 ? -HALF * 3 : width + HALF * 3)

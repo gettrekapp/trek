@@ -2,9 +2,9 @@
 // for each pose, stances, chores and labels.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HATS, JACKETS, NEUTRAL_JACKET, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
-import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
+import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -20,6 +20,17 @@ test('lookFor: the same look for the same id; jacket by provider, neutral when u
   const { jacket: _a, ...rest1 } = lookFor('t-1', 'claude')
   const { jacket: _b, ...rest2 } = lookFor('t-1', 'gemini')
   assert.deepEqual(rest1, rest2, 'the provider changes only the jacket')
+})
+
+test('lookFor: pants are drawn last, so hikers from before keep every other trait', () => {
+  const { pants: p1, ...before1 } = lookFor('t-1', 'claude')
+  assert.deepEqual(before1, { jacket: '#d97757', hat: 'headlamp', hatColor: '#b9a77a', hair: '#e0b050', skin: '#d9a066', beard: true, pack: '#7a4a6b', gear: 'compass' })
+  const { pants: p2, ...before2 } = lookFor('session-7', 'codex')
+  assert.deepEqual(before2, { jacket: '#3fae6a', hat: 'headlamp', hatColor: '#b9a77a', hair: '#3b2a1a', skin: '#f2c9a0', beard: true, pack: '#8a5a2b', gear: 'mug' })
+  for (const p of [p1, p2]) assert.ok(PANTS.includes(p), p)
+  const seen = new Set()
+  for (let i = 0; i < 200; i++) seen.add(lookFor(`session-${i}`, 'claude').pants)
+  assert.equal(seen.size, PANTS.length)
 })
 
 test('lookFor: looks spread out (no hat on more than 35% of 1000 sessions; beards near 30%)', () => {
@@ -59,21 +70,68 @@ test("pixels: the jacket and the hat show; a two-frame pose's frames differ; gea
   assert.ok(withMug.some((r) => r.fill === '#e6e1d3'), 'the mug')
 })
 
+const top = (rects) => Math.min(...rects.map((r) => r.y))
+const right = (rects) => Math.max(...rects.map((r) => r.x + r.w))
+const bare = { ...lookFor('shape', 'claude'), hat: 'none', beard: false }
+
+test('shade: each channel × 0.76', () => {
+  assert.equal(shade('#000000'), '#000000')
+  assert.equal(shade('#ffffff'), '#c2c2c2')
+  assert.equal(shade('#d97757'), '#a55a42')
+})
+
+test('pixels: sitting is 2 rows lower than standing, crouched chores 1 row; legs reach forward when seated', () => {
+  assert.equal(top(pixels(bare, 'stand', 0, 'none')), 2)
+  assert.equal(top(pixels(bare, 'sit', 0, 'none')), 4)
+  assert.equal(top(pixels(bare, 'tent', 0)), 3)
+  assert.equal(top(pixels(bare, 'fire', 0)), 3)
+  assert.equal(right(pixels(bare, 'stand', 0, 'none')), 10)
+  assert.equal(right(pixels(bare, 'sit', 0, 'none')), 11, 'boots out front')
+})
+
+test('pixels: a sleeper lies down, low and full width, in a bag the color of its jacket; a second z on frame 1', () => {
+  const asleep = pixels(bare, 'sleep', 0)
+  assert.ok(asleep.filter((r) => r.fill !== '#b9b4c6').every((r) => r.y >= 11), 'everything but the z is in the bottom 5 rows')
+  assert.equal(Math.min(...asleep.map((r) => r.x)), 0)
+  assert.equal(right(asleep), 12)
+  assert.ok(asleep.some((r) => r.fill === bare.jacket && r.w === 8), 'the bag')
+  assert.equal(pixels(bare, 'sleep', 1).length, asleep.length + 3)
+})
+
+test('pixels: sleeves and the hem are the shaded jacket; pants and a bedroll show; wave, sleep and fire have two frames', () => {
+  const fills = (rects) => new Set(rects.map((r) => r.fill))
+  const standing = fills(pixels(bare, 'stand', 0, 'none'))
+  assert.ok(standing.has(shade(bare.jacket)), 'sleeves')
+  assert.ok(standing.has(bare.pants), 'pants')
+  assert.ok(standing.has('#d9c9a0'), 'bedroll')
+  assert.deepEqual([FRAMES.wave, FRAMES.sleep, FRAMES.fire, FRAMES.sit, FRAMES.cheer], [2, 2, 2, 1, 1])
+})
+
 const session = (over = {}) => ({ terminalId: 't', label: 'Claude 2', provider: 'claude', status: 'working', decision: false, worktreeId: 'w', worktreeName: 'auth', branch: 'feature/auth', ...over })
 
-test('stanceFor: each status; a decision waves like attention; unknown sleeps', () => {
-  assert.deepEqual(stanceFor(session({ status: 'working' }), 'chop'), { pose: 'chop', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'attention' }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: true })
-  assert.deepEqual(stanceFor(session({ status: 'idle', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: true })
-  assert.deepEqual(stanceFor(session({ status: 'starting' }), 'map'), { pose: 'walk', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'done' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'complete' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'idle' }), 'map'), { pose: 'sleep', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'exited' }), 'map'), { pose: 'sit', gear: 'none', grey: true, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'someday' }), 'map'), { pose: 'sleep', grey: false, sign: false })
+test('stanceFor: each status; a decision waves with its own sign, and wins over attention; finished cheers; unknown sleeps', () => {
+  assert.deepEqual(stanceFor(session({ status: 'working' }), 'chop'), { pose: 'chop', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'attention' }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'attention' })
+  assert.deepEqual(stanceFor(session({ status: 'idle', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'attention', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'starting' }), 'map'), { pose: 'walk', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'done' }), 'map'), { pose: 'cheer', gear: 'none', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'complete' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'idle' }), 'map'), { pose: 'sleep', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'exited' }), 'map'), { pose: 'sit', gear: 'none', grey: true, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'someday' }), 'map'), { pose: 'sleep', grey: false, sign: null })
   assert.equal(isWaiting(session({ status: 'attention' })), true)
   assert.equal(isWaiting(session({ decision: true })), true)
   assert.equal(isWaiting(session()), false)
+})
+
+test("signs: '!' and '?' on a 3×5 grid, in the core's attention and decision colors", () => {
+  assert.deepEqual(SIGN_TEXT, { attention: '!', decision: '?' })
+  assert.equal(SIGN_COLORS.attention, 'var(--attention, #e2a336)')
+  assert.equal(SIGN_COLORS.decision, 'var(--decision, #b18cff)')
+  for (const cells of Object.values(SIGN_GLYPHS)) for (const [x, y] of cells) assert.ok(x >= 0 && x < 3 && y >= 0 && y < 5)
+  assert.deepEqual(SIGN_GLYPHS.attention, [[1, 0], [1, 1], [1, 2], [1, 4]])
+  assert.deepEqual(SIGN_GLYPHS.decision, [[0, 0], [1, 0], [2, 0], [2, 1], [1, 2], [1, 4]])
 })
 
 test('choreFor: stable for at least 20 s at a time, and it changes over ten minutes', () => {
@@ -99,6 +157,31 @@ test('choreFor: stable for at least 20 s at a time, and it changes over ten minu
     if (seen.size > 1) changing++
   }
   assert.ok(changing >= 15, `${changing} of 20 hikers changed chores`)
+})
+
+test('pixels: every hat, beard, gear, pose and frame stays on the 12×16 grid', () => {
+  const base = lookFor('sweep', 'claude')
+  for (const hat of HATS)
+    for (const beard of [false, true])
+      for (const gear of [undefined, 'none', 'pole', 'map', 'mug', 'compass'])
+        for (const pose of POSES)
+          for (let frame = 0; frame < FRAMES[pose]; frame++)
+            for (const r of pixels({ ...base, hat, beard }, pose, frame, gear)) assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= 12 && r.y + r.h <= 16, `${hat}/${beard}/${gear}/${pose}/${frame}: ${JSON.stringify(r)}`)
+})
+
+test("pixels: a bearded hiker's cheer still smiles (the mouth is drawn over the beard)", () => {
+  const rects = pixels({ ...lookFor('smile', 'claude'), beard: true }, 'cheer', 0)
+  const over = (x, y) => rects.filter((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).at(-1).fill
+  assert.equal(over(5, 6), '#111111')
+  assert.equal(over(6, 6), '#111111')
+})
+
+test('stanceFor and indicatorTitle: a decision on a finished or exited session still waves, in color, and the title says so', () => {
+  assert.deepEqual(stanceFor(session({ status: 'done', decision: true }), 'map'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'exited', decision: true }), 'map'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.equal(indicatorTitle({ status: 'working', decision: true }, false), 'Agent is waiting on your decision')
+  assert.equal(indicatorTitle({ status: 'attention', decision: false }, false), 'Agent needs your attention')
+  assert.equal(indicatorTitle({ status: 'done', decision: false }, true), 'Agent finished — click to mark fully complete')
 })
 
 test('labels: the aria label, the badge titles, the tooltip', () => {

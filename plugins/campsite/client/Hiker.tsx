@@ -3,6 +3,7 @@
 import { memo } from 'react'
 import type { Gear, Look } from '../shared/hiker.ts'
 import { FRAMES, pixels, type Pose } from '../shared/pixels.ts'
+import { SIGN_COLORS, SIGN_GLYPHS, type Sign } from '../shared/pose.ts'
 
 const MOTION: Partial<Record<Pose, string>> = {
   stand: 'cs-bob',
@@ -21,12 +22,13 @@ interface Props {
   scale: number
   label: string
   grey?: boolean
-  sign?: boolean
+  /** Drawn over the head. Not at scale 1: a tab has no room above, so its indicator shows a chip instead */
+  sign?: Sign | null
   /** Hidden from assistive tech: its container already says who it is (a session tab) */
   decorative?: boolean
 }
 
-export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey = false, sign = false, decorative = false }: Props): React.JSX.Element {
+export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey = false, sign = null, decorative = false }: Props): React.JSX.Element {
   const frames = FRAMES[pose]
   return (
     <svg
@@ -39,11 +41,13 @@ export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey 
       aria-label={decorative ? undefined : label}
       aria-hidden={decorative || undefined}
     >
-      {sign && (
+      {sign && scale > 1 && (
+        // A 5×7 board over the head; its glyph on a 3×5 grid, one unit in from each edge
         <g className="cs-sign">
-          <rect x={4} y={-6} width={4} height={5} fill="#ffb020" />
-          <rect x={5.5} y={-5} width={1} height={2} fill="#111111" />
-          <rect x={5.5} y={-2.5} width={1} height={0.8} fill="#111111" />
+          <rect x={3.5} y={-8} width={5} height={7} style={{ fill: SIGN_COLORS[sign] }} />
+          {SIGN_GLYPHS[sign].map(([x, y]) => (
+            <rect key={`${x},${y}`} x={4.5 + x} y={-7 + y} width={1} height={1} fill="#111113" />
+          ))}
         </g>
       )}
       {Array.from({ length: frames }, (_, f) => (

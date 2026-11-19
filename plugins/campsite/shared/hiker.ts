@@ -10,6 +10,8 @@ const HAT_COLORS = ['#c94f3d', '#3a6ea5', '#b9a77a', '#d4a017', '#6b7a3a', '#7a4
 const HAIRS = ['#3b2a1a', '#e0b050', '#8a3b1c', '#222222', '#bbbbbb'] as const
 const SKINS = ['#f2c9a0', '#d9a066', '#a86b3c', '#6e4527'] as const
 const PACKS = ['#6b7a3a', '#8a5a2b', '#4a5d7a', '#c08a2e', '#7a4a6b', '#3f6f6a'] as const
+// A step lighter than the old fixed #3b4254, so legs hold against a dark tab and the strip
+export const PANTS = ['#566178', '#6a6e55', '#77634f', '#4d6a7c'] as const
 
 export const JACKETS: Readonly<Record<string, string>> = { claude: '#d97757', codex: '#3fae6a', gemini: '#4c8df6', grok: '#8f96a0' }
 export const NEUTRAL_JACKET = '#a08a6a'
@@ -23,6 +25,7 @@ export interface Look {
   beard: boolean
   pack: string
   gear: Gear
+  pants: string
 }
 
 /** 32-bit FNV-1a */
@@ -59,6 +62,8 @@ export function lookFor(terminalId: string, provider: string): Look {
   const beard = next() < 0.3
   const pack = pick(PACKS)
   const gear = pick(GEARS)
+  // Added after the first release: drawn last, so earlier traits are unchanged
+  const pants = pick(PANTS)
   const jacket = Object.hasOwn(JACKETS, provider) ? JACKETS[provider] : NEUTRAL_JACKET
-  return { jacket, hat, hatColor, hair, skin, beard, pack, gear }
+  return { jacket, hat, hatColor, hair, skin, beard, pack, gear, pants }
 }
