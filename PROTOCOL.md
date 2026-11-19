@@ -1127,6 +1127,7 @@ links nowhere. A server older than plugins handled Linear (its `linear` capabili
 | `voice` | [The voice plugin](plugins/voice/README.md): `voice.*`, `voice.summary`, `speak_summary` |
 | `linear` | [The Linear plugin](plugins/linear/README.md): `linear.*`, Linear tickets, `linearWorkspace` |
 | `azure-devops` | [The Azure DevOps plugin](plugins/azure-devops/README.md): Azure DevOps tickets, `azureDevOpsBaseUrl` |
+| `campsite` | [The campsite plugin](plugins/campsite/README.md): none; client only (hikers for the sessions), listed for its per-project switch |
 
 ### Installed plugins
 
