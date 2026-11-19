@@ -1,13 +1,14 @@
 // A project's screens (its worktree list, a worktree, a session, Changes, a branch's history, adding a
 // worktree, automations) in their own stack. On a wide window (tablets) the stack is the detail pane
 // beside the project's sidebar, and the list is a placeholder under the screen the sidebar opened.
-// Under the stack, on every width, the project's Global tray (ui/GlobalTray.tsx).
-import { useState } from 'react'
+// Under the stack, on every width, the project's Global tray (ui/GlobalTray.tsx). While the tray is
+// open no swipe goes back (the project's or the root stack's): the tray closes from its backdrop or bar.
+import { useEffect, useState } from 'react'
 import { View, useWindowDimensions } from 'react-native'
 import { Stack, useLocalSearchParams, useNavigation, useRootNavigationState, useRoute } from 'expo-router'
 import { aboveIndex, childRoutes, isWide } from '../../../../src/logic/layout.ts'
 import { GlobalTray } from '../../../../src/ui/GlobalTray.tsx'
-import { GlobalTrayProvider } from '../../../../src/ui/globalTrayContext.tsx'
+import { GlobalTrayProvider, useGlobalTray } from '../../../../src/ui/globalTrayContext.tsx'
 import { PaneWidthProvider } from '../../../../src/ui/paneWidth.tsx'
 import { ProjectProvider } from '../../../../src/ui/projectContext.tsx'
 import { ProjectSidebar } from '../../../../src/ui/ProjectSidebar.tsx'
@@ -45,23 +46,39 @@ export default function ProjectLayout(): React.JSX.Element {
         >
           <PaneWidthProvider value={pane?.width ?? null}>
             <GlobalTrayProvider serverId={serverId} projectId={projectId}>
-              <View style={{ flex: 1 }}>
-                <Stack
-                  screenOptions={({ route: screen }) => ({
-                    headerStyle: { backgroundColor: colors.bg },
-                    headerShadowVisible: false,
-                    headerBackButtonDisplayMode: 'minimal',
-                    headerTintColor: colors.text,
-                    contentStyle: { backgroundColor: colors.bg },
-                    ...(screen.key !== undefined && noBack?.has(screen.key) ? { headerBackVisible: false, gestureEnabled: false } : null)
-                  })}
-                />
-              </View>
+              <ProjectStack noBack={noBack} rootNavigation={navigation} />
               {pane ? <GlobalTray serverId={serverId} projectId={projectId} paneHeight={pane.height} /> : null}
             </GlobalTrayProvider>
           </PaneWidthProvider>
         </View>
       </View>
     </ProjectProvider>
+  )
+}
+
+/**
+ * The project's stack, inside the tray's provider: while the tray is open neither this stack's
+ * screens nor the root stack's project screen take the edge swipe (on iOS the root's took it from
+ * under the tray's backdrop and left the whole project).
+ */
+function ProjectStack({ noBack, rootNavigation }: { noBack: Set<string> | null; rootNavigation: { setOptions(options: { gestureEnabled: boolean }): void } }): React.JSX.Element {
+  const open = (useGlobalTray()?.height ?? 'collapsed') !== 'collapsed'
+  useEffect(() => {
+    rootNavigation.setOptions({ gestureEnabled: !open })
+  }, [rootNavigation, open])
+  return (
+    <View style={{ flex: 1 }}>
+      <Stack
+        screenOptions={({ route: screen }) => ({
+          headerStyle: { backgroundColor: colors.bg },
+          headerShadowVisible: false,
+          headerBackButtonDisplayMode: 'minimal',
+          headerTintColor: colors.text,
+          contentStyle: { backgroundColor: colors.bg },
+          ...(open ? { gestureEnabled: false } : null),
+          ...(screen.key !== undefined && noBack?.has(screen.key) ? { headerBackVisible: false, gestureEnabled: false } : null)
+        })}
+      />
+    </View>
   )
 }
