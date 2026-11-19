@@ -945,6 +945,7 @@ Before a worktree is removed, promoted or moved off the server, what runs for it
 - `worktree.remove {teardown}` without `force` refuses a worktree with changes (`GIT_ERROR`, `details.reason: 'dirty'`) before anything is torn down.
 - `worktree.promote` refuses `teardown` with `dryRun` (`BAD_REQUEST`), which runs nothing.
 - `worktree.promote` runs the items before it takes the repository's lock (one promote or demote per repository at a time). Another promote or demote of the repository can take the lock meanwhile; ours then fails with `CONFLICT` after its teardown has already happened (the items stay torn down).
+- `stack.destroy` on the worktree, and `env.destroy` of its branch's VM, are `CONFLICT` meanwhile too (an older client tears down itself with them).
 - `move.unreceive` holds the worktree it removes the same way: while it runs, a promote, remove or move of that worktree is `CONFLICT`, and it is `CONFLICT` while one of them runs.
 - `move.finish` runs the items once the source checks unchanged, and refuses `teardown` with `verifyOnly`.
 
