@@ -90,8 +90,6 @@ export function SessionTerminal({ serverId, projectId, sessionId, sizesPty, bott
   }, [])
   // Quick buttons: the project's (or the Global ones), and the one whose sheet is open.
   const project = topic.state === 'ready' ? topic.snapshot : null
-  // While this screen is the one shown, the server knows the phone shows this session and its
-  // worktree (none for a Global session), once the project's snapshot says which that is.
   const quickButtons = useMemo(() => (project ? quickButtonsFor(project, sessionId) : []), [project, sessionId])
   const [running, setRunning] = useState<{ button: TerminalQuickButton; plan: QuickButtonPlan; builtins: BuiltinValues } | null>(null)
   // The [agent] built-in is the server's label for the session's provider, when it lists agents.
@@ -119,10 +117,10 @@ export function SessionTerminal({ serverId, projectId, sessionId, sizesPty, bott
   const fitRef = useRef<{ cols: number; rows: number } | null>(null)
   const claimRef = useRef<() => void>(() => {})
   const sizesRef = useRef(sizesPty)
-  // Turned on (the Global tray pulled to full height): claim the size now, without waiting for a new fit.
+  // Turned on (the Global tray pulled to full height): the claim is not made here. The WebView grows
+  // with the tray, so the page sends a new fit, and that claims the size.
   useEffect(() => {
     sizesRef.current = sizesPty
-    if (sizesPty) claimRef.current()
   }, [sizesPty])
 
   useEffect(() => {
@@ -169,7 +167,6 @@ export function SessionTerminal({ serverId, projectId, sessionId, sizesPty, bott
       void server.ptys.detach(ptyId).catch(() => {})
     }
   }, [server, ptyId, pageReady, page?.n, serverId, sessionId, toPage])
-
 
   const write = (data: string): void => {
     if (server && ptyId) void server.ptys.write(ptyId, data).catch((err) => setError(errorMessage(err)))
@@ -247,7 +244,6 @@ export function SessionTerminal({ serverId, projectId, sessionId, sizesPty, bott
     keysOpenDefault = !keysOpen
     setKeysOpen(!keysOpen)
   }
-
 
   const padBottom = keyboardUp || !bottomInset ? 10 : Math.max(insets.bottom, 10)
 
