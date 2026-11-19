@@ -1,7 +1,7 @@
 // scripts/environments.test.mjs — which path an environment's VM name hashes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveProfileName, envListProblem, envRepoKey, registryUnreadableMessage } from '../src/shared/environments.ts'
+import { deriveProfileName, envListProblem, envRepoKey, registryUnreadableMessage } from '../plugins/colima/shared/environments.ts'
 
 test("envRepoKey is the repository's path, or the profile key an import kept", () => {
   assert.equal(envRepoKey({ path: '/private/var/t/app' }), '/private/var/t/app')
@@ -45,5 +45,4 @@ test('repoKeyFor (plugins E2): an absolute stored profileKey, else the repositor
   assert.equal(repoKeyFor('/r/app', 'C:\\old\\app'), 'C:\\old\\app')
   for (const key of [undefined, '', 'relative/app', 3]) assert.equal(repoKeyFor('/r/app', key), '/r/app')
   assert.equal(fromPlugin({ path: '/r/app', environments: { profileKey: '/old/app' } }), '/old/app')
-  assert.equal(envRepoKey, fromPlugin, 'src/shared/environments.ts re-exports the plugin\'s')
 })

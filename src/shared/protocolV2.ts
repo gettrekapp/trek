@@ -26,11 +26,6 @@ import type {
   ContainerAction,
   ContainerInfo,
   DockerLogEvent,
-  EnvCheckResult,
-  EnvLogEvent,
-  EnvService,
-  EnvUpResult,
-  EnvironmentInfo,
   EnvironmentSettings,
   SkillInfo,
   StackLogChunk,
@@ -606,26 +601,8 @@ export interface MethodParamsV2 {
   'docker.container': { action: ContainerAction; id: string }
   /** `docker compose <action's args>` in the repository's main checkout; its output streams to this connection as `docker.log` */
   'docker.compose': RepoRef & { action: ComposeAction }
-  // The worktrees' Colima environments on the server's machine (capability `env`)
-  /** colima and docker on the server's PATH (an `ok` answer is kept) */
-  'env.check': Record<string, never>
-  /** The repository's environments (by its envRepoKey), and the twb- VMs no registry entry names */
-  'env.list': RepoRef
-  /**
-   * Starts (or creates) the worktree's branch's VM and runs `docker compose up -d` in the worktree,
-   * with `settings` (the repository's, with the compose file picked) and the branch's variables as
-   * parsed `envVars`. Its output streams to this connection as `env.log`. Long: minutes on a first boot.
-   */
-  'env.up': WorktreeRef & { settings: EnvironmentSettings; envVars?: Record<string, string> }
-  /** `profile`: a twb- profile name */
-  'env.stop': { profile: string }
-  /** Deletes the VM (and, if its worktree is still there, `compose down -v` first) and its registry entry */
-  'env.destroy': { profile: string }
-  'env.ps': WorktreeRef & { composeFile?: string }
-  /** The compose files in the worktree's root */
-  'env.composeFiles': WorktreeRef
-  /** The last `tail` lines (default 300, at most 5000) of one compose service */
-  'env.logs': WorktreeRef & { composeFile?: string; service: string; tail?: number }
+  // The worktrees' Colima environments (`env.*`, capability `env`) are the env plugin's since plugins
+  // E2, reached untyped through a plugin host since E3 (plugins/colima/shared/types.ts has their types).
   // The worktrees' dev stacks on the server's machine (capability `stacks`)
   'stack.status': WorktreeRef
   /** Starts `stack.sh up` (detached; it outlives the request and the server) */
@@ -796,15 +773,6 @@ export interface MethodResultsV2 {
   'docker.container': null
   /** docker compose's exit code; -1 when docker could not run */
   'docker.compose': number
-  'env.check': EnvCheckResult
-  'env.list': EnvironmentInfo[]
-  'env.up': EnvUpResult
-  /** colima's exit code */
-  'env.stop': number
-  'env.destroy': number
-  'env.ps': EnvService[]
-  'env.composeFiles': string[]
-  'env.logs': string
   'stack.status': StackStatus
   'stack.up': null
   'stack.down': number
@@ -869,8 +837,6 @@ export interface EventPayloadsV2 {
   'topic.ended': TopicEndedPayload
   /** A `docker.compose` run's output, to the connection that asked for it only */
   'docker.log': DockerLogEvent
-  /** An `env.up`, `env.stop` or `env.destroy`'s output and steps, to the connection that asked for it only */
-  'env.log': EnvLogEvent
   /**
    * For clients older than plugins: a plugin with a legacy capability's server-wide change (the
    * Linear or voice key or settings), as `{ <capability>: true }`, beside its `plugins.changed`; and

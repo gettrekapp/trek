@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { deriveProfileName } from '../src/shared/environments.ts'
+import { deriveProfileName } from '../plugins/colima/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'

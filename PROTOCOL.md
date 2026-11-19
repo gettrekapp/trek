@@ -971,6 +971,8 @@ Before a worktree is removed, promoted or moved off the server, what runs for it
 ## Docker, environments and stacks
 
 Since plugins E2 the `env.*` methods and `env.log` are the built-in `env` plugin's; everything below holds for them as it did.
+Since plugins E3 the clients reach them through the plugin's host (untyped `env.<method>` requests),
+and core's protocol types no longer list them (`plugins/colima/shared/types.ts` has them).
 
 With the capabilities `docker`, `env` and `stacks`, the server runs these on its own machine,
 for any client (phase 5a; before it, the desktop ran them on its own machine, for its Local

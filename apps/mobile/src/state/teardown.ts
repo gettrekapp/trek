@@ -15,13 +15,28 @@ function refusedWith(err: unknown, code: string, reason?: string): boolean {
 }
 
 /** env.list on a server machine without colima (TOOL_ERROR, reason `missing`): it has no VMs, as on the desktop. */
-const noColima = (err: unknown): boolean => refusedWith(err, 'TOOL_ERROR', 'missing')
+const noEnvTool = (err: unknown): boolean => refusedWith(err, 'TOOL_ERROR', 'missing')
 
 /**
  * stack.status for a worktree outside the server's allowed roots, or of a repository it no longer
  * has registered (PATH_DENIED, from its configuration): the server runs no stack there.
  */
 const noStackThere = (err: unknown): boolean => refusedWith(err, 'PATH_DENIED')
+
+/** A VM as env.list answers it: what the blocker reads. */
+interface EnvRow {
+  worktreePath: string
+  vmState: string
+  profile: string
+}
+
+/**
+ * env.list, asked untyped: the env plugin's method (plugins E2), not in core's protocol types since
+ * plugins E3. Old-server fallback (no worktreeTeardown): remove with teardownBlocker.
+ */
+function listEnvironments(conn: RegisteredServer['connection'], projectId: string, repoId: string): Promise<EnvRow[]> {
+  return (conn as unknown as { request(method: string, params: Record<string, unknown>): Promise<EnvRow[]> }).request('env.list', { projectId, repoId })
+}
 
 /**
  * Why only the desktop can do it ("its dev stack is running"), or null. A server without the
@@ -52,7 +67,7 @@ export async function teardownBlocker(
   }
   const askStack = caps.includes(CAPABILITY.stacks) && !(strict && worktree.missing === true)
   const stack = askStack ? await conn.request('stack.status', { projectId, worktreeId: worktree.id }).catch(failed(null, noStackThere)) : null
-  const envs = caps.includes(CAPABILITY.env) ? await conn.request('env.list', { projectId, repoId }).catch(failed([], noColima)) : []
+  const envs = caps.includes(CAPABILITY.env) ? await listEnvironments(conn, projectId, repoId).catch(failed([], noEnvTool)) : []
   const vm = envs.find((e) => e.worktreePath === worktree.path && e.vmState === 'running')
   if (stack && (stack.containers > 0 || stack.upRunning)) return 'its dev stack is running'
   if (vm) return `its Docker VM (${vm.profile}) is running`

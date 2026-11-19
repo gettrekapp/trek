@@ -47,7 +47,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { deriveProfileName } from '../src/shared/environments.ts'
+import { deriveProfileName } from '../plugins/colima/shared/environments.ts'
 import { localTeardown, makeFinish } from './smokeTeardown.mjs'
 import { SMOKE_SHELL, writeShellRc, stubsFirstOnPath, homeEnv, smokeLocalProfile, SERVER_HAS_ENVS, NO_ENVS } from './smokeShell.mjs'
 import { fileURLToPath } from 'node:url'

@@ -1,5 +1,5 @@
-// The Colima plugin's types (plugins E2): what env.* take and answer, and env.log's payload. Copied
-// from src/shared/types.ts, whose copies stay for the renderer and protocolV2.ts until plugins E3.
+// The Colima plugin's types (plugins E2): what env.* take and answer, and env.log's payload.
+// src/shared/types.ts had them before plugins E3; it keeps only EnvironmentSettings, repo.update's old field.
 
 /** Settings for per-worktree isolated Docker environments (Colima VMs). */
 export interface EnvironmentSettings {

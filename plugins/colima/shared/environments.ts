@@ -40,7 +40,7 @@ export function repoKeyFor(path: string, profileKey: unknown): string {
   return typeof profileKey === 'string' && /^(\/|[A-Za-z]:[\\/])/.test(profileKey) ? profileKey : path
 }
 
-/** repoKeyFor over a repository's old `environments` field (the renderer's, until plugins E3). */
+/** repoKeyFor over a project payload's `environments` (the server's mirror of the plugin's settings): the smokes' and tests'. */
 export function envRepoKey(repo: { path: string; environments?: { profileKey?: unknown } }): string {
   return repoKeyFor(repo.path, repo.environments?.profileKey)
 }

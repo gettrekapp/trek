@@ -1,8 +1,8 @@
 // scripts/pluginBoundaries.test.mjs — the plugin boundary (plugin system phase 1). A plugin's code
 // (plugins/<id>/) imports only the plugin contract (src/shared/plugins/), its own folder and npm
 // packages: not the rest of src/shared (the protocol's or the model's internals), never server/src, src/main, src/renderer, src/host, src/web or another
-// plugin. Core imports a plugin only through plugins/builtin.*.ts (until E3, also src/shared/environments.ts:
-// CORE_IMPORT_EXCEPTIONS below). That is what lets a plugin
+// plugin. Core imports a plugin only through plugins/builtin.*.ts (CORE_IMPORT_EXCEPTIONS: none since plugins E3).
+// That is what lets a plugin
 // become a package later with only the loader changing.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -57,10 +57,7 @@ test("a plugin's code imports only the contract and its own folder", () => {
  * Core files allowed to import a plugin's file other than plugins/builtin.*.ts, each until the
  * phase that moves their importers into the plugin. Never add one for new code.
  */
-const CORE_IMPORT_EXCEPTIONS = [
-  // Plugins E2 → E3: the renderer's Colima UI (and the smokes) still import the env helpers through here.
-  { from: 'src/shared/environments.ts', to: 'plugins/colima/shared/environments.ts' }
-]
+const CORE_IMPORT_EXCEPTIONS = []
 
 test('core imports a plugin only through plugins/builtin.*.ts (and the listed exceptions)', () => {
   const problems = []
