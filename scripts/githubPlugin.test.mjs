@@ -5,18 +5,33 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { githubPrs } from '../plugins/github/shared/pr.ts'
 import { checksOf, parsePrView, prQueryArgs } from '../plugins/github/server/query.ts'
-import { GH_QUIET_ENV, isAuthFailure } from '../plugins/github/server/gh.ts'
+import { GH_QUIET_ENV, ghThroughHost, isAuthFailure } from '../plugins/github/server/gh.ts'
 import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 test('parse: github.com pull links in any accepted form, canonicalised; anything else is not GitHub\'s', () => {
   assert.deepEqual(githubPrs.parse('https://www.github.com/acme/app/pull/12/files'), { url: 'https://github.com/acme/app/pull/12', number: 12, label: '#12' })
   assert.deepEqual(githubPrs.parse('http://github.com/acme/app/pull/3'), { url: 'https://github.com/acme/app/pull/3', number: 3, label: '#3' })
-  for (const bad of ['https://gitlab.com/a/b/-/merge_requests/1', 'https://github.com/acme/app/issues/12', 'https://dev.azure.com/o/p/_git/r/pullrequest/5', '12']) assert.equal(githubPrs.parse(bad), null, bad)
+  const canon = { url: 'https://github.com/acme/app/pull/12', number: 12, label: '#12' }
+  for (const ok of [
+    'https://github.com/acme/app/pull/12?query=1',
+    'https://github.com/acme/app/pull/12#frag',
+    'https://github.com/acme/app/pull/12/',
+    'HTTPS://GitHub.com/acme/app/pull/12',
+    '  https://github.com/acme/app/pull/12\n'
+  ]) assert.deepEqual(githubPrs.parse(ok), canon, ok)
+  for (const bad of [
+    'https://gitlab.com/a/b/-/merge_requests/1',
+    'https://github.com/acme/app/issues/12',
+    'https://dev.azure.com/o/p/_git/r/pullrequest/5',
+    '12',
+    'https://github.com.evil.com/a/b/pull/1',
+    'https://evil.com/github.com/a/b/pull/1'
+  ]) assert.equal(githubPrs.parse(bad), null, bad)
 })
 
 test('owns: only canonical links', () => {
   assert.equal(githubPrs.owns('https://github.com/acme/app/pull/12'), true)
-  for (const u of ['https://github.com/acme/app/pull/12/files', 'https://www.github.com/acme/app/pull/12', 'https://example.com/acme/app/pull/12']) assert.equal(githubPrs.owns(u), false, u)
+  for (const u of ['https://github.com/acme/app/pull/12/files', 'http://github.com/acme/app/pull/12', 'https://www.github.com/acme/app/pull/12', 'https://example.com/acme/app/pull/12']) assert.equal(githubPrs.owns(u), false, u)
 })
 
 test('fromNumber: the owner and repository of the first linked GitHub PR', () => {
@@ -152,6 +167,16 @@ test('provider.read: one GraphQL call with the owner, repo and number; an auth f
   await assert.rejects(p.read(PR), (e) => e.code === undefined && e.message === 'HTTP 502: Bad Gateway')
 })
 
+test('provider.read: any other failure is rethrown as it was, its code kept', async () => {
+  const stopped = Object.assign(new Error('gh was stopped'), { code: 'ABORT_ERR' })
+  const gh = fakeGh([stopped])
+  const p = createGithubPrProvider(gh.run)
+  await assert.rejects(p.read(PR), (e) => e === stopped && e.code === 'ABORT_ERR')
+  // A link that isn't a canonical GitHub one never reaches gh.
+  await assert.rejects(p.read({ url: 'https://example.com/a/b/pull/1', number: 1, label: '#1' }), (e) => e.code === 'BAD_REQUEST')
+  assert.equal(gh.calls.length, 1)
+})
+
 test('provider.available: gh auth status for github.com, false on any failure', async () => {
   const gh = fakeGh(['', new Error('not logged in')])
   const p = createGithubPrProvider(gh.run)
@@ -168,6 +193,62 @@ test('provider.headBranch: gh pr view --json headRefName; null on a failure or a
   assert.equal(await p.headBranch(PR), null)
   assert.equal(await p.headBranch(PR), null)
   assert.equal(await p.headBranch(PR), null)
+})
+
+test('provider.headBranch: a non-canonical link never reaches gh; a name starting with - is refused', async () => {
+  const gh = fakeGh(['{"headRefName":"-x"}'])
+  const p = createGithubPrProvider(gh.run)
+  for (const url of ['https://github.com/acme/app/pull/12/files', '--repo=evil/x', 'https://example.com/acme/app/pull/12']) {
+    assert.equal(await p.headBranch({ url, number: 12, label: '#12' }), null, url)
+  }
+  assert.equal(gh.calls.length, 0)
+  assert.equal(await p.headBranch(PR), null)
+  assert.equal(gh.calls.length, 1)
+})
+
+/** A fake host: records run's calls, answers from a queue (an Error is thrown). */
+function fakeHost(command, answers = []) {
+  const runs = []
+  const asked = []
+  return {
+    runs,
+    asked,
+    host: {
+      testCommand: (envName, fallback) => {
+        asked.push([envName, fallback])
+        return command
+      },
+      run: async (cmd, args, options) => {
+        runs.push({ cmd, args, options })
+        const next = answers.shift()
+        if (next instanceof Error) throw next
+        return next ?? ''
+      }
+    }
+  }
+}
+
+test('ghThroughHost: gh or the TREK_SERVER_GH stub through host.run, quietly, with a timeout, a cap and the signal', async () => {
+  const f = fakeHost('/stub/gh', ['out'])
+  const gh = ghThroughHost(f.host)
+  assert.deepEqual(f.asked, [['TREK_SERVER_GH', 'gh']])
+  const signal = new AbortController().signal
+  assert.equal(await gh(['auth', 'status'], signal), 'out')
+  assert.deepEqual(f.runs, [{ cmd: '/stub/gh', args: ['auth', 'status'], options: { timeoutMs: 30_000, maxBytes: 1024 * 1024, signal, env: GH_QUIET_ENV } }])
+})
+
+test('ghThroughHost: a bad TREK_SERVER_GH fails closed without running anything', async () => {
+  const f = fakeHost(null)
+  await assert.rejects(ghThroughHost(f.host)(['auth', 'status']), /gh is not installed on the server \(TREK_SERVER_GH is not an absolute path\)/)
+  assert.equal(f.runs.length, 0)
+})
+
+test('ghThroughHost: ENOENT is "not installed"; any other failure passes through unchanged', async () => {
+  const other = Object.assign(new Error('HTTP 401: Bad credentials'), { code: 'X' })
+  const f = fakeHost('gh', [Object.assign(new Error('gh is not installed on the server'), { code: 'ENOENT' }), other])
+  const gh = ghThroughHost(f.host)
+  await assert.rejects(gh(['x']), (e) => e.message === 'gh is not installed on the server' && e.code === undefined)
+  await assert.rejects(gh(['x']), (e) => e === other)
 })
 
 test('provider.fetchRef and promptHint', () => {

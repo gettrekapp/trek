@@ -33,12 +33,15 @@ export function createGithubPrProvider(gh: GhRunner): PrServerProvider {
         stdout = await gh(prQueryArgs(partsOf(pr)), signal)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        throw isAuthFailure(message) ? pluginError('NOT_SIGNED_IN', message) : new Error(message)
+        // Anything else keeps its code (ABORT_ERR when the watch stopped it, BAD_REQUEST for a link that isn't GitHub's).
+        throw isAuthFailure(message) ? pluginError('NOT_SIGNED_IN', message) : err
       }
       return parsePrView(JSON.parse(stdout))
     },
     headBranch: async (pr, signal) => {
       try {
+        // Only a canonical link reaches gh (partsOf throws for anything else).
+        partsOf(pr)
         const out = JSON.parse(await gh(['pr', 'view', pr.url, '--json', 'headRefName'], signal)) as { headRefName?: unknown }
         const name = typeof out?.headRefName === 'string' ? out.headRefName : ''
         return BRANCH.test(name) ? name : null
