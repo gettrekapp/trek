@@ -813,9 +813,23 @@ test('welcomeCapabilities lists prResolve whenever a PR provider is registered',
   assert.equal(welcomeCapabilities(false, false, false, [], 'darwin', false, false, false, false).includes('prResolve'), false)
 })
 
-test('pr.resolve: a head branch already checked out in a worktree, or in a repository git cannot read, is null', async () => {
-  const checkedOut = ctxFor(gitProject(), { providers: [createGithubPrProvider(fakeRunner(['{"headRefName":"feature"}']).run)] })
-  assert.equal((await checkedOut.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null, 'w1 has feature checked out')
+test("pr.resolve: a checked-out branch that is the PR's own comes back by name (the client links that worktree); an unreadable repository gives null", async () => {
+  const p = gitProject()
+  const dir = p.repositories[0].path
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { env, encoding: 'utf8' })
+  const origin = mkdtempSync(join(tmpdir(), 'trek-prresolve-origin-'))
+  after(() => removeDir(origin))
+  execFileSync('git', ['init', '-q', '--bare', origin], { env })
+  git('remote', 'add', 'origin', origin)
+  git('commit', '--allow-empty', '-q', '-m', 'init')
+  // A same-repository PR: feature is checked out (w1) and origin's feature is the PR head.
+  git('checkout', '-q', '-b', 'feature')
+  git('commit', '--allow-empty', '-q', '-m', 'feature work')
+  git('push', '-q', 'origin', 'feature', 'feature:refs/pull/12/head')
+  assert.equal(p.repositories[0].worktrees[1].branch, 'feature')
+  const checkedOut = ctxFor(p, { providers: [createGithubPrProvider(fakeRunner(['{"headRefName":"feature"}']).run)] })
+  assert.equal((await checkedOut.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, 'feature')
   // project()'s /repo is no repository: git can't say whether a local branch has the name.
   const unreadable = ctxFor(project(), { providers: [createGithubPrProvider(fakeRunner(['{"headRefName":"feat/x"}']).run)] })
   assert.equal((await unreadable.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null)

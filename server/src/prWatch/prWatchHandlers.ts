@@ -30,8 +30,6 @@ async function usableHeadBranch(provider: PrServerProvider, pr: { url: string; n
   } catch {
     return null
   }
-  // Checked out already (the main checkout's main, say): a client would link the PR to that worktree.
-  if (repo.worktrees.some((w) => !w.missing && w.branch === name)) return null
   try {
     if ((await gitService.localBranchSha(repo.path, name)) === null) return name
     return (await gitService.isPullRequestBranch(repo.path, provider.fetchRef(pr.number), name)) ? name : null
