@@ -73,9 +73,9 @@ test("env.destroy (plugins E2) is CONFLICT while the server holds a worktree of 
 })
 
 /** The lifecycle over a stand-in environment service: the registry's answers and colima's list. */
-function lifecycleWith({ known = [], repos = [], vms = [], destroy = async () => 0 } = {}) {
+function lifecycleWith({ known = [], repos = [], vms = [], destroy = async () => 0, enabled = true } = {}) {
   const asked = { list: 0, destroyed: [], events: [] }
-  const host = { repoSettings: () => ({}), emitTo: (caller, event, payload) => asked.events.push([caller, event, payload]) }
+  const host = { repoSettings: () => ({}), emitTo: (caller, event, payload) => asked.events.push([caller, event, payload]), isEnabled: () => enabled }
   const env = {
     known: async (profile) => known.includes(profile),
     knownRepo: async (key) => repos.includes(key),
@@ -127,11 +127,22 @@ test("the lifecycle's repository check asks the registry first: no VM of the rep
   assert.equal(await leftover.lifecycle.beforeRepoRemove(ctx, repo), null)
 })
 
+test("the lifecycle's repository check where the plugin is off for the project (plugins E3): a running VM still refuses, saying how to reach it; a stopped one doesn't", async () => {
+  const repo = { id: 'r1', path: '/r/app', name: 'app' }
+  const running = lifecycleWith({ enabled: false, repos: ['/r/app'], vms: [{ profile: 'twb-x-000000', vmState: 'running', worktreePath: feat.path }] })
+  assert.equal(
+    await running.lifecycle.beforeRepoRemove(ctx, repo),
+    'It has a running Colima VM. Turn Colima environments on for this project (Settings → Plugins), then stop it in the Env tab.'
+  )
+  const stopped = lifecycleWith({ enabled: false, repos: ['/r/app'], vms: [{ profile: 'twb-x-000000', vmState: 'stopped', worktreePath: feat.path }] })
+  assert.equal(await stopped.lifecycle.beforeRepoRemove(ctx, repo), null)
+})
+
 test("the lifecycle takes only a colima that isn't installed as no VMs; any other failure to list is the plan's and the repository check's own", async () => {
   const failing = (err) => {
     const made = lifecycleWith({ known: [featProfile], repos: ['/r/app'] })
     // The stand-in's list, failing as the host or the file system would.
-    return colimaLifecycle({ repoSettings: () => ({}), emitTo: () => {} }, { ...made.env, list: async () => Promise.reject(err) })
+    return colimaLifecycle({ repoSettings: () => ({}), emitTo: () => {}, isEnabled: () => true }, { ...made.env, list: async () => Promise.reject(err) })
   }
   const notInstalled = Object.assign(new Error('colima is not installed on the server'), { code: 'ENOENT' })
   const fileGone = Object.assign(new Error("ENOENT: no such file or directory, open '/x'"), { code: 'ENOENT', syscall: 'open', path: '/x' })
@@ -172,6 +183,25 @@ test('env.up refuses where the plugin is off for the project; the other methods 
   })
   const offPlan = await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op: 'remove' })
   assert.ok(offPlan.result.items.some((i) => i.id === 'env:destroy'), JSON.stringify(offPlan))
+  // Still off: the repository is kept while the VM runs, the reason saying how to reach it.
+  const b = join(s.dir, 'repos', 'b')
+  mkdirSync(b, { recursive: true })
+  git(b, 'init', '-q', '-b', 'main')
+  git(b, 'commit', '--allow-empty', '-q', '-m', 'init')
+  s.store.addRepo(b, { id: 'b' })
+  assert.equal((await s.call('repo.add', { projectId: s.projectId, path: b })).ok, true)
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running' })}\n`)
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  const kept = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
+  refused(kept, 'BAD_REQUEST')
+  assert.equal(kept.error.message, 'It has a running Colima VM. Turn Colima environments on for this project (Settings → Plugins), then stop it in the Env tab.')
+  // And a remove with env:destroy deletes the VM before git removes the worktree.
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  resetCalls()
+  const removed = await s.call('worktree.remove', { projectId: s.projectId, worktreeId, teardown: ['env:destroy'] })
+  assert.equal(removed.ok, true, JSON.stringify(removed))
+  assert.ok(calls().some((c) => c.startsWith('colima|') && c.includes(`|delete ${profile} --force|`)), calls().join('\n'))
+  assert.equal(existsSync(s.feature), false)
   // An unknown worktree is still NOT_FOUND first.
   refused(await s.call('env.up', { projectId: s.projectId, worktreeId: 'nope', settings: { enabled: true } }), 'NOT_FOUND')
 })

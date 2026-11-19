@@ -141,8 +141,10 @@ export interface PluginRepo {
 
 /**
  * A plugin's part in a worktree's teardown (plugins E1): before a remove, promote or move, the
- * server asks each plugin on in the project for its items, shows them in the client's confirm, and
- * runs the chosen ones before the operation.
+ * server asks each set-up plugin for its items, whether the plugin is on in the project or not,
+ * shows them in the client's confirm, and runs the chosen ones before the operation. Plugins E3: a
+ * plugin switched off for a project still tears down what it made there, and still vetoes
+ * (`beforeRepoRemove`).
  */
 export interface WorktreeLifecycle {
   /**
@@ -285,7 +287,10 @@ export interface PluginInstance {
   ticketProvider?: TicketProvider
   /** A pull request host (plugins P3): the watch, `pr.resolve` and the PR tools go through it in the projects where the plugin is on */
   prProvider?: PrServerProvider
-  /** Its part in a worktree's teardown (plugins E1), in the projects where the plugin is on */
+  /**
+   * Its part in a worktree's teardown (plugins E1). It takes part in every project, on or off there
+   * (plugins E3), so keep `plan` and `beforeRepoRemove` cheap where the plugin has made nothing.
+   */
   worktreeLifecycle?: WorktreeLifecycle
   /** A value for one of the manifest's `projectSettings` keys (already the declared kind): its problem, or null */
   checkProjectSetting?(key: string, value: string): string | null

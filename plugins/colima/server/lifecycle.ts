@@ -9,6 +9,8 @@ import type { EnvironmentService } from './service.ts'
 
 export const vmLabel = (profile: string): string => `Stop and delete this worktree's Colima VM “${profile}”`
 export const REPO_REMOVE_REASON = 'It has a running environment. Stop it in the Env tab first.'
+/** The same where the plugin is off for the project (plugins E3): its Env tab is hidden there until it is turned on. */
+export const REPO_REMOVE_REASON_OFF = 'It has a running Colima VM. Turn Colima environments on for this project (Settings → Plugins), then stop it in the Env tab.'
 
 type LifecycleEnv = Pick<EnvironmentService, 'known' | 'knownRepo' | 'list' | 'destroy'>
 
@@ -26,7 +28,7 @@ async function vmsOf(env: LifecycleEnv, repoKey: string): Promise<EnvironmentInf
   }
 }
 
-export function colimaLifecycle(host: Pick<ServerPluginHost, 'repoSettings' | 'emitTo'>, env: LifecycleEnv): WorktreeLifecycle {
+export function colimaLifecycle(host: Pick<ServerPluginHost, 'repoSettings' | 'emitTo' | 'isEnabled'>, env: LifecycleEnv): WorktreeLifecycle {
   const projectOf = (ctx: PluginCallContext): string => ctx.projectId ?? ''
   return {
     plan: async (ctx, worktree) => {
@@ -56,7 +58,9 @@ export function colimaLifecycle(host: Pick<ServerPluginHost, 'repoSettings' | 'e
     beforeRepoRemove: async (ctx, repo) => {
       const repoKey = repoKeyOf(host, projectOf(ctx), repo)
       if (!(await env.knownRepo(repoKey))) return null
-      return (await vmsOf(env, repoKey)).some((e) => e.vmState === 'running' && e.worktreePath !== '') ? REPO_REMOVE_REASON : null
+      if (!(await vmsOf(env, repoKey)).some((e) => e.vmState === 'running' && e.worktreePath !== '')) return null
+      // Off for the project (plugins E3), the lifecycle still vetoes, but the Env tab is hidden: say how to reach it.
+      return host.isEnabled(projectOf(ctx)) ? REPO_REMOVE_REASON : REPO_REMOVE_REASON_OFF
     }
   }
 }

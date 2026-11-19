@@ -267,14 +267,15 @@ export async function holdWorktree<T>(path: string, label: string, fn: (hold: Wo
 
 /**
  * Runs the chosen items before the operation: each participant once, with its own ids, in
- * participant order. An id with no participant here is BAD_REQUEST before anything runs. Each involved participant is asked again first: one that throws
- * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
- * (the VM was deleted meanwhile) is skipped (logged). A
- * teardown that throws, or runs past the whole teardown's deadline (`teardownTimeoutMs` from the
- * start, shared by the participants: each gets what is left), stops it: TOOL_ERROR, `details.tornDown`
- * the labels already done; one still running then keeps the worktree 'finishing' until it settles. One at a time per worktree: CONFLICT while it is busy (even with no ids),
- * unless `options.hold` is this worktree's hold (holdWorktree), which it then uses. Resolves with
- * the labels of the items it tore down, in order (skipped ones left out).
+ * participant order. An id with no participant here is BAD_REQUEST before anything runs. Each
+ * involved participant is asked again first: one that throws or hangs stops it (TOOL_ERROR) before
+ * anything is torn down; an item its answer no longer lists (the VM was deleted meanwhile) is
+ * skipped (logged). A teardown that throws, or runs past the whole teardown's deadline
+ * (`teardownTimeoutMs` from the start, shared by the participants: each gets what is left), stops
+ * it: TOOL_ERROR, `details.tornDown` the labels already done; one still running then keeps the
+ * worktree 'finishing' until it settles. One at a time per worktree: CONFLICT while it is busy (even
+ * with no ids), unless `options.hold` is this worktree's hold (holdWorktree), which it then uses.
+ * Resolves with the labels of the items it tore down, in order (skipped ones left out).
  */
 export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<string[]> {
   requireDistinct(participants)

@@ -1288,6 +1288,31 @@ test('remove_worktree (plugins E1) tears down what the plan ticks by default and
   await assert.rejects(s.call('remove_worktree', { worktree: 'main', teardown: 'no' }), /teardown must be a boolean/)
 })
 
+test("remove_worktree (plugins E3): a participant whose plan failed is named and nothing is removed; teardown: false still removes", async (t) => {
+  const broken = {
+    manifest: { id: 'probe', version: '1.0.0', name: 'Probe', description: '', defaultEnabled: true },
+    setup: () => ({
+      handlers: {},
+      worktreeLifecycle: {
+        plan: async () => {
+          throw new Error('colima list failed')
+        },
+        teardown: async () => {}
+      }
+    })
+  }
+  const s = await toolSetup(t, { extraPlugins: [broken] })
+  const created = await s.call('create_worktree', { branch: 'feat/a' })
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/a' }), (err) => {
+    assert.equal(err.code, 'TOOL_ERROR')
+    assert.equal(err.message, "couldn't check probe before removing; retry, or pass teardown: false to remove it without tearing down")
+    return true
+  })
+  assert.ok(existsSync(created.path), 'nothing removed')
+  assert.equal((await s.call('remove_worktree', { worktree: 'feat/a', teardown: false })).removed, true)
+  assert.equal(existsSync(created.path), false)
+})
+
 test('remove_worktree (plugins E1): a loaded worktree is refused before its plan is asked; a failed teardown says what was already done', async (t) => {
   let planned = 0
   const plugin = (id, label, teardown) => ({

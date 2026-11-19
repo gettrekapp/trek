@@ -1006,7 +1006,11 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         let teardown: string[] = []
         if (args.teardown !== false && !worktree.isMain) {
           assertNotLoaded(ctx, worktree.path)
-          const plan = (await v2('worktree.teardownPlan', { worktreeId: worktree.id, op: 'remove' })) as { items: TeardownItem[] }
+          const plan = (await v2('worktree.teardownPlan', { worktreeId: worktree.id, op: 'remove' })) as { items: TeardownItem[]; unplanned?: string[] }
+          // A participant whose plan failed (plugins E3) may have something running: don't remove past it.
+          if (plan.unplanned && plan.unplanned.length > 0) {
+            throw codedError('TOOL_ERROR', `couldn't check ${plan.unplanned.join(', ')} before removing; retry, or pass teardown: false to remove it without tearing down`, { reason: 'teardown' })
+          }
           teardown = defaultTeardown(plan.items)
         }
         let tornDown: string[] = []
