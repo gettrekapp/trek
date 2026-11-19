@@ -1,7 +1,8 @@
 // The participants in a worktree's teardown (plugins E1), in order: core's dev stack
-// (`stack:destroy`), then each plugin on in the project with a worktreeLifecycle, in registration
-// order: the Colima VM is the env plugin's `env:destroy` since plugins E2. The core one never runs
-// on Windows, where the server has no dev stacks (machineHandlersFor), or without machine services.
+// (`stack:destroy`), then each set-up plugin with a worktreeLifecycle, on in the project or not
+// (plugins E3), in registration order: the Colima VM is the env plugin's `env:destroy` since
+// plugins E2. The core one never runs on Windows, where the server has no dev stacks
+// (machineHandlersFor), or without machine services.
 import type { Machine } from '../integrations/machineHandlers.ts'
 import type { V2Context } from '../v2.ts'
 import { pluginParticipant, type Participant } from './teardown.ts'
@@ -47,10 +48,4 @@ export function participantsFor(
   // A test's stand-in for the registry may have no lifecycles.
   const plugins = ctx.plugins?.lifecycles?.(projectId) ?? []
   return [...core, ...plugins.map((entry) => pluginParticipant(entry, ctx.caller ?? ''))]
-}
-
-/** The participants known here but not taking part in the project (a plugin switched off since the confirm): runTeardown's `inactive`. */
-export function inactiveParticipants(ctx: Pick<V2Context, 'plugins'>, projectId: string): string[] {
-  // A test's stand-in for the registry may not say.
-  return ctx.plugins?.inactiveLifecycles?.(projectId) ?? []
 }

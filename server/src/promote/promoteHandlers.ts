@@ -55,7 +55,7 @@ import { promoteChanging as changing } from './changing.ts'
 import type { PromoteBinding } from './requests.ts'
 import { teardownNote } from '../../../src/shared/teardown.ts'
 import { assertNotTearingDown, holdWorktree, optionalTeardown, runTeardown, withTornDown } from '../teardown/teardown.ts'
-import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
+import { participantsFor } from '../teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -788,8 +788,7 @@ export const promoteHandlers: Record<string, Handler> = {
           // The chosen teardown (plugins E1): after the same checks (a promote the server would
           // refuse tears nothing down), before the repository's lock.
           done = await runTeardown(participantsFor(ctx, first.project.id), { project: first.project, repo: first.repo, worktree: first.worktree }, 'promote', teardown, {
-            hold,
-            inactive: inactiveParticipants(ctx, first.project.id)
+            hold
           })
           return await locked(first.repo, async () => {
             // Again, with no await since: no other operation blocks the main checkout between this

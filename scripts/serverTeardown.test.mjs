@@ -4,9 +4,9 @@
 // ids refused before anything runs, and the repository veto.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { TEARDOWN_RUN_TIMEOUT_MS, anyBusy, assertNotTearingDown, busyReason, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
+import { TEARDOWN_RUN_TIMEOUT_MS, anyBusy, assertNotTearingDown, busyReason, holdWorktree, optionalTeardown, planTeardown, planTeardownReport, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
-import { inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
+import { participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
 import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
@@ -56,6 +56,25 @@ test('planTeardown: every participant in order, ids namespaced; one that throws,
   assert.ok(warnings.some((w) => w.includes('slow') && w.includes('no answer')))
   assert.deepEqual(defaultTeardown(items), ['stack:destroy', 'env:destroy'])
   assert.deepEqual(log, [])
+})
+
+test('planTeardownReport (plugins E3): the items, and the participants whose plan failed or hung', async () => {
+  const log = []
+  const warnings = []
+  const report = await planTeardownReport(
+    [
+      participant('stack', [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], log),
+      participant('broken', 'throw', log),
+      participant('slow', 'hang', log),
+      participant('odd', 'not a list', log)
+    ],
+    target,
+    'move',
+    { timeoutMs: 50, warn: (m) => warnings.push(m) }
+  )
+  assert.deepEqual(report, { items: [{ id: 'stack:destroy', label: 'Tear down the dev stack', checked: true }], unplanned: ['broken', 'slow'] })
+  // An answer that is not a list is left out too, but it did answer: not unplanned.
+  assert.equal(warnings.length, 3)
 })
 
 test('runTeardown: the chosen items in participant order, each participant once with its own ids; none chosen runs nothing', async () => {
@@ -225,13 +244,11 @@ test('TEARDOWN_RUN_TIMEOUT_MS: a minute under the clients\' wait for the request
   assert.equal(TEARDOWN_RUN_TIMEOUT_MS, TEARDOWN_REQUEST_TIMEOUT_MS - 60_000)
 })
 
-test('runTeardown: an id of a plugin that is now off is skipped; an unknown one is refused with a hint', async () => {
+test('runTeardown: an id no participant here offers is refused with a hint, before anything runs', async () => {
   const log = []
-  const warnings = []
   const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
-  assert.deepEqual(await runTeardown(ps, target, 'remove', ['vms:vm', 'stack:destroy'], { inactive: ['vms'], warn: (m) => warnings.push(m) }), ['Tear down'])
-  assert.deepEqual(log, [['stack', 'remove', ['destroy']]])
-  assert.match(warnings.join('\n'), /vms:vm is no longer planned/)
+  await assert.rejects(runTeardown(ps, target, 'remove', ['vms:vm', 'stack:destroy']), (e) => e.code === 'BAD_REQUEST' && e.message === '"vms:vm" is not offered for this worktree; reopen the confirm')
+  assert.deepEqual(log, [], 'nothing ran')
   await assert.rejects(runTeardown(ps, target, 'remove', ['ghost:y']), (e) => e.code === 'BAD_REQUEST' && e.message === '"ghost:y" is not offered for this worktree; reopen the confirm')
 })
 
@@ -338,12 +355,6 @@ test("participantsFor: core's stack with machine services, never on Windows; the
   assert.deepEqual(participantsFor({ ...ctx, machine: undefined }, 'p1', 'darwin').map((p) => p.id), ['one', 'two'])
   // A test's stand-in for the registry may have no lifecycles.
   assert.deepEqual(participantsFor({ store: {}, plugins: { prProviders: () => [] } }, 'p1', 'linux'), [])
-})
-
-test('inactiveParticipants: the plugins with a lifecycle that are off in the project; none without a registry that says', () => {
-  assert.deepEqual(inactiveParticipants({ plugins: { inactiveLifecycles: (projectId) => [`off-in-${projectId}`] } }, 'p1'), ['off-in-p1'])
-  assert.deepEqual(inactiveParticipants({ plugins: { prProviders: () => [] } }, 'p1'), [])
-  assert.deepEqual(inactiveParticipants({}, 'p1'), [])
 })
 
 test('withTornDown: a failure after the teardown keeps its code, message and reason, and says what was torn down; toWireError passes it on any code', () => {

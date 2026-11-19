@@ -17,8 +17,8 @@ import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
 import { isInside } from '../../src/host/pathContainment.ts'
 import { prOwner, safeParse } from '../../src/shared/plugins/pullRequests.ts'
-import { holdWorktree, optionalTeardown, planTeardown, requireOp, runTeardown, withTornDown } from './teardown/teardown.ts'
-import { inactiveParticipants, participantsFor } from './teardown/participants.ts'
+import { holdWorktree, optionalTeardown, planTeardownReport, requireOp, runTeardown, withTornDown } from './teardown/teardown.ts'
+import { participantsFor } from './teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -301,7 +301,9 @@ export const worktreeHandlers: Record<string, Handler> = {
     const project = ctx.projects.require(p.projectId)
     const { repo, worktree } = locate(project, p.worktreeId)
     if (worktree.isMain) throw bad('the main checkout is never removed, promoted or moved, so it has no teardown')
-    return { items: await planTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, op) }
+    const { items, unplanned } = await planTeardownReport(participantsFor(ctx, project.id), { project, repo, worktree }, op)
+    // `unplanned` (plugins E3): the participants whose plan failed, so a client can wait for them.
+    return { items, ...(unplanned.length > 0 ? { unplanned } : {}) }
   },
 
   'worktree.remove': async (p, ctx) => {
@@ -336,7 +338,7 @@ export const worktreeHandlers: Record<string, Handler> = {
         // Again under the block: a load that landed after the first check would have its sessions
         // in a worktree being torn down. None can land from here on.
         assertNotLoaded(ctx, worktree.path)
-        done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold })
         // A directory that is already gone is removed from git's list too, and
         // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
         if (!worktree.missing) {

@@ -396,7 +396,7 @@ made from it. No server sets it yet.
 `repo.remove` refuses to remove a project's last repository (`BAD_REQUEST`) and
 drops that repository's `worktreeOrder` entries. On a server with
 `worktreeTeardown` it is also refused (`BAD_REQUEST`, with the reason) while a
-teardown participant says so: the `env` plugin's, while a Colima VM of one of its
+teardown participant says so: the `env` plugin's (on in the project or not, plugins E3), while a Colima VM of one of its
 worktrees runs. `repo.listBranches` fails with
 `GIT_ERROR` when git does. A `branch.*` call with `null` or an empty string
 clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
@@ -946,15 +946,14 @@ model's id is typed, as in any server window (the browser lists no models).
 
 Before a worktree is removed, promoted or moved off the server, what runs for it on the server's machine can be torn down by the server, in the same request (capability `worktreeTeardown`, plugins E1). The participants, in this order:
 - core's dev stack (`stack:destroy`, once the worktree's stack has run);
-- core's Colima VM (`env:destroy`, when its branch has one; neither on Windows);
-- each plugin on in the project that takes part.
+- each set-up plugin that takes part (the `env` plugin's Colima VM, `env:destroy`, when its branch has one; not on Windows), whether or not it is on in the project (plugins E3): a plugin switched off for a project still tears down what it made there, and `repo.remove` still asks it.
 
 | Method | Params | Result |
 |---|---|---|
-| `worktree.teardownPlan` | `{projectId, worktreeId, op}` (`op`: `remove`, `promote` or `move`) | `{items: [{id, label, checked, running?}]}`: what each participant would tear down, in the order it would run. `id` is `<participant>:<item>`, `label` what the confirm shows, `checked` its default, `running` true when what it tears down is running now (a client keeps a move that would leave it running from going ahead unticked). A participant whose plan fails or takes over 10 s is left out. `BAD_REQUEST` for the main checkout or another `op`; `NOT_FOUND` for an unknown worktree |
+| `worktree.teardownPlan` | `{projectId, worktreeId, op}` (`op`: `remove`, `promote` or `move`) | `{items: [{id, label, checked, running?}], unplanned?}`: what each participant would tear down, in the order it would run. `id` is `<participant>:<item>`, `label` what the confirm shows, `checked` its default, `running` true when what it tears down is running now (a client keeps a move that would leave it running from going ahead unticked). A participant whose plan fails or takes over 10 s is left out, and its id is listed in `unplanned` (plugins E3; absent when none was), so a client can wait rather than leave it running. `BAD_REQUEST` for the main checkout or another `op`; `NOT_FOUND` for an unknown worktree |
 
 `worktree.remove`, `worktree.promote` and `move.finish` take `teardown: string[]`, ids from the plan. The server runs them after the operation's own checks and before it, each participant once with its own ids, in participant order.
-- An id whose participant is not there is `BAD_REQUEST`, and nothing runs. An id of a plugin switched off in the project since the plan is skipped.
+- An id whose participant is not there is `BAD_REQUEST`, and nothing runs.
 - Each chosen participant is asked again first; an id it no longer plans (gone meanwhile) is skipped, and one whose check fails stops the request (`TOOL_ERROR`, `details.reason: 'teardown'`) before anything is torn down.
 - A failure ends the request with `TOOL_ERROR`, `details.reason: 'teardown'`, a message naming the step ("Couldn't tear down the dev stack …: …"), `details.tornDown` the labels of the steps already done, and the worktree untouched. Steps before it stay done.
 - A failure of the operation itself after its teardown ran (a git error, a `CONFLICT`, git's own `dirty` refusal; any code, any other `details.reason`) carries `details.tornDown` too: the labels of what was torn down, which stays torn down though the operation was not done. It is absent when nothing was torn down.

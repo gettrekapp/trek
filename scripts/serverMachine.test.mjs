@@ -298,7 +298,7 @@ test('worktree.remove {teardown}: a dirty worktree is refused first; a failing i
   assert.deepEqual(destroyed(), [], 'no teardown field: nothing torn down')
 })
 
-test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with or without teardown; the path is blocked from before the teardown to after the removal; a plugin now off is skipped', { skip }, async (t) => {
+test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with or without teardown; the path is blocked from before the teardown to after the removal', { skip }, async (t) => {
   const s = await setup(t)
   const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
   // A plugin participant whose teardown waits until released, and records whether the path was blocked then.
@@ -325,10 +325,10 @@ test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with 
         return () => blocked.delete(path)
       }
     },
-    plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => ['gone'] }
+    plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] }
   }
   const call = (method, params) => dispatchV2(method, params, ctx)
-  const removing = call('worktree.remove', { ...ref, force: true, teardown: ['probe:vm', 'gone:x'] })
+  const removing = call('worktree.remove', { ...ref, force: true, teardown: ['probe:vm'] })
   await teardownStarted
   assert.deepEqual(log, [['remove', ['vm'], true]])
   refused(await call('worktree.remove', { ...ref, force: true }), 'CONFLICT')
@@ -348,7 +348,7 @@ test('worktree.remove {teardown}: git refusing changes that appeared during the 
     plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
     teardown: async () => writeFileSync(join(s.feature, 'appeared.txt'), 'new\n')
   }
-  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => [] } })
+  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] } })
   refused(res, 'GIT_ERROR', 'dirty')
   assert.deepEqual(res.error.details, { reason: 'dirty', tornDown: ['Stop the VM'] })
   assert.equal(existsSync(s.feature), true)
@@ -369,7 +369,7 @@ test('worktree.remove {teardown}: the project write failing after the removal ca
     if (tore) throw new Error('disk full')
     return s.ctx.projects.apply(...args)
   }
-  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, projects, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => [] } })
+  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, projects, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] } })
   assert.equal(res.ok, false)
   assert.match(res.error.message, /disk full/)
   assert.deepEqual(res.error.details, { tornDown: ['Stop the VM'] })
@@ -393,6 +393,20 @@ test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs,
   assert.equal(res.error.message, 'It has a running environment. Stop it in the Env tab first.')
   writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n`)
   assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
+})
+
+test('worktree.teardownPlan (plugins E3): a participant whose plan fails is named in unplanned; none failed, no field', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  const broken = { plan: async () => { throw new Error('colima list failed') }, teardown: async () => {} }
+  const cache = { plan: async () => [{ id: 'x', label: 'Drop the cache', checked: false }], teardown: async () => {} }
+  const plan = (lifecycles) => dispatchV2('worktree.teardownPlan', { ...ref, op: 'move' }, { ...s.ctx, plugins: { lifecycles: () => lifecycles } })
+  const res = await plan([{ id: 'probe', lifecycle: broken }, { id: 'cache', lifecycle: cache }])
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(res.result.unplanned, ['probe'])
+  assert.deepEqual(res.result.items.filter((i) => i.id.startsWith('cache:')), [{ id: 'cache:x', label: 'Drop the cache', checked: false }])
+  const fine = await plan([{ id: 'cache', lifecycle: cache }])
+  assert.equal('unplanned' in fine.result, false)
 })
 
 test('repo.remove (plugins E1): a repository the environments registry has no VM for runs no colima', { skip }, async (t) => {

@@ -143,7 +143,7 @@ test("the lifecycle takes only a colima that isn't installed as no VMs; any othe
   await assert.rejects(broken.beforeRepoRemove(ctx, { id: 'r1', path: '/r/app', name: 'app' }), /no such file/)
 })
 
-test('env.up refuses where the plugin is off for the project (a teardown skips it there, so no VM it could never clean up); the other methods still answer', { skip }, async (t) => {
+test('env.up refuses where the plugin is off for the project; the other methods still answer, and a VM made before is still torn down with its worktree (plugins E3)', { skip }, async (t) => {
   const s = await setup(t)
   const worktreeId = s.worktreeAt(s.feature).id
   assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })).result.code, 0)
@@ -161,6 +161,17 @@ test('env.up refuses where the plugin is off for the project (a teardown skips i
   assert.equal((await s.call('env.ps', { projectId: s.projectId, worktreeId })).ok, true)
   assert.equal((await s.call('env.stop', { profile })).result, 0)
   assert.equal((await s.call('env.destroy', { profile })).result, 0)
+  // Its lifecycle still takes part there (plugins E3): a remove's plan offers the VM's teardown.
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })).error?.code, 'BAD_REQUEST')
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.plugins = { ...d.settings.plugins, env: { enabled: true } }
+  })
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })).result.code, 0)
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.plugins = { ...d.settings.plugins, env: { enabled: false } }
+  })
+  const offPlan = await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op: 'remove' })
+  assert.ok(offPlan.result.items.some((i) => i.id === 'env:destroy'), JSON.stringify(offPlan))
   // An unknown worktree is still NOT_FOUND first.
   refused(await s.call('env.up', { projectId: s.projectId, worktreeId: 'nope', settings: { enabled: true } }), 'NOT_FOUND')
 })

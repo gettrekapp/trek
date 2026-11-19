@@ -76,9 +76,9 @@ export function colimaHandlers(host: ServerPluginHost, env: EnvironmentService):
 
     // The branch git has checked out now (re-read), the repository's VM key from the server's own
     // data (never the client's profileKey), the settings and variables checked.
-    // Not where the plugin is off for the project: a teardown skips an off plugin, so a VM made
-    // there could never be cleaned up with its worktree. The other methods still answer, so a VM
-    // made before it was turned off can be seen, stopped and destroyed.
+    // Not where the plugin is off for the project: its UI is hidden there. A VM made before it was
+    // turned off is still torn down with its worktree (plugins E3: an off plugin's lifecycle takes
+    // part), and the other methods still answer, so it can be seen, stopped and destroyed.
     up: async (p, ctx) => {
       const worktree = await host.checkedWorktree(p.projectId, p.worktreeId, { refresh: true })
       if (!host.isEnabled(p.projectId as string)) throw bad(OFF_MESSAGE)

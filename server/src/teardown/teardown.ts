@@ -1,7 +1,8 @@
 // Worktree teardown on the server (plugins E1): before a worktree is removed, promoted or moved,
-// the participants (core's dev stack, participants.ts, and each plugin on in the project with a
-// worktreeLifecycle: the Colima VM is the env plugin's since plugins E2) say what they would tear down (`worktree.teardownPlan`), and the
-// request that does the operation runs the items the client chose, in participant order, before it.
+// the participants (core's dev stack, participants.ts, and each set-up plugin with a
+// worktreeLifecycle, on in the project or not since plugins E3: the Colima VM is the env plugin's
+// since plugins E2) say what they would tear down (`worktree.teardownPlan`), and the request that
+// does the operation runs the items the client chose, in participant order, before it.
 // A participant whose plan throws or takes over TEARDOWN_PLAN_TIMEOUT_MS is left out (logged); one
 // whose teardown throws, or runs past the whole teardown's deadline (TEARDOWN_RUN_TIMEOUT_MS, shared
 // by the participants), stops the operation: TOOL_ERROR, `details.reason: 'teardown'`, naming it.
@@ -49,8 +50,6 @@ export interface TeardownOptions {
   teardownTimeoutMs?: number
   /** runTeardown inside holdWorktree: the hold, so the teardown runs under it (else it holds the worktree itself) */
   hold?: WorktreeHold
-  /** runTeardown: participants that are known but not taking part (a plugin now off in the project); their ids are skipped, not refused */
-  inactive?: Iterable<string>
   warn?: (message: string) => void
 }
 
@@ -149,15 +148,34 @@ async function planEach(participants: readonly Participant[], target: TeardownTa
   )
 }
 
-/** Every participant's items, in participant order (asked at once). One whose plan fails is left out (logged). */
-export async function planTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, options: TeardownOptions = {}): Promise<TeardownItem[]> {
+/**
+ * Every participant's items, in participant order (asked at once), and the participants whose plan
+ * failed or took too long (plugins E3: a client waits for them). One that fails is left out (logged).
+ */
+export async function planTeardownReport(
+  participants: readonly Participant[],
+  target: TeardownTarget,
+  op: WorktreeOp,
+  options: TeardownOptions = {}
+): Promise<{ items: TeardownItem[]; unplanned: string[] }> {
   const warn = warnOf(options)
   const plans = await planEach(participants, target, op, options)
-  return plans.flatMap((plan, i) => {
-    if ('items' in plan) return plan.items
+  const items: TeardownItem[] = []
+  const unplanned: string[] = []
+  plans.forEach((plan, i) => {
+    if ('items' in plan) {
+      items.push(...plan.items)
+      return
+    }
     warn(`[teardown] ${participants[i].id}'s plan was left out: ${plan.error}`)
-    return []
+    unplanned.push(participants[i].id)
   })
+  return { items, unplanned }
+}
+
+/** Every participant's items, in participant order (asked at once). One whose plan fails is left out (logged). */
+export async function planTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, options: TeardownOptions = {}): Promise<TeardownItem[]> {
+  return (await planTeardownReport(participants, target, op, options)).items
 }
 
 /** A label inside "Couldn't …": its first letter lowercased only when it starts an ordinary word ("Tear down" → "tear down"; "VM …" stays). */
@@ -249,10 +267,9 @@ export async function holdWorktree<T>(path: string, label: string, fn: (hold: Wo
 
 /**
  * Runs the chosen items before the operation: each participant once, with its own ids, in
- * participant order. An id with no participant here (and not one of `options.inactive`) is
- * BAD_REQUEST before anything runs. Each involved participant is asked again first: one that throws
+ * participant order. An id with no participant here is BAD_REQUEST before anything runs. Each involved participant is asked again first: one that throws
  * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
- * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
+ * (the VM was deleted meanwhile) is skipped (logged). A
  * teardown that throws, or runs past the whole teardown's deadline (`teardownTimeoutMs` from the
  * start, shared by the participants: each gets what is left), stops it: TOOL_ERROR, `details.tornDown`
  * the labels already done; one still running then keeps the worktree 'finishing' until it settles. One at a time per worktree: CONFLICT while it is busy (even with no ids),
@@ -268,16 +285,11 @@ export async function runTeardown(participants: readonly Participant[], target: 
     assertFree(key)
   }
   if (ids.length === 0) return []
-  const warn = warnOf(options)
   const known = new Set(participants.map((p) => p.id))
-  const inactive = new Set(options.inactive ?? [])
   for (const id of ids) {
     const at = id.indexOf(':')
     const owner = at > 0 ? id.slice(0, at) : ''
-    if (!known.has(owner) && !inactive.has(owner)) throw codedError('BAD_REQUEST', `${JSON.stringify(id)} is not offered for this worktree; reopen the confirm`)
-  }
-  for (const id of ids) {
-    if (!known.has(id.slice(0, id.indexOf(':')))) warn(`[teardown] ${id} is no longer planned for ${target.worktree.path} (its plugin is off); skipped`)
+    if (!known.has(owner)) throw codedError('BAD_REQUEST', `${JSON.stringify(id)} is not offered for this worktree; reopen the confirm`)
   }
   if (!options.hold) return holdWorktree(target.worktree.path, 'tearing it down', (hold) => tearDown(participants, target, op, ids, options, hold))
   return tearDown(participants, target, op, ids, options, options.hold)

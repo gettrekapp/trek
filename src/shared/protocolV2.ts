@@ -714,7 +714,8 @@ export interface MethodResultsV2 {
   'repo.listBranches': string[]
   /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
   'worktree.create': { worktreeId: string; linkWarnings?: string[] }
-  'worktree.teardownPlan': { items: TeardownItem[] }
+  /** `unplanned` (plugins E3): the participants whose plan failed or took over 10 s; absent when none did */
+  'worktree.teardownPlan': { items: TeardownItem[]; unplanned?: string[] }
   /** `tornDown`: the labels of the teardown items that ran first, in order (`[]` with no `teardown`) */
   'worktree.remove': { tornDown: string[] }
   'worktree.load': null

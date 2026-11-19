@@ -930,7 +930,7 @@ test('a plugin settings write (plugins E1) that would leave the map unmovable (o
   assert.deepEqual(repo().branchData.feat, { pluginSettings: { big: { f0: 'small' } } })
 })
 
-test("lifecycles (plugins E1): the worktree lifecycles of plugins on in the project; through pluginParticipant a plugin gets its context and the worktree, read only", async (t) => {
+test("lifecycles (plugins E1, E3): every set-up plugin's worktree lifecycle, on in the project or not; through pluginParticipant a plugin gets its context and the worktree, read only", async (t) => {
   const seen = []
   const lifecycle = {
     plan: async (ctx, worktree, op) => (seen.push(['plan', ctx, worktree, op]), [{ id: 'vm', label: 'Stop the VM', checked: true }]),
@@ -946,10 +946,10 @@ test("lifecycles (plugins E1): the worktree lifecycles of plugins on in the proj
     { projects: { p1: project('p1'), p2: project('p2', { vms: { enabled: false } }) } }
   )
   assert.deepEqual(registry.lifecycles('p1').map((l) => l.id), ['vms'])
-  assert.deepEqual(registry.lifecycles('p2'), [])
-  // Off in p2: its ids there are skipped, not refused (runTeardown's inactive); a plugin with no lifecycle is never listed.
-  assert.deepEqual(registry.inactiveLifecycles('p1'), [])
-  assert.deepEqual(registry.inactiveLifecycles('p2'), ['vms'])
+  // Off in p2 (plugins E3): still listed, so it still tears down what it made there and still vetoes;
+  // a plugin with no lifecycle is never listed.
+  assert.deepEqual(registry.lifecycles('p2').map((l) => l.id), ['vms'])
+  assert.equal('inactiveLifecycles' in registry, false)
   const { pluginParticipant, planTeardown, runTeardown, repoRemoveVeto } = await import('../server/src/teardown/teardown.ts')
   const participant = pluginParticipant(registry.lifecycles('p1')[0], 'conn-1')
   const repo = { id: 'r1', name: 'app', path: '/r/app', branchData: {}, worktrees: [] }
