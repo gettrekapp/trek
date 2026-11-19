@@ -490,7 +490,10 @@ test("host.spawn (plugins E1): only in a project's repository or worktree, or th
   }
   let host
   const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
-  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } } })
+  const { registry, dir, warnings } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } } })
+  // The data directory before any dataFile call: made for the spawn, not "not installed".
+  const fresh = await host.spawn(process.execPath, ['-e', ''], { cwd: join(dir, 'data', 'plugins', 'runner') })
+  assert.equal((await fresh.done).code, 0)
   const dataDir = dirname(host.dataFile('state.json'))
   for (const cwd of [repoPath, wtPath, dataDir]) {
     const child = await host.spawn(process.execPath, ['-e', ''], { cwd })
@@ -499,18 +502,71 @@ test("host.spawn (plugins E1): only in a project's repository or worktree, or th
   for (const cwd of [root, tmpdir(), gonePath, join(wtPath, 'sub'), '', undefined]) {
     await assert.rejects(host.spawn(process.execPath, ['-e', ''], { cwd }), /not a repository, a worktree|needs a cwd/, String(cwd))
   }
-  const attached = await host.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: repoPath })
-  const detached = await host.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: repoPath, detached: true })
+  // A worktree whose directory is gone (not yet marked missing): its own error, not "not installed".
+  removeDir(gonePath)
+  repo.worktrees[2].missing = false
+  await assert.rejects(host.spawn(process.execPath, ['-e', ''], { cwd: gonePath }), (e) => /does not exist/.test(e.message) && e.code !== 'ENOENT')
+  // A throwing onOutput: warned with the plugin's name, never an uncaught exception.
+  const noisy = await host.spawn(process.execPath, ['-e', 'process.stdout.write("x")'], { cwd: repoPath, onOutput: () => { throw new Error('boom') } })
+  await noisy.done
+  assert.ok(warnings.some((w) => w.includes('[plugin runner]') && w.includes('boom')), warnings.join('\n'))
+  // Each child with its own record of whether it has ended: the after-hook signals only a live one.
+  const live = []
+  const track = (child) => {
+    const entry = { pid: child.pid, ended: false }
+    void child.done.then(() => { entry.ended = true })
+    live.push(entry)
+    return child
+  }
   t.after(() => {
-    for (const child of [attached, detached]) {
+    for (const entry of live) {
+      if (entry.ended) continue
       try {
-        process.kill(child.pid)
+        // Still ours: signal 0 first, so a pid already gone is left alone.
+        process.kill(entry.pid, 0)
+        process.kill(entry.pid, 'SIGKILL')
       } catch {}
     }
+  })
+  let grandchildText = ''
+  const script = 'const c = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); process.stdout.write(c.pid + "\\n"); setInterval(() => {}, 1000)'
+  const attached = track(await host.spawn(process.execPath, ['-e', script], { cwd: repoPath, onOutput: (_s, chunk) => { grandchildText += chunk } }))
+  const detached = track(await host.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: repoPath, detached: true }))
+  for (const end = Date.now() + 5000; !grandchildText.includes('\n') && Date.now() < end; ) await new Promise((r) => setTimeout(r, 20))
+  const grandchild = Number(grandchildText.trim())
+  assert.ok(grandchild > 0)
+  // The grandchild is not a ChildProcess here: ended in the hook only while it is still there.
+  t.after(() => {
+    try {
+      process.kill(grandchild, 0)
+      process.kill(grandchild, 'SIGKILL')
+    } catch {}
   })
   registry.dispose()
   const end = await attached.done
   assert.ok(end.code !== 0 || end.signal !== null, 'killed by dispose')
+  if (process.platform !== 'win32') {
+    let gone = false
+    for (const until = Date.now() + 5000; !gone && Date.now() < until; await new Promise((r) => setTimeout(r, 50))) {
+      try {
+        process.kill(grandchild, 0)
+      } catch {
+        gone = true
+      }
+    }
+    assert.ok(gone, "dispose ended the child's grandchild too")
+  }
   assert.doesNotThrow(() => process.kill(detached.pid, 0), 'a detached child outlives the dispose')
-  process.kill(detached.pid)
+  // Unref'd, so its done can't hold the test open: wait for the pid to go.
+  detached.kill()
+  let detachedGone = false
+  for (const until = Date.now() + 5000; !detachedGone && Date.now() < until; await new Promise((r) => setTimeout(r, 50))) {
+    try {
+      process.kill(detached.pid, 0)
+    } catch {
+      detachedGone = true
+    }
+  }
+  live[1].ended = detachedGone
+  assert.ok(detachedGone, 'kill() ends a detached child')
 })

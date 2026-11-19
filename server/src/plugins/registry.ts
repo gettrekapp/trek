@@ -2,7 +2,7 @@
 // with its host (secrets, data files, its programs (run, spawn), its project's subscribers, the
 // session lookup), then asked for its methods (`<id>.*` when no core method has the name), its MCP
 // tools, instructions and session prompt in the projects where it is on.
-import { chmodSync, mkdirSync } from 'node:fs'
+import { chmodSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
@@ -130,12 +130,19 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const spawnCwd = (cwd: unknown): string => {
       if (typeof cwd !== 'string' || cwd === '') throw new Error("spawn needs a cwd: a repository, a worktree or the plugin's data directory")
       const key = realOrResolved(cwd)
-      if (key === realOrResolved(dir)) return dir
+      if (key === realOrResolved(dir)) {
+        mkdirSync(dir, { recursive: true, mode: 0o700 })
+        return dir
+      }
+      const present = (path: string): string => {
+        if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) throw new Error(`${cwd} does not exist`)
+        return path
+      }
       for (const project of options.projects.all()) {
         for (const repo of project.repositories) {
-          if (realOrResolved(repo.path) === key) return repo.path
+          if (realOrResolved(repo.path) === key) return present(repo.path)
           const worktree = repo.worktrees.find((w) => w.missing !== true && realOrResolved(w.path) === key)
-          if (worktree) return worktree.path
+          if (worktree) return present(worktree.path)
         }
       }
       throw new Error(`${cwd} is not a repository, a worktree or this plugin's data directory`)
@@ -153,16 +160,27 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       },
       legacyDataFile: (name) => fileIn(options.dataDir, name),
       testEndpoint: (envName) => testEndpoint(envName, env[envName], warn),
+      // Only the known options: a plugin can't reach runCommand's or spawnCommand's test-only ones (platform).
       run: (command, args, opts = {}) =>
         runCommand(command, args, {
-          ...opts,
+          timeoutMs: opts.timeoutMs,
+          maxBytes: opts.maxBytes,
+          env: opts.env,
           signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
         }),
       spawn: async (command, args, opts) => {
         const cwd = spawnCwd(opts?.cwd)
+        const detached = opts.detached === true
         // A detached child outlives the plugin: the dispose's abort is not its signal.
-        const signal = opts.detached === true ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
-        return spawnCommand(command, args, { ...opts, cwd, signal })
+        const signal = detached ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
+        return spawnCommand(command, args, {
+          cwd,
+          env: opts.env,
+          signal,
+          detached,
+          onOutput: opts.onOutput,
+          warn: (message) => warn(`[plugin ${manifest.id}] ${message}`)
+        })
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),

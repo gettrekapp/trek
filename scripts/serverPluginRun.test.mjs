@@ -156,3 +156,89 @@ test('spawnCommand on Windows: a .mjs stub runs with this binary and ELECTRON_RU
   await child.done
   assert.equal(text, JSON.stringify([['a b'], '1']))
 })
+
+/** Alive by pid (signal 0). */
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Waits up to `ms` for `pid` to be gone; true when it is. */
+async function gone(pid, ms = 5000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (!alive(pid)) return true
+  return !alive(pid)
+}
+
+/** Ends each recorded pid still alive (only pids this test started). */
+function endAfter(t, pids) {
+  t.after(() => {
+    for (const pid of pids) {
+      if (alive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {}
+      }
+    }
+  })
+}
+
+test('spawnCommand: a missing cwd is its own error, not "not installed"', async (t) => {
+  const dir = tempDir(t)
+  await assert.rejects(spawnCommand(node, ['-e', ''], { cwd: join(dir, 'nope') }), (e) => /does not exist/.test(e.message) && e.code !== 'ENOENT')
+})
+
+test("spawnCommand: an onOutput that throws is warned once and the output keeps coming", async (t) => {
+  const dir = tempDir(t)
+  const warnings = []
+  const chunks = []
+  const child = await spawnCommand(node, ['-e', 'process.stdout.write("a"); setTimeout(() => process.stdout.write("b"), 100); setTimeout(() => process.stdout.write("c"), 200)'], {
+    cwd: dir,
+    warn: (m) => warnings.push(m),
+    onOutput: (_s, chunk) => {
+      chunks.push(chunk)
+      throw new Error('handler broke')
+    }
+  })
+  await child.done
+  assert.equal(chunks.join(''), 'abc')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /handler broke/)
+})
+
+test('spawnCommand: done settles when the child exits, though a grandchild still holds its pipes', { skip: posixOnly('process groups') }, async (t) => {
+  const dir = tempDir(t)
+  const pids = []
+  endAfter(t, pids)
+  let text = ''
+  // The grandchild: its own group (not ended with the child's), inheriting the child's stdout and stderr.
+  const script = 'const c = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "inherit" }); process.stdout.write(c.pid + "\\n"); c.unref()'
+  const child = await spawnCommand(node, ['-e', script], { cwd: dir, onOutput: (_s, chunk) => { text += chunk } })
+  pids.push(child.pid)
+  const timer = new Promise((r) => setTimeout(() => r('hung'), 3000))
+  const end = await Promise.race([child.done, timer])
+  const grandchild = Number(text.trim())
+  if (grandchild) pids.push(grandchild)
+  assert.deepEqual(end, { code: 0, signal: null })
+  assert.ok(grandchild > 0, 'the output before the exit came')
+})
+
+test("spawnCommand: kill() ends the child's whole process group", { skip: posixOnly('process groups') }, async (t) => {
+  const dir = tempDir(t)
+  const pids = []
+  endAfter(t, pids)
+  let text = ''
+  const script = 'const c = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); process.stdout.write(c.pid + "\\n"); setInterval(() => {}, 1000)'
+  const child = await spawnCommand(node, ['-e', script], { cwd: dir, onOutput: (_s, chunk) => { text += chunk } })
+  pids.push(child.pid)
+  for (const end = Date.now() + 5000; !text.includes('\n') && Date.now() < end; ) await new Promise((r) => setTimeout(r, 20))
+  const grandchild = Number(text.trim())
+  assert.ok(grandchild > 0)
+  pids.push(grandchild)
+  child.kill()
+  await child.done
+  assert.ok(await gone(grandchild), 'the grandchild ended with its parent')
+})

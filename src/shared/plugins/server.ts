@@ -66,7 +66,7 @@ export interface SpawnOptions {
   env?: Record<string, string>
   /** Kills the program when it aborts */
   signal?: AbortSignal
-  /** Each chunk of its output as it comes (UTF-8); not with `detached` */
+  /** Each chunk of its output as it comes (UTF-8); not with `detached`. A throw is logged once and the output keeps coming. */
   onOutput?(stream: 'stdout' | 'stderr', chunk: string): void
   /**
    * Outlives the plugin and the server (no stdio): keep its pid yourself (a data file) to end it
@@ -77,8 +77,9 @@ export interface SpawnOptions {
 
 export interface SpawnedProgram {
   pid: number
-  /** How it ended: its exit code, or the signal that ended it */
+  /** How it ended: its exit code, or the signal that ended it (once it exits, though a grandchild keeps its output open) */
   done: Promise<{ code: number | null; signal: string | null }>
+  /** POSIX: SIGTERM to its whole process group, SIGKILL 3 s later if it is still there. Windows: the program only. */
   kill(): void
 }
 

@@ -4,8 +4,9 @@
 // (TREK_SERVER_GH=/…/gh.mjs) runs with this process's binary and ELECTRON_RUN_AS_NODE=1, as the
 // gh runner did (server/src/prWatch/gh.ts before P3): Windows can't run a sh stub, and execFile
 // can't start a batch file without a shell. And host.spawn (plugins E1): a long-running program
-// with its output streamed, killed by the plugin's dispose unless detached.
+// with its output streamed, ended with its process group by the plugin's dispose unless detached.
 import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { statSync } from 'node:fs'
 import { isAbsolute, win32 } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
@@ -117,16 +118,19 @@ export function commandFromEnv(envName: string, value: string | undefined, fallb
 }
 
 export interface SpawnCommandOptions {
+  /** An existing directory; a missing one is refused (not as ENOENT) */
   cwd: string
   /** Added to this process's env; PATH (in any case) is dropped */
   env?: Record<string, string>
-  /** Kills the child when it aborts */
+  /** Ends the child when it aborts */
   signal?: AbortSignal
-  /** Each chunk of its output, as UTF-8, as it comes; not with `detached` */
+  /** Each chunk of its output, as UTF-8, as it comes; not with `detached`. A throw is warned (once) and the output keeps coming. */
   onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
-  /** Its own process group, with no stdio, unref'd: it outlives the server */
+  /** Where a throwing onOutput is reported; default console.warn */
+  warn?: (message: string) => void
+  /** No stdio, unref'd: it outlives the server */
   detached?: boolean
-  /** For tests */
+  /** For tests: how the command is read (a Windows .mjs stub); the process group follows the real OS */
   platform?: NodeJS.Platform
 }
 
@@ -137,11 +141,19 @@ export interface SpawnedCommand {
   kill(): void
 }
 
+/** After SIGTERM, how long the child's group has before SIGKILL */
+export const SPAWN_KILL_GRACE_MS = 3000
+/** After the child exits, how long its pipes have to drain before done settles (a grandchild may hold them open) */
+const SPAWN_DRAIN_MS = 200
+
 /**
  * Starts a program for a plugin (plugins E1: host.spawn): no shell, no timeout, the command rules of
- * runCommand. Resolves once it has started; rejects when the command is refused or not installed
- * (`code: 'ENOENT'`). `signal` and `kill()` end it (SIGTERM; Windows: TerminateProcess). No error
- * holds its arguments.
+ * runCommand. Resolves once it has started; rejects when the command is refused, the cwd is missing,
+ * or the program is not installed (`code: 'ENOENT'`). No error holds its arguments.
+ *
+ * On POSIX every child leads its own process group: `signal` and `kill()` send SIGTERM to the whole
+ * group (its grandchildren too), then SIGKILL after SPAWN_KILL_GRACE_MS if the group is still there.
+ * On Windows they end the child only (TerminateProcess): its grandchildren may survive it.
  */
 export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions): Promise<SpawnedCommand> {
   const platform = options.platform ?? process.platform
@@ -149,7 +161,9 @@ export function spawnCommand(command: string, args: readonly string[], options: 
   if (problem) return Promise.reject(problem)
   if (options.detached && options.onOutput) return Promise.reject(new Error('a detached program has no output to follow: its stdout and stderr go nowhere'))
   if (options.signal?.aborted) return Promise.reject(stopped(command))
+  if (statSync(options.cwd, { throwIfNoEntry: false })?.isDirectory() !== true) return Promise.reject(new Error(`${options.cwd} does not exist`))
   const viaNode = throughNode(command, platform)
+  const posix = process.platform !== 'win32'
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
@@ -160,7 +174,8 @@ export function spawnCommand(command: string, args: readonly string[], options: 
         hidden<SpawnOptions>({
           cwd: options.cwd,
           env: childEnv(options.env, viaNode),
-          detached: options.detached === true,
+          // POSIX: its own process group, so kill() reaches its grandchildren; only a detached one is unref'd.
+          detached: options.detached === true || posix,
           stdio: options.detached ? 'ignore' : ['ignore', 'pipe', 'pipe']
         })
       )
@@ -169,24 +184,81 @@ export function spawnCommand(command: string, args: readonly string[], options: 
       reject(notInstalled(command, err))
       return
     }
+    let started = false
+    let exited = false
     const done = new Promise<{ code: number | null; signal: string | null }>((settle) => {
-      child.once('close', (code, signal) => settle({ code, signal }))
+      let drain: NodeJS.Timeout | undefined
+      const finish = (code: number | null, signal: string | null): void => {
+        if (drain) clearTimeout(drain)
+        settle({ code, signal })
+      }
+      child.once('exit', (code, signal) => {
+        exited = true
+        // 'close' once its pipes are drained; a grandchild holding them can't keep done open.
+        drain = setTimeout(() => {
+          child.stdout?.destroy()
+          child.stderr?.destroy()
+          finish(code, signal)
+        }, SPAWN_DRAIN_MS)
+        drain.unref()
+        child.once('close', () => finish(code, signal))
+      })
     })
+    const groupAlive = (): boolean => {
+      try {
+        process.kill(-child.pid!, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
     const kill = (): void => {
-      if (child.exitCode === null && child.signalCode === null) child.kill()
+      if (exited || child.pid === undefined) return
+      if (!posix) {
+        child.kill()
+        return
+      }
+      try {
+        process.kill(-child.pid, 'SIGTERM')
+      } catch {
+        child.kill()
+      }
+      const hard = setTimeout(() => {
+        if (!groupAlive()) return
+        try {
+          process.kill(-child.pid!, 'SIGKILL')
+        } catch {
+          // gone meanwhile
+        }
+      }, SPAWN_KILL_GRACE_MS)
+      hard.unref()
     }
     if (!options.detached) {
+      let warned = false
+      const deliver = (stream: 'stdout' | 'stderr', chunk: string): void => {
+        try {
+          options.onOutput?.(stream, chunk)
+        } catch (err) {
+          if (warned) return
+          warned = true
+          ;(options.warn ?? console.warn)(`${command}'s output handler failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
       // Read even with no onOutput: an unread pipe would stall the child once it fills.
       for (const stream of ['stdout', 'stderr'] as const) {
         child[stream]?.setEncoding('utf8')
-        child[stream]?.on('data', (chunk: string) => options.onOutput?.(stream, chunk))
+        child[stream]?.on('data', (chunk: string) => deliver(stream, chunk))
+        child[stream]?.on('error', () => {})
       }
     }
-    child.once('error', (err: NodeJS.ErrnoException) => {
-      // Before 'spawn': it never started. Never err.message: it holds the command line.
-      if (child.pid === undefined) reject(err.code === 'ENOENT' ? notInstalled(command) : Object.assign(new Error(`${command} could not start`), { code: err.code }))
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      // Only before 'spawn' (it never started); a later one (a failed kill) is not the caller's to see.
+      // Never err.message: it holds the command line.
+      if (started) return
+      reject(err.code === 'ENOENT' ? notInstalled(command) : Object.assign(new Error(`${command} could not start`), { code: err.code }))
     })
     child.once('spawn', () => {
+      started = true
       if (options.detached) child.unref()
       if (options.signal?.aborted) {
         // Aborted while it was starting
