@@ -49,6 +49,9 @@ exit 0`)
 stub('colima', `case "$1" in
   --version) echo "colima version 0.0.0-stub" ;;
   list) [ -f '${stubDir}/vms' ] && cat '${stubDir}/vms' ;;
+  # Opt in: delete-fails fails every delete; delete-fails-unlisted, like a real colima, one of a profile it has no VM for.
+  delete) if [ -f '${stubDir}/delete-fails' ]; then exit 1; fi
+    if [ -f '${stubDir}/delete-fails-unlisted' ] && ! grep -qs "\"$2\"" '${stubDir}/vms'; then exit 1; fi ;;
 esac
 exit 0`)
 const originalPath = process.env.PATH
@@ -632,11 +635,14 @@ test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with 
   const log = []
   let release
   const gate = new Promise((r) => (release = r))
+  let started
+  const teardownStarted = new Promise((r) => (started = r))
   const blocked = new Set()
   const lifecycle = {
     plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
     teardown: async (_ctx, worktree, op, ids) => {
       log.push([op, ids, blocked.has(worktree.path)])
+      started()
       await gate
     }
   }
@@ -653,7 +659,7 @@ test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with 
   }
   const call = (method, params) => dispatchV2(method, params, ctx)
   const removing = call('worktree.remove', { ...ref, force: true, teardown: ['probe:vm', 'gone:x'] })
-  await new Promise((r) => setTimeout(r, 50))
+  await teardownStarted
   assert.deepEqual(log, [['remove', ['vm'], true]])
   refused(await call('worktree.remove', { ...ref, force: true }), 'CONFLICT')
   refused(await call('worktree.remove', { ...ref, force: true, teardown: [] }), 'CONFLICT')
@@ -681,5 +687,128 @@ test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs,
   refused(res, 'BAD_REQUEST')
   assert.equal(res.error.message, 'It has a running environment. Stop it in the Env tab first.')
   writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n`)
+  assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
+})
+
+/** A plugin participant (plugins E1) that records its teardowns. */
+function probeLifecycle(log) {
+  return {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async (_ctx, _worktree, op, ids) => void log.push([op, ids])
+  }
+}
+
+test('worktree.remove {teardown}: a VM whose record outlived it (colima has none, so its delete fails) still lets the removal go on', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  await s.call('env.up', { ...ref, settings: { enabled: true, networkAddress: false } })
+  writeFileSync(join(stubDir, 'delete-fails-unlisted'), '')
+  t.after(() => rmSync(join(stubDir, 'delete-fails-unlisted'), { force: true }))
+  const plan = (await s.call('worktree.teardownPlan', { ...ref, op: 'remove' })).result.items
+  assert.deepEqual(plan.map((i) => i.id), ['env:destroy'], 'the record is planned though colima lists no VM')
+  resetCalls()
+  const res = await s.call('worktree.remove', { ...ref, teardown: ['env:destroy'] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(calls().filter((c) => c.includes('|delete ')).length, 1, 'colima delete ran (and failed)')
+  assert.equal(existsSync(s.feature), false)
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+})
+
+test('worktree.remove {teardown}: a VM colima still lists after a failed delete fails the removal, the worktree kept', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  await s.call('env.up', { ...ref, settings: { enabled: true, networkAddress: false } })
+  const profile = deriveProfileName(s.a, 'feature-x')
+  // Opt in: every delete fails, and colima still lists the VM after it.
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running' })}\n`)
+  writeFileSync(join(stubDir, 'delete-fails'), '')
+  t.after(() => {
+    for (const f of ['vms', 'delete-fails']) rmSync(join(stubDir, f), { force: true })
+  })
+  const listed = (await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result
+  assert.deepEqual(listed.map((e) => [e.profile, e.vmState]), [[profile, 'running']])
+  const res = await s.call('worktree.remove', { ...ref, teardown: ['env:destroy'] })
+  refused(res, 'TOOL_ERROR', 'teardown')
+  assert.match(res.error.message, /deleting the VM exited with code 1/)
+  assert.ok(existsSync(s.feature))
+})
+
+test('worktree.remove: a load that lands before the block is IN_USE, and nothing is torn down', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  const log = []
+  const ctx = {
+    ...s.ctx,
+    sessions: {
+      ...s.ctx.sessions,
+      // The load lands just as the block is taken: after the first check, before the teardown.
+      blockPath: () => {
+        s.projects.apply(s.projectId, (d) => {
+          d.repositories[0].worktrees.find((w) => w.id === ref.worktreeId).loaded = true
+        })
+        return () => {}
+      }
+    },
+    plugins: { lifecycles: () => [{ id: 'probe', lifecycle: probeLifecycle(log) }] }
+  }
+  refused(await dispatchV2('worktree.remove', { ...ref, force: true, teardown: ['probe:vm'] }, ctx), 'IN_USE')
+  assert.deepEqual(log, [])
+  assert.ok(existsSync(s.feature))
+})
+
+test('worktree.remove {teardown}: a worktree whose status git cannot read is refused (GIT_ERROR) before anything is torn down', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  const log = []
+  const ctx = { ...s.ctx, plugins: { lifecycles: () => [{ id: 'probe', lifecycle: probeLifecycle(log) }] } }
+  writeFileSync(join(s.feature, '.git'), `gitdir: ${join(s.dir, 'nowhere')}\n`)
+  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, ctx)
+  refused(res, 'GIT_ERROR')
+  assert.match(res.error.message, /nothing was torn down/)
+  assert.deepEqual(log, [])
+})
+
+test('worktree.remove {teardown}: a missing row\'s VM is deleted, git is not run, the row is dropped', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  await s.call('env.up', { ...ref, settings: { enabled: true, networkAddress: false } })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.id === ref.worktreeId).missing = true
+  })
+  resetCalls()
+  const res = await s.call('worktree.remove', { ...ref, teardown: ['env:destroy'] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(calls().filter((c) => c.includes('|delete ')).length, 1, 'the VM was deleted')
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+  // Git was not run: the folder (still on disk here) and git's record of it stay.
+  assert.ok(existsSync(s.feature))
+  assert.ok(git(s.a, 'worktree', 'list', '--porcelain').includes(`worktree ${s.feature}\n`))
+  assert.equal(s.worktreeAt(s.feature), undefined, 'the row is dropped')
+})
+
+test("repo.remove (plugins E1): a running VM whose worktree folder is gone still refuses; a twb- leftover with no record doesn't; the last repository's own refusal comes first", { skip }, async (t) => {
+  const s = await setup(t)
+  s.ctx.sessions.forgetRepo = () => {}
+  s.ctx.sessions.forgetGlobal = () => {}
+  await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })
+  const profile = deriveProfileName(s.a, 'feature-x')
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running' })}\n`)
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  const last = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
+  refused(last, 'BAD_REQUEST')
+  assert.equal(last.error.message, 'a project needs at least one repository')
+  const b = join(s.dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', '-b', 'main', b], { env: gitEnv })
+  git(b, 'commit', '--allow-empty', '-q', '-m', 'init')
+  s.store.addRepo(b, { id: 'b' })
+  assert.equal((await s.call('repo.add', { projectId: s.projectId, path: b })).ok, true)
+  rmSync(s.feature, { recursive: true, force: true })
+  const orphaned = (await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result
+  assert.deepEqual(orphaned.map((e) => [e.profile, e.vmState, e.orphaned]), [[profile, 'running', true]])
+  const res = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
+  refused(res, 'BAD_REQUEST')
+  assert.equal(res.error.message, 'It has a running environment. Stop it in the Env tab first.')
+  // Only a leftover no registry names (another repository's, or a crash's) runs now.
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n${JSON.stringify({ name: 'twb-leftover-000000', status: 'Running' })}\n`)
   assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
 })

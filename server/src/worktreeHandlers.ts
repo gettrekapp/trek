@@ -74,6 +74,28 @@ async function hasChanges(worktreePath: string): Promise<boolean> {
 }
 
 /**
+ * Whether the worktree has changes, for a check that must not guess: a status git can't read is
+ * GIT_ERROR, never "clean" (hasChanges, for its other callers, fails open).
+ */
+async function changesOrRefuse(worktreePath: string, refusal: string): Promise<boolean> {
+  try {
+    const out = await gitService.git(worktreePath, ['--no-optional-locks', 'status', '--porcelain'])
+    return out.trim().length > 0
+  } catch (err) {
+    throw codedError('GIT_ERROR', `couldn't read the status of ${worktreePath}: ${(err as Error).message.trim()}; ${refusal}`)
+  }
+}
+
+/** IN_USE while any project has the worktree's path loaded (its sessions run there). */
+function assertNotLoaded(ctx: V2Context, worktreePath: string): void {
+  const key = real(worktreePath)
+  const running = [...ctx.projects.all()]
+    .filter((project) => project.repositories.some((r) => r.worktrees.some((w) => w.loaded && real(w.path) === key)))
+    .map((project) => project.name)
+  if (running.length > 0) throw codedError('IN_USE', `${worktreePath} has running sessions in ${running.join(', ')}; unload it first`)
+}
+
+/**
  * A worktree may be removed where the allowlist covers it, or wherever git itself
  * lists it as a linked worktree of the repo: an agent's worktree in a temp or
  * scratchpad folder is outside the roots, but its path comes from git, not the
@@ -281,11 +303,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const { repo, worktree } = locate(project, p.worktreeId)
     if (worktree.isMain) throw bad('the main worktree cannot be removed')
     assertNotPromoting(repo.path)
-    const key = real(worktree.path)
-    const running = [...ctx.projects.all()]
-      .filter((project) => project.repositories.some((r) => r.worktrees.some((w) => w.loaded && real(w.path) === key)))
-      .map((project) => project.name)
-    if (running.length > 0) throw codedError('IN_USE', `${worktree.path} has running sessions in ${running.join(', ')}; unload it first`)
+    assertNotLoaded(ctx, worktree.path)
 
     if (!worktree.missing) {
       findRegistered(ctx.store.config.repos, repo.path)
@@ -295,7 +313,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     }
     // The chosen teardown (plugins E1), after every check: a removal git would refuse for changes
     // tears nothing down (the client asks, then forces with the same ids).
-    if (teardown.length > 0 && !force && !worktree.missing && (await hasChanges(worktree.path))) {
+    if (teardown.length > 0 && !force && !worktree.missing && (await changesOrRefuse(worktree.path, 'nothing was torn down'))) {
       throw codedError('GIT_ERROR', `${worktree.path} has modified or untracked files; nothing was torn down`, { reason: 'dirty' })
     }
 
@@ -305,6 +323,9 @@ export const worktreeHandlers: Record<string, Handler> = {
     await holdWorktree(worktree.path, async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
+        // Again under the block: a load that landed after the first check would have its sessions
+        // in a worktree being torn down. None can land from here on.
+        assertNotLoaded(ctx, worktree.path)
         await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
         // A directory that is already gone is removed from git's list too, and
         // only this one: a repo-wide prune would drop worktrees on unmounted volumes.

@@ -65,10 +65,17 @@ export function envParticipant(ctx: Pick<V2Context, 'store' | 'events'>, machine
       const profile = profileOf(repo, worktree)
       if (!profile) return
       const code = await machine.env.destroy(profile, (event) => ctx.events?.send('env.log', event), (path) => allowed(ctx, path))
-      if (code !== 0) throw new Error(`deleting the VM exited with code ${code}`)
+      if (code === 0) return
+      // A record whose VM was already gone (vmState missing) is planned too, and colima fails to
+      // delete what it doesn't have: the record is dropped by now, so if colima lists no VM under
+      // the profile any more, there is nothing left to tear down.
+      const left = (await vmsOf(machine, repo)).some((e) => e.profile === profile && e.vmState !== 'missing')
+      if (left) throw new Error(`deleting the VM exited with code ${code}`)
     },
+    // A VM of one of its worktrees, running, even when the worktree's folder is gone (orphaned);
+    // not a twb- leftover no record names (worktreePath ''), which env.list lists for every repository.
     beforeRepoRemove: async (_project, repo) =>
-      (await vmsOf(machine, repo)).some((e) => e.vmState === 'running' && e.orphaned !== true) ? 'It has a running environment. Stop it in the Env tab first.' : null
+      (await vmsOf(machine, repo)).some((e) => e.vmState === 'running' && e.worktreePath !== '') ? 'It has a running environment. Stop it in the Env tab first.' : null
   }
 }
 
