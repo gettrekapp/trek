@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
+import { pluginPathChecks } from '../server/src/plugins/coreChecks.ts'
 import { toWireError } from '../server/src/errors.ts'
 import { dispatchV2, isCoreMethod } from '../server/src/v2.ts'
 import { mcpContext } from '../server/src/plugins/mcp.ts'
@@ -866,14 +867,19 @@ test("host.run (plugins E2) takes a cwd under spawn's rule; a repository or work
   }
   let host
   const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
-  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } }, paths: { allowed: (path) => path !== wtPath } })
+  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } }, paths: {
+    check: (path) => {
+      if (path === wtPath) throw Object.assign(new Error(`Path not under a configured root: ${path}`), { code: 'PATH_DENIED' })
+    }
+  } })
   const cwdOf = (cwd) => host.run(process.execPath, ['-e', 'process.stdout.write(process.cwd())'], { cwd })
   assert.equal(await cwdOf(repoPath), repoPath)
   const dataDir = dirname(host.dataFile('x.json'))
   // The child's process.cwd() is a real path; setup's temp dir is not one on macOS (/var → /private/var).
   assert.equal(await cwdOf(dataDir), realpathSync(dataDir), "the plugin's data directory is not the allowlist's to refuse")
   assert.equal(await host.run(process.execPath, ['-e', 'process.stdout.write("ok")']), 'ok', 'no cwd: as before')
-  await assert.rejects(cwdOf(wtPath), (e) => e.code === 'PATH_DENIED' && /outside the server's allowed paths/.test(e.message))
+  // The guard's own refusal, as core's machine methods give it.
+  await assert.rejects(cwdOf(wtPath), (e) => e.code === 'PATH_DENIED' && e.message === `Path not under a configured root: ${wtPath}`)
   await assert.rejects(host.spawn(process.execPath, ['-e', ''], { cwd: wtPath }), (e) => e.code === 'PATH_DENIED')
   await assert.rejects(cwdOf(root), /not a repository, a worktree/)
   await registry.dispose()
@@ -911,6 +917,7 @@ test('dispose (plugins E2) waits for a child that ignores SIGTERM until the SIGK
   let ready
   const up = new Promise((resolve) => (ready = resolve))
   const stubborn = await host.spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); process.stdout.write("up"); setInterval(() => {}, 1000)'], { cwd: dir, onOutput: () => ready() })
+  endAfter(t, [stubborn.pid])
   await up
   const began = Date.now()
   await registry.dispose()
@@ -919,4 +926,97 @@ test('dispose (plugins E2) waits for a child that ignores SIGTERM until the SIGK
   assert.equal((await stubborn.done).signal, 'SIGKILL')
   assert.ok(waited >= 2900, `it waited for the SIGKILL (${waited} ms)`)
   assert.equal(await registry.dispose(), undefined, 'a second dispose has nothing to wait for')
+})
+
+/** Alive by pid (signal 0). */
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Waits up to `ms` for `pid` to be gone; true when it is. */
+async function gone(pid, ms) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (!alive(pid)) return true
+  return !alive(pid)
+}
+
+/** SIGKILLs each recorded pid still alive after the test (only pids it started). */
+function endAfter(t, pids) {
+  t.after(() => {
+    for (const pid of pids) {
+      if (alive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {}
+      }
+    }
+  })
+}
+
+test("dispose (plugins E2) waits until a program's whole group is gone: a grandchild ignoring SIGTERM is SIGKILLed first", { skip: posixOnly('POSIX process groups') }, async (t) => {
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner])
+  const dir = dirname(host.dataFile('x.json'))
+  const pids = []
+  endAfter(t, pids)
+  let text = ''
+  // The child ends on SIGTERM; its grandchild (same group, sharing its stdout) ignores it.
+  const script =
+    'require("node:child_process").spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\", () => {}); process.stdout.write(process.pid + \\"\\\\n\\"); setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] }); setInterval(() => {}, 1000)'
+  const program = await host.spawn(process.execPath, ['-e', script], { cwd: dir, onOutput: (_s, chunk) => (text += chunk) })
+  pids.push(program.pid)
+  for (const end = Date.now() + 5000; !text.includes('\n') && Date.now() < end; ) await new Promise((r) => setTimeout(r, 20))
+  const grandchild = Number(text.trim())
+  assert.ok(grandchild > 0)
+  pids.push(grandchild)
+  await new Promise((r) => setTimeout(r, 500))
+  const began = Date.now()
+  await registry.dispose()
+  const waited = Date.now() - began
+  assert.ok(waited >= 2900, `dispose waited for the SIGKILL (${waited} ms)`)
+  // Its SIGKILL is sent when dispose resolves; its new parent (init) reaps it a moment later.
+  assert.ok(await gone(grandchild, 1000), 'the grandchild is gone after dispose')
+  assert.equal('stopped' in program, false, "stopped is the host's own, not the plugin's")
+})
+
+test('dispose (plugins E2) waits for a host.run program that ignores SIGTERM until the SIGKILL ends it', { skip: posixOnly('POSIX signals') }, async (t) => {
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner])
+  const dir = dirname(host.dataFile('x.json'))
+  const marker = join(dir, 'pid')
+  const pids = []
+  endAfter(t, pids)
+  const script = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000)`
+  const running = host.run(process.execPath, ['-e', script], { timeoutMs: 60_000 })
+  running.catch(() => {})
+  let pid = 0
+  for (const end = Date.now() + 5000; !pid && Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
+    try {
+      pid = Number(readFileSync(marker, 'utf8'))
+    } catch {}
+  }
+  assert.ok(pid > 0)
+  pids.push(pid)
+  const began = Date.now()
+  await registry.dispose()
+  const waited = Date.now() - began
+  await assert.rejects(running, (e) => e.code === 'ABORT_ERR')
+  assert.ok(waited >= 2900, `dispose waited for the SIGKILL (${waited} ms)`)
+  assert.equal(alive(pid), false, 'the program is gone once dispose resolves')
+})
+
+test("pluginPathChecks (plugins E2): check rethrows the guard's own refusal", () => {
+  const refusal = Object.assign(new Error('UNC paths are not allowed: \\\\host\\share'), { code: 'PATH_DENIED' })
+  const checked = []
+  const ok = pluginPathChecks({ store: { guard: { check: (path) => (checked.push(path), path) } } })
+  assert.equal(ok.check('/r/app'), undefined)
+  assert.deepEqual(checked, ['/r/app'])
+  const denied = pluginPathChecks({ store: { guard: { check: () => { throw refusal } } } })
+  assert.throws(() => denied.check('/r/app'), (e) => e === refusal)
 })

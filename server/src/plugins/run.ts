@@ -24,6 +24,12 @@ export interface RunCommandOptions {
   env?: Record<string, string>
   /** Its working directory, already checked by the caller (the registry's cwd rule); a missing one is refused (not as ENOENT); absent: this process's */
   cwd?: string
+  /**
+   * Given the child's `stopped` once it is started (plugins E2, the registry's dispose): it settles
+   * once the child has exited; after an abort, SIGKILL follows SPAWN_KILL_GRACE_MS later if it is
+   * still there. Not for a plugin.
+   */
+  onStopped?: (stopped: Promise<void>) => void
   /** For tests */
   platform?: NodeJS.Platform
 }
@@ -71,7 +77,7 @@ export function runCommand(command: string, args: readonly string[], options: Ru
   return new Promise((resolve, reject) => {
     try {
       // On Windows a bare name is found on PATH, never in the server's current directory.
-      execFile(
+      const child = execFile(
         viaNode ? process.execPath : commandPath(command, { platform }),
         viaNode ? [command, ...args] : [...args],
         hidden({
@@ -102,10 +108,43 @@ export function runCommand(command: string, args: readonly string[], options: Ru
           resolve(String(stdout))
         }
       )
+      if (options.onStopped) options.onStopped(childStopped(child, options.signal))
     } catch (err) {
       // commandPath's ENOENT (Windows: not on PATH)
       reject(notInstalled(command, err))
     }
+  })
+}
+
+/**
+ * runCommand's child stopping (plugins E2): an abort's SIGTERM (execFile's) gets SIGKILL after
+ * SPAWN_KILL_GRACE_MS if the child is still there; settles once it has exited (the registry's dispose
+ * caps its wait).
+ */
+function childStopped(child: ChildProcess, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((settle) => {
+    let hard: NodeJS.Timeout | undefined
+    const done = (): void => {
+      if (hard) clearTimeout(hard)
+      signal?.removeEventListener('abort', onAbort)
+      settle()
+    }
+    const running = (): boolean => child.exitCode === null && child.signalCode === null
+    const onAbort = (): void => {
+      // Held (not unref'd) while the child runs: the process can't exit before the SIGKILL lands.
+      // Settled by the child's 'exit' (reaped), soon after the SIGKILL.
+      hard = setTimeout(() => {
+        if (running()) child.kill('SIGKILL')
+      }, SPAWN_KILL_GRACE_MS)
+    }
+    child.once('exit', done)
+    // Only a child that never started: an abort's 'error' (AbortError) comes while it still runs.
+    child.on('error', () => {
+      if (child.pid === undefined) done()
+    })
+    if (!running()) done()
+    else if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -143,8 +182,16 @@ export interface SpawnedCommand {
   pid: number
   /** How it ended: its exit code, or the signal that ended it */
   done: Promise<{ code: number | null; signal: string | null }>
+  /**
+   * The host's own (plugins E2, the registry's dispose): with no kill, settles with done; after
+   * kill(), once the child's whole group is gone (POSIX) or once the SIGKILL has been sent to it.
+   */
+  stopped: Promise<void>
   kill(): void
 }
+
+/** How often stopped looks for the killed group */
+const SPAWN_GROUP_POLL_MS = 75
 
 /** After SIGTERM, how long the child's group has before SIGKILL */
 export const SPAWN_KILL_GRACE_MS = 3000
@@ -217,26 +264,45 @@ export function spawnCommand(command: string, args: readonly string[], options: 
         return false
       }
     }
+    let killing = false
+    let settleStopped!: () => void
+    const groupStopped = new Promise<void>((settle) => (settleStopped = settle))
+    // With no kill (or none sent to a group: Windows, a child already exited), stopped is done.
+    void done.then(() => {
+      if (!killing) settleStopped()
+    })
     const kill = (): void => {
-      if (exited || child.pid === undefined) return
+      if (exited || child.pid === undefined || killing) return
       if (!posix) {
         child.kill()
         return
       }
+      killing = true
       try {
         process.kill(-child.pid, 'SIGTERM')
       } catch {
         child.kill()
       }
-      const hard = setTimeout(() => {
-        if (!groupAlive()) return
-        try {
-          process.kill(-child.pid!, 'SIGKILL')
-        } catch {
-          // gone meanwhile
+      let hard: NodeJS.Timeout | undefined = undefined
+      const poll = setInterval(() => {
+        if (groupAlive()) return
+        clearInterval(poll)
+        clearTimeout(hard)
+        settleStopped()
+      }, SPAWN_GROUP_POLL_MS)
+      // Both held (not unref'd): only while the group is still there, at most SPAWN_KILL_GRACE_MS,
+      // so the process can't exit before its SIGKILL lands (plugins E2).
+      hard = setTimeout(() => {
+        clearInterval(poll)
+        if (groupAlive()) {
+          try {
+            process.kill(-child.pid!, 'SIGKILL')
+          } catch {
+            // gone meanwhile
+          }
         }
+        settleStopped()
       }, SPAWN_KILL_GRACE_MS)
-      hard.unref()
     }
     if (!options.detached) {
       let warned = false
@@ -273,7 +339,7 @@ export function spawnCommand(command: string, args: readonly string[], options: 
       }
       options.signal?.addEventListener('abort', kill, { once: true })
       void done.then(() => options.signal?.removeEventListener('abort', kill))
-      resolve({ pid: child.pid!, done, kill })
+      resolve({ pid: child.pid!, done, stopped: groupStopped, kill })
     })
   })
 }

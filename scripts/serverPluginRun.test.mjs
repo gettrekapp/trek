@@ -3,7 +3,7 @@
 // absolute path. Runs only `node` (this process's binary) and temp scripts it writes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandFromEnv, runCommand, spawnCommand } from '../server/src/plugins/run.ts'
@@ -249,4 +249,75 @@ test('runCommand (plugins E2): in the cwd it is given', async (t) => {
   assert.equal(await runCommand(node, ['-e', 'process.stdout.write(process.cwd())'], { cwd: dir }), dir)
   // A missing cwd is said so, not taken for a program that is not installed.
   await assert.rejects(runCommand(node, ['-e', ''], { cwd: join(dir, 'gone') }), (e) => e.code !== 'ENOENT' && /does not exist/.test(e.message))
+})
+
+/** A child that starts a grandchild ignoring SIGTERM in its group, prints `<pid>\n` once its handler is in, and waits. */
+const STUBBORN_GRANDCHILD =
+  'const c = require("node:child_process").spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\", () => {}); process.stdout.write(process.pid + \\"\\\\n\\"); setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] }); setInterval(() => {}, 1000)'
+
+test("spawnCommand (plugins E2): after kill(), stopped waits until the whole group is gone, past the SIGKILL for a grandchild ignoring SIGTERM", { skip: posixOnly('process groups') }, async (t) => {
+  const dir = tempDir(t)
+  const pids = []
+  endAfter(t, pids)
+  let text = ''
+  const child = await spawnCommand(node, ['-e', STUBBORN_GRANDCHILD], { cwd: dir, onOutput: (_s, chunk) => { text += chunk } })
+  pids.push(child.pid)
+  for (const end = Date.now() + 5000; !text.includes('\n') && Date.now() < end; ) await new Promise((r) => setTimeout(r, 20))
+  const grandchild = Number(text.trim())
+  assert.ok(grandchild > 0)
+  pids.push(grandchild)
+  await new Promise((r) => setTimeout(r, 500))
+  const began = Date.now()
+  child.kill()
+  await child.done
+  assert.ok(Date.now() - began < 2000, 'the child itself ended on SIGTERM')
+  assert.ok(alive(grandchild), 'the grandchild outlived the SIGTERM')
+  await child.stopped
+  assert.ok(Date.now() - began >= 2900, `stopped waited for the SIGKILL (${Date.now() - began} ms)`)
+  assert.ok(await gone(grandchild, 1000), 'the grandchild ended with the SIGKILL')
+})
+
+test('spawnCommand (plugins E2): with no kill, stopped settles with done', async (t) => {
+  const dir = tempDir(t)
+  const child = await spawnCommand(node, ['-e', ''], { cwd: dir })
+  await child.done
+  assert.ok(child.stopped instanceof Promise)
+  await child.stopped
+})
+
+test('runCommand (plugins E2): onStopped settles once an aborted child has exited, past the SIGKILL for one ignoring SIGTERM', { skip: posixOnly('POSIX signals') }, async (t) => {
+  const dir = tempDir(t)
+  const pids = []
+  endAfter(t, pids)
+  const ac = new AbortController()
+  let stopped
+  const marker = join(dir, 'pid')
+  const script = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000)`
+  const running = runCommand(node, ['-e', script], { signal: ac.signal, onStopped: (p) => (stopped = p) })
+  running.catch(() => {})
+  let pid = 0
+  for (const end = Date.now() + 5000; !pid && Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
+    try {
+      pid = Number(readFileSync(marker, 'utf8'))
+    } catch {}
+  }
+  assert.ok(pid > 0)
+  pids.push(pid)
+  const began = Date.now()
+  ac.abort()
+  await assert.rejects(running, (e) => e.code === 'ABORT_ERR')
+  assert.ok(stopped instanceof Promise)
+  await stopped
+  assert.ok(Date.now() - began >= 2900, `it waited for the SIGKILL (${Date.now() - began} ms)`)
+  assert.ok(await gone(pid, 1000))
+})
+
+test('runCommand (plugins E2): onStopped settles on a normal exit, and for a program that is not installed', async () => {
+  let stopped
+  assert.equal(await runCommand(node, ['-e', 'process.stdout.write("ok")'], { onStopped: (p) => (stopped = p) }), 'ok')
+  assert.ok(stopped instanceof Promise)
+  await stopped
+  let missing
+  await assert.rejects(runCommand('/no/such/program-trek', [], { onStopped: (p) => (missing = p) }), (e) => e.code === 'ENOENT')
+  if (missing) await missing
 })

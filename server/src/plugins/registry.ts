@@ -60,8 +60,8 @@ export const PLUGIN_STOP_MS = SPAWN_KILL_GRACE_MS + 500
 
 /** Core's checks before a plugin runs a program somewhere (plugins E2; coreChecks.ts). */
 export interface PluginPathChecks {
-  /** Whether the server's path allowlist covers the path */
-  allowed(path: string): boolean
+  /** Throws the server's own refusal (the path guard's PATH_DENIED, its wording and its UNC reason) when its allowlist does not cover the path */
+  check(path: string): void
 }
 
 export interface PluginRegistryOptions {
@@ -122,7 +122,7 @@ export interface PluginRegistry {
   settingFields(pluginId: string, scope: 'repo' | 'branch'): Readonly<Record<string, PluginFieldKind>> | undefined
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
   onChanged(listener: (manifest: PluginManifest) => void): void
-  /** Stops every plugin; resolves once their programs (not detached ones) have exited, at most PLUGIN_STOP_MS later */
+  /** Stops every plugin; resolves once their programs (host.run's, and host.spawn's but detached ones, each with its whole group) are gone or SIGKILLed, at most PLUGIN_STOP_MS later */
   dispose(): Promise<void>
 }
 
@@ -160,8 +160,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const aborts = new Map<string, AbortController>()
   /** Each open connection's sender, by its caller id (server.ts): what host.emitTo reaches */
   const callers = new Map<string, (event: string, payload: unknown) => void>()
-  /** Each running non-detached program's `done` (host.spawn): dispose waits for them */
-  const live = new Set<Promise<unknown>>()
+  /** Each running program's `stopped` (host.run, host.spawn unless detached): dispose waits for them */
+  const live = new Set<Promise<void>>()
+  const track = (stopped: Promise<void>): void => {
+    live.add(stopped)
+    void stopped.then(() => live.delete(stopped))
+  }
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -193,7 +197,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       }
       const usable = (path: string): string => {
         if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) throw new Error(`${cwd} does not exist`)
-        if (options.paths && !options.paths.allowed(path)) throw codedError('PATH_DENIED', `${path} is outside the server's allowed paths`)
+        options.paths?.check(path)
         return path
       }
       for (const project of options.projects.all()) {
@@ -226,14 +230,15 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           maxBytes: opts.maxBytes,
           env: opts.env,
           ...(opts.cwd !== undefined ? { cwd: programCwd(opts.cwd) } : {}),
-          signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
+          signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal,
+          onStopped: track
         }),
       spawn: async (command, args, opts) => {
         const cwd = programCwd(opts?.cwd)
         const detached = opts.detached === true
         // A detached child outlives the plugin: the dispose's abort is not its signal.
         const signal = detached ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
-        const program = await spawnCommand(command, args, {
+        const { pid, done, stopped, kill } = await spawnCommand(command, args, {
           cwd,
           env: opts.env,
           signal,
@@ -241,11 +246,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           onOutput: opts.onOutput,
           warn: (message) => warn(`[plugin ${manifest.id}] ${message}`)
         })
-        if (!detached) {
-          live.add(program.done)
-          void program.done.then(() => live.delete(program.done))
-        }
-        return program
+        if (!detached) track(stopped)
+        // stopped is the host's own: the plugin gets what SpawnedProgram names.
+        return { pid, done, kill }
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
@@ -468,9 +471,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           warn(`[plugin ${e.manifest.id}] dispose failed: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-      // The aborts sent each running program SIGTERM; SIGKILL follows SPAWN_KILL_GRACE_MS later
-      // (run.ts) on an unref'd timer, so the server waits that long before it exits, or a program
-      // ignoring SIGTERM would outlive it (plugins E2).
+      // The aborts sent each running program SIGTERM (a spawned one's whole group); SIGKILL follows
+      // SPAWN_KILL_GRACE_MS later (run.ts) on an unref'd timer, so the server waits until each is
+      // gone or that SIGKILL is sent, or a program ignoring SIGTERM would outlive it (plugins E2).
       const children = [...live]
       if (children.length === 0) return Promise.resolve()
       return new Promise<void>((resolve) => {

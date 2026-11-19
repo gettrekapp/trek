@@ -5,13 +5,9 @@ import type { PluginPathChecks } from './registry.ts'
 
 export function pluginPathChecks(ctx: Pick<V2Context, 'projects' | 'store' | 'poller'>): PluginPathChecks {
   return {
-    allowed: (path) => {
-      try {
-        ctx.store.guard.check(path)
-        return true
-      } catch {
-        return false
-      }
+    // The guard's own PATH_DENIED, as core's machine methods throw it (its wording, the UNC reason on Windows).
+    check: (path) => {
+      ctx.store.guard.check(path)
     }
   }
 }
