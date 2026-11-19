@@ -2,8 +2,9 @@
 import { CAPABILITY } from '../../src/shared/protocolV2.ts'
 
 /**
- * What this server always has. `docker`, `env` and `stacks` say it serves those methods; whether
- * the machine has docker or colima installed is each call's answer (`env.check`, TOOL_ERROR).
+ * What this server always has. `docker` and `stacks` say it serves those methods; whether the
+ * machine has docker installed is each call's answer (TOOL_ERROR). (`env` is the env plugin's legacy
+ * capability since plugins E2: listed after these while it is set up, so never on Windows.)
  * (`linear` and `voice` are the Linear and voice plugins' legacy capabilities since plugin system
  * phases 2 and 1, listed while they are registered.) `review` (5c-2): the Changes tab's sources and
  * draft line comments. `move` (5d): `move.*`, a worktree's
@@ -24,7 +25,6 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.dequeue,
   CAPABILITY.agents,
   CAPABILITY.docker,
-  CAPABILITY.env,
   CAPABILITY.stacks,
   CAPABILITY.skills,
   CAPABILITY.review,
@@ -60,8 +60,8 @@ export function welcomeCapabilities(
   phoneAccess = false,
   prResolve = false
 ): string[] {
-  // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
-  const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
+  // Windows (W1): no dev stacks yet (machineHandlersFor). The env plugin isn't set up there (its platforms), so it lists no env.
+  const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.stacks] : []
   return [
     ...(mcp ? [CAPABILITY.mcp] : []),
     ...STATIC_CAPABILITIES.filter((c) => !windowsOff.includes(c)),

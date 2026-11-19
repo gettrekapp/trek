@@ -26,7 +26,7 @@ import { createMachine } from './integrations/machine'
 import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
 import { createIntegrations } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
-import { seedEnvironmentsFromApp } from './integrations/envSeed'
+import { seedStacksFromApp } from './integrations/stackSeed'
 import { loadWebBundle, type WebBundle } from './web/bundle'
 import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
@@ -320,14 +320,15 @@ const serverDataDir = resolve(args.dataDir ?? store.config.dataDir ?? defaultDat
 void pruneRecoveryFiles(resolve(serverDataDir, 'promote-recovery')).then((removed) => {
   if (removed.length > 0) console.log(`deleted ${removed.length} promote recovery file(s) older than 30 days`)
 })
+// --import-env-from: the dev stacks the app ran before 5a, taken over once. Its environments
+// registry is the env plugin's to take over, at its setup (plugins E2: host.legacyImportFile).
 if (args.importEnvFrom !== undefined) {
   try {
-    const seed = seedEnvironmentsFromApp(args.importEnvFrom, serverDataDir)
-    if (seed.seeded) console.log(`environments: took over ${seed.environments} environment(s) and ${seed.stackFiles} stack file(s) from ${args.importEnvFrom}`)
-    if (seed.skipped.length > 0) console.warn(`environments: left out ${seed.skipped.join('; ')}`)
+    const seed = seedStacksFromApp(args.importEnvFrom, serverDataDir)
+    if (seed.seeded && seed.stackFiles > 0) console.log(`dev stacks: took over ${seed.stackFiles} stack file(s) from ${args.importEnvFrom}`)
+    if (seed.skipped.length > 0) console.warn(`dev stacks: left out ${seed.skipped.join('; ')}`)
   } catch (err) {
-    // The VMs are still there; the next start tries again (nothing was written).
-    console.warn(`environments: could not take over ${args.importEnvFrom}: ${(err as Error).message}`)
+    console.warn(`dev stacks: could not take over ${args.importEnvFrom}: ${(err as Error).message}`)
   }
 }
 /** A tarball install that is not the local server: the only kind that updates itself. Read once: the service, the control socket and the daily check are all for this install or for none. */
@@ -349,7 +350,7 @@ const server = startServer(
     promoteRecoveryDir: resolve(serverDataDir, 'promote-recovery'),
     historyDir: resolve(serverDataDir, 'history'),
     local: local !== undefined,
-    machine: createMachine(serverDataDir, { local: local !== undefined }),
+    machine: createMachine(serverDataDir),
     integrations: createIntegrations({}),
     prWatch: {
       // The smokes' knob: the time between polls, and between sign-in checks.

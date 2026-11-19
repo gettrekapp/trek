@@ -1,118 +1,21 @@
-// scripts/serverMachine.test.mjs — docker.*, env.*, stack.* and worktree.dirty (phase 5a), against
-// real git in a temp dir and stub docker, colima and stack.sh: nothing here runs a real docker or
-// colima. Each stub records its arguments and working directory (`pwd -P`, its real path, which the
-// tests compare with real paths: a checkout under a symlink, /var → /private/var, spells $PWD otherwise).
-process.env.GIT_CONFIG_GLOBAL = '/dev/null'
-process.env.GIT_CONFIG_NOSYSTEM = '1'
-
+// scripts/serverMachine.test.mjs — docker.*, stack.*, worktree.dirty and a worktree's teardown of
+// its dev stack and VM (phase 5a, plugins E1), against real git in a temp dir and the stub docker,
+// colima and stack.sh of scripts/machineHarness.mjs: nothing here runs a real docker or colima.
+// The env.* methods are the Colima plugin's since plugins E2 (scripts/colimaPlugin.test.mjs); the
+// tests here reach its VM through the harness's registry.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { saveConfig } from '../server/src/config.ts'
-import { ConfigStore } from '../server/src/configStore.ts'
-import { GitPoller } from '../server/src/git/poller.ts'
-import { ProjectState } from '../server/src/projects/state.ts'
-import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
 import { holdWorktree } from '../server/src/teardown/teardown.ts'
-import { createMachine, localSiblingRegistries } from '../server/src/integrations/machine.ts'
-import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
-import { deriveProfileName, envListProblem } from '../src/shared/environments.ts'
-import { ClientError } from '../src/shared/client/connection.ts'
-import { posixOnly, removeDir } from './testPlatform.mjs'
-
-// The stubs are bash scripts, and a Windows server has no environments or dev stacks yet (W1;
-// scripts/serverWindowsMachine.test.mjs checks it refuses them): only the pure checks run there.
-const skip = posixOnly('bash stubs for docker, colima and stack.sh; no env or stacks on Windows')
-
-const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
-const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
-
-// The stubs, first on PATH for the whole file (node --test runs each file in its own process).
-const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-stubs-')))
-const callsFile = join(stubDir, 'calls')
-const stub = (name, body) => {
-  writeFileSync(join(stubDir, name), `#!/bin/bash\necho "${name}|$(pwd -P)|$*|FOO=$FOO" >> '${callsFile}'\n${body}\n`)
-  chmodSync(join(stubDir, name), 0o755)
-}
-stub('docker', `case "$1" in
-  --version) echo "Docker version 0.0.0-stub" ;;
-  ps) if [ "$2" = "-a" ]; then echo '{"ID":"c1","Names":"web","Image":"nginx","State":"running","Status":"Up 1 minute","Ports":"80/tcp"}'; fi ;;
-esac
-case " $* " in *" compose "*" ps "*) echo '[{"Service":"web","State":"running","Status":"Up","Publishers":[{"PublishedPort":8080,"TargetPort":80,"Protocol":"tcp"}]}]' ;; esac
-case " $* " in *" logs "*) echo "web log line" ;; esac
-exit 0`)
-stub('colima', `case "$1" in
-  --version) echo "colima version 0.0.0-stub" ;;
-  list) [ -f '${stubDir}/vms' ] && cat '${stubDir}/vms' ;;
-  # Opt in: delete-fails fails every delete; delete-fails-unlisted, like a real colima, one of a profile it has no VM for.
-  delete) if [ -f '${stubDir}/delete-fails' ]; then exit 1; fi
-    if [ -f '${stubDir}/delete-fails-unlisted' ] && ! grep -qs "\"$2\"" '${stubDir}/vms'; then exit 1; fi ;;
-esac
-exit 0`)
-const originalPath = process.env.PATH
-process.env.PATH = `${stubDir}:${originalPath}`
-process.on('exit', () => removeDir(stubDir))
-
-const calls = () => (existsSync(callsFile) ? readFileSync(callsFile, 'utf8').split('\n').filter(Boolean) : [])
-const resetCalls = () => rmSync(callsFile, { force: true })
-
-async function setup(t, options = {}) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-machine-')))
-  t.after(() => removeDir(dir))
-  resetCalls()
-  const a = join(dir, 'repos', 'a')
-  execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
-  mkdirSync(join(a, 'docker', 'stack'), { recursive: true })
-  writeFileSync(join(a, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\necho "stack|$(pwd -P)|$*" >> '${callsFile}'\n${options.stackBody ?? ''}\n`, { mode: 0o755 })
-  writeFileSync(join(a, 'docker-compose.yml'), 'services: {}\n')
-  writeFileSync(join(a, 'compose.dev.yaml'), 'services: {}\n')
-  git(a, 'add', '.')
-  git(a, 'commit', '-q', '-m', 'init')
-  git(a, 'worktree', 'add', '-q', '-b', 'feature-x', `${a}-feature-x`)
-  const configPath = join(dir, 'config.json')
-  saveConfig(configPath, { serverId: 'sid', name: 'box', repos: [{ id: 'a', name: 'a', path: a }] })
-  const store = new ConfigStore(configPath)
-  const hub = new TopicHub()
-  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
-  const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {} })
-  t.after(() => {
-    poller.stop()
-    store.close()
-  })
-  const data = join(dir, 'data')
-  mkdirSync(data)
-  const machine = {
-    env: createEnvironmentService({ registryFile: join(data, 'environments.json'), home: dir }),
-    stacks: createStackService({ stateDir: join(data, 'stacks') })
-  }
-  const events = []
-  const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions: { blockPath: () => () => {}, refreshAttention: () => {} }, machine, events: { send: (event, payload) => events.push([event, payload]) } }
-  const call = (method, params) => dispatchV2(method, params, ctx)
-  /** Another connection to the same server: its own event sink, the same machine. */
-  const connection = () => {
-    const own = []
-    const other = { ...ctx, events: { send: (event, payload) => own.push([event, payload]) } }
-    return { events: own, call: (method, params) => dispatchV2(method, params, other) }
-  }
-  const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
-  const projectId = created.result.projectId
-  await poller.refresh(a)
-  const repo = () => projects.require(projectId).repositories[0]
-  const worktreeAt = (path) => repo().worktrees.find((w) => w.path === path)
-  return { dir, a, feature: `${a}-feature-x`, data, store, projects, call, connection, events, projectId, repoId: repo().id, repo, worktreeAt, ctx }
-}
-
-const refused = (res, code, reason) => {
-  assert.equal(res.ok, false, JSON.stringify(res))
-  assert.equal(res.error.code, code, res.error.message)
-  if (reason !== undefined) assert.equal(res.error.details?.reason, reason)
-}
+import { deriveProfileName } from '../plugins/colima/shared/environments.ts'
+import { removeDir } from './testPlatform.mjs'
+import { calls, callsFile, git, gitEnv, originalPath, refused, resetCalls, setup, skip, stubDir } from './machineHarness.mjs'
 
 test('docker.list, docker.container and docker.compose run docker on the server, compose in the main checkout', { skip }, async (t) => {
   const s = await setup(t)
@@ -157,190 +60,6 @@ test('a machine without docker or colima: TOOL_ERROR with reason missing, and en
   // Exactly one done event, though the child reports both error and close.
   await new Promise((r) => setTimeout(r, 50))
   assert.equal(s.events.filter(([, e]) => e.done).length, 1)
-})
-
-test("env.up starts the branch's VM under the repository's envRepoKey, with the checked settings and variables", { skip }, async (t) => {
-  const s = await setup(t)
-  // An imported repository keeps the path its VMs were named after.
-  s.projects.apply(s.projectId, (d) => {
-    d.repositories[0].environments = { enabled: true, profileKey: '/old/spelling/a' }
-  })
-  const worktreeId = s.worktreeAt(s.feature).id
-  const profile = deriveProfileName('/old/spelling/a', 'feature-x')
-  const res = await s.call('env.up', {
-    projectId: s.projectId,
-    worktreeId,
-    settings: { enabled: true, cpu: 3, memory: 6, networkAddress: false, composeFile: 'docker-compose.yml', profileKey: '/elsewhere' },
-    envVars: { FOO: 'bar' }
-  })
-  assert.deepEqual(res.result, { code: 0, address: undefined })
-  assert.deepEqual(calls(), [
-    `colima|${process.cwd()}|start ${profile} --cpu 3 --memory 6 --disk 20|FOO=`,
-    `docker|${s.feature}|--context colima-${profile} compose -f docker-compose.yml up -d|FOO=bar`,
-    `colima|${process.cwd()}|list --json|FOO=`
-  ])
-  const registry = JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))
-  assert.deepEqual(Object.keys(registry), [profile])
-  assert.deepEqual([registry[profile].repoPath, registry[profile].branch, registry[profile].worktreePath, registry[profile].envVars], ['/old/spelling/a', 'feature-x', s.feature, { FOO: 'bar' }])
-  assert.equal(statSync(join(s.data, 'environments.json')).mode & 0o777, 0o600)
-  const steps = s.events.filter(([event, e]) => event === 'env.log' && e.step).map(([, e]) => e.step)
-  assert.deepEqual(steps, ['vm', 'compose', 'ready'])
-  assert.equal(s.events.every(([event, e]) => event === 'env.log' && e.profile === profile), true)
-  // The list names it under the same key; ps and logs read its compose project.
-  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running', address: '10.0.0.5' })}\n${JSON.stringify({ name: 'twb-leftover-000000', status: 'Stopped' })}\n`)
-  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
-  const list = (await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result
-  assert.deepEqual(list.map((e) => [e.profile, e.vmState, e.address, e.orphaned]), [[profile, 'running', '10.0.0.5', undefined], ['twb-leftover-000000', 'stopped', undefined, true]])
-  assert.deepEqual((await s.call('env.ps', { projectId: s.projectId, worktreeId })).result, [{ name: 'web', state: 'running', status: 'Up', ports: [{ published: 8080, target: 80, protocol: 'tcp' }] }])
-  assert.equal((await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', tail: 50 })).result, 'web log line\n')
-  assert.deepEqual((await s.call('env.composeFiles', { projectId: s.projectId, worktreeId })).result, ['compose.dev.yaml', 'docker-compose.yml'])
-})
-
-test('env.up refuses settings, compose files and variables that would steer the run, before colima runs', { skip }, async (t) => {
-  const s = await setup(t)
-  const worktreeId = s.worktreeAt(s.feature).id
-  const up = (extra) => s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true }, ...extra })
-  for (const composeFile of ['../outside.yml', '/etc/passwd', '-f /etc/x', 'a/../../b.yml', 'ok.yml,../x.yml', 'x\0.yml', '.']) {
-    refused(await up({ settings: { enabled: true, composeFile } }), 'BAD_REQUEST')
-  }
-  for (const settings of [{ enabled: true, cpu: 0 }, { enabled: true, memory: 0.25 }, { enabled: true, memory: Number.NaN }, { enabled: true, memory: '2' }, { enabled: true, memory: 2000 }, { enabled: true, cpu: 1.5 }, { enabled: true, disk: 20.5 }, { enabled: true, disk: '20' }, { enabled: true, rosetta: 'yes' }, { enabled: true, extra: 1 }, 'x', null]) {
-    refused(await up({ settings }), 'BAD_REQUEST')
-  }
-  for (const envVars of [{ PATH: '/tmp' }, { LD_PRELOAD: 'x.so' }, { DYLD_INSERT_LIBRARIES: 'x' }, { DOCKER_HOST: 'tcp://x' }, { 'A B': '1' }, { '1X': '1' }, { X: 1 }, { X: 'a\0b' }, ['X=1']]) {
-    refused(await up({ envVars }), 'BAD_REQUEST')
-  }
-  // The names that steer docker compose or the server's own files, by family and in any case.
-  for (const name of ['HOME', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'COMPOSE_PROJECT_NAME', 'COMPOSE_ENV_FILES', 'BUILDKIT_X', 'XDG_CONFIG_HOME', 'path', 'Docker_Host', 'ld_preload']) {
-    const res = await up({ envVars: { API_URL: 'http://x', [name]: 'x' } })
-    refused(res, 'BAD_REQUEST')
-    assert.match(res.error.message, new RegExp(`envVars: ${name} cannot be set`))
-  }
-  // A symlink in the worktree that leads outside it is refused like a ".." path.
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => removeDir(outside))
-  writeFileSync(join(outside, 'evil.yml'), 'services: {}\n')
-  symlinkSync(join(outside, 'evil.yml'), join(s.feature, 'evil.yml'))
-  symlinkSync(outside, join(s.feature, 'outdir'))
-  for (const composeFile of ['evil.yml', 'outdir/evil.yml', 'docker-compose.yml,evil.yml']) {
-    refused(await up({ settings: { enabled: true, composeFile } }), 'BAD_REQUEST')
-    refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile }), 'BAD_REQUEST')
-    refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', composeFile }), 'BAD_REQUEST')
-  }
-  for (const composeFile of ['../outside.yml', '/etc/passwd', '-f']) {
-    refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile }), 'BAD_REQUEST')
-    refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', composeFile }), 'BAD_REQUEST')
-  }
-  refused(await s.call('env.up', { projectId: s.projectId, worktreeId: 'nope', settings: { enabled: true } }), 'NOT_FOUND')
-  for (const profile of ['../x', 'twb-', '-rf', 'other-vm', 'twb-A', 'twb-a b']) {
-    refused(await s.call('env.stop', { profile }), 'BAD_REQUEST')
-    refused(await s.call('env.destroy', { profile }), 'BAD_REQUEST')
-  }
-  refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: '-f' }), 'BAD_REQUEST')
-  refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', tail: 1e9 }), 'BAD_REQUEST')
-  assert.deepEqual(calls(), [])
-  assert.equal(existsSync(join(s.data, 'environments.json')), false)
-  // An ordinary name still passes, and a symlink that stays inside the worktree is fine.
-  symlinkSync(join(s.feature, 'docker-compose.yml'), join(s.feature, 'linked.yml'))
-  assert.equal((await up({ settings: { enabled: true, networkAddress: false, composeFile: 'linked.yml' }, envVars: { API_URL: 'http://x' } })).result.code, 0)
-})
-
-test('env.up takes a fractional memory size, as colima --memory does (GiB)', { skip }, async (t) => {
-  const s = await setup(t)
-  const worktreeId = s.worktreeAt(s.feature).id
-  const profile = deriveProfileName(s.a, 'feature-x')
-  const res = await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, cpu: 2, memory: 1.5, disk: 30, networkAddress: false } })
-  assert.equal(res.result.code, 0)
-  assert.equal(calls()[0], `colima|${process.cwd()}|start ${profile} --cpu 2 --memory 1.5 --disk 30|FOO=`)
-  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, memory: 0.5, networkAddress: false } })).result.code, 0)
-})
-
-test("a symlinked default docker-compose.yml (into the main checkout, say) is the repository's: no composeFile, no confinement", { skip }, async (t) => {
-  const s = await setup(t)
-  const worktreeId = s.worktreeAt(s.feature).id
-  const profile = deriveProfileName(s.a, 'feature-x')
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => removeDir(outside))
-  writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
-  unlinkSync(join(s.feature, 'docker-compose.yml'))
-  symlinkSync(join(outside, 'docker-compose.yml'), join(s.feature, 'docker-compose.yml'))
-  const res = await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
-  assert.equal(res.result.code, 0, JSON.stringify(res))
-  assert.equal(calls()[1], `docker|${s.feature}|--context colima-${profile} compose -f docker-compose.yml up -d|FOO=`)
-  // ps and logs without a composeFile read the default file too.
-  resetCalls()
-  assert.equal((await s.call('env.ps', { projectId: s.projectId, worktreeId })).ok, true)
-  assert.equal((await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web' })).ok, true)
-  assert.deepEqual(calls().map((c) => c.split('|')[2]), [
-    `--context colima-${profile} compose -f docker-compose.yml ps --format json`,
-    `--context colima-${profile} compose -f docker-compose.yml logs --no-color --tail 300 web`
-  ])
-  // A client that names it explicitly is still held to the check.
-  refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile: 'docker-compose.yml' }), 'BAD_REQUEST')
-})
-
-test("a Local server's sibling profiles: local and local-* beside its data dir, never itself or another dir", (t) => {
-  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-datadirs-')))
-  t.after(() => removeDir(parent))
-  for (const name of ['local', 'local-dev', 'local-wt2', 'other', 'local-', 'local-Bad', 'localx']) mkdirSync(join(parent, name))
-  writeFileSync(join(parent, 'local-file'), '')
-  assert.deepEqual(localSiblingRegistries(join(parent, 'local')).sort(), [join(parent, 'local-dev', 'environments.json'), join(parent, 'local-wt2', 'environments.json')].sort())
-  assert.deepEqual(localSiblingRegistries(join(parent, 'local-dev')).sort(), [join(parent, 'local', 'environments.json'), join(parent, 'local-wt2', 'environments.json')].sort())
-  // A parent that cannot be read has none.
-  assert.deepEqual(localSiblingRegistries(join(parent, 'gone', 'local')), [])
-})
-
-test("a Local server reads the other Local profiles' registries (read-only): their VMs are not orphans to delete", { skip }, async (t) => {
-  const s = await setup(t)
-  const parent = join(s.dir, 'trek-server')
-  const own = join(parent, 'local')
-  mkdirSync(own, { recursive: true })
-  mkdirSync(join(parent, 'local-dev'))
-  const sibling = join(parent, 'local-dev', 'environments.json')
-  const siblingText = JSON.stringify({ 'twb-devvm-000000': { repoPath: '/elsewhere', branch: 'b', worktreePath: '/elsewhere-b', createdAt: 'then' } })
-  writeFileSync(sibling, siblingText, { mode: 0o600 })
-  const siblingStat = statSync(sibling)
-  // A sibling whose registry cannot be parsed hides nothing and breaks nothing.
-  mkdirSync(join(parent, 'local-torn'))
-  writeFileSync(join(parent, 'local-torn', 'environments.json'), '{"twb-torn')
-  writeFileSync(join(stubDir, 'vms'), ['twb-devvm-000000', 'twb-leftover-000000', 'twb-torn-000000'].map((name) => JSON.stringify({ name, status: 'Running' })).join('\n') + '\n')
-  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
-  const list = async () => (await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => [e.profile, e.orphaned])
-  // Colima's home (homedir(), read when the machine is made) holds the test's worktrees.
-  const home = process.env.HOME
-  process.env.HOME = s.dir
-  t.after(() => {
-    process.env.HOME = home
-  })
-  s.ctx.machine = createMachine(own, { local: true })
-  assert.deepEqual(await list(), [['twb-leftover-000000', true], ['twb-torn-000000', true]])
-  // Its own registry still works beside them, and the siblings' files are never written.
-  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })).result.code, 0)
-  assert.equal(existsSync(join(own, 'environments.json')), true)
-  assert.equal(readFileSync(sibling, 'utf8'), siblingText)
-  assert.equal(statSync(sibling).mtimeMs, siblingStat.mtimeMs)
-  // A server that is not Local reads only its own registry: every unknown twb- VM is an orphan.
-  s.ctx.machine = createMachine(join(parent, 'local-dev'))
-  assert.deepEqual((await list()).filter(([, orphaned]) => orphaned).map(([p]) => p), ['twb-leftover-000000', 'twb-torn-000000'])
-  s.ctx.machine = createMachine(join(s.dir, 'plain'))
-  mkdirSync(join(s.dir, 'plain'))
-  assert.deepEqual((await list()).map(([p]) => p), ['twb-devvm-000000', 'twb-leftover-000000', 'twb-torn-000000'])
-})
-
-test('env.destroy deletes the VM and its registry entry; two environments started at once both stay registered', { skip }, async (t) => {
-  const s = await setup(t)
-  git(s.a, 'worktree', 'add', '-q', '-b', 'feature-y', `${s.a}-feature-y`)
-  await s.ctx.poller.refresh(s.a)
-  const [x, y] = [s.worktreeAt(s.feature).id, s.worktreeAt(`${s.a}-feature-y`).id]
-  const results = await Promise.all([x, y].map((worktreeId) => s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })))
-  assert.deepEqual(results.map((r) => r.result.code), [0, 0])
-  const px = deriveProfileName(s.a, 'feature-x')
-  const py = deriveProfileName(s.a, 'feature-y')
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))).sort(), [px, py].sort())
-  resetCalls()
-  assert.equal((await s.call('env.destroy', { profile: px })).result, 0)
-  assert.deepEqual(calls(), [`docker|${s.feature}|--context colima-${px} compose -f docker-compose.yml down -v|FOO=`, `colima|${process.cwd()}|delete ${px} --force|FOO=`])
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [py])
-  assert.equal((await s.call('env.stop', { profile: py })).result, 0)
 })
 
 test("stack.*: the worktree's stack.sh, by the server's own path; its state in the data dir", { skip }, async (t) => {
@@ -437,49 +156,6 @@ test("stack.up: a second up while one is starting is refused; a run that exits l
   assert.equal(calls().filter((c) => c.startsWith('stack|')).length, 1)
 })
 
-test('the registry: a file that cannot be read is never overwritten; a leftover temp file does not loosen 0600', { skip }, async (t) => {
-  const s = await setup(t)
-  const registryFile = join(s.data, 'environments.json')
-  const worktreeId = s.worktreeAt(s.feature).id
-  const up = () => s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
-  const torn = '{"twb-kept-000000": {"repoPath": "/x"'
-  writeFileSync(registryFile, torn)
-  const res = await up()
-  assert.equal(res.result.code, -1)
-  assert.match(res.result.error, /environments registry .* cannot be read/)
-  assert.equal(readFileSync(registryFile, 'utf8'), torn)
-  assert.deepEqual(calls(), [])
-  // A leftover temp file from a crashed write, world-readable.
-  rmSync(registryFile)
-  writeFileSync(`${registryFile}.${process.pid}.tmp`, 'stale')
-  chmodSync(`${registryFile}.${process.pid}.tmp`, 0o644)
-  assert.equal((await up()).result.code, 0)
-  assert.equal(statSync(registryFile).mode & 0o777, 0o600)
-})
-
-test('env.destroy skips docker compose for a registry entry outside the allowlist, and still deletes the VM', { skip }, async (t) => {
-  const s = await setup(t)
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => removeDir(outside))
-  writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
-  const profile = 'twb-imported-000000'
-  writeFileSync(join(s.data, 'environments.json'), JSON.stringify({ [profile]: { repoPath: s.a, branch: 'x', worktreePath: outside, createdAt: 'then' } }))
-  assert.equal((await s.call('env.destroy', { profile })).result, 0)
-  assert.deepEqual(calls(), [`colima|${process.cwd()}|delete ${profile} --force|FOO=`])
-  assert.match(s.events.map(([, e]) => e.data).join(''), /skipping docker compose down/)
-  assert.deepEqual(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8')), {})
-})
-
-test("env.up refuses a worktree outside Colima's home on a path boundary (/x/rep is not /x/repos)", { skip }, async (t) => {
-  const s = await setup(t)
-  // A home that is a string prefix of the worktree's path but not one of its directories.
-  s.ctx.machine = { ...s.ctx.machine, env: createEnvironmentService({ registryFile: join(s.data, 'environments.json'), home: join(s.dir, 'rep') }) }
-  const res = await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true } })
-  assert.equal(res.result.code, -1)
-  assert.match(res.result.error, /outside the home directory/)
-  assert.deepEqual(calls(), [])
-})
-
 test("a run's events reach only the connection that asked for it", { skip }, async (t) => {
   const s = await setup(t)
   const other = s.connection()
@@ -551,25 +227,6 @@ test('stack.down and stack.destroy are refused while an up is starting, so the s
   }
 })
 
-test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, not a list of orphans', { skip }, async (t) => {
-  const s = await setup(t)
-  const registryFile = join(s.data, 'environments.json')
-  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: 'twb-real-000000', status: 'Running' })}\n`)
-  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
-  for (const text of ['{"twb-real-000000": {', '[]']) {
-    writeFileSync(registryFile, text)
-    const res = await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })
-    refused(res, 'TOOL_ERROR', 'registry')
-    assert.ok(res.error.message.includes(registryFile), res.error.message)
-    // The client shows it (the Env panel, Settings) rather than keeping the last list quietly.
-    assert.equal(envListProblem(new ClientError(res.error.code, res.error.message, res.error.details)), res.error.message)
-    assert.equal(readFileSync(registryFile, 'utf8'), text)
-  }
-  // No file is an empty registry: the VM is a leftover.
-  rmSync(registryFile)
-  assert.deepEqual((await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => [e.profile, e.orphaned]), [['twb-real-000000', true]])
-})
-
 test('worktree.teardownPlan (plugins E1): the dev stack once it has run and the VM the branch has; none for the main checkout', { skip }, async (t) => {
   const s = await setup(t)
   const worktreeId = s.worktreeAt(s.feature).id
@@ -615,7 +272,7 @@ test('worktree.remove {teardown} (plugins E1): the chosen items, the stack then 
     .filter(([tool, , args]) => (tool === 'stack' && args === 'destroy') || (tool === 'colima' && args.startsWith('delete ')))
   assert.deepEqual(steps.map(([tool, cwd]) => [tool, tool === 'stack' ? cwd : '']), [['stack', s.feature], ['colima', '']])
   assert.equal(existsSync(s.feature), false)
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(s.registryFile, 'utf8'))), [])
 })
 
 test('worktree.remove {teardown}: a dirty worktree is refused first; a failing item stops it with the worktree kept; an unknown id is refused; no teardown tears nothing down', { skip }, async (t) => {
@@ -796,7 +453,7 @@ test('worktree.remove {teardown}: a VM whose record outlived it (colima has none
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.equal(calls().filter((c) => c.includes('|delete ')).length, 1, 'colima delete ran (and failed)')
   assert.equal(existsSync(s.feature), false)
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(s.registryFile, 'utf8'))), [])
 })
 
 test('worktree.remove {teardown}: a VM colima still lists after a failed delete fails the removal, the worktree kept', { skip }, async (t) => {
@@ -864,7 +521,7 @@ test('worktree.remove {teardown}: a missing row\'s VM is deleted, git is not run
   const res = await s.call('worktree.remove', { ...ref, teardown: ['env:destroy'] })
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.equal(calls().filter((c) => c.includes('|delete ')).length, 1, 'the VM was deleted')
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(s.registryFile, 'utf8'))), [])
   // Git was not run: the folder (still on disk here) and git's record of it stay.
   assert.ok(existsSync(s.feature))
   assert.ok(git(s.a, 'worktree', 'list', '--porcelain').includes(`worktree ${s.feature}\n`))
@@ -896,16 +553,4 @@ test("repo.remove (plugins E1): a running VM whose worktree folder is gone still
   // Only a leftover no registry names (another repository's, or a crash's) runs now.
   writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n${JSON.stringify({ name: 'twb-leftover-000000', status: 'Running' })}\n`)
   assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
-})
-
-test('env.list and env.up refuse an unknown repository and a missing row before colima runs (the codes the Colima plugin keeps)', { skip }, async (t) => {
-  const s = await setup(t)
-  resetCalls()
-  refused(await s.call('env.list', { projectId: s.projectId, repoId: 'nope' }), 'NOT_FOUND')
-  const worktreeId = s.worktreeAt(s.feature).id
-  s.projects.apply(s.projectId, (d) => {
-    d.repositories[0].worktrees.find((w) => w.id === worktreeId).missing = true
-  })
-  refused(await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } }), 'BAD_REQUEST')
-  assert.deepEqual(calls(), [])
 })

@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TEARDOWN_RUN_TIMEOUT_MS, anyBusy, assertNotTearingDown, busyReason, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
-import { envParticipant, inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
+import { inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
 import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
@@ -329,11 +329,11 @@ test('toWireError: a teardown failure carries tornDown (strings only)', () => {
   assert.equal(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { tornDown: 'a' })).details, undefined)
 })
 
-test("participantsFor: core's stack and VM with machine services, never on Windows; then the plugins' in order", () => {
-  const machine = { stacks: {}, env: {} }
+test("participantsFor: core's stack with machine services, never on Windows; then the plugins' in order (the VM is the env plugin's since E2)", () => {
+  const machine = { stacks: {} }
   const lifecycle = { plan: async () => [], teardown: async () => {} }
   const ctx = { store: {}, machine, caller: 'c1', plugins: { lifecycles: () => [{ id: 'one', lifecycle }, { id: 'two', lifecycle }] } }
-  assert.deepEqual(participantsFor(ctx, 'p1', 'linux').map((p) => p.id), ['stack', 'env', 'one', 'two'])
+  assert.deepEqual(participantsFor(ctx, 'p1', 'linux').map((p) => p.id), ['stack', 'one', 'two'])
   assert.deepEqual(participantsFor(ctx, 'p1', 'win32').map((p) => p.id), ['one', 'two'])
   assert.deepEqual(participantsFor({ ...ctx, machine: undefined }, 'p1', 'darwin').map((p) => p.id), ['one', 'two'])
   // A test's stand-in for the registry may have no lifecycles.
@@ -375,30 +375,13 @@ test('planTeardown: an item may say it is running (a boolean); anything else the
   assert.equal(warnings.length, 1)
 })
 
-test('the core participants say whether their stack or VM is running (plugins E1)', async () => {
+test('the stack participant says whether its stack is running (plugins E1)', async () => {
   const ctx = { store: { guard: { check: () => {} } } }
   const stackOf = (status) => stackParticipant(ctx, { stacks: { status: async () => status } })
   const stack = { available: true, created: true, slug: 'app-feat', stopping: false, hasAdmin: false }
   assert.deepEqual((await stackOf({ ...stack, containers: 0, upRunning: false }).plan(target, 'move')).map((i) => i.running), [undefined])
   assert.deepEqual((await stackOf({ ...stack, containers: 2, upRunning: false }).plan(target, 'move')).map((i) => i.running), [true])
   assert.deepEqual((await stackOf({ ...stack, containers: 0, upRunning: true }).plan(target, 'move')).map((i) => i.running), [true])
-  const { deriveProfileName, envRepoKey } = await import('../src/shared/environments.ts')
-  const profile = deriveProfileName(envRepoKey(target.repo), 'feat')
-  const envOf = (vmState) => envParticipant(ctx, { env: { known: async (p) => p === profile, list: async () => [{ profile, vmState, worktreePath: target.worktree.path }] } })
-  assert.deepEqual((await envOf('running').plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', true]])
-  for (const state of ['stopped', 'missing']) assert.deepEqual((await envOf(state).plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', undefined]], state)
-})
-
-test("the VM participant's repository check asks the registry first: no VM of the repository, no colima list", async () => {
-  const ctx = { store: { guard: { check: () => {} } } }
-  const { envRepoKey } = await import('../src/shared/environments.ts')
-  let listed = 0
-  const envWith = (repoKeys) =>
-    envParticipant(ctx, { env: { knownRepo: async (key) => repoKeys.includes(key), list: async () => (listed++, [{ profile: 'twb-x', vmState: 'running', worktreePath: target.worktree.path }]) } })
-  assert.equal(await envWith([]).beforeRepoRemove(target.project, target.repo), null)
-  assert.equal(listed, 0)
-  assert.equal(await envWith([envRepoKey(target.repo)]).beforeRepoRemove(target.project, target.repo), 'It has a running environment. Stop it in the Env tab first.')
-  assert.equal(listed, 1)
 })
 
 test("busyReason and anyBusy (plugins E2): a hold's label, then 'finishing' while a timed-out teardown runs on, then free", async () => {

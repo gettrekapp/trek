@@ -2,8 +2,9 @@
 // share (plugins E2): real git in a temp dir; stub docker and colima first on PATH and a stub
 // stack.sh in the repository, each recording its arguments, its working directory (`pwd -P`, its
 // real path) and $FOO; a project on a ConfigStore; and the Colima plugin on a registry with core's
-// path checks. Nothing here runs a real docker or colima. Importing it puts the stubs on PATH for
-// the whole file (node --test runs each file in its own process).
+// path checks. Nothing here runs a real docker or colima. Core has no env.* since plugins E2: every
+// call goes through dispatchV2. Importing it puts the stubs on PATH for the whole file (node --test
+// runs each file in its own process).
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 
@@ -14,7 +15,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
-import { toWireError } from '../server/src/errors.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
 import { pluginPathChecks } from '../server/src/plugins/coreChecks.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
@@ -34,7 +34,8 @@ export const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
 export const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-stubs-')))
-const callsFile = join(stubDir, 'calls')
+/** Where each stub (and stack.sh) appends its call */
+export const callsFile = join(stubDir, 'calls')
 const stub = (name, body) => {
   writeFileSync(join(stubDir, name), `#!/bin/bash\necho "${name}|$(pwd -P)|$*|FOO=$FOO" >> '${callsFile}'\n${body}\n`)
   chmodSync(join(stubDir, name), 0o755)
@@ -120,8 +121,7 @@ export async function setup(t, options = {}) {
       dataDir,
       hub,
       projects,
-      // Until Task 8 core still has env.*: the registry is told env. is not a core namespace.
-      isCoreMethod: (prefix) => prefix !== 'env.' && isCoreMethod(prefix),
+      isCoreMethod,
       coreToolNames: [],
       paths: pluginPathChecks({ projects, store, poller }),
       ...(local ? { siblingDataDirs: () => localSiblingDataDirs(dataDir) } : {}),
@@ -133,16 +133,7 @@ export async function setup(t, options = {}) {
   }
   const files = usePlugin()
   t.after(() => registry.dispose())
-  // Until Task 8 core still has env.*: the plugin's methods are asked first.
-  const call = async (method, params, on = ctx) => {
-    const plugin = on.plugins?.handler(method)
-    if (!plugin) return dispatchV2(method, params, on)
-    try {
-      return { ok: true, result: await plugin(params, on.caller) }
-    } catch (err) {
-      return { ok: false, error: toWireError(method, err) }
-    }
-  }
+  const call = (method, params, on = ctx) => dispatchV2(method, params, on)
   let others = 0
   /** Another connection to the same server: its own caller and events (made after the last usePlugin). */
   const connection = () => {

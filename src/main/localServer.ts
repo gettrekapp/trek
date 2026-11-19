@@ -376,7 +376,8 @@ async function spawnAndWait(why: string): Promise<void> {
     // windowsHide (hidden): belt and braces. Trek.exe is a GUI-subsystem program, so the server it
     // runs as gets no console; were it a console one, detached would give it a window of its own.
     // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
-    // server takes them over once (server/src/integrations/envSeed.ts). Resolved: the server takes only an absolute path.
+    // server takes them over once (server/src/integrations/stackSeed.ts, and the env plugin's
+    // plugins/colima/server/seed.ts). Resolved: the server takes only an absolute path.
     child = spawn(
       process.execPath,
       [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', resolvePath(app.getPath('userData'))],

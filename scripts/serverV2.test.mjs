@@ -388,7 +388,7 @@ test('project.delete ends the project topic for its subscribers, before the serv
 })
 
 test('welcome capabilities: mcp while the listener is up, then what the server always has and the plugins’ legacy capabilities, pairing on every server, then phoneAccess and local on the local server', () => {
-  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'skills', 'review', 'move', 'promote', 'push', 'automations', 'history', 'ui', 'mcpTools', 'worktreeTeardown']
+  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'stacks', 'skills', 'review', 'move', 'promote', 'push', 'automations', 'history', 'ui', 'mcpTools', 'worktreeTeardown']
   // A macOS or Linux server's (a Windows one's are in serverWindowsMachine.test.mjs).
   assert.deepEqual(welcomeCapabilities(true, false, false, [], 'linux'), ['mcp', ...all, 'pairing'])
   assert.deepEqual(welcomeCapabilities(false, false, false, [], 'linux'), [...all, 'pairing'])
@@ -398,6 +398,8 @@ test('welcome capabilities: mcp while the listener is up, then what the server a
   assert.equal(welcomeCapabilities(false, false, false, [], 'linux', false, false, true).includes('phoneAccess'), false, 'never on a remote server')
   // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
   assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear'], 'linux'), [...all, 'voice', 'linear', 'pairing'])
+  // `env` is the env plugin's legacy capability since plugins E2: after the static ones, in registration order.
+  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear', 'env'], 'linux'), [...all, 'voice', 'linear', 'env', 'pairing'])
 })
 
 test('the update capability is listed only when the server says it can update itself, never on the local server', () => {
