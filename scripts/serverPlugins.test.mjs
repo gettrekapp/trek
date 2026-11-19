@@ -140,7 +140,7 @@ test('refused: a bad id, a duplicate, a core or reserved namespace, a setup that
   const { registry, warnings } = setup(t, plugins)
   assert.deepEqual(registry.presence().map((p) => p.id), ['echo'])
   assert.equal(warnings.length, 7)
-  assert.match(warnings.join('\n'), /Bad not loaded: its id is not a plugin id/)
+  assert.match(warnings.join('\n'), /Bad not loaded: its id is not a usable plugin id/)
   assert.match(warnings.join('\n'), /echo not loaded: another plugin has that id/)
   assert.match(warnings.join('\n'), /session not loaded: its id is a core namespace/)
   assert.match(warnings.join('\n'), /plugins not loaded: its id is a core namespace/)
@@ -690,21 +690,32 @@ test('the host reads the project (plugins E1): its worktrees and repositories, a
       { id: 'w3', path: '/r/app-detached', isMain: false, sessions: [] }
     ]
   }
-  const { registry } = setup(t, [look], { projects: { p1: { id: 'p1', settings: {}, globalSessions: [], repositories: [repo] } } })
+  const empty = { id: 'r2', name: 'empty', path: '/r/empty', branchData: {}, worktrees: [] }
+  const lib = { id: 'r3', name: 'lib', path: '/r/lib', branchData: {}, worktrees: [{ id: 'w4', path: '/r/lib', branch: 'main', isMain: true, sessions: [] }] }
+  const { registry } = setup(t, [look], { projects: { p1: { id: 'p1', settings: {}, globalSessions: [], repositories: [repo, empty, lib] } } })
   assert.deepEqual(host.worktrees('p1'), [
     { id: 'w1', repoId: 'r1', repoPath: '/r/app', path: '/r/app', branch: 'main', present: true },
     { id: 'w2', repoId: 'r1', repoPath: '/r/app', path: '/r/app-feat', branch: 'feat', present: false },
-    { id: 'w3', repoId: 'r1', repoPath: '/r/app', path: '/r/app-detached', branch: null, present: true }
+    { id: 'w3', repoId: 'r1', repoPath: '/r/app', path: '/r/app-detached', branch: null, present: true },
+    { id: 'w4', repoId: 'r3', repoPath: '/r/lib', path: '/r/lib', branch: 'main', present: true }
   ])
   assert.equal(host.worktree('p1', 'w2').path, '/r/app-feat')
+  assert.deepEqual(host.worktree('p1', 'w4'), { id: 'w4', repoId: 'r3', repoPath: '/r/lib', path: '/r/lib', branch: 'main', present: true })
   assert.throws(() => host.worktree('p1', 'nope'), (e) => e.code === 'NOT_FOUND')
   assert.throws(() => host.worktrees('gone'), (e) => e.code === 'NOT_FOUND')
-  assert.deepEqual(host.repos('p1'), [{ id: 'r1', path: '/r/app', name: 'app' }])
+  assert.deepEqual(host.repos('p1'), [
+    { id: 'r1', path: '/r/app', name: 'app' },
+    { id: 'r2', path: '/r/empty', name: 'empty' },
+    { id: 'r3', path: '/r/lib', name: 'lib' }
+  ])
+  assert.deepEqual(host.repoSettings('p1', 'r2'), {}, 'a repository with no pluginSettings')
   assert.deepEqual(host.repoSettings('p1', 'r1'), { enabled: true })
   assert.deepEqual(host.branchSettings('p1', 'r1', 'feat'), { env: 'A=1\n' })
   assert.deepEqual(host.branchSettings('p1', 'r1', 'other'), {})
   assert.deepEqual(host.branchSettings('p1', 'r1', 'constructor'), {}, 'a prototype name is no branch')
   assert.throws(() => host.repoSettings('p1', 'nope'), (e) => e.code === 'NOT_FOUND')
+  assert.throws(() => host.repoSettings('gone', 'r1'), (e) => e.code === 'NOT_FOUND')
+  assert.throws(() => host.branchSettings('gone', 'r1', 'feat'), (e) => e.code === 'NOT_FOUND')
   host.repoSettings('p1', 'r1').enabled = false
   assert.equal(repo.pluginSettings.look.enabled, true, 'a copy')
   assert.deepEqual(registry.settingFields('look', 'repo'), { enabled: 'boolean' })
@@ -713,14 +724,12 @@ test('the host reads the project (plugins E1): its worktrees and repositories, a
   assert.equal(registry.settingFields('constructor', 'repo'), undefined)
 })
 
-test('the host reads only its own settings entry (plugins E1): a plugin id that is an Object.prototype name finds none', (t) => {
-  let host
-  const odd = { manifest: manifest('constructor', { repoSettings: { a: 'string' } }), setup: (h) => ((host = h), { handlers: {} }) }
-  const repo = { id: 'r1', name: 'app', path: '/r/app', pluginSettings: {}, branchData: { feat: { pluginSettings: {} } }, worktrees: [] }
-  setup(t, [odd], { projects: { p1: { id: 'p1', settings: {}, globalSessions: [], repositories: [repo] } } })
-  assert.ok(host, 'set up')
-  assert.deepEqual(host.repoSettings('p1', 'r1'), {})
-  assert.deepEqual(host.branchSettings('p1', 'r1', 'feat'), {})
+test('refused before setup (plugins E1): a built-in whose id is an Object.prototype name', (t) => {
+  let ran = false
+  const { registry, warnings } = setup(t, [{ manifest: manifest('constructor', { repoSettings: { a: 'string' } }), setup: () => ((ran = true), { handlers: {} }) }])
+  assert.equal(ran, false)
+  assert.deepEqual(registry.presence(), [])
+  assert.match(warnings.join('\n'), /constructor not loaded: its id is not a usable plugin id/)
 })
 
 test('refused before setup (plugins E1): repo or branch settings of an unknown kind or with a bad name', (t) => {

@@ -64,6 +64,8 @@ export const MAX_PLUGIN_SETTINGS_CHARS = 1024 * 1024
 const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 /** A key every plain object has (`constructor`, `toString`…): `byId[id]` or `values[key]` would find Object's own. */
 const UNUSABLE_IDS: readonly string[] = Object.getOwnPropertyNames(Object.prototype)
+/** A plugin id (PLUGIN_ID_RE) that is not one of Object's own names, so `byId[id]` can't find Object's member. */
+export const isUsablePluginId = (id: string): boolean => PLUGIN_ID_RE.test(id) && !UNUSABLE_IDS.includes(id)
 /** A field name's problem (its form, or one of Object's own names), or null. */
 function fieldNameProblem(key: string): string | null {
   if (!FIELD_NAME_RE.test(key)) return `${JSON.stringify(key)} is not a field name`

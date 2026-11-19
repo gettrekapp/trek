@@ -8,7 +8,7 @@ import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import {
   legacyCapabilitiesOf,
-  PLUGIN_ID_RE,
+  isUsablePluginId,
   pluginEnabled,
   pluginFieldsProblem,
   type PluginFieldKind,
@@ -109,12 +109,12 @@ interface Entry {
   instance: PluginInstance
 }
 
-/** A plugin's throw as the wire should see it: its own code if allowed, else TOOL_ERROR. */
 /** A plugin's own entry in stored `pluginSettings`, as a copy; {} when it has none (an own key only: never Object's members). */
 function ownValues(byId: Record<string, PluginSettingValues> | undefined, id: string): PluginSettingValues {
   return byId && Object.hasOwn(byId, id) ? { ...byId[id] } : {}
 }
 
+/** A plugin's throw as the wire should see it: its own code if allowed, else TOOL_ERROR. */
 function wireError(err: unknown): Error {
   const code = (err as { code?: unknown } | null)?.code
   if (typeof code === 'string' && PASSTHROUGH.has(code)) return err as Error
@@ -258,8 +258,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   for (const plugin of options.plugins) {
     const { manifest } = plugin
     const refuse = (why: string): void => warn(`[plugins] ${manifest.id || '(no id)'} not loaded: ${why}`)
-    if (!PLUGIN_ID_RE.test(manifest.id)) {
-      refuse('its id is not a plugin id')
+    if (!isUsablePluginId(manifest.id)) {
+      refuse('its id is not a usable plugin id')
       continue
     }
     if (entries.has(manifest.id) || unavailable.some((m) => m.id === manifest.id)) {
