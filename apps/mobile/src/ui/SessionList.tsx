@@ -1,4 +1,4 @@
-// A list of sessions (a worktree's, or the project's Global ones): each a row with its state mark,
+// A worktree's sessions: each a row with its state mark,
 // title, status or decision and queue count, the decision answered in place, and Restart and Close
 // behind its ⋯ (sessionMenu, also the Global tray's long press), so a row is one tap target and they are not hit by mistake. A tap opens the session.
 import { Alert, Pressable, Text, View } from 'react-native'

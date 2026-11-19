@@ -55,6 +55,7 @@ import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../..
 import { FileDiff } from '../../../../../src/ui/FileDiff.tsx'
 import { ReviewBar } from '../../../../../src/ui/ReviewBar.tsx'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { useGlobalTray } from '../../../../../src/ui/globalTrayContext.tsx'
 
 interface Params {
   serverId: string
@@ -204,6 +205,8 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
+  // An open Global tray has the keyboard: this screen, under it, keeps its size.
+  const tray = useGlobalTray()
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -505,9 +508,6 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
       })
     })
   }, [])
-  // The Global tray's collapsed bar, under the stack, pads the home indicator's inset.
-  const inset = 0
-
   // One object for the screen's life: each callback is the latest render's.
   const latest = useRef({ openNew, openBox, save, remove })
   latest.current = { openNew, openBox, save, remove }
@@ -532,7 +532,7 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const hasDraft = draft !== undefined && draft.comments.length > 0
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight} enabled={tray === null || tray.height === 'collapsed'}>
       <ReviewContext.Provider value={reviewUi}>
         <View ref={port} collapsable={false} style={styles.port}>
           <ScrollView
@@ -614,14 +614,14 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
         </View>
         {reviewError ? (
           // It can carry a whole comment that was being written: it scrolls, so the bar stays on screen, and its text can be copied.
-          <ScrollView style={styles.errorPort} contentContainerStyle={[styles.error, hasDraft ? null : { paddingBottom: 8 + inset }]} keyboardShouldPersistTaps="handled">
+          <ScrollView style={styles.errorPort} contentContainerStyle={[styles.error, hasDraft ? null : { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">
             <Text accessibilityRole="alert" selectable style={ui.error}>
               {reviewError}
             </Text>
           </ScrollView>
         ) : null}
         {hasDraft ? (
-          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} inset={inset} onSend={(sessionId, revision) => void send(sessionId, revision)} onDiscard={(revision, count) => void discard(revision, count)} />
+          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} onSend={(sessionId, revision) => void send(sessionId, revision)} onDiscard={(revision, count) => void discard(revision, count)} />
         ) : null}
       </ReviewContext.Provider>
     </KeyboardAvoidingView>

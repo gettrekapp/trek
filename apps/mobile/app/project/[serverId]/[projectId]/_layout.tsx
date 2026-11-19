@@ -1,5 +1,5 @@
 // A project's screens (its worktree list, a worktree, a session, Changes, a branch's history, adding a
-// worktree, its Global sessions, automations) in their own stack. On a wide window (tablets) the stack is the detail pane
+// worktree, automations) in their own stack. On a wide window (tablets) the stack is the detail pane
 // beside the project's sidebar, and the list is a placeholder under the screen the sidebar opened.
 // Under the stack, on every width, the project's Global tray (ui/GlobalTray.tsx).
 import { useState } from 'react'
