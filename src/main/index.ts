@@ -14,7 +14,6 @@ function setDockIcon(): void {
 }
 import { registerAppIpc } from './appIpc'
 import { registerKeyringNotice } from './keyringNotice'
-import { registerGithubHandlers } from './github'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
 import { appSettings, registerAppSettingsHandlers } from './appSettings'
@@ -264,7 +263,6 @@ app.whenReady().then(async () => {
   registerAppIpc()
   registerKeyringNotice()
   registerImportHandlers()
-  registerGithubHandlers()
   registerAppSettingsHandlers()
   // Before the links: their first connections are linked to the aggregator as they are made.
   registerAttentionHandlers()

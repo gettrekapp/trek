@@ -163,7 +163,7 @@ function ServerProjectTree({
     if (isCurrent()) useAppStore.getState().setServerLink(connection.status)
     backendChanged()
     const offStatus = connection.on('status', onStatus)
-    // gh's sign-in changed on the server (5c-1): the SDK has already moved `prWatch` in the welcome.
+    // A PR provider's sign-in changed on the server (5c-1): the SDK has already moved `prWatch` in the welcome.
     const offPrWatch = connection.on('event', (frame) => {
       if (frame.event !== 'integrations.changed' || !isCurrent()) return
       if (typeof (frame.payload as { prWatch?: unknown } | null)?.prWatch === 'boolean') backendChanged()

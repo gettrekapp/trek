@@ -24,7 +24,7 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'ui', 'automations', 'history', 'mcpTools', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'ui', 'automations', 'history', 'mcpTools', 'settingsEdit', 'globalPanel', 'prResolve'])
 })
 
 test('moving a worktree to another server follows move (5d)', () => {
@@ -51,6 +51,11 @@ test('the Changes tab review follows review (5c-2): an older server has only the
 test('the pull request watch follows prWatch (5c-1): listed only while gh is signed in on the server', () => {
   assert.equal(v2Features(['prWatch']).prWatch, true)
   assert.equal(v2Features(['mcp', 'local', 'linear'], { localEntry: true }).prWatch, false)
+})
+
+test("asking the server for a PR's head branch follows prResolve (plugins P3)", () => {
+  assert.equal(v2Features(['prResolve']).prResolve, true)
+  assert.equal(v2Features(['prWatch', 'mcp']).prResolve, false)
 })
 
 test('v2 features are the ceiling AND the welcome capabilities; settings need none', () => {

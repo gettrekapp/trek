@@ -381,13 +381,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if (failed) report('Could not unload every worktree', failed.reason)
       },
       // The server links the dirs and tags the branch itself.
-      create: async ({ repoId, branch, createBranch, fromPr }) => {
+      create: async ({ repoId, branch, createBranch, fromPr, prUrl }) => {
         const { result, rev } = await requestWithRev('worktree.create', {
           projectId,
           repoId,
           branch,
           createBranch,
-          ...(fromPr !== undefined ? { fromPr } : {})
+          ...(fromPr !== undefined ? { fromPr } : {}),
+          ...(prUrl !== undefined ? { prUrl } : {})
         })
         const { worktreeId } = result
         // The response can come before the patch that lists the worktree.
@@ -803,6 +804,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       setEnvVars: async (repoId, branch, text) => {
         await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
       }
+    },
+    pullRequests: {
+      resolve: async (repoId, input) => request('pr.resolve', { projectId, repoId, input })
     },
     automations: {
       save: async (automation) => {

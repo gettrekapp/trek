@@ -3,6 +3,9 @@ import { pathBaseName } from '../../../shared/pathName'
 import { repoById, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
+import { useFeatures } from '../useFeatures'
+import { usePrProviders } from '../plugins/usePrProviders'
+import { parsePrWith } from '../../../shared/plugins/pullRequests.ts'
 
 interface Props {
   repoId: string
@@ -10,23 +13,6 @@ interface Props {
 }
 
 const baseName = pathBaseName
-
-interface ParsedPullRequest {
-  owner: string
-  repo: string
-  number: number
-  /** Canonical form of the pasted link — this is what gets saved. */
-  url: string
-}
-
-function parsePullRequestUrl(input: string): ParsedPullRequest | null {
-  const match = input
-    .trim()
-    .match(/^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i)
-  if (!match) return null
-  const [, owner, repo, num] = match
-  return { owner, repo, number: Number(num), url: `https://github.com/${owner}/${repo}/pull/${num}` }
-}
 
 export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
@@ -41,7 +27,9 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
 
   const [prUrl, setPrUrl] = useState('')
   const [addingPr, setAddingPr] = useState(false)
-  const pr = parsePullRequestUrl(prUrl)
+  const providers = usePrProviders()
+  const features = useFeatures()
+  const pr = parsePrWith(providers, prUrl)
 
   const repo = repoById(project, repoId)!
 
@@ -100,8 +88,9 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     setAddingPr(true)
     setError(null)
     try {
-      const branch =
-        (await window.api.githubPrHeadBranch(pr.owner, pr.repo, pr.number)) ?? `pr/${pr.number}`
+      // The server's providers name the PR's head branch; null (or an older server) → pr/<n>.
+      const resolved = features.prResolve ? await getBackend().pullRequests.resolve(repoId, pr.url) : null
+      const branch = resolved?.headBranch ?? `pr/${pr.number}`
       const linkPr = (): void => {
         useAppStore.getState().setBranchPullRequest(repoId, branch, pr.url)
       }
@@ -116,7 +105,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         repoId,
         branch,
         createBranch: false,
-        fromPr: pr.number
+        fromPr: pr.number,
+        ...(features.prResolve ? { prUrl: pr.url } : {})
       })
       linkPr()
       await addInstance({ path })
@@ -172,21 +162,25 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
               . New branches are cut from the latest master/main (fetched from origin first).
             </p>
 
-            <h3>From a GitHub pull request</h3>
-            <div className="create-row">
-              <input
-                type="text"
-                placeholder="https://github.com/org/repo/pull/123"
-                value={prUrl}
-                onChange={(e) => setPrUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void createFromPr()
-                }}
-              />
-              <button disabled={addingPr || !pr} onClick={() => void createFromPr()}>
-                {addingPr ? 'Adding…' : 'Add PR'}
-              </button>
-            </div>
+            <h3>From a pull request</h3>
+            {providers.length === 0 ? (
+              <p className="muted">No pull request provider is on in this project (Settings → Plugins).</p>
+            ) : (
+              <div className="create-row">
+                <input
+                  type="text"
+                  placeholder={providers[0]?.hint ?? 'a pull request link'}
+                  value={prUrl}
+                  onChange={(e) => setPrUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void createFromPr()
+                  }}
+                />
+                <button disabled={addingPr || !pr} onClick={() => void createFromPr()}>
+                  {addingPr ? 'Adding…' : 'Add PR'}
+                </button>
+              </div>
+            )}
             <p className="muted">
               Checks out the pull request&apos;s branch into a new worktree and links the PR to it.
             </p>

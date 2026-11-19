@@ -414,7 +414,7 @@ try {
   check('turning a watch on is refused then (TOOL_ERROR); the one on stays', [refused, (await branchData())?.prWatch !== undefined], ['TOOL_ERROR', true])
   // Pushed (integrations.changed {prWatch}): the open window and connection follow without reconnecting.
   check("the open window's PR watch goes away", await until(() => win.evaluate(() => window.__features().prWatch), false), false)
-  check('the chip says the watch is paused', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watch paused — gh signed out'), 'PR #12 · watch paused — gh signed out')
+  check('the chip says the watch is paused', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watch paused — gh isn\'t signed in'), 'PR #12 · watch paused — gh isn\'t signed in')
   check("and the open SDK connection's capabilities follow", sdk.welcome.capabilities.includes('prWatch'), false)
   pr()
   writeFileSync(signedIn, '')

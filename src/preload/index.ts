@@ -61,10 +61,6 @@ const api = {
   /** How saved server tokens are kept on this computer: 'unencrypted' on Linux without a keyring. */
   secretStorage: (): Promise<'encrypted' | 'unencrypted'> => ipcRenderer.invoke('app:secretStorage'),
 
-  // GitHub metadata lookup — always resolved from the local machine
-  githubPrHeadBranch: (owner: string, repo: string, number: number): Promise<string | null> =>
-    ipcRenderer.invoke('github:prHeadBranch', owner, repo, number),
-
 
   // Agent CLIs — app-wide defaults and local model lists
   llmGetSettings: (): Promise<LlmSettings> => ipcRenderer.invoke('llm:getSettings'),

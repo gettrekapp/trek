@@ -19,6 +19,7 @@ export type FeatureName =
   | 'mcpTools'
   | 'settingsEdit'
   | 'globalPanel'
+  | 'prResolve'
 
 export type BackendFeatures = Readonly<Record<FeatureName, boolean>>
 
@@ -39,7 +40,8 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'history',
   'mcpTools',
   'settingsEdit',
-  'globalPanel'
+  'globalPanel',
+  'prResolve'
 ]
 
 /** An empty window: no project, so nothing to do. */
@@ -57,14 +59,16 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Automations need `automations`: an older server has no `automation.*`.
  * - The History tab needs `history`: an older server records nothing.
  * - The quick button editor's MCP tool list needs `mcpTools`: an older server has no `mcpTools.list`.
+ * - Asking the server for a pull request's head branch (Add Worktree) needs `prResolve`: an older
+ *   server has no `pr.resolve`, and the worktree falls back to `pr/<n>`.
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
  * - Skills are the server's (5b), read on its disk: they need `skills`, on
  *   any server. (Voice and Linear are plugins since plugin system phases 1
  *   and 2: plugins/.)
- * - The pull request watch (5c-1) runs gh on the server's machine: it needs
- *   `prWatch`, which the server lists only while gh is signed in there.
+ * - The pull request watch (5c-1) runs on the server's machine through its PR providers: it
+ *   needs `prWatch`, which the server lists only while a provider's host is signed in there.
  * - The Changes tab's sources and line comments (5c-2) need `review`: an older server's
  *   `worktree.changes` knows only the branch against its base.
  * - The Global panel needs `mcp`.
@@ -90,7 +94,8 @@ export const V2_FEATURES: BackendFeatures = {
   history: true,
   mcpTools: true,
   settingsEdit: true,
-  globalPanel: true
+  globalPanel: true,
+  prResolve: true
 }
 
 /**
@@ -113,7 +118,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   ui: 'ui',
   automations: 'automations',
   history: 'history',
-  mcpTools: 'mcpTools'
+  mcpTools: 'mcpTools',
+  prResolve: 'prResolve'
 }
 
 /**

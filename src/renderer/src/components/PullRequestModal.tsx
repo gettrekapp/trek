@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
+import { usePrProviders } from '../plugins/usePrProviders'
+import { parsePrWith } from '../../../shared/plugins/pullRequests.ts'
 
 interface Props {
   repoId: string
@@ -9,7 +11,7 @@ interface Props {
   onClose: () => void
 }
 
-/** Links a branch to a GitHub pull request by URL. */
+/** Links a branch to a pull request by its link. */
 export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.Element {
   const currentUrl = useAppStore(
     (s) => s.project?.repositories.find((r) => r.id === repoId)?.branchPullRequests?.[branch]
@@ -17,14 +19,20 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
   const setBranchPullRequest = useAppStore((s) => s.setBranchPullRequest)
   const [input, setInput] = useState(currentUrl ?? '')
   const [error, setError] = useState<string | null>(null)
+  const providers = usePrProviders()
 
   const save = (): void => {
-    const url = input.trim()
-    if (!/^https?:\/\/\S+$/i.test(url)) {
-      setError('Paste the pull request URL, e.g. https://github.com/org/repo/pull/123')
+    const parsed = parsePrWith(providers, input)
+    if (!parsed) {
+      setError(
+        providers.length === 0
+          ? 'No pull request provider is on in this project (Settings → Plugins).'
+          : `Enter ${providers.map((p) => p.hint).join(', or ')}`
+      )
       return
     }
-    setBranchPullRequest(repoId, branch, url)
+    // The canonical form is what gets saved.
+    setBranchPullRequest(repoId, branch, parsed.url)
     onClose()
   }
 
@@ -36,14 +44,14 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose} onClick={(e) => e.stopPropagation()}>
       <div className="modal ticket-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>GitHub Pull Request</h2>
+        <h2>Pull Request</h2>
         <p className="muted">Link branch “{branch}” to a pull request.</p>
         {error && <div className="error">{error}</div>}
         <div className="ticket-fields">
           <input
             type="text"
             autoFocus
-            placeholder="https://github.com/org/repo/pull/123"
+            placeholder={providers[0]?.hint ?? ''}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

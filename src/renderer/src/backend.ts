@@ -62,8 +62,10 @@ export interface CreateWorktreeRequest {
   branch: string
   /** true cuts a new branch from the default branch; false checks out an existing one */
   createBranch: boolean
-  /** GitHub PR number whose head is fetched into `branch` first; needs createBranch: false */
+  /** Pull request number whose head is fetched into `branch` first; needs createBranch: false */
   fromPr?: number
+  /** The PR's link: its provider names the ref fromPr fetches (`features.prResolve`) */
+  prUrl?: string
 }
 
 export interface WindowBackend {
@@ -213,6 +215,10 @@ export interface WindowBackend {
     dismissPrNotice(path: string): Promise<void>
     setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
+  readonly pullRequests: {
+    /** A link or number through the server's PR providers, with its head branch (`features.prResolve`) */
+    resolve(repoId: string, input: string): Promise<{ url: string; number: number; label: string; providerId: string; headBranch: string | null }>
+  }
   /** The project's automations (feature `automations`). Each rejects on failure, for the caller to show. */
   readonly automations: {
     /** Resolves the automation's id once the window's mirror holds the save */
@@ -348,6 +354,7 @@ export const idleBackend: WindowBackend = {
     dismissPrNotice: noProject,
     setEnvVars: noProject
   },
+  pullRequests: { resolve: noProject },
   automations: { save: noProject, remove: noProject, runNow: noProject, resolveMissed: noProject },
   history: { list: noProject, onRecorded: () => () => {} },
   mcpTools: { list: noProject, trek: noProject },

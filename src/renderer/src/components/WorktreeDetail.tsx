@@ -6,11 +6,12 @@ import {
   dormantSessions,
   environmentFor,
   instanceForInfo,
-  pullRequestLabel,
   repoOfInfo,
   useAppStore
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
+import { usePrProviders } from '../plugins/usePrProviders'
+import { prLabel, prOwner } from '../../../shared/plugins/pullRequests.ts'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
@@ -151,6 +152,7 @@ export function WorktreeDetail({
   const envBusy = useAppStore((s) => s.envBusy)
 
   const features = useFeatures()
+  const prProviders = usePrProviders()
   const canMove = features.moveWorktree && moveTargets(appServers.servers, ownEntry).length > 0
   const path = info?.path
   // The stack runs on the server's machine (`features.stacks`, any server that has `stacks`).
@@ -522,10 +524,14 @@ export function WorktreeDetail({
                 title={`${prNotice ? `${prNotice}\n` : ''}Open pull request — ${pullRequest}`}
                 onClick={() => window.open(pullRequest)}
               >
-                PR {pullRequestLabel(pullRequest)}
+                PR {prLabel(prProviders, pullRequest)}
                 {watchingPr && (
-                  // The server keeps the watch while gh is signed out, but polls nothing until it signs in again.
-                  <span className="chip-pr-watch">{features.prWatch ? ' · watching' : ' · watch paused — gh signed out'}</span>
+                  // The server keeps the watch while its host is signed out, but polls nothing until it signs in again.
+                  <span className="chip-pr-watch">
+                    {features.prWatch
+                      ? ' · watching'
+                      : ` · watch paused — ${prOwner(prProviders, pullRequest)?.signInName ?? 'its host'} isn't signed in`}
+                  </span>
                 )}
               </span>
             )}
@@ -680,7 +686,7 @@ export function WorktreeDetail({
                   }}
                 >
                   <div className="detail-menu-name" title="Change or unlink the linked pull request">
-                    Pull request {pullRequest ? pullRequestLabel(pullRequest) : '(none)'}…
+                    Pull request {pullRequest ? prLabel(prProviders, pullRequest) : '(none)'}…
                   </div>
                 </div>
                 {pullRequest && info.branch && (features.prWatch || watchingPr) && (
