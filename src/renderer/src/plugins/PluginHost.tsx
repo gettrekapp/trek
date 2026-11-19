@@ -2,13 +2,15 @@
 // components, mounted where the window's server has the plugin and it is on for the project, each
 // inside its host and an error boundary (a plugin that throws hides its own UI, not the window's).
 import { Component, useMemo, useSyncExternalStore, type ReactNode } from 'react'
-import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type PluginSlotName } from '../../../shared/plugins/client.ts'
+import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type PluginSlotName, type PluginSlotProps } from '../../../shared/plugins/client.ts'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
-import { allBranchTickets, useAppStore } from '../store'
-import { terminalLabel } from '../terminals'
+import { allBranchTickets, allWorktrees, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
+import { revealTerminal, terminalLabel } from '../terminals'
 import { createClientHost, type HostDeps } from './host'
 import { pluginActive, pluginStatus, type PluginStatus } from './presence'
+import { sessionsSource, type SessionsSource } from './sessions.ts'
+import { activeSlotEntries } from './slots.ts'
 
 export interface PluginEntry {
   plugin: ClientPlugin
@@ -31,6 +33,27 @@ function generationOf(backend: WindowBackend): number {
   return generation
 }
 
+let sessionView: SessionsSource | null = null
+/** The window's session view, made on first use */
+function windowSessions(): SessionsSource {
+  if (!sessionView) {
+    sessionView = sessionsSource(() => {
+      const s = useAppStore.getState()
+      return {
+        worktrees: s.project ? allWorktrees(s.project) : [],
+        globalId: GLOBAL_WORKTREE_ID,
+        terminals: s.terminals,
+        terminalOrder: s.terminalOrder,
+        decisions: s.decisions,
+        activeWorktreeId: s.activeWorktreeId,
+        activeTerminal: s.activeTerminal,
+        globalPanelOpen: s.globalPanelOpen
+      }
+    }, useAppStore.subscribe)
+  }
+  return sessionView
+}
+
 /** What every plugin host in this window is built with. */
 const hostDeps = (): HostDeps => ({
   appSettings: window.api.appSettings,
@@ -45,6 +68,12 @@ const hostDeps = (): HostDeps => ({
       last = now
       listener()
     })
+  },
+  sessions: () => windowSessions().sessions(),
+  onSessionsChanged: (listener) => windowSessions().onChanged(listener),
+  selectedTerminalId: () => windowSessions().selected(),
+  focusSession: (terminalId) => {
+    if (Object.hasOwn(useAppStore.getState().terminals, terminalId)) revealTerminal(terminalId)
   }
 })
 
@@ -108,7 +137,7 @@ export function usePluginEntries(plugins: readonly ClientPlugin[] = BUILTIN_CLIE
   }, [backend, key, hasProject, settings, plugins])
 }
 
-class PluginBoundary extends Component<{ id: string; children: ReactNode }, { failed: boolean }> {
+class PluginBoundary extends Component<{ id: string; fallback?: ReactNode; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true }
@@ -117,14 +146,14 @@ class PluginBoundary extends Component<{ id: string; children: ReactNode }, { fa
     console.error(`[plugin ${this.props.id}] its UI failed and is hidden`, err)
   }
   render(): ReactNode {
-    return this.state.failed ? null : this.props.children
+    return this.state.failed ? (this.props.fallback ?? null) : this.props.children
   }
 }
 
 /** A plugin component inside its host and error boundary. */
-export function PluginScope({ entry, children }: { entry: PluginEntry; children: ReactNode }): React.JSX.Element {
+export function PluginScope({ entry, fallback, children }: { entry: PluginEntry; fallback?: ReactNode; children: ReactNode }): React.JSX.Element {
   return (
-    <PluginBoundary id={entry.plugin.manifest.id}>
+    <PluginBoundary id={entry.plugin.manifest.id} fallback={fallback}>
       <PluginHostContext.Provider value={entry.host}>{children}</PluginHostContext.Provider>
     </PluginBoundary>
   )
@@ -149,21 +178,22 @@ export function PluginRuntimes(): React.JSX.Element {
   )
 }
 
+type MultiSlot = Exclude<PluginSlotName, 'settings' | 'sessionIndicator'>
+
 /** The active plugins' components for one slot, in built-in order. */
-export function PluginSlot({ name }: { name: Exclude<PluginSlotName, 'settings'> }): React.JSX.Element {
+export function PluginSlot<N extends MultiSlot>({ name, props }: { name: N; props?: PluginSlotProps<N> }): React.JSX.Element {
   const entries = usePluginEntries()
   return (
     <>
-      {entries
-        .filter((e) => pluginActive(e.status) && e.plugin.slots?.[name])
-        .map((e) => {
-          const Slot = e.plugin.slots![name]!
-          return (
-            <PluginScope key={e.key} entry={e}>
-              <Slot />
-            </PluginScope>
-          )
-        })}
+      {activeSlotEntries(entries, name).map((e) => {
+        // The signature ties `props` to `name`; inside, a generic conditional type can't be spread.
+        const Slot = e.plugin.slots![name]! as React.FC<object>
+        return (
+          <PluginScope key={e.key} entry={e}>
+            <Slot {...((props ?? {}) as object)} />
+          </PluginScope>
+        )
+      })}
     </>
   )
 }
