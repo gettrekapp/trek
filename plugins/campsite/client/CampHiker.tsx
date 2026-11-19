@@ -1,0 +1,73 @@
+// A hiker at the campsite strip (2.5×): walks in from the nearer edge, walks to each new spot, and
+// walks off when its session closes (Campsite's departures). A button: click to show its session.
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PluginSession } from '../../../src/shared/plugins/client.ts'
+import { lookFor } from '../shared/hiker.ts'
+import type { Place } from '../shared/layout.ts'
+import { hikerLabel, hikerTooltip, stanceFor, type Chore, type Stance } from '../shared/pose.ts'
+import { Hiker } from './Hiker.tsx'
+
+export const SCALE = 2.5
+export const HALF = 6 * SCALE
+/** Matches .cs-camp-hiker's transform transition */
+export const WALK_MS = 1200
+
+const WALK: Stance = { pose: 'walk', grey: false, sign: false }
+
+/** Off the strip, past the edge nearer `x` */
+export const offstage = (x: number, width: number): number => (x < width / 2 ? -HALF * 3 : width + HALF * 3)
+
+interface Props {
+  session: PluginSession
+  x: number
+  place: Place
+  width: number
+  chore: Chore
+  selected: boolean
+  /** Where it appears before walking to `x` (a leaving hiker's last spot); default: the nearer edge */
+  startX?: number
+  leaving?: boolean
+  onClick?: () => void
+}
+
+export function CampHiker({ session, x, place, width, chore, selected, startX, leaving = false, onClick }: Props): React.JSX.Element {
+  const look = useMemo(() => lookFor(session.terminalId, session.provider), [session.terminalId, session.provider])
+  const [initialX] = useState(() => startX ?? offstage(x, width))
+  const shown = useRef(initialX)
+  const [shownX, setShownX] = useState(initialX)
+  const [walking, setWalking] = useState(true)
+  const [facingLeft, setFacingLeft] = useState(x < initialX)
+  // Any move is a walk; the next frame, so the transition runs from where it stands
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const from = shown.current
+      if (from === x) return
+      shown.current = x
+      setFacingLeft(x < from)
+      setWalking(true)
+      setShownX(x)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [x])
+  useEffect(() => {
+    if (!walking) return
+    const timer = setTimeout(() => setWalking(false), WALK_MS)
+    return () => clearTimeout(timer)
+  }, [walking, shownX])
+  const stance = walking || leaving ? WALK : stanceFor(session, chore)
+  const inside = place === 'inside'
+  return (
+    <button
+      className={`cs-camp-hiker${selected ? ' selected' : ''}${inside ? ' inside' : ''}${facingLeft ? ' left' : ''}`}
+      style={{ transform: `translateX(${shownX - HALF}px)` }}
+      title={hikerTooltip(session, chore)}
+      onClick={onClick}
+      tabIndex={leaving ? -1 : 0}
+      aria-hidden={leaving || undefined}
+    >
+      <span className="cs-facing">
+        <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey || inside} sign={stance.sign} scale={SCALE} label={hikerLabel(session)} />
+      </span>
+    </button>
+  )
+}

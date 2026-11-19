@@ -116,6 +116,6 @@ test('labels: an unknown status reads as idle; a worktree session with no name f
   assert.equal(hikerLabel(session({ status: 'someday' })), 'Claude 2, idle')
   assert.equal(statusTitle('someday', true), 'Agent is idle')
   assert.equal(hikerTooltip(session({ worktreeName: null, branch: 'feature/x', status: 'idle' }), 'chop'), 'Claude 2 · feature/x · idle')
-  assert.equal(hikerTooltip(session({ worktreeName: null, branch: null, status: 'idle' }), 'chop'), 'Claude 2 ·  · idle')
+  assert.equal(hikerTooltip(session({ worktreeName: null, branch: null, status: 'idle' }), 'chop'), 'Claude 2 · idle')
   assert.equal(hikerTooltip(session({ worktreeId: null, worktreeName: 'x', branch: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
 })

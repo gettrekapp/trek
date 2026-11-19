@@ -94,5 +94,5 @@ export function hikerTooltip(session: PluginSession, chore: Chore): string {
   const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
   const parts = [session.label, where, statusText(session)]
   if (session.status === 'working' && !isWaiting(session)) parts.push(CHORE_NAMES[chore])
-  return parts.join(' · ')
+  return parts.filter(Boolean).join(' · ')
 }
