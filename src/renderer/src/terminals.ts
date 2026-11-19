@@ -24,6 +24,7 @@ import {
 import { errorCode, errorText } from './v2/errors'
 import { tabView } from './globalTabs'
 import { quietReveals } from './v2/sessionSelect'
+import { osc52Text } from './v2/osc52'
 
 /**
  * Owns the live xterm instances of a server window's sessions. These live
@@ -114,7 +115,43 @@ function newXterm(): { term: Terminal; fit: FitAddon } {
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
+  term.parser.registerOscHandler(52, (data) => {
+    const text = osc52Text(data)
+    if (text !== null) copyToClipboard(text)
+    return true
+  })
   return { term, fit }
+}
+
+/**
+ * Puts a terminal program's copy on this computer's clipboard. The async
+ * clipboard API needs a secure context, which a web client over plain http
+ * lacks; there the older copy command is tried instead.
+ */
+function copyToClipboard(text: string): void {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => copyWithCommand(text))
+    return
+  }
+  copyWithCommand(text)
+}
+
+function copyWithCommand(text: string): void {
+  const active = document.activeElement as HTMLElement | null
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  try {
+    document.execCommand('copy')
+  } catch {
+    // nothing else to try
+  }
+  area.remove()
+  active?.focus()
 }
 
 /** "worktree · tab" label for a terminal, as shown in notifications; repo-prefixed with several. */
