@@ -10,6 +10,9 @@ import {
   CAPABILITY,
   TEARDOWN_REQUEST_TIMEOUT_MS,
   defaultTeardown,
+  promoteTeardownFailure,
+  teardownFailed,
+  teardownNote,
   teardownSentence,
   type Project,
   type PromoteRequestEvent,
@@ -21,7 +24,6 @@ import { Latest } from '../logic/latest.ts'
 import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
 import { teardownBlocker, teardownPlan } from '../state/teardown.ts'
-import { teardownFailed, teardownNote } from '../logic/worktrees.ts'
 import { Button } from './Button.tsx'
 import { colors, ui } from './theme.ts'
 
@@ -46,6 +48,8 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
   useEffect(() => projectLatest.set(project), [project, projectLatest])
   const promptRef = useRef(prompt)
   promptRef.current = prompt
+  // A confirm in flight: a second tap does not claim again.
+  const running = useRef(false)
 
   useEffect(() => {
     if (!server) return
@@ -170,7 +174,9 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     close()
   }
   const confirm = async (): Promise<void> => {
-    const teardown = prompt.kind === 'confirm' ? prompt.teardown : []
+    if (running.current || prompt.kind !== 'confirm') return
+    running.current = true
+    const { teardown } = prompt
     setPrompt({ kind: 'running', request })
     try {
       const claim = await conn.request('promote.claim', { projectId, requestId: request.requestId })
@@ -188,10 +194,10 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     } catch (err) {
       // The desktop's wording: a failed teardown's text names what was already done; a failure after it gets the note.
       const text = errorMessage(err)
-      const failure = teardownFailed(err)
-        ? `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
-        : `Could not promote: ${text}${teardownNote(err)}`
+      const failure = teardownFailed(err) ? promoteTeardownFailure(text) : `Could not promote: ${text}${teardownNote(err)}`
       setPrompt({ kind: 'result', request, failed: true, text: failure })
+    } finally {
+      running.current = false
     }
   }
 

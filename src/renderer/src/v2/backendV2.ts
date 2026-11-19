@@ -32,7 +32,7 @@ import { hasNormalTabs } from '../globalTabs.ts'
 import { selectionOf, selectionReporter, type SelectionState } from './uiSelection.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
-import { TEARDOWN_REQUEST_TIMEOUT_MS, type TeardownItem } from '../../../shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, promoteTeardownFailure, teardownFailed, teardownNote, tornDownBefore, type TeardownItem } from '../../../shared/teardown.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
@@ -127,31 +127,6 @@ const discardPrompt = (name: string): ConfirmPrompt => ({
   detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
   confirmLabel: 'Delete Changes & Worktree'
 })
-
-/** The error's `details` from a server that tears down itself (plugins E1). */
-function teardownDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
-  const details = (err as { details?: unknown } | null)?.details
-  return details && typeof details === 'object' ? details : {}
-}
-
-/** The teardown itself failed (`details.reason: 'teardown'`); its text names what was already done. */
-const teardownFailed = (err: unknown): boolean => teardownDetails(err).reason === 'teardown'
-
-/** What a failure after the teardown found already torn down (`details.tornDown`); none for the teardown's own failure. */
-function tornDownBefore(err: unknown): string[] {
-  const { tornDown } = teardownDetails(err)
-  if (teardownFailed(err) || !Array.isArray(tornDown)) return []
-  return tornDown.filter((label): label is string => typeof label === 'string')
-}
-
-/**
- * Added to a failed remove's or promote's error on a server that tore down first (plugins E1): the
- * items ran, then something else failed, so they are gone though nothing else happened.
- */
-function serverTornDownNote(err: unknown): string {
-  const labels = tornDownBefore(err)
-  return labels.length > 0 ? ` The teardown had already run and is not undone: ${labels.join('; ')}.` : ''
-}
 
 export interface V2BackendDeps {
   projectId: string
@@ -364,7 +339,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     // the teardown gets the note.
     const fail = async (err: unknown): Promise<void> => {
       await reload()
-      await deps.showError(REMOVE_FAILED, errorText(err) + serverTornDownNote(err))
+      await deps.showError(REMOVE_FAILED, errorText(err) + teardownNote(err))
     }
     // The ids for the forced retry: the same ones, unless the refusal came after they ran.
     let retryIds: readonly string[] = teardown
@@ -663,12 +638,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           } catch (err) {
             if (teardownFailed(err)) {
               // Its text names what was already done.
-              const text = errorText(err)
-              const error = `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
+              const error = promoteTeardownFailure(errorText(err))
               await deps.showError(PROMOTE_FAILED, error)
               return { outcome: 'failed', error }
             }
-            return failed(err, serverTornDownNote(err))
+            return failed(err, teardownNote(err))
           } finally {
             release()
           }

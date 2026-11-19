@@ -39,8 +39,42 @@ export function teardownCheckbox(items: readonly TeardownItem[]): { label: strin
   return { label: `Also: ${items.map((i) => i.label).join('; ')}`, checked: items.some((i) => i.checked), ids }
 }
 
-/** The phone's question's last sentence (it has no checkbox): what the default ids tear down; '' for nothing. */
+/**
+ * The phone's question's last sentences (it has no checkbox): what the default ids tear down, and
+ * what is running but not checked by default, so stays running; '' for neither.
+ */
 export function teardownSentence(items: readonly TeardownItem[]): string {
-  const labels = items.filter((i) => i.checked).map((i) => i.label)
-  return labels.length > 0 ? ` Also: ${labels.join('; ')}.` : ''
+  const done = items.filter((i) => i.checked).map((i) => i.label)
+  const left = items.filter((i) => !i.checked && i.running === true).map((i) => i.label)
+  return (done.length > 0 ? ` Also: ${done.join('; ')}.` : '') + (left.length > 0 ? ` Not done (still running): ${left.join('; ')}.` : '')
+}
+
+/** The error's `details` from a server that tears down itself (plugins E1). */
+export function teardownDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
+  const details = (err as { details?: unknown } | null)?.details
+  return details && typeof details === 'object' ? details : {}
+}
+
+/** The teardown itself failed (`details.reason: 'teardown'`); its text names what was already done. */
+export const teardownFailed = (err: unknown): boolean => teardownDetails(err).reason === 'teardown'
+
+/** What a failure after the teardown found already torn down (`details.tornDown`); none for the teardown's own failure. */
+export function tornDownBefore(err: unknown): string[] {
+  const { tornDown } = teardownDetails(err)
+  if (teardownFailed(err) || !Array.isArray(tornDown)) return []
+  return tornDown.filter((label): label is string => typeof label === 'string')
+}
+
+/**
+ * Added to a failed remove's or promote's error on a server that tore down first (plugins E1): the
+ * items ran, then something else failed, so they are gone though nothing else happened.
+ */
+export function teardownNote(err: unknown): string {
+  const labels = tornDownBefore(err)
+  return labels.length > 0 ? ` The teardown had already run and is not undone: ${labels.join('; ')}.` : ''
+}
+
+/** A promote whose teardown failed (teardownFailed), from the error's text (which names what was already done). */
+export function promoteTeardownFailure(text: string): string {
+  return `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
 }

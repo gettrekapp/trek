@@ -473,6 +473,10 @@ test('demo: worktrees are created, unloaded, loaded and removed', async () => {
     const { worktreeId } = await h.conn.request('worktree.create', { ...ref, repoId: 'demo-repo', branch: 'feature/saved-carts', createBranch: false })
     // Nothing to tear down in the demo
     assert.deepEqual(await h.conn.request('worktree.teardownPlan', { ...ref, worktreeId, op: 'remove' }), { items: [] })
+    // Refused as the server refuses them
+    await assert.rejects(h.conn.request('worktree.teardownPlan', { ...ref, worktreeId, op: 'delete' }), { code: 'BAD_REQUEST' })
+    const main = h.server.state.project.repositories[0].worktrees.find((w) => w.isMain)
+    await assert.rejects(h.conn.request('worktree.teardownPlan', { ...ref, worktreeId: main.id, op: 'remove' }), { code: 'BAD_REQUEST' })
     await assert.rejects(h.conn.request('worktree.remove', { ...ref, worktreeId }), { code: 'IN_USE' })
     await h.conn.request('worktree.unload', { ...ref, worktreeId })
     await h.conn.request('worktree.remove', { ...ref, worktreeId })

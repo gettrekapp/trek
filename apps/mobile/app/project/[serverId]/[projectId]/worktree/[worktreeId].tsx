@@ -13,6 +13,7 @@ import {
   CAPABILITY,
   TEARDOWN_REQUEST_TIMEOUT_MS,
   defaultTeardown,
+  teardownNote,
   teardownSentence,
   type AgentInfo,
   type Project,
@@ -26,7 +27,7 @@ import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit } from '../../../../../src/logic/worktreeRow.ts'
-import { refusedAsDirty, removeQuestion, removeWorktree, teardownNote, teardownRemove } from '../../../../../src/logic/worktrees.ts'
+import { refusedAsDirty, removeQuestion, removeWorktree, teardownRemove } from '../../../../../src/logic/worktrees.ts'
 import { changesRoute, projectRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
 import { useServers } from '../../../../../src/state/ServersProvider.tsx'

@@ -6,6 +6,7 @@
 
 /** "#12" from a pull request link, else "PR" (the desktop's generic label). */
 export { genericPrLabel as pullRequestLabel } from '../shared.ts'
+import { tornDownBefore } from '../shared.ts'
 
 /** The branch a PR's worktree gets when the server can't name the PR's own (pr.resolve's headBranch), as on the desktop. */
 export function prBranch(number: number): string {
@@ -43,31 +44,6 @@ export function removeQuestion(name: string, loaded: boolean, which: 'remove' | 
   const stop = loaded ? SESSIONS_STOP : ''
   if (which === 'discard') return { title: `${name} has uncommitted changes.`, message: `Removing it discards them. This cannot be undone.${stop}${also}` }
   return { title: `Remove ${name}?`, message: `The worktree's folder is deleted. Its branch stays.${stop}${also}` }
-}
-
-/** The error's `details` from a server that tears down itself (plugins E1). */
-function teardownDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
-  const details = (err as { details?: unknown } | null)?.details
-  return details && typeof details === 'object' ? details : {}
-}
-
-/** The teardown itself failed (`details.reason: 'teardown'`); its text names what was already done. The desktop's rule. */
-export const teardownFailed = (err: unknown): boolean => teardownDetails(err).reason === 'teardown'
-
-/** What a failure after the teardown found already torn down (`details.tornDown`); none for the teardown's own failure. */
-function tornDownBefore(err: unknown): string[] {
-  const { tornDown } = teardownDetails(err)
-  if (teardownFailed(err) || !Array.isArray(tornDown)) return []
-  return tornDown.filter((label): label is string => typeof label === 'string')
-}
-
-/**
- * Added to a failed remove's or promote's error on a server that tore down first (plugins E1): the
- * items ran, then something else failed, so they are gone though nothing else happened. The desktop's wording.
- */
-export function teardownNote(err: unknown): string {
-  const labels = tornDownBefore(err)
-  return labels.length > 0 ? ` The teardown had already run and is not undone: ${labels.join('; ')}.` : ''
 }
 
 /**

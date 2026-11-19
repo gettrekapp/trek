@@ -1,7 +1,7 @@
 // The demo's worktrees (apps/mobile/src/demo): create, load, unload and remove (with an empty
 // teardown plan); their changes, diffs and commits from demoData; the branch list, the agents and
 // ui.report.
-import type { ChangesSource, Worktree } from '../../shared.ts'
+import { WORKTREE_OPS, type ChangesSource, type Worktree } from '../../shared.ts'
 import type { DemoChanges } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
@@ -85,8 +85,11 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
     return { tornDown: [] }
   },
   // As a server with `worktreeTeardown` answers for a worktree with no stack, VM or plugin to tear down.
+  // The server's refusals: an unknown op, and the main checkout.
   'worktree.teardownPlan': (ctx, p) => {
-    worktreeRef(ctx, p)
+    const { worktree } = worktreeRef(ctx, p)
+    if (!(WORKTREE_OPS as readonly unknown[]).includes(p.op)) throw new DemoError('BAD_REQUEST', `op must be one of ${WORKTREE_OPS.join(', ')}`)
+    if (worktree.isMain) throw new DemoError('BAD_REQUEST', 'the main checkout is never removed, promoted or moved, so it has no teardown')
     return { items: [] }
   },
   'worktree.load': (ctx, p) => {

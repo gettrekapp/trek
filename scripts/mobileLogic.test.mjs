@@ -27,12 +27,12 @@ import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
-import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree, teardownFailed, teardownNote, teardownRemove } from '../apps/mobile/src/logic/worktrees.ts'
+import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree, teardownRemove } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../apps/mobile/src/state/teardown.ts'
-import { defaultTeardown, teardownSentence } from '../src/shared/teardown.ts'
+import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, teardownSentence } from '../src/shared/teardown.ts'
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
@@ -1157,6 +1157,21 @@ test("teardown (plugins E1): a failure after the teardown says what was torn dow
   assert.equal(teardownNote(new Error('plain')), '')
   assert.equal(teardownNote(Object.assign(new Error('x'), { details: { tornDown: [] } })), '')
   assert.equal(teardownNote(null), '')
+})
+
+test('teardown (plugins E1): a failed teardown before a promote, with a full stop added only when the text has none', () => {
+  assert.equal(promoteTeardownFailure('stack.sh exited with code 1'), 'The teardown before the promote failed: stack.sh exited with code 1. Nothing was promoted.')
+  assert.equal(promoteTeardownFailure('stack.sh failed.'), 'The teardown before the promote failed: stack.sh failed. Nothing was promoted.')
+  assert.equal(promoteTeardownFailure('Is it running?'), 'The teardown before the promote failed: Is it running? Nothing was promoted.')
+})
+
+test("teardown (plugins E1): the phone's question names what stays running, as it is not sent", () => {
+  const vm = { id: 'env:destroy', label: 'Delete the VM “trek-x”', checked: false, running: true }
+  const stack = { id: 'stack:destroy', label: 'Tear down the dev stack', checked: true, running: true }
+  const idle = { id: 'env:cache', label: 'Drop the cache', checked: false }
+  assert.equal(teardownSentence([vm]), ' Not done (still running): Delete the VM “trek-x”.')
+  assert.equal(teardownSentence([stack, vm, idle]), ' Also: Tear down the dev stack. Not done (still running): Delete the VM “trek-x”.')
+  assert.deepEqual(defaultTeardown([stack, vm, idle]), ['stack:destroy'])
 })
 
 test("tickets: the providers on for the project, by the server's plugin list and the project's plugins setting", () => {
