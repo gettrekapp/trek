@@ -32,6 +32,7 @@ import { hasNormalTabs } from '../globalTabs.ts'
 import { selectionOf, selectionReporter, type SelectionState } from './uiSelection.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, type TeardownItem } from '../../../shared/teardown.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
@@ -87,6 +88,12 @@ export interface WorktreeTeardown {
    * can't be read. Rejects, with the text to show, when the server did not answer in time.
    */
   isDirty(info: GitWorktreeInfo, backend: WindowBackend): Promise<boolean>
+  /**
+   * The confirm on a server that tears down itself (`worktreeTeardown`, plugins E1): the plan's
+   * items as the dialog's checkbox (teardownCheckbox). The ids to send: the ticked ones; none when
+   * unticked or not confirmed. `stillWanted` false right before the dialog: not shown, not confirmed.
+   */
+  confirmPlan(prompt: ConfirmPrompt, items: readonly TeardownItem[], stillWanted?: () => boolean): Promise<{ confirmed: boolean; teardown: string[] }>
 }
 
 /** Added to a failed removal's error once its stack or VM is already gone. */
@@ -95,6 +102,41 @@ export function tornDownNote(stack: boolean, vm: boolean): string {
   if (stack) return ' Its dev stack was already removed.'
   if (vm) return ' Its VM was already removed.'
   return ''
+}
+
+/** Delete's confirmation. `vm`: a VM this window tears down itself (a server without `worktreeTeardown`). */
+function removePrompt(info: GitWorktreeInfo, loaded: boolean, dirty: boolean, vm?: string): ConfirmPrompt {
+  const name = info.branch ?? info.path
+  return {
+    title: 'Delete Worktree',
+    message: `Delete worktree “${name}”?`,
+    detail:
+      `This runs "git worktree remove" on ${info.path} and deletes the directory. ` +
+      `The branch itself is kept. ` +
+      (loaded ? 'Its running sessions will be stopped. ' : '') +
+      (dirty ? 'This worktree has uncommitted changes — they will be permanently deleted.' : 'Uncommitted changes will block the deletion.') +
+      (vm ? ` Its Docker environment (Colima VM “${vm}”) and all its data will also be deleted.` : ''),
+    confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
+  }
+}
+
+/** The question when git refuses a worktree with changes. */
+const discardPrompt = (name: string): ConfirmPrompt => ({
+  title: 'Delete Uncommitted Changes',
+  message: `“${name}” has uncommitted changes.`,
+  detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
+  confirmLabel: 'Delete Changes & Worktree'
+})
+
+/**
+ * Added to a failed promote's error on a server that tore down first (plugins E1): another promote
+ * of the repository took its lock while the chosen items ran (CONFLICT, after them), so they are
+ * gone though nothing was promoted.
+ */
+function promoteTornDownNote(err: unknown, items: readonly TeardownItem[], teardown: readonly string[]): string {
+  if (teardown.length === 0 || errorCode(err) !== 'CONFLICT' || !/another promote is changing/.test(errorText(err))) return ''
+  const labels = items.filter((i) => teardown.includes(i.id)).map((i) => i.label)
+  return ` The teardown had already run and is not undone: ${labels.join('; ')}.`
 }
 
 export interface V2BackendDeps {
@@ -275,6 +317,65 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     return features.value
   }
 
+  /**
+   * Delete on a server with `worktreeTeardown` (plugins E1): the plan's items in the confirm; the
+   * chosen ids go with worktree.remove, which runs them before git's removal and, unforced, refuses
+   * a worktree with changes before anything goes. The discard question then forces with the same ids.
+   */
+  const removeThroughPlan = async (info: GitWorktreeInfo, worktreeId: string, legacyId: string): Promise<void> => {
+    const dirty = info.dirty ?? false
+    const loaded = deps.state().loadedWorktrees[legacyId] === true
+    const name = info.branch ?? info.path
+    let items: readonly TeardownItem[]
+    try {
+      items = (await request('worktree.teardownPlan', { projectId, worktreeId, op: 'remove' })).items
+    } catch (err) {
+      await deps.showError(REMOVE_FAILED, errorText(err))
+      return
+    }
+    const { confirmed, teardown } = await deps.teardown.confirmPlan(removePrompt(info, loaded, dirty), items)
+    if (!confirmed) return
+    const send = (force: boolean): Promise<unknown> =>
+      request(
+        'worktree.remove',
+        { projectId, worktreeId, force, ...(teardown.length > 0 ? { teardown } : {}) },
+        teardown.length > 0 ? { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS } : undefined
+      )
+    let wasLoaded = false
+    // Best effort: the removal's own error is the one to show.
+    const reload = async (): Promise<void> => {
+      if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
+    }
+    // A failed teardown's text names what was already done ("(already done: …)").
+    const fail = async (err: unknown): Promise<void> => {
+      await reload()
+      await deps.showError(REMOVE_FAILED, errorText(err))
+    }
+    try {
+      if (loaded) {
+        await request('worktree.unload', { projectId, worktreeId })
+        wasLoaded = true
+      }
+      await send(dirty)
+      return
+    } catch (err) {
+      // Changes can appear between the poll and the removal; the server refuses them before any teardown.
+      if (dirty || !refusedAsDirty(err)) {
+        await fail(err)
+        return
+      }
+    }
+    if (!(await deps.confirm(discardPrompt(name)))) {
+      await reload()
+      return
+    }
+    try {
+      await send(true)
+    } catch (forceErr) {
+      await fail(forceErr)
+    }
+  }
+
   const backend: WindowBackend = {
     kind: 'v2',
     /** Read at the time: the capabilities arrive with the welcome (useFeatures re-reads them). */
@@ -412,6 +513,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           return
         }
         const { worktreeId } = ref
+        // A server that tears down itself (plugins E1): its plan in the confirm, the ids with the removal.
+        if (can(CAPABILITY.worktreeTeardown)) {
+          await removeThroughPlan(info, worktreeId, legacyId)
+          return
+        }
         // The server's status poll; a stale "clean" is caught by git below, unless the teardown
         // would destroy something first: that is checked afresh below, after the confirm.
         let dirty = info.dirty ?? false
@@ -419,30 +525,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const name = info.branch ?? info.path
         const machine = currentFeatures()
         const env = machine.env ? deps.teardown.environment(info) : undefined
-        const prompt: ConfirmPrompt = {
-          title: 'Delete Worktree',
-          message: `Delete worktree “${name}”?`,
-          detail:
-            `This runs "git worktree remove" on ${info.path} and deletes the directory. ` +
-            `The branch itself is kept. ` +
-            (loaded ? 'Its running sessions will be stopped. ' : '') +
-            (dirty
-              ? 'This worktree has uncommitted changes — they will be permanently deleted.'
-              : 'Uncommitted changes will block the deletion.') +
-            (env ? ` Its Docker environment (Colima VM “${env.profile}”) and all its data will also be deleted.` : ''),
-          confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
-        }
+        const prompt = removePrompt(info, loaded, dirty, env?.profile)
         const { confirmed, stackName } = machine.stacks
           ? await deps.teardown.confirm(info, prompt, backend)
           : { confirmed: await deps.confirm(prompt), stackName: undefined }
         if (!confirmed) return
-        const askDiscard = (): Promise<boolean> =>
-          deps.confirm({
-            title: 'Delete Uncommitted Changes',
-            message: `“${name}” has uncommitted changes.`,
-            detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
-            confirmLabel: 'Delete Changes & Worktree'
-          })
+        const askDiscard = (): Promise<boolean> => deps.confirm(discardPrompt(name))
         // The stack and the VM can't come back: git's refusal after them would be too late to ask
         // (legacy runs worktreeIsDirty first). Asked before anything is unloaded or destroyed.
         if ((stackName || env) && !dirty) {
@@ -518,8 +606,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         }
         const { worktreeId } = ref
         let plan: PromotePlan
+        // A server that tears down itself (plugins E1): its plan, read with the dry run.
+        let items: readonly TeardownItem[] | undefined
         try {
           plan = (await request('worktree.promote', { projectId, worktreeId, dryRun: true })) as PromotePlan
+          if (can(CAPABILITY.worktreeTeardown)) items = (await request('worktree.teardownPlan', { projectId, worktreeId, op: 'promote' })).items
         } catch (err) {
           if (!asked) return failed(err)
           // The server refuses it: the first window to see that answers for all, without a dialog.
@@ -528,6 +619,34 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           return { outcome: 'failed', error }
         }
         if (asked && !asked.stillAsked()) return { outcome: 'declined' }
+        if (items) {
+          // The server tears down in the promote itself; its binding of the request stops the claim's timer.
+          const stillWanted = asked ? (): boolean => asked.stillAsked() : undefined
+          const { confirmed, teardown } = await deps.teardown.confirmPlan(promotePrompt(plan, { asked }), items, stillWanted)
+          if (!confirmed) {
+            if (asked?.stillAsked()) await asked.answer({ outcome: 'declined' })
+            return { outcome: 'declined' }
+          }
+          if (asked && !(await asked.claim())) return { outcome: 'declined' }
+          const release = markPromoting(info.path)
+          try {
+            const claimToken = asked?.claimToken()
+            const params = {
+              projectId,
+              worktreeId,
+              ...(teardown.length > 0 ? { teardown } : {}),
+              ...(asked ? { requestId: asked.requestId, ...(claimToken ? { claimToken } : {}) } : {})
+            }
+            const result = (await request('worktree.promote', params, { timeoutMs: SLOW_MS })) as PromoteResult
+            const notes = resultNotes(result)
+            if (notes) await deps.showError('Promoted, with notes', notes)
+            return { outcome: 'promoted', worktreeId: result.worktreeId }
+          } catch (err) {
+            return failed(err, promoteTornDownNote(err, items, teardown))
+          } finally {
+            release()
+          }
+        }
         const machine = currentFeatures()
         const env = machine.env ? deps.teardown.environment(info) : undefined
         const prompt = promotePrompt(plan, { vm: env?.profile, asked })

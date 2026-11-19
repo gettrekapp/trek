@@ -115,3 +115,31 @@ test('confirm: an agent request that ended while the stack status was read shows
   assert.deepEqual(await teardown.confirm(info, { title: 'Promote to Primary' }, owner, () => wanted), { confirmed: false })
   assert.deepEqual(ui, [])
 })
+
+test('confirmPlan (plugins E1): no items is the plain confirm; one item is the box as it is; several are one box naming each; the ids follow the box', async () => {
+  const stack = { id: 'stack:destroy', label: 'Tear down the dev stack “trek-r-feat” (drops its databases)', checked: true }
+  const vm = { id: 'env:destroy', label: "Stop and delete this worktree's Colima VM “twb-x”", checked: false }
+  const plain = setup()
+  assert.deepEqual(await plain.teardown.confirmPlan({ title: 'Delete Worktree' }, []), { confirmed: true, teardown: [] })
+  assert.deepEqual(plain.ui, [['confirm', 'Delete Worktree']])
+  const single = setup()
+  assert.deepEqual(await single.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack]), { confirmed: true, teardown: ['stack:destroy'] })
+  assert.deepEqual(single.ui, [['confirm+box', stack.label]])
+  const several = setup()
+  assert.deepEqual(await several.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack, vm]), { confirmed: true, teardown: ['stack:destroy', 'env:destroy'] })
+  assert.deepEqual(several.ui, [['confirm+box', `Also: ${stack.label}; ${vm.label}`]])
+  const unticked = setup({ checkbox: { confirmed: true, checked: false } })
+  assert.deepEqual(await unticked.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack, vm]), { confirmed: true, teardown: [] })
+  const declined = setup({ checkbox: { confirmed: false, checked: true } })
+  assert.deepEqual(await declined.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack]), { confirmed: false, teardown: [] })
+  const ended = setup()
+  assert.deepEqual(await ended.teardown.confirmPlan({ title: 'Promote to Primary' }, [stack], () => false), { confirmed: false, teardown: [] })
+  assert.deepEqual(ended.ui, [])
+})
+
+test('teardownCheckbox: ticked by default when any item is', async () => {
+  const { teardownCheckbox } = await import('../src/shared/teardown.ts')
+  assert.equal(teardownCheckbox([]), null)
+  assert.equal(teardownCheckbox([{ id: 'a:x', label: 'X', checked: false }, { id: 'b:y', label: 'Y', checked: true }]).checked, true)
+  assert.equal(teardownCheckbox([{ id: 'a:x', label: 'X', checked: false }]).checked, false)
+})

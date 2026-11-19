@@ -22,9 +22,9 @@
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
 //   - a session's skill menu lists the worktree's skill and types it into the server's pty;
-//   - Delete worktree asks with the stack checkbox and the VM named, and (a file written as the
-//     confirm shows) about its uncommitted changes, from a fresh git status (worktree.dirty), before it runs
-//     `stack.sh destroy` and `colima delete <profile> --force`; then the server removes the worktree;
+//   - Delete worktree asks with one box for the stack and the VM (the server's teardown plan), and
+//     (a file written as the confirm shows) about its uncommitted changes, which the server refuses
+//     before it runs `stack.sh destroy` and `colima delete <profile> --force`; then it removes the worktree;
 //   - the upgrade (5a): the app's environments registry and its running stack's pid and log, as a
 //     pre-5a Trek left them in userData, are the Local server's now: the VM it knew is no orphan,
 //     the stack's `up` still counts as running and its log shows, and the delete stops it first;
@@ -253,7 +253,7 @@ const localData = join(defaultDataDir(process.platform, { ...homeEnv(home), XDG_
 // detail, its checkbox and a number from the stubs' shared sequence (for the order against
 // stack.sh and colima), and answered with its confirm button (index 1) and the box ticked.
 // The delete's confirm writes an untracked file into the worktree as it is shown: the renderer
-// read the status poll's "clean" before asking, so only the server's fresh worktree.dirty can see it.
+// read the status poll's "clean" before asking, so only the server's own check at the removal can see it.
 const mainStub = join(work, 'main-stub.cjs')
 const dirtyOnConfirm = join(worktree, 'scratch.txt')
 writeFileSync(
@@ -565,19 +565,20 @@ try {
   check('the confirm was built on a clean status (the file came after)', asked?.detail?.includes('Uncommitted changes will block the deletion.') ?? false, true)
   const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
   if (SERVER_HAS_ENVS) {
-    check('the confirm names the VM and offers the stack', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.detail ?? ''), asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
+    check('the confirm offers the stack and the VM as its box', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.checkbox ?? ''), asked?.checkbox?.includes('Tear down the dev stack “trek-') ?? false], [true, true])
     check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
     check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
   } else {
-    for (const name of ['the confirm names the VM and offers the stack', 'stack.sh destroy ran in the worktree', "colima delete ran on the branch's VM"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+    for (const name of ['the confirm offers the stack and the VM as its box', 'stack.sh destroy ran in the worktree', "colima delete ran on the branch's VM"]) console.log(`SKIP ${name} (${NO_ENVS})`)
   }
   check('the worktree directory is gone', existsSync(worktree), false)
   const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
   if (SERVER_HAS_ENVS) {
     const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
     check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
-    // A broken worktree.dirty falls back to "clean": the stack and the VM go, and git's own refusal
-    // asks the same question afterwards. Only the order tells the two apart.
+    // The server refuses the unforced removal for the file that appeared (before it tears anything
+    // down), the window asks, then forces with the same items. Only the order tells this apart from
+    // asking afterwards.
     check(
       'a fresh dirty check asks before the stack and the VM go (seq)',
       [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],

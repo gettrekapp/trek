@@ -21,3 +21,15 @@ export const TEARDOWN_REQUEST_TIMEOUT_MS = 10 * 60_000
 export function defaultTeardown(items: readonly TeardownItem[]): string[] {
   return items.filter((i) => i.checked).map((i) => i.id)
 }
+
+/**
+ * A plan as one native checkbox (the desktop's message box has one): one item as it is; several as
+ * one box naming each, ticked when any is checked by default, sending all or none. Null for none.
+ */
+export function teardownCheckbox(items: readonly TeardownItem[]): { label: string; checked: boolean; ids(ticked: boolean): string[] } | null {
+  if (items.length === 0) return null
+  const all = items.map((i) => i.id)
+  const ids = (ticked: boolean): string[] => (ticked ? all : [])
+  if (items.length === 1) return { label: items[0].label, checked: items[0].checked, ids }
+  return { label: `Also: ${items.map((i) => i.label).join('; ')}`, checked: items.some((i) => i.checked), ids }
+}

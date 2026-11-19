@@ -4,7 +4,9 @@
 // Colima VM, before the server removes the worktree (4c's order). Every call goes to the backend
 // doing the remove, which it hands each step: a window that leaves mid-confirm sends nothing to
 // the next one's. The store and the dialogs come in as deps (installV2.ts), so this file runs
-// under node --test.
+// under node --test. On a server with `worktreeTeardown` (plugins E1) only `confirmPlan` is used:
+// the server tears down.
+import { teardownCheckbox } from '../../shared/teardown.ts'
 import type { GitWorktreeInfo } from '../../shared/types'
 import type { WindowBackend } from './backend'
 import type { ConfirmPrompt, WorktreeTeardown } from './v2/backendV2'
@@ -26,6 +28,15 @@ export const DIRTY_CHECK_TIMED_OUT =
 export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTeardown {
   return {
     environment: (info) => deps.environment(info),
+
+    // The server's plan as the dialog's one checkbox (teardownCheckbox): the ids when ticked.
+    confirmPlan: async (prompt, items, stillWanted) => {
+      if (stillWanted && !stillWanted()) return { confirmed: false, teardown: [] }
+      const box = teardownCheckbox(items)
+      if (!box) return { confirmed: await deps.confirm(prompt), teardown: [] }
+      const result = await deps.confirmWithCheckbox({ ...prompt, checkboxLabel: box.label, checkboxChecked: box.checked })
+      return { confirmed: result.confirmed, teardown: result.confirmed ? box.ids(result.checked) : [] }
+    },
 
     // When the worktree's dev stack has run, the dialog offers to destroy it too; stackName is set when that was ticked.
     // `stillWanted` false once the stack's status is read: no dialog, not confirmed.

@@ -19,8 +19,9 @@
 //   - the feature row's Env panel: the variables saved on blur, Start runs colima and compose on the
 //     server with them, the steps arrive, the server's registry names the VM;
 //   - its Stack tab starts and stops the worktree's stack.sh on the server;
-//   - Delete worktree asks with the stack checkbox and the VM named, asks about the changes a fresh
-//     worktree.dirty finds, then the stack and the VM go before the server removes the worktree;
+//   - Delete worktree asks with one box for the stack and the VM (the server's teardown plan); the
+//     changes are asked about when the server refuses them, before either goes; the server tears
+//     both down before it removes the worktree;
 //   - the renderer never holds the token; no console or page errors.
 //
 // Prints SERVER ENV SMOKE PASS (n checks) or SERVER ENV SMOKE FAIL and exits 0 or 1.
@@ -377,11 +378,11 @@ try {
   const dialogs = await app.evaluate(() => globalThis.__dialogs)
   const asked = dialogs.find((d) => d.message === 'Delete worktree “feature-x”?')
   const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
-  check('the confirm names the VM and offers the stack', [asked?.detail?.includes(`Colima VM “${featureProfile}”`) ?? false, asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
+  check('the confirm offers the stack and the VM as its box', [asked?.checkbox?.includes('Tear down the dev stack “trek-') ?? false, asked?.checkbox?.includes(`Colima VM “${featureProfile}”`) ?? false], [true, true])
   const stackAt = seqOf('stack', (c) => c.split('|')[1] === 'destroy')
   const colimaAt = seqOf('colima', (c) => c.includes('|delete '))
   check('stack.sh destroy, then colima delete, on the server', [stackAt !== null, colimaAt !== null, stackAt !== null && colimaAt !== null && stackAt < colimaAt], [true, true, true])
-  check("a fresh worktree.dirty asked about the changes before either", discard !== undefined && stackAt !== null && discard.seq < stackAt, true)
+  check('the server refused the changes and the window asked, before either went', discard !== undefined && stackAt !== null && discard.seq < stackAt, true)
   check("then the server's removal: the worktree was still there when the VM went", existsSync(join(work, 'delete-saw-worktree')), true)
   check('no error dialogs', dialogs.filter((d) => d.type === 'error'), [])
 

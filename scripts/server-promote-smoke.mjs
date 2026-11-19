@@ -13,7 +13,7 @@
 // dev stack that has run and a running VM. A second SDK connection listens as another window.
 // Through the DOM, the SDK, git and the MCP endpoint it checks:
 //   - the welcome lists promote, and the window's feature follows it;
-//   - Promote to primary… asks first (what moves, the dev stack's box, ticked, and the VM); the
+//   - Promote to primary… asks first (what moves; the dev stack and the VM in one box, ticked); the
 //     stack, then the VM, are destroyed before the promote, the worktree's folder still there and
 //     the main checkout still on main; then the main checkout is on feature-x with the work unstaged
 //     (the racily-clean file's content too), the worktree's folder and row gone, the session moved to
@@ -347,9 +347,9 @@ try {
   const first = (await confirmOf(PROMOTE_MESSAGE))[0] ?? {}
   const promptText = first.detail ?? ''
   // Windows: no VM or dev stack (NO_ENVS); the rest of the confirmation is the same.
-  check('the confirmation says the work and the session move, and the VM goes', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText), SERVER_HAS_ENVS ? promptText.includes(`Colima VM “${vmProfile}”`) : 'no VM on Windows'], [true, true, SERVER_HAS_ENVS ? true : 'no VM on Windows'])
-  if (SERVER_HAS_ENVS) check('it offers to destroy the dev stack (ticked here)', /^Also destroy its dev stack “trek-/.test(first.checkbox ?? ''), true)
-  else console.log(`SKIP it offers to destroy the dev stack (ticked here) (${NO_ENVS})`)
+  check('the confirmation says the work and the session move', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText)], [true, true])
+  if (SERVER_HAS_ENVS) check('it offers to tear down the dev stack and the VM (ticked here)', [/Tear down the dev stack “trek-/.test(first.checkbox ?? ''), (first.checkbox ?? '').includes(`Colima VM “${vmProfile}”`)], [true, true])
+  else console.log(`SKIP it offers to tear down the dev stack and the VM (ticked here) (${NO_ENVS})`)
   check('it says the ignored .trek/ is deleted with the worktree', /Deleted with the worktree, never moved \(ignored by git\): \.trek\//.test(promptText), true)
   if (SERVER_HAS_ENVS) {
     check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
