@@ -25,6 +25,8 @@ import { colors, ui } from './theme.ts'
 
 /** A new Global session's pty size: the phone does not size it at start; the desktop sizes it when it attaches. */
 const START_SIZE = { cols: 80, rows: 24 }
+/** The open tray's top corner radius, in points. */
+const TRAY_RADIUS = 12
 
 export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: string; projectId: string; paneHeight: number }): React.JSX.Element | null {
   const tray = useGlobalTray()
@@ -66,6 +68,8 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
     if (hidden) anim.setValue(heights[height])
     else Animated.spring(anim, { toValue: heights[height], useNativeDriver: false, bounciness: 0, speed: 20 }).start()
   }, [anim, heights, height, hidden])
+  // The backdrop's bottom edge: the tray's top, less its corner radius (the corners stay dimmed).
+  const backdropBottom = useMemo(() => Animated.add(anim, lift - TRAY_RADIUS), [anim, lift])
   const latest = useRef({ heights, height, tray })
   latest.current = { heights, height, tray }
   const pan = useMemo(() => {
@@ -148,8 +152,15 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
     <>
       {/* The bar's room under the stack, whatever the keyboard does: the screens end above it. */}
       <View style={{ height: BAR_HEIGHT + insets.bottom }} />
-      {/* Open, the screen above is dimmed and a tap on it closes the tray: any keyboard is the tray's. */}
-      {open ? <Pressable accessibilityRole="button" accessibilityLabel="Close the Global tray" onPress={() => tray.setHeight('collapsed')} style={[StyleSheet.absoluteFill, styles.backdrop]} /> : null}
+      {/* Open, the screen above is dimmed and a tap on it closes the tray: any keyboard is the tray's.
+          It ends under the tray's rounded top, not the pane's bottom: its frame is the dimmed strip,
+          so its centre (where VoiceOver, or a tap on the element, lands) is in the strip, not on the
+          tray (at full height it would be the terminal). */}
+      {open ? (
+        <Animated.View style={[styles.backdropArea, { bottom: backdropBottom }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close the Global tray" onPress={() => tray.setHeight('collapsed')} style={[StyleSheet.absoluteFill, styles.backdrop]} />
+        </Animated.View>
+      ) : null}
       <Animated.View style={[styles.tray, { bottom: lift, height: anim }]}>
         <View {...pan.panHandlers}>
           <Pressable
@@ -259,8 +270,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderTopLeftRadius: TRAY_RADIUS,
+    borderTopRightRadius: TRAY_RADIUS,
     overflow: 'hidden'
   },
   // Exactly BAR_HEIGHT, the collapsed height trayHeights counts on (the bottom inset sits under it).
@@ -268,6 +279,7 @@ const styles = StyleSheet.create({
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 6 },
   barRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10, paddingHorizontal: 16 },
   tab: { flexDirection: 'row', gap: 6, paddingVertical: 6 },
+  backdropArea: { position: 'absolute', top: 0, left: 0, right: 0 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.3)' },
   body: { flex: 1, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }
 })
