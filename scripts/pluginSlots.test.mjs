@@ -26,3 +26,8 @@ test('overlayDimmed: while scrolled back, or while typing (held 3 s after a key)
   assert.equal(overlayDimmed({ typing: true, scrolledUp: false }), true)
   assert.equal(overlayDimmed({ typing: true, scrolledUp: true }), true)
 })
+
+test('overlayDimmed: never while nothing fills the overlay (disabled)', () => {
+  assert.equal(overlayDimmed({ typing: true, scrolledUp: true, enabled: false }), false)
+  assert.equal(overlayDimmed({ typing: true, scrolledUp: false, enabled: true }), true)
+})

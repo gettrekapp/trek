@@ -23,7 +23,8 @@ import {
   sendV2Size,
   subscribeForeignSize
 } from '../terminals'
-import { PluginSlot } from '../plugins/PluginHost'
+import { PluginSlot, usePluginEntries } from '../plugins/PluginHost'
+import { activeSlotEntries } from '../plugins/slots.ts'
 import { useOverlayDim } from '../plugins/useOverlayDim'
 import { getBackend } from '../backend'
 import { QueueChip, QueuePanel } from './QueuePanel'
@@ -73,7 +74,8 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     builtins: BuiltinValues
   } | null>(null)
   // The plugin overlay steps back while the user types here or scrolls back (campsite's hiker).
-  const overlay = useOverlayDim(terminalId, visible)
+  const overlayFilled = activeSlotEntries(usePluginEntries(), 'terminalOverlay').length > 0
+  const overlay = useOverlayDim(terminalId, visible, overlayFilled)
 
   const send = (text: string): void => {
     const backend = getBackend()

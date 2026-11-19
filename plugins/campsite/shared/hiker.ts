@@ -3,13 +3,13 @@
 
 export const HATS = ['beanie', 'bucket', 'cap', 'headlamp', 'none'] as const
 export type Hat = (typeof HATS)[number]
-export const GEARS = ['pole', 'map', 'mug', 'compass'] as const
+const GEARS = ['pole', 'map', 'mug', 'compass'] as const
 export type Gear = (typeof GEARS)[number]
 
-export const HAT_COLORS = ['#c94f3d', '#3a6ea5', '#b9a77a', '#d4a017', '#6b7a3a', '#7a4a6b'] as const
-export const HAIRS = ['#3b2a1a', '#e0b050', '#8a3b1c', '#222222', '#bbbbbb'] as const
-export const SKINS = ['#f2c9a0', '#d9a066', '#a86b3c', '#6e4527'] as const
-export const PACKS = ['#6b7a3a', '#8a5a2b', '#4a5d7a', '#c08a2e', '#7a4a6b', '#3f6f6a'] as const
+const HAT_COLORS = ['#c94f3d', '#3a6ea5', '#b9a77a', '#d4a017', '#6b7a3a', '#7a4a6b'] as const
+const HAIRS = ['#3b2a1a', '#e0b050', '#8a3b1c', '#222222', '#bbbbbb'] as const
+const SKINS = ['#f2c9a0', '#d9a066', '#a86b3c', '#6e4527'] as const
+const PACKS = ['#6b7a3a', '#8a5a2b', '#4a5d7a', '#c08a2e', '#7a4a6b', '#3f6f6a'] as const
 
 export const JACKETS: Readonly<Record<string, string>> = { claude: '#d97757', codex: '#3fae6a', gemini: '#4c8df6', grok: '#8f96a0' }
 export const NEUTRAL_JACKET = '#a08a6a'

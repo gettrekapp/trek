@@ -8,8 +8,8 @@ import { hikerLabel, hikerTooltip, stanceFor, type Chore, type Stance } from '..
 import { Hiker } from './Hiker.tsx'
 import { useReducedMotion } from './hooks.ts'
 
-export const SCALE = 2.5
-export const HALF = 6 * SCALE
+const SCALE = 2.5
+const HALF = 6 * SCALE
 /** Matches .cs-camp-hiker's transform transition */
 export const WALK_MS = 1200
 

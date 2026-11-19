@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -118,4 +118,11 @@ test('labels: an unknown status reads as idle; a worktree session with no name f
   assert.equal(hikerTooltip(session({ worktreeName: null, branch: 'feature/x', status: 'idle' }), 'chop'), 'Claude 2 · feature/x · idle')
   assert.equal(hikerTooltip(session({ worktreeName: null, branch: null, status: 'idle' }), 'chop'), 'Claude 2 · idle')
   assert.equal(hikerTooltip(session({ worktreeId: null, worktreeName: 'x', branch: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
+})
+
+test("indicatorState: the session's own; with none, the tab's status and no decision; with neither, idle (a sleeping hiker)", () => {
+  assert.deepEqual(indicatorState(session({ status: 'attention', decision: true }), 'working'), { status: 'attention', decision: true })
+  assert.deepEqual(indicatorState(undefined, 'done'), { status: 'done', decision: false })
+  assert.deepEqual(indicatorState(undefined, null), { status: 'idle', decision: false })
+  assert.equal(stanceFor(indicatorState(undefined, null), 'chop').pose, 'sleep')
 })

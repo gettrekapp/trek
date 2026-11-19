@@ -7,12 +7,12 @@
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { isWaiting } from './pose.ts'
 
-export const SLOT = 40
+const SLOT = 40
 export const TENT_W = 84
 export const LOG_W = 72
-export const GAP = 16
-export const PAD = 24
-export const FIRE_CLEAR = 28
+const GAP = 16
+const PAD = 24
+const FIRE_CLEAR = 28
 export const MAX_SPREAD = 12
 
 export type Place = 'tent' | 'fire' | 'log' | 'inside'

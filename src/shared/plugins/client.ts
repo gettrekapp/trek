@@ -71,7 +71,7 @@ export interface ClientPluginHost {
   ticketIds(): string[]
   /** Called when that set changes; returns the unsubscribe */
   onTicketIdsChanged(listener: () => void): () => void
-  /** The project's sessions in sidebar order (worktrees, then Global); the same array until something changes */
+  /** The project's sessions in the project's worktree order (worktrees, then Global); the same array until something changes */
   sessions(): readonly PluginSession[]
   /** Called when that list, a session's status or decision, or the selected session changes; returns the unsubscribe */
   onSessionsChanged(listener: () => void): () => void
@@ -83,6 +83,11 @@ export interface ClientPluginHost {
 
 export interface SessionIndicatorProps {
   terminalId: string
+  /**
+   * The tab's status as the window tracks it (null: not known yet). The tab can exist before, or
+   * after, `sessions()` lists its session: draw from this then, so the tab is never blank.
+   */
+  status: PluginSessionStatus | null
   onToggleComplete?: () => void
 }
 

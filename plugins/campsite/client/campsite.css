@@ -154,7 +154,7 @@
 .cs-log {
   position: absolute;
   bottom: 10px;
-  width: 72px;
+  /* width: LOG_W, inline (Tent.tsx) */
   height: 6px;
   background: #5a3a22;
   border-radius: 3px;
@@ -167,7 +167,7 @@
 .cs-tent {
   position: absolute;
   bottom: 18px;
-  width: 84px;
+  /* width: TENT_W, inline (Tent.tsx) */
   z-index: 1;
 }
 .cs-tent svg {

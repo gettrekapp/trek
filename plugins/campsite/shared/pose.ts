@@ -27,6 +27,16 @@ export function choreFor(terminalId: string, now: number): Chore {
 /** Waiting on the user: its bell rang, or it asked for a decision */
 export const isWaiting = (s: Pick<PluginSession, 'status' | 'decision'>): boolean => s.status === 'attention' || s.decision
 
+/**
+ * What a tab's hiker draws: the session as the host lists it, or, before the host lists it (or once
+ * it no longer does), the tab's own status with no decision; with neither, idle (a sleeping hiker).
+ * A tab never goes blank.
+ */
+export function indicatorState(session: Pick<PluginSession, 'status' | 'decision'> | undefined, status: PluginSessionStatus | null): Pick<PluginSession, 'status' | 'decision'> {
+  if (session) return { status: session.status, decision: session.decision }
+  return { status: status ?? 'idle', decision: false }
+}
+
 export interface Stance {
   pose: Pose
   /** What the hands hold instead of the look's own */
@@ -36,6 +46,7 @@ export interface Stance {
   sign: boolean
 }
 
+// `stand` and `cheer` poses are reserved: drawn by pixels.ts, not returned here yet.
 export function stanceFor(session: Pick<PluginSession, 'status' | 'decision'>, chore: Chore): Stance {
   if (isWaiting(session)) return { pose: 'wave', gear: 'none', grey: false, sign: true }
   switch (session.status) {
