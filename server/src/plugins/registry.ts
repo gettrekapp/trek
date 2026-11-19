@@ -22,6 +22,7 @@ import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
 import { repoIn } from '../projects/model.ts'
 import { codedError } from '../errors.ts'
+import type { WireErrorCode } from '../../../src/shared/protocolV2.ts'
 import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { createSecretFile } from '../secrets.ts'
@@ -146,11 +147,18 @@ function ownValues(byId: Record<string, PluginSettingValues> | undefined, id: st
   return byId && Object.hasOwn(byId, id) ? { ...byId[id] } : {}
 }
 
-/** A plugin's throw as the wire should see it: its own code if allowed, else TOOL_ERROR. */
+/**
+ * A plugin's throw as the wire should see it: its own code if allowed, else TOOL_ERROR. Rebuilt, so
+ * only a string `details.reason` comes along: `details.tornDown` is core's orchestrator's to say
+ * (what a worktree's teardown ended), never a plugin's.
+ */
 function wireError(err: unknown): Error {
   const code = (err as { code?: unknown } | null)?.code
-  if (typeof code === 'string' && PASSTHROUGH.has(code)) return err as Error
-  return codedError('TOOL_ERROR', err instanceof Error ? err.message : String(err))
+  const message = err instanceof Error ? err.message : String(err)
+  if (typeof code !== 'string' || !PASSTHROUGH.has(code)) return codedError('TOOL_ERROR', message)
+  const details = (err as { details?: unknown }).details
+  const reason = details && typeof details === 'object' ? (details as { reason?: unknown }).reason : undefined
+  return codedError(code as WireErrorCode, message, typeof reason === 'string' && reason ? { reason } : undefined)
 }
 
 /**

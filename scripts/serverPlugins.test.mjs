@@ -944,11 +944,20 @@ test('pluginError (plugins E2) carries details; PATH_DENIED and GIT_ERROR reach 
         },
         git: () => {
           throw pluginError('GIT_ERROR', 'git broke')
+        },
+        // Only core's orchestrator says what was torn down: a plugin's tornDown never reaches the wire.
+        forged: () => {
+          throw Object.assign(new Error('half done'), { code: 'CONFLICT', details: { reason: 'busy', tornDown: ['dev stack', 'Colima VM'] } })
+        },
+        forgedOnly: () => {
+          throw Object.assign(new Error('half done'), { code: 'TOOL_ERROR', details: { tornDown: ['dev stack'] } })
         }
       }
     })
   }
   const { registry } = setup(t, [thrower])
+  assert.deepEqual((await dispatchV2('thrower.forged', {}, { plugins: registry })).error, { code: 'CONFLICT', message: 'half done', details: { reason: 'busy' } })
+  assert.deepEqual((await dispatchV2('thrower.forgedOnly', {}, { plugins: registry })).error, { code: 'TOOL_ERROR', message: 'half done' })
   const call = (method) => dispatchV2(method, {}, { plugins: registry })
   assert.deepEqual((await call('thrower.missing')).error, { code: 'TOOL_ERROR', message: 'colima is not installed', details: { reason: 'missing' } })
   assert.deepEqual((await call('thrower.denied')).error, { code: 'PATH_DENIED', message: '/x is outside' })
