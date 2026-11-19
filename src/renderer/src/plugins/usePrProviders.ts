@@ -21,3 +21,14 @@ export function usePrProviders(): PrProvider[] {
     [backend, key, hasProject, settings]
   )
 }
+
+/**
+ * Whether the window knows which PR providers are on: the server's welcome (with its plugins) and
+ * the project are in. Before that usePrProviders() is empty without meaning none is on.
+ */
+export function usePrProvidersKnown(): boolean {
+  const backend = useSyncExternalStore(subscribeBackend, getBackend)
+  const key = useSyncExternalStore(subscribeBackend, welcomeKey)
+  const hasProject = useAppStore((s) => s.project !== null)
+  return !!backend.plugins.projectId && hasProject && key !== ''
+}

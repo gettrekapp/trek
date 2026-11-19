@@ -4,7 +4,7 @@ import { repoById, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
 import { useFeatures } from '../useFeatures'
-import { usePrProviders } from '../plugins/usePrProviders'
+import { usePrProviders, usePrProvidersKnown } from '../plugins/usePrProviders'
 import { parsePrWith } from '../../../shared/plugins/pullRequests.ts'
 
 interface Props {
@@ -28,6 +28,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   const [prUrl, setPrUrl] = useState('')
   const [addingPr, setAddingPr] = useState(false)
   const providers = usePrProviders()
+  const providersKnown = usePrProvidersKnown()
   const features = useFeatures()
   const pr = parsePrWith(providers, prUrl)
 
@@ -164,7 +165,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
             </p>
 
             <h3>From a pull request</h3>
-            {providers.length === 0 ? (
+            {/* Only once the welcome is in: before it, no provider is known yet (as the phone). */}
+            {providersKnown && providers.length === 0 ? (
               <p className="muted">No pull request provider is on in this project (Settings → Plugins).</p>
             ) : (
               <div className="create-row">
