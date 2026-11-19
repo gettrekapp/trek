@@ -216,7 +216,7 @@ test('a server with no installed plugins store answers NOT_FOUND to all three', 
 const WAIT_MS = 10_000
 
 /** A server with a token and the built-in plugins, on a port the OS picks; nothing outside its temp folder is read or written. */
-async function server(t, config = {}) {
+async function server(t, config = {}, list = BUILTIN_SERVER_PLUGINS) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-wire-'))
   const configPath = join(dir, 'config.json')
   saveConfig(configPath, { repos: [], ...config })
@@ -228,7 +228,7 @@ async function server(t, config = {}) {
     store,
     '1.0.0',
     { create: (hub, onSummariesChange) => new ProjectState({ hub, store: files, onSummariesChange }, files.loadAll()), store: files },
-    { sweepStaleMoves: false, plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: join(dir, 'secrets.json'), dataDir: dir, env: {} } }
+    { sweepStaleMoves: false, plugins: { list, secretsFile: join(dir, 'secrets.json'), dataDir: dir, env: {} } }
   )
   const sockets = []
   t.after(async () => {
@@ -289,7 +289,7 @@ async function server(t, config = {}) {
     const welcome = hello ? await signIn() : undefined
     /** The first `name` event from frame index `from` on whose payload `pred` accepts. */
     const event = (name, pred = () => true, from = 0) => frame((f) => f.type === 'event' && f.event === name && pred(f.payload), name, from)
-    return { frames, request, welcome, event, signIn }
+    return { ws, frames, request, welcome, event, signIn }
   }
   return { dir, connect }
 }
@@ -389,4 +389,52 @@ test('on the wire: remoteInstall off drops the capability and refuses install an
   const remove = await late.request('plugins.remove', { id: 'solarized' })
   assert.deepEqual([remove.ok, remove.error.code], [false, 'NOT_FOUND'])
   assert.equal((await late.request('plugins.bundle', { id: 'solarized' })).ok, true, 'still there')
+})
+
+test('on the wire (plugins E1): host.emitTo reaches only the connection that sent the request; once it closes, nobody', async (t) => {
+  let host
+  let lastCaller
+  const teller = {
+    manifest: { id: 'teller', version: '1.0.0', name: 'teller', description: '', defaultEnabled: true },
+    setup: (h) => {
+      host = h
+      return {
+        handlers: {
+          tell: (p, ctx) => {
+            lastCaller = ctx.caller
+            host.emitTo(ctx.caller, 'teller.told', { text: p.text })
+            return null
+          }
+        }
+      }
+    }
+  }
+  const s = await server(t, {}, [teller])
+  const a = await s.connect()
+  const b = await s.connect()
+  assert.equal((await a.request('teller.tell', { text: 'hi' })).ok, true)
+  assert.deepEqual((await a.event('teller.told')).payload, { text: 'hi' })
+  assert.equal(typeof lastCaller, 'string')
+  assert.ok(lastCaller.length > 0, 'a connection has a caller id')
+  await settle(b)
+  assert.equal(b.frames.filter((f) => f.event === 'teller.told').length, 0, 'the other connection hears nothing')
+  assert.ok(!JSON.stringify(a.frames).includes(lastCaller), 'the caller id is never on the wire')
+
+  // b's own request reaches b, under its own id.
+  const aCaller = lastCaller
+  assert.equal((await b.request('teller.tell', { text: 'me' })).ok, true)
+  assert.deepEqual((await b.event('teller.told')).payload, { text: 'me' })
+  assert.notEqual(lastCaller, aCaller)
+
+  // a closes: its caller is disconnected, and a later emitTo to it throws nothing and reaches no one.
+  await new Promise((done) => {
+    a.ws.addEventListener('close', done)
+    a.ws.close()
+  })
+  const before = b.frames.length
+  // The server's close handler may run just after the client sees the close: give it a turn of the loop.
+  await new Promise((done) => setImmediate(done))
+  host.emitTo(aCaller, 'teller.told', { text: 'late' })
+  await settle(b)
+  assert.equal(b.frames.slice(before).filter((f) => f.event === 'teller.told').length, 0)
 })

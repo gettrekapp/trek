@@ -19,8 +19,11 @@ import { commandFromEnv, runCommand, spawnCommand } from './run.ts'
 import { realOrResolved } from '../repos.ts'
 import type { TopicHub } from '../topicHub'
 
-/** Namespaces a plugin may not take, beside those of the core methods. */
-export const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp', 'pr'])
+/**
+ * Namespaces a plugin may not take, beside those of the core methods: among them the core events
+ * whose namespace is no method's (`state.patch`, `topic.ended`, `daemon.shutdown`, `integrations.changed`).
+ */
+export const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp', 'pr', 'state', 'topic', 'daemon'])
 
 /**
  * A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory), and
@@ -188,6 +191,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
+      // No check that the plugin is on in a project, unlike `emit`: the caller asked for this
+      // operation while it was on, and its log runs to its end (its `done`) even if the plugin is
+      // turned off meanwhile.
       emitTo: (caller, event, payload) => {
         if (!event.startsWith(`${manifest.id}.`) || event.length === manifest.id.length + 1) {
           throw new Error(`plugin ${manifest.id} sends only its own events (${manifest.id}.*), not ${JSON.stringify(event)}`)

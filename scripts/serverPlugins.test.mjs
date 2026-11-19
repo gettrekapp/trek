@@ -624,3 +624,29 @@ test("emitTo goes through the connection's sink: past the high-water mark a chun
     ['teller.log', { data: 'b' }]
   ])
 })
+
+test('emitTo takes any payload: null, undefined, a number or a string goes through the sink as a chunk', (t) => {
+  let host
+  const { registry } = setup(t, [{ manifest: manifest('teller'), setup: (h) => ((host = h), { handlers: {} }) }])
+  const sent = []
+  let buffered = 0
+  const sink = createEventSink((event, payload) => sent.push([event, payload]), () => buffered)
+  registry.connect('c1', (event, payload) => sink.send(event, payload))
+  for (const payload of [null, undefined, 3, 'text']) host.emitTo('c1', 'teller.log', payload)
+  assert.deepEqual(sent, [['teller.log', null], ['teller.log', undefined], ['teller.log', 3], ['teller.log', 'text']])
+  buffered = 64 * 1024 * 1024
+  host.emitTo('c1', 'teller.log', null)
+  buffered = 0
+  host.emitTo('c1', 'teller.log', 'after')
+  assert.deepEqual(sent.slice(4), [
+    ['teller.log', { data: '[output dropped: the connection fell behind]\n' }],
+    ['teller.log', 'after']
+  ])
+})
+
+test('a plugin may not take a core event namespace no method has: state, topic, daemon, integrations', (t) => {
+  const ids = ['state', 'topic', 'daemon', 'integrations']
+  const { registry, warnings } = setup(t, ids.map((id) => ({ manifest: manifest(id), setup: () => ({ handlers: {} }) })))
+  assert.deepEqual(registry.presence(), [])
+  for (const id of ids) assert.match(warnings.join('\n'), new RegExp(`${id} not loaded: its id is a core namespace`))
+})

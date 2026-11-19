@@ -63,7 +63,8 @@ export function createEventSink(send: (event: string, payload: unknown) => void,
   let congested = false
   return {
     send(event: string, payload: unknown) {
-      const p = payload as { done?: boolean; step?: unknown; profile?: string }
+      // A plugin's payload (host.emitTo) may be anything: a non-object has none of the fields read here.
+      const p = (payload !== null && typeof payload === 'object' ? payload : {}) as { done?: boolean; step?: unknown; profile?: string }
       const key = `${event}\0${p.profile ?? ''}`
       const buffered = bufferedAmount()
       congested = congested ? buffered > SINK_LOW_WATER : buffered > SINK_HIGH_WATER

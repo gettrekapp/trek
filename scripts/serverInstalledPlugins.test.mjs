@@ -74,7 +74,7 @@ test('add replaces a plugin of the same id; remove deletes it', (t) => {
 test('a reserved id is refused as BAD_REQUEST and nothing is written', (t) => {
   const s = setup(t, { reserved: installedIdReserved([{ manifest: { id: 'voice' } }]) })
   const store = s.make()
-  for (const id of ['voice', 'plugins', 'update', 'project']) {
+  for (const id of ['voice', 'plugins', 'update', 'project', 'state', 'topic', 'daemon']) {
     assert.throws(() => store.add(pkg(id)), (err) => err.code === 'BAD_REQUEST' && /built-in plugin or a core namespace/.test(err.message), id)
   }
   assert.equal(existsSync(s.dir) ? readdirSync(s.dir).length : 0, 0)

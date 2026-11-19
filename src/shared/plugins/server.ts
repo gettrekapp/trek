@@ -129,6 +129,15 @@ export interface ServerPluginHost {
    * `event` (its full name, which must start with `<id>.`) to one connection only (plugins E1),
    * through that connection's event sink: past its high-water mark a chunk is dropped and said so,
    * one with `done: true` never is. An unknown or closed caller is a no-op.
+   *
+   * Four payload fields carry the sink's meaning (any other payload, an object without them or not
+   * an object at all, is an ordinary chunk: sent as given, or dropped while congested):
+   * - `done: true`: the run's last event, never dropped.
+   * - `step` (any value): a step, never dropped; a pending dropped notice waits for the next non-step event.
+   * - `profile` (a string): with the event name, which run a chunk belongs to.
+   * - `data`: the chunk's text, where the dropped notice puts its own.
+   * After chunks were dropped, the run's next non-step event is preceded by one notice of the same event:
+   * `{ data: '[output dropped: the connection fell behind]\n' }`, plus `profile` when the run has one.
    */
   emitTo(caller: string, event: string, payload: unknown): void
   /** The project's open windows: what `emit` could reach */
