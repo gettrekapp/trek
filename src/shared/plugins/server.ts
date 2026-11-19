@@ -132,8 +132,8 @@ export interface WorktreeLifecycle {
   plan(ctx: PluginCallContext, worktree: PluginWorktree, op: WorktreeOp): Promise<TeardownItem[]>
   /** Tears down the chosen items (its own ids, un-namespaced); a throw stops the operation, its message shown */
   teardown(ctx: PluginCallContext, worktree: PluginWorktree, op: WorktreeOp, ids: readonly string[]): Promise<void>
-  /** Why the repository can't be removed from its project now, or null */
-  beforeRepoRemove?(ctx: PluginCallContext, repo: PluginRepo): Promise<string | null>
+  /** Why the repository can't be removed from its project now; null (or undefined) when it can */
+  beforeRepoRemove?(ctx: PluginCallContext, repo: PluginRepo): Promise<string | null | undefined>
 }
 
 export interface ServerPluginHost {

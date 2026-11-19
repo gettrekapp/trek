@@ -4,7 +4,8 @@
 // ids refused before anything runs, and the repository veto.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown } from '../server/src/teardown/teardown.ts'
+import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown } from '../server/src/teardown/teardown.ts'
+import { codedError, toWireError } from '../server/src/errors.ts'
 import { defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
@@ -203,27 +204,79 @@ test('planTeardown and runTeardown: two participants with one id is an internal 
 test('repoRemoveVeto: an answer that is not a reason, and a check that hangs, refuse', async () => {
   const p = (id, check) => ({ id, plan: async () => [], teardown: async () => {}, beforeRepoRemove: check })
   assert.equal(await repoRemoveVeto([p('a', async () => 42)], target.project, target.repo), 'a could not check it: not a reason')
-  assert.equal(await repoRemoveVeto([p('a', async () => undefined)], target.project, target.repo), 'a could not check it: not a reason')
+  assert.equal(await repoRemoveVeto([p('a', async () => undefined)], target.project, target.repo), null, 'undefined is no veto, like null')
   assert.equal(await repoRemoveVeto([p('a', async () => '')], target.project, target.repo), null)
   assert.match(await repoRemoveVeto([p('a', () => new Promise(() => {}))], target.project, target.repo, { timeoutMs: 50 }), /^a could not check it: no answer in 0.05 s$/)
 })
 
-test('runTeardown: after a teardown hits the cap, the worktree stays busy until it really ends', async () => {
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-  const calls = []
+test('runTeardown: after a teardown hits the cap, the worktree stays busy until it really ends; so is every other operation on it', async () => {
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  let calls = 0
   const late = {
     id: 'env',
     plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }],
     teardown: async () => {
-      calls.push(Date.now())
-      if (calls.length === 1) await wait(150)
+      calls += 1
+      if (calls === 1) await gate
     }
   }
-  const t0 = Date.now()
   await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }), /no answer in 0.05 s/)
-  await wait(100 - (Date.now() - t0))
-  await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy']), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is still finishing for this worktree')
-  await wait(200 - (Date.now() - t0))
+  const finishing = (e) => e.code === 'CONFLICT' && e.message === 'a teardown is still finishing for this worktree'
+  await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy']), finishing)
+  await assert.rejects(runTeardown([late], target, 'remove', []), finishing, 'even with nothing chosen')
+  assert.throws(() => assertNotTearingDown(target.worktree.path), finishing)
+  await assert.rejects(holdWorktree(target.worktree.path, async () => 'x'), finishing)
+  release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assertNotTearingDown(target.worktree.path)
   await runTeardown([late], target, 'remove', ['env:destroy'])
-  assert.equal(calls.length, 2)
+  assert.equal(calls, 2)
+})
+
+test('holdWorktree: the worktree is busy for the whole operation; runTeardown inside it takes the hold', async () => {
+  const log = []
+  const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
+  const running = (e) => e.code === 'CONFLICT' && e.message === 'a teardown is already running for this worktree'
+  const answer = await holdWorktree(target.worktree.path, async (hold) => {
+    assert.throws(() => assertNotTearingDown(target.worktree.path), running)
+    await assert.rejects(runTeardown(ps, target, 'remove', ['stack:destroy']), running)
+    await assert.rejects(holdWorktree(target.worktree.path, async () => {}), running)
+    await runTeardown(ps, target, 'remove', ['stack:destroy'], { hold })
+    await runTeardown(ps, target, 'remove', [], { hold })
+    assert.throws(() => assertNotTearingDown(target.worktree.path), running, 'still held after its teardown')
+    return 'removed'
+  })
+  assert.equal(answer, 'removed')
+  assert.deepEqual(log, [['stack', 'remove', ['destroy']]])
+  assertNotTearingDown(target.worktree.path)
+  await assert.rejects(holdWorktree(target.worktree.path, async () => {
+    throw new Error('git failed')
+  }), /git failed/)
+  assertNotTearingDown(target.worktree.path)
+  const other = { ...target, worktree: { ...target.worktree, path: '/r/elsewhere' } }
+  await holdWorktree(target.worktree.path, async (hold) => {
+    await assert.rejects(runTeardown(ps, other, 'remove', ['stack:destroy'], { hold }), /another worktree/)
+  })
+})
+
+test('holdWorktree: a teardown that hits the cap inside it keeps the worktree busy after the operation ends', async () => {
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  const late = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => gate }
+  const where = { ...target, worktree: { ...target.worktree, path: '/r/app-held' } }
+  await assert.rejects(holdWorktree(where.worktree.path, (hold) => runTeardown([late], where, 'remove', ['env:destroy'], { hold, teardownTimeoutMs: 50 })), /no answer/)
+  assert.throws(() => assertNotTearingDown(where.worktree.path), /still finishing/)
+  release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assertNotTearingDown(where.worktree.path)
+})
+
+test('toWireError: a teardown failure carries tornDown (strings only)', () => {
+  const err = codedError('TOOL_ERROR', "Couldn't stop the VM: no", { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
+  assert.deepEqual(toWireError('worktree.remove', err), { code: 'TOOL_ERROR', message: "Couldn't stop the VM: no", details: { reason: 'teardown', tornDown: ['Tear down the dev stack'] } })
+  assert.deepEqual(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { reason: 'teardown', tornDown: [] })).details, { reason: 'teardown', tornDown: [] })
+  assert.deepEqual(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { reason: 'teardown', tornDown: [1, 'a'] })).details, { reason: 'teardown' })
+  assert.deepEqual(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { tornDown: ['a'] })).details, { tornDown: ['a'] })
+  assert.equal(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { tornDown: 'a' })).details, undefined)
 })

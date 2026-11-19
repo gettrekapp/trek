@@ -33,7 +33,8 @@ export interface Participant {
   plan(target: TeardownTarget, op: WorktreeOp): Promise<TeardownItem[]>
   /** Its own (un-namespaced) ids */
   teardown(target: TeardownTarget, op: WorktreeOp, ids: readonly string[]): Promise<void>
-  beforeRepoRemove?(project: Project, repo: Repository): Promise<string | null>
+  /** Why the repository can't leave its project now; null (or undefined) for no veto */
+  beforeRepoRemove?(project: Project, repo: Repository): Promise<string | null | undefined>
 }
 
 export interface TeardownOptions {
@@ -41,6 +42,8 @@ export interface TeardownOptions {
   timeoutMs?: number
   /** One participant's teardown's limit; TEARDOWN_RUN_TIMEOUT_MS */
   teardownTimeoutMs?: number
+  /** runTeardown inside holdWorktree: the hold, so the teardown runs under it (else it holds the worktree itself) */
+  hold?: WorktreeHold
   /** runTeardown: participants that are known but not taking part (a plugin now off in the project); their ids are skipped, not refused */
   inactive?: Iterable<string>
   warn?: (message: string) => void
@@ -154,10 +157,58 @@ function inSentence(label: string): string {
 }
 
 /**
- * The worktrees (by real path) a teardown is running for: one at a time each. `finishing`: the
- * request gave up on a participant that hit the cap, which is still running; the entry goes once it settles.
+ * The worktrees (by real path) being torn down or held for an operation: one at a time each.
+ * `finishing`: a participant hit the cap and is still running; the entry goes once it settles.
  */
 const running = new Map<string, 'running' | 'finishing'>()
+
+/** A worktree held for one operation (holdWorktree): runTeardown inside it takes this instead of its own hold. */
+export class WorktreeHold {
+  /** Set when a participant hit the cap: the entry outlives the hold, until that work settles */
+  #lingering = false
+  readonly key: string
+  constructor(key: string) {
+    this.key = key
+  }
+  /** @internal */
+  linger(work: Promise<unknown>): void {
+    this.#lingering = true
+    running.set(this.key, 'finishing')
+    const clear = (): void => void running.delete(this.key)
+    work.then(clear, clear)
+  }
+  /** @internal */
+  get lingering(): boolean {
+    return this.#lingering
+  }
+}
+
+function assertFree(key: string): void {
+  const busy = running.get(key)
+  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : 'a teardown is already running for this worktree')
+}
+
+/** CONFLICT while the worktree at `path` is being torn down, or a timed-out teardown of it is still finishing. */
+export function assertNotTearingDown(path: string): void {
+  assertFree(realOrResolved(path))
+}
+
+/**
+ * Runs `fn` (an operation on the worktree at `path`: its teardown and then its removal, promote or
+ * move) with the worktree held: CONFLICT if it is busy, and any other teardown or hold of it is
+ * CONFLICT until `fn` ends (or, past a teardown that hit the cap, until that teardown settles).
+ */
+export async function holdWorktree<T>(path: string, fn: (hold: WorktreeHold) => Promise<T>): Promise<T> {
+  const key = realOrResolved(path)
+  assertFree(key)
+  running.set(key, 'running')
+  const hold = new WorktreeHold(key)
+  try {
+    return await fn(hold)
+  } finally {
+    if (!hold.lingering) running.delete(key)
+  }
+}
 
 /**
  * Runs the chosen items before the operation: each participant once, with its own ids, in
@@ -166,11 +217,17 @@ const running = new Map<string, 'running' | 'finishing'>()
  * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
  * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
  * teardown that throws or takes over `teardownTimeoutMs` stops it: TOOL_ERROR, `details.tornDown`
- * the labels already done. One teardown at a time per worktree: a second is CONFLICT, also while a
- * participant that hit the cap is still finishing.
+ * the labels already done. One at a time per worktree: CONFLICT while it is busy (even with no ids),
+ * unless `options.hold` is this worktree's hold (holdWorktree), which it then uses.
  */
 export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<void> {
   requireDistinct(participants)
+  const key = realOrResolved(target.worktree.path)
+  if (options.hold) {
+    if (options.hold.key !== key) throw new Error(`teardown of ${target.worktree.path} under another worktree's hold`)
+  } else {
+    assertFree(key)
+  }
   if (ids.length === 0) return
   const warn = warnOf(options)
   const known = new Set(participants.map((p) => p.id))
@@ -183,54 +240,46 @@ export async function runTeardown(participants: readonly Participant[], target: 
   for (const id of ids) {
     if (!known.has(id.slice(0, id.indexOf(':')))) warn(`[teardown] ${id} is no longer planned for ${target.worktree.path} (its plugin is off); skipped`)
   }
-  const key = realOrResolved(target.worktree.path)
-  const busy = running.get(key)
-  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : 'a teardown is already running for this worktree')
-  running.set(key, 'running')
-  // Cleared in `finally`, unless a participant hit the cap: then once that participant's work settles.
-  let release = true
-  try {
-    const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
-    const plans = await planEach(involved, target, op, options)
-    const planned = new Map<string, TeardownItem>()
-    plans.forEach((plan, i) => {
-      if ('error' in plan) throw codedError('TOOL_ERROR', `Couldn't check ${involved[i].id} before tearing it down: ${plan.error}`, { reason: 'teardown' })
-      for (const item of plan.items) planned.set(item.id, item)
-    })
-    const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_RUN_TIMEOUT_MS
-    const tornDown: string[] = []
-    for (const p of involved) {
-      const mine = ids.filter((id) => id.startsWith(`${p.id}:`))
-      for (const gone of mine.filter((id) => !planned.has(id))) warn(`[teardown] ${gone} is no longer planned for ${target.worktree.path}; skipped`)
-      const now = mine.filter((id) => planned.has(id))
-      if (now.length === 0) continue
-      const labels = now.map((id) => planned.get(id)!.label)
-      const work = Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1))))
-      let settled = false
-      const settle = (): void => {
-        settled = true
-      }
-      work.then(settle, settle)
-      try {
-        await withTimeout(work, teardownTimeoutMs)
-      } catch (err) {
-        if (!settled) {
-          release = false
-          running.set(key, 'finishing')
-          const clear = (): void => void running.delete(key)
-          work.then(clear, clear)
-        }
-        const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
-        throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: ${messageOf(err)}${done}`, { reason: 'teardown', tornDown: [...tornDown] })
-      }
-      tornDown.push(...labels)
+  if (!options.hold) return holdWorktree(target.worktree.path, (hold) => tearDown(participants, target, op, ids, options, hold))
+  return tearDown(participants, target, op, ids, options, options.hold)
+}
+
+/** runTeardown's work, with the worktree held. */
+async function tearDown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions, hold: WorktreeHold): Promise<void> {
+  const warn = warnOf(options)
+  const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
+  const plans = await planEach(involved, target, op, options)
+  const planned = new Map<string, TeardownItem>()
+  plans.forEach((plan, i) => {
+    if ('error' in plan) throw codedError('TOOL_ERROR', `Couldn't check ${involved[i].id} before tearing it down: ${plan.error}`, { reason: 'teardown' })
+    for (const item of plan.items) planned.set(item.id, item)
+  })
+  const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_RUN_TIMEOUT_MS
+  const tornDown: string[] = []
+  for (const p of involved) {
+    const mine = ids.filter((id) => id.startsWith(`${p.id}:`))
+    for (const gone of mine.filter((id) => !planned.has(id))) warn(`[teardown] ${gone} is no longer planned for ${target.worktree.path}; skipped`)
+    const now = mine.filter((id) => planned.has(id))
+    if (now.length === 0) continue
+    const labels = now.map((id) => planned.get(id)!.label)
+    const work = Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1))))
+    let settled = false
+    const settle = (): void => {
+      settled = true
     }
-  } finally {
-    if (release) running.delete(key)
+    work.then(settle, settle)
+    try {
+      await withTimeout(work, teardownTimeoutMs)
+    } catch (err) {
+      if (!settled) hold.linger(work)
+      const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
+      throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: ${messageOf(err)}${done}`, { reason: 'teardown', tornDown: [...tornDown] })
+    }
+    tornDown.push(...labels)
   }
 }
 
-/** The first participant's reason the repository can't leave its project now, or null. A check that fails, hangs or answers something else refuses too. */
+/** The first participant's reason the repository can't leave its project now, or null. A check that fails, hangs or answers something other than a string, null or undefined refuses too. */
 export async function repoRemoveVeto(participants: readonly Participant[], project: Project, repo: Repository, options: TeardownOptions = {}): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? TEARDOWN_PLAN_TIMEOUT_MS
   for (const p of participants) {
@@ -242,7 +291,7 @@ export async function repoRemoveVeto(participants: readonly Participant[], proje
     } catch (err) {
       return `${p.id} could not check it: ${messageOf(err)}`
     }
-    if (reason === null) continue
+    if (reason === null || reason === undefined) continue
     if (typeof reason !== 'string') return `${p.id} could not check it: not a reason`
     if (reason.trim() !== '') return reason.trim()
   }
