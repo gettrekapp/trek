@@ -37,8 +37,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
 
 /**
  * `mcp` while the MCP listener is up, then the features this server always has, then `pairing`
- * (6a: `pairing.create`, and a phone's `pairingCode` at hello), then `prWatch` while gh is signed
- * in on its machine (5c-1), then on the local server `phoneAccess` (its listener for phones, when
+ * (6a: `pairing.create`, and a phone's `pairingCode` at hello), then `prWatch` while a PR provider's sign-in
+ * check passes on its machine (5c-1), then on the local server `phoneAccess` (its listener for phones, when
  * it has one to offer) and `local`. `plugins`: the registered plugins' legacy capabilities
  * (`voice`), listed after the static ones, for clients older than plugins. `update` (after
  * `pairing`) on a server that can update itself (never the local one).

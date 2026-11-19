@@ -24,6 +24,7 @@ import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/h
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDir } from './testPlatform.mjs'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
   ...process.env,
@@ -34,7 +35,7 @@ const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
 const FRESH_ID = '99999999-2222-4333-8444-555555555555'
 
 /** One server's handlers over its own config, projects and poller, with `clone` as its one repo. */
-async function server(t, dir, name, clone, prWatchable = true) {
+async function server(t, dir, name, clone, prWatchable = true, providers = [createGithubPrProvider(async () => '')]) {
   const configPath = join(dir, `${name}.json`)
   saveConfig(configPath, { serverId: name, name, repos: [{ id: 'r', name: 'app', path: clone }] })
   const store = new ConfigStore(configPath)
@@ -44,10 +45,11 @@ async function server(t, dir, name, clone, prWatchable = true) {
   t.after(() => { poller.stop(); store.close() })
   const forgotten = []
   const polled = []
-  const prWatch = { available: () => prWatchable, pollSoon: (...a) => polled.push(a), forget: (...a) => forgotten.push(a) }
+  // available() is true if ANY provider is signed in; availableFor is the PR's own provider's.
+  const prWatch = { available: () => true, availableFor: () => prWatchable, pollSoon: (...a) => polled.push(a), forget: (...a) => forgotten.push(a) }
   const sessions = { blockPath: () => () => {}, refreshAttention: () => {} }
   const history = new HistoryStore(join(dir, `${name}-history`))
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history })
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history, plugins: { prProviders: () => providers } })
   const created = await call('project.create', { name: `P-${name}`, repositories: [{ path: clone }] })
   const projectId = created.result.projectId
   await poller.refresh(clone)
@@ -237,6 +239,16 @@ test('a move builds the worktree on the target and removes the source', async (t
   assert.ok(existsSync(join(projectDir(s.path), `${CLAUDE_ID}.jsonl`)))
 })
 
+test('a PR watch whose link no provider on the target owns is dropped, named so', async (t) => {
+  const s = await setup(t)
+  const B = await server(t, s.dir, 'b3', s.b, true, [])
+  s.B = B
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.match(received.result.dropped.join('\n'), /no pull request provider on this server owns/)
+  assert.equal(B.project().repositories[0].branchData.feat.prWatch, undefined)
+})
+
 test('a tag the target lacks, and a PR watch without gh there, are reported as dropped', async (t) => {
   const s = await setup(t)
   s.A.projects.apply(s.A.projectId, (d) => { d.repositories[0].branchData.feat.tag = 'a-only' })
@@ -246,7 +258,7 @@ test('a tag the target lacks, and a PR watch without gh there, are reported as d
   assert.equal(received.ok, true, JSON.stringify(received))
   assert.equal(received.result.dropped.length, 2)
   assert.match(received.result.dropped.join('\n'), /Only on A/)
-  assert.match(received.result.dropped.join('\n'), /gh is not signed in/)
+  assert.match(received.result.dropped.join('\n'), /gh is not installed or not signed in/)
   assert.equal(B.project().repositories[0].branchData.feat.prWatch, undefined)
 })
 

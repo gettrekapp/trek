@@ -86,7 +86,7 @@ export interface V2Context {
   integrations?: Integrations
   /** Tells every authenticated connection the Linear key changed (and a plugin's legacy capability, for clients older than plugins) (`integrations.changed`) */
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
-  /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
+  /** The pull request watch (5c-1): the PR providers' sign-in checks on this machine; without it no PR is watched */
   prWatch?: PrWatcher
   /** Automations' scheduler; without it the automation.* methods that run anything are TOOL_ERROR */
   automations?: AutomationScheduler

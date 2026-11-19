@@ -37,6 +37,8 @@ import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts
 import { MAX_HISTORY_PER_BRANCH, sanitizeHistoryEvent, type HistoryEvent } from '../../../src/shared/model/history.ts'
 import { codedError } from '../errors.ts'
 import { recordHistory } from '../history/record.ts'
+import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
+import { prOwner } from '../../../src/shared/plugins/pullRequests.ts'
 import { assertNotPromoting } from '../promote/changing.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
 import { realOrResolved as real } from '../repos.ts'
@@ -311,7 +313,7 @@ function checkBranchData(value: unknown): MoveBranchData {
 }
 
 /** The incoming branch data on top of what the target project already has for the branch. */
-function mergeBranchData(project: Project, existing: BranchData | undefined, incoming: MoveBranchData, prWatchable: boolean, dropped: string[]): BranchData {
+function mergeBranchData(project: Project, existing: BranchData | undefined, incoming: MoveBranchData, watchProblem: (pr: string) => string | null, dropped: string[]): BranchData {
   const data: BranchData = { ...(existing ?? {}) }
   if (incoming.note) data.note = incoming.note
   if (incoming.ticket) data.ticket = incoming.ticket
@@ -335,8 +337,9 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
     if (ids.length > 0) data.customTags = ids
   }
   if (incoming.prWatch && data.pr) {
-    if (prWatchable) data.prWatch ??= {}
-    else dropped.push('The pull request is not watched here: gh is not signed in on this server')
+    const problem = watchProblem(data.pr)
+    if (problem === null) data.prWatch ??= {}
+    else dropped.push(`The pull request is not watched here: ${problem}`)
   }
   return data
 }
@@ -803,7 +806,12 @@ async function build(
       throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
     }
     const dropped: string[] = []
-    const watchable = ctx.prWatch?.available() ?? false
+    // The watch needs the PR's own provider on this server, signed in (not just any provider).
+    const watchProblem = (pr: string): string | null => {
+      const owner = prOwner(ctx.plugins?.prProviders(p.projectId) ?? [], pr)
+      if (!owner) return 'no pull request provider on this server owns this link'
+      return ctx.prWatch?.availableFor(owner.id) ? null : notSignedIn(owner.signInName)
+    }
     let previous: BranchData | undefined
     const worktreeId = ctx.projects.apply(p.projectId, (d) => {
       const r = repoIn(d, repo.id)
@@ -819,7 +827,7 @@ async function build(
       }
       const existing = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
       previous = existing ? structuredClone(existing) : undefined
-      const data = mergeBranchData(d, existing, incoming, watchable, dropped)
+      const data = mergeBranchData(d, existing, incoming, watchProblem, dropped)
       if (Object.keys(data).length > 0) r.branchData[branch] = data
       return created.id
     })

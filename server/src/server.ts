@@ -781,7 +781,7 @@ export function startServer(
     projects,
     poller,
     sessions,
-    // The first gh check too, so the local server's first welcome lists `prWatch` if it has it.
+    // The first PR provider sign-in check too, so the local server's first welcome lists `prWatch` if it has it.
     ready: prWatch ? prWatch.ready : Promise.resolve(),
     shutdown: (reason, detail) => shutdown(reason, detail)
   }
