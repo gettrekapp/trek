@@ -13,8 +13,10 @@ export interface PluginWelcome {
  * How a plugin the app knows stands on the window's server:
  * - `on`/`off`: the server has it, and it is on or off for the project;
  * - `legacy`: a server older than plugins that has it (its legacy capability, or built in there:
- *   `legacyBuiltIn`), always on there; also a `legacyBuiltIn` plugin a server lists plugins without,
- *   when that server predates plugins P3 (no `prResolve`): GitHub was core in releases 0.3–0.10;
+ *   `legacyBuiltIn`), always on there. Also a `legacyBuiltIn` plugin a server lists plugins
+ *   without: one with legacy capabilities (Colima's `env`) where the server says one of them (core
+ *   served it there: before plugins E2, P3 or not); one without (GitHub) where the server predates
+ *   plugins P3 (no `prResolve`): GitHub was core in releases 0.3–0.10;
  * - `missing`: the server lists plugins but not this one (too old for it, or its setup failed there:
  *   a P3+ server leaves out a built-in whose setup failed, so a `legacyBuiltIn` one is missing only there);
  * - `unknown`: no welcome yet (or no project).
@@ -38,10 +40,14 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
   // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
   const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
   if (!listed) {
-    // A built-in with legacy capabilities (Colima's `env`) was core only on a server that lists one of them.
+    if (manifest.legacyBuiltIn !== true) return 'missing'
+    // A built-in with legacy capabilities (Colima's `env`, plugins E3): core served it on a server
+    // that says one of them without listing it, P3 or not. From E2 on a server says it only through
+    // the plugin, while the plugin is set up: one whose setup failed says neither, so it is missing.
     const caps = legacyCapabilitiesOf(manifest)
-    const legacyHere = caps.length === 0 || caps.some((c) => welcome.capabilities?.includes(c) === true)
-    return manifest.legacyBuiltIn === true && !listsAllItHas(welcome) && legacyHere ? 'legacy' : 'missing'
+    if (caps.length > 0) return caps.some((c) => welcome.capabilities?.includes(c) === true) ? 'legacy' : 'missing'
+    // One without (GitHub): core's only on a server before P3.
+    return listsAllItHas(welcome) ? 'missing' : 'legacy'
   }
   // Registered there, but not for its platform (plugins E1): as good as missing.
   if (listed.available === false) return 'missing'

@@ -44,6 +44,32 @@ test('pluginStatus (plugins E1): a built-in a released server lacks needs its le
   assert.equal(pluginStatus(github, { plugins: [], capabilities: [] }, undefined), 'legacy')
 })
 
+test('pluginStatus (plugins E3): a built-in with a legacy capability is legacy wherever the server says it without listing the plugin, P3 or not', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyBuiltIn: true, legacyCapability: ['env'] }
+  const github = { id: 'github', version: '1.0.0', name: 'GitHub', description: '', defaultEnabled: true, legacyBuiltIn: true }
+  // An E1-era server (after P3, before E2): it lists plugins and says prResolve, and serves env.* in core.
+  const e1 = { plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env', 'worktreeTeardown'] }
+  assert.equal(pluginStatus(env, e1, undefined), 'legacy')
+  assert.equal(pluginStatus(env, e1, { env: { enabled: false } }), 'legacy', 'the project setting is not read there')
+  // An E2+ server whose env plugin failed to set up: neither the plugin nor its capability.
+  assert.equal(pluginStatus(env, { plugins: e1.plugins, capabilities: ['prResolve', 'worktreeTeardown'] }, undefined), 'missing')
+  // A server before P3 that lists plugins: the same rule (its env capability decides).
+  assert.equal(pluginStatus(env, { plugins: [], capabilities: ['env'] }, undefined), 'legacy')
+  assert.equal(pluginStatus(env, { plugins: [], capabilities: [] }, undefined), 'missing')
+  // An installed plugin's entry with the built-in's id is not the built-in: the capability still decides.
+  assert.equal(pluginStatus(env, { plugins: [{ id: 'env', version: '9.0.0', defaultEnabled: true, sha256: 'ab' }], capabilities: ['prResolve', 'env'] }, undefined), 'legacy')
+  // Listed (E2+): the project's setting decides; listed as unavailable: missing, whatever it says.
+  assert.equal(pluginStatus(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, { env: { enabled: false } }), 'off')
+  assert.equal(pluginStatus(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }], capabilities: ['prResolve', 'env'] }, undefined), 'missing')
+  // GitHub (no legacy capability) keeps P3's rule, whatever else the server says.
+  assert.equal(pluginStatus(github, { plugins: [], capabilities: ['prResolve', 'env'] }, undefined), 'missing')
+  assert.equal(pluginStatus(github, { plugins: [], capabilities: ['env'] }, undefined), 'legacy')
+  // A P3+ server where GitHub failed to set up (another PR provider still says prResolve): missing.
+  assert.equal(pluginStatus(github, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, undefined), 'missing')
+  // A server older than plugins: GitHub was built in there.
+  assert.equal(pluginStatus(github, { capabilities: [] }, undefined), 'legacy')
+})
+
 test('withPluginEnabled keeps the other plugins', () => {
   assert.deepEqual(withPluginEnabled(undefined, 'voice', false), { voice: { enabled: false } })
   assert.deepEqual(withPluginEnabled({ other: { enabled: true }, voice: { enabled: false } }, 'voice', true), { other: { enabled: true }, voice: { enabled: true } })

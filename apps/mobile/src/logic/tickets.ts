@@ -38,9 +38,10 @@ const TRACKERS: ReadonlyArray<{ manifest: PluginManifest; provider: TicketProvid
  *   setting or, with none, the server's default for it (not the manifest's);
  * - a server older than plugins (no list): it has the plugin's legacy capability, or had it built
  *   in (`legacyBuiltIn`); always on there, whatever the project's setting;
- * - a server that lists plugins but not this `legacyBuiltIn` one, and predates plugins P3 (no
- *   `prResolve`): it was core there (GitHub in releases 0.3–0.10); always on there too. A P3+
- *   server leaves out a built-in whose setup failed, so there it is off.
+ * - a server that lists plugins but not this `legacyBuiltIn` one: with legacy capabilities
+ *   (Colima's `env`), on where the server says one of them (core served it there, P3 or not); without
+ *   (GitHub), on where it predates plugins P3 (no `prResolve`). Always on there too. A P3+ server
+ *   leaves out a built-in whose setup failed, and an E2+ one then says none of its capabilities.
  */
 export function pluginOn(manifest: PluginManifest, server: TicketServer, settings: ProjectSettings): boolean {
   if (!server.plugins) {
@@ -49,10 +50,11 @@ export function pluginOn(manifest: PluginManifest, server: TicketServer, setting
   }
   const listed = server.plugins.find((p) => p.id === manifest.id)
   if (!listed) {
-    // A built-in with legacy capabilities (Colima's `env`) was core only on a server that lists one of them.
+    if (manifest.legacyBuiltIn !== true) return false
+    // A built-in with legacy capabilities (Colima's `env`, plugins E3): core's where the server says one.
     const caps = legacyCapabilitiesOf(manifest)
-    const legacyHere = caps.length === 0 || caps.some((c) => server.capabilities?.includes(c) === true)
-    return manifest.legacyBuiltIn === true && server.capabilities?.includes(CAPABILITY.prResolve) !== true && legacyHere
+    if (caps.length > 0) return caps.some((c) => server.capabilities?.includes(c) === true)
+    return server.capabilities?.includes(CAPABILITY.prResolve) !== true
   }
   if (listed.available === false) return false
   return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })

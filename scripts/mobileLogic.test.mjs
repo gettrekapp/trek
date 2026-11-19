@@ -1228,6 +1228,28 @@ test('pluginOn (plugins E1): a built-in a released server lacks needs its legacy
   assert.equal(pluginOn(github, { plugins: [], capabilities: [] }, {}), true)
 })
 
+test('pluginOn (plugins E3): a built-in with a legacy capability is on wherever the server says it without listing the plugin, P3 or not', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyBuiltIn: true, legacyCapability: ['env'] }
+  const github = { id: 'github', version: '1.0.0', name: 'GitHub', description: '', defaultEnabled: true, legacyBuiltIn: true }
+  const e1 = { plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }
+  assert.equal(pluginOn(env, e1, {}), true)
+  assert.equal(pluginOn(env, e1, { plugins: { env: { enabled: false } } }), true, 'the project setting is not read there')
+  assert.equal(pluginOn(env, { plugins: e1.plugins, capabilities: ['prResolve'] }, {}), false, 'an E2+ server whose env plugin failed to set up')
+  // A server before P3 that lists plugins: the same rule (its env capability decides).
+  assert.equal(pluginOn(env, { plugins: [], capabilities: ['env'] }, {}), true)
+  assert.equal(pluginOn(env, { plugins: [], capabilities: [] }, {}), false)
+  // Listed (E2+): the project's setting decides; listed as unavailable: off, whatever it says.
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, { plugins: { env: { enabled: false } } }), false)
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }], capabilities: ['prResolve', 'env'] }, {}), false)
+  // GitHub (no legacy capability) keeps P3's rule, whatever else the server says.
+  assert.equal(pluginOn(github, { plugins: [], capabilities: ['prResolve', 'env'] }, {}), false)
+  assert.equal(pluginOn(github, { plugins: [], capabilities: ['env'] }, {}), true)
+  // A P3+ server where GitHub failed to set up (another PR provider still says prResolve): off.
+  assert.equal(pluginOn(github, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, {}), false)
+  // A server older than plugins: GitHub was built in there.
+  assert.equal(pluginOn(github, { capabilities: [] }, {}), true)
+})
+
 test("tickets: a ticket's label and link from the project's settings; the raw id with no provider", () => {
   const providers = activeTicketProviders(tkServer(), {})
   assert.deepEqual(ticketView(providers, { linearWorkspace: 'acme' }, 'TOW-12'), { label: 'TOW-12', url: 'https://linear.app/acme/issue/TOW-12' })
