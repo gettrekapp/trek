@@ -1123,6 +1123,66 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
   assert.match((await refusal(bare.call('get_pull_request', { worktree: 'main' })))[1], /gh is not installed or not signed in/)
 })
 
+test("set_worktree_pull_request resolves through the project's PR providers; none on: the error says so", async (t) => {
+  const s = await toolSetup(t)
+  await s.call('create_worktree', { branch: 'feat' })
+  assert.deepEqual(await s.call('set_worktree_pull_request', { worktree: 'main', pullRequest: 'https://www.github.com/acme/app/pull/12/files' }), { branch: 'main', pullRequest: 'https://github.com/acme/app/pull/12' })
+  assert.deepEqual(await s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: '#13' }), { branch: 'feat', pullRequest: 'https://github.com/acme/app/pull/13' })
+  // A number with nothing linked to infer the repository from.
+  const fresh = await toolSetup(t)
+  const refused = await fresh.call('set_worktree_pull_request', { worktree: 'main', pullRequest: '13' }).catch((e) => e)
+  assert.equal(refused.code, 'BAD_REQUEST')
+  assert.match(refused.message, /GitHub pull request link/)
+  // No provider on for the project.
+  const none = await toolSetup(t, { plugins: { prProviders: () => [] } })
+  const noneErr = await none.call('set_worktree_pull_request', { worktree: 'main', pullRequest: 'https://github.com/o/r/pull/9' }).catch((e) => e)
+  assert.equal(noneErr.code, 'BAD_REQUEST')
+  assert.match(noneErr.message, /No pull request provider is on/)
+})
+
+test('get_pull_request reads through the owning provider; a made-up provider works the same', async (t) => {
+  const EX = 'https://code.example/app/pr/5'
+  const reads = []
+  const example = {
+    id: 'example', hint: 'an Example link', signInName: 'example-cli',
+    parse: (i) => (i === EX ? { url: EX, number: 5, label: '!5' } : null),
+    owns: (u) => u === EX,
+    read: async (pr) => { reads.push(pr.url); return { number: 5, state: 'OPEN', mergeable: 'MERGEABLE', headSha: 'h1', checks: 'failing', failed: ['build'], commentTimes: [] } }
+  }
+  let available = true
+  const prWatch = {
+    available: () => available, availableFor: () => available, pollSoon() {}, forget() {}, dismiss() {},
+    read: (provider, pr) => provider.read(pr)
+  }
+  const s = await toolSetup(t, { prWatch, plugins: { prProviders: () => [example] } })
+  const refusal = (p) => p.then(() => ['ok', ''], (e) => [e.code, e.message])
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].branchData.main = { pr: EX } })
+  const got = await s.call('get_pull_request', { worktree: 'main' })
+  assert.equal(got.number, 5)
+  assert.equal(got.state, 'open')
+  assert.equal(got.checks, 'failing')
+  assert.deepEqual(got.failedChecks, ['build'])
+  assert.deepEqual(reads, [EX])
+
+  available = false
+  const signedOut = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(signedOut[0], 'TOOL_ERROR')
+  assert.match(signedOut[1], /example-cli is not installed or not signed in/)
+
+  available = true
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].branchData.main = { pr: 'https://elsewhere.example/x/1' } })
+  const notOwned = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(notOwned[0], 'BAD_REQUEST')
+  assert.match(notOwned[1], /no pull request provider is on for/)
+})
+
+test("the PR tools' descriptions name no host", () => {
+  for (const name of ['set_worktree_pull_request', 'watch_pull_request', 'get_pull_request']) {
+    const def = MCP_TOOLS.find((t) => t.name === name)
+    assert.doesNotMatch(def.description, /GitHub|\bgh\b/, name)
+  }
+})
+
 test('get_selected_worktree and focus_session act on the most recently used client', async (t) => {
   const s = await toolSetup(t)
   const topic = `project:${s.projectId}`

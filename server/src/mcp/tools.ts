@@ -38,7 +38,7 @@ import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
 import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
-import { prOwner, safeParse } from '../../../src/shared/plugins/pullRequests.ts'
+import { prOwner, resolvePrInput, safeParse, type PrProvider } from '../../../src/shared/plugins/pullRequests.ts'
 import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
 import { checkSource } from '../review/draft.ts'
@@ -418,7 +418,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'set_worktree_pull_request',
     description:
-      'Link a worktree branch to a GitHub pull request: its URL (https://github.com/<owner>/<repo>/pull/123), or just the number (123 or #123) when the repository already has another PR linked to infer the repo from. Omit pullRequest to unlink it.',
+      'Link a worktree branch to a pull request: its link, or just the number (123 or #123) when the repository already has another pull request linked to infer the repository from. The link forms each host takes are in the server instructions. Omit pullRequest to unlink it.',
     inputSchema: {
       type: 'object',
       properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' }, ...ATTRIBUTION_PARAMS },
@@ -465,7 +465,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'watch_pull_request',
     description:
-      "Watch (or stop watching) a worktree branch's linked GitHub pull request. The Trek server polls it with gh every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
+      "Watch (or stop watching) a worktree branch's linked pull request. The Trek server reads it every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -479,7 +479,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'get_pull_request',
     description:
-      "Read the state of a worktree branch's linked GitHub pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while GitHub works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
+      "Read the state of a worktree branch's linked pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while the host works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
@@ -702,19 +702,12 @@ function targetRepository(project: Project, ref: unknown): Repository {
   return byName[0]
 }
 
-const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i
-
-/** A GitHub PR URL, or a number whose owner/repo come from another PR linked in the same repository. */
-function pullRequestUrl(input: string, repo: Repository): string {
-  const url = input.match(PR_URL)
-  if (url) return `https://github.com/${url[1]}/${url[2]}/pull/${url[3]}`
-  const num = input.match(/^#?(\d+)$/)
-  if (!num) throw bad(`Unrecognised pull request "${input}". Use its GitHub URL or number.`)
-  const known = Object.values(repo.branchData)
-    .map((d) => d.pr?.match(PR_URL))
-    .find(Boolean)
-  if (!known) throw bad('No other PR is linked to infer the repo from — pass the full GitHub URL')
-  return `https://github.com/${known[1]}/${known[2]}/pull/${num[1]}`
+/** A pull request link or number → the canonical link to store, through the project's PR providers. */
+function pullRequestUrl(input: string, repo: Repository, providers: readonly PrProvider[]): string {
+  const linked = Object.values(repo.branchData).flatMap((d) => (d.pr ? [d.pr] : []))
+  const resolved = resolvePrInput(providers, input, linked)
+  if (!resolved.ok) throw bad(resolved.problem)
+  return resolved.pr.url
 }
 
 /** A { provider, model?, effort? } argument; `required` when the caller passed an llm object. */
@@ -1074,7 +1067,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         const input = refArg(args.pullRequest, 'pullRequest')
-        const url = input ? pullRequestUrl(input, repo) : null
+        const url = input ? pullRequestUrl(input, repo, deps.plugins?.prProviders(projectId) ?? []) : null
         await v2('branch.setPr', { repoId: repo.id, branch, pr: url }, by)
         return { branch, pullRequest: url }
       },
