@@ -3,7 +3,8 @@
 // project with a worktreeLifecycle) say what they would tear down (`worktree.teardownPlan`), and the
 // request that does the operation runs the items the client chose, in participant order, before it.
 // A participant whose plan throws or takes over TEARDOWN_PLAN_TIMEOUT_MS is left out (logged); one
-// whose teardown throws stops the operation: TOOL_ERROR, `details.reason: 'teardown'`, naming it.
+// whose teardown throws, or runs past the whole teardown's deadline (TEARDOWN_RUN_TIMEOUT_MS, shared
+// by the participants), stops the operation: TOOL_ERROR, `details.reason: 'teardown'`, naming it.
 // At the run, a chosen participant whose re-check fails stops it too, before anything is torn down.
 import type { Project, Repository, Worktree } from '../../../src/shared/model/types'
 import type { PluginCallContext } from '../../../src/shared/plugins/server.ts'
@@ -14,8 +15,12 @@ import { pluginRepo, pluginWorktree } from '../plugins/worktrees.ts'
 import { realOrResolved } from '../repos.ts'
 
 export const TEARDOWN_PLAN_TIMEOUT_MS = 10_000
-/** How long one participant's teardown may take: the clients wait no longer for the whole request */
-export const TEARDOWN_RUN_TIMEOUT_MS = TEARDOWN_REQUEST_TIMEOUT_MS
+/**
+ * How long a whole teardown may take, all its participants together: a minute under the clients'
+ * wait for the request (TEARDOWN_REQUEST_TIMEOUT_MS), whose clock starts first and which still has
+ * the operation itself to do, so a slow teardown fails here, naming it, not as the client's TIMEOUT.
+ */
+export const TEARDOWN_RUN_TIMEOUT_MS = TEARDOWN_REQUEST_TIMEOUT_MS - 60_000
 /** At most this many ids in a request's `teardown` */
 export const MAX_TEARDOWN_IDS = 50
 const ITEM_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -40,7 +45,7 @@ export interface Participant {
 export interface TeardownOptions {
   /** A plan's (and a repository check's) limit; TEARDOWN_PLAN_TIMEOUT_MS */
   timeoutMs?: number
-  /** One participant's teardown's limit; TEARDOWN_RUN_TIMEOUT_MS */
+  /** The whole teardown's limit, shared by its participants (each gets what is left); TEARDOWN_RUN_TIMEOUT_MS */
   teardownTimeoutMs?: number
   /** runTeardown inside holdWorktree: the hold, so the teardown runs under it (else it holds the worktree itself) */
   hold?: WorktreeHold
@@ -80,11 +85,14 @@ export function optionalTeardown(value: unknown): string[] {
   return [...new Set(value as string[])]
 }
 
+/** `ms` in seconds for a message: whole seconds from 10 s up, else to two places ("0.05"). */
+const seconds = (ms: number): string => (ms >= 10_000 ? String(Math.round(ms / 1000)) : String(Math.round(ms / 10) / 100))
+
 /** `work`, or a rejection after `ms`. The timer is not unref'd: the caller is waiting on it (it is cleared once settled). */
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer in ${ms / 1000} s`)), ms)
+    timer = setTimeout(() => reject(new Error(`no answer in ${seconds(ms)} s`)), ms)
   })
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
 }
@@ -231,8 +239,9 @@ export async function holdWorktree<T>(path: string, label: string, fn: (hold: Wo
  * BAD_REQUEST before anything runs. Each involved participant is asked again first: one that throws
  * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
  * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
- * teardown that throws or takes over `teardownTimeoutMs` stops it: TOOL_ERROR, `details.tornDown`
- * the labels already done. One at a time per worktree: CONFLICT while it is busy (even with no ids),
+ * teardown that throws, or runs past the whole teardown's deadline (`teardownTimeoutMs` from the
+ * start, shared by the participants: each gets what is left), stops it: TOOL_ERROR, `details.tornDown`
+ * the labels already done; one still running then keeps the worktree 'finishing' until it settles. One at a time per worktree: CONFLICT while it is busy (even with no ids),
  * unless `options.hold` is this worktree's hold (holdWorktree), which it then uses. Resolves with
  * the labels of the items it tore down, in order (skipped ones left out).
  */
@@ -263,6 +272,7 @@ export async function runTeardown(participants: readonly Participant[], target: 
 /** runTeardown's work, with the worktree held. */
 async function tearDown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions, hold: WorktreeHold): Promise<string[]> {
   const warn = warnOf(options)
+  const deadline = Date.now() + (options.teardownTimeoutMs ?? TEARDOWN_RUN_TIMEOUT_MS)
   const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
   const plans = await planEach(involved, target, op, options)
   const planned = new Map<string, TeardownItem>()
@@ -270,7 +280,6 @@ async function tearDown(participants: readonly Participant[], target: TeardownTa
     if ('error' in plan) throw codedError('TOOL_ERROR', `Couldn't check ${involved[i].id} before tearing it down: ${plan.error}`, { reason: 'teardown' })
     for (const item of plan.items) planned.set(item.id, item)
   })
-  const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_RUN_TIMEOUT_MS
   const tornDown: string[] = []
   for (const p of involved) {
     const mine = ids.filter((id) => id.startsWith(`${p.id}:`))
@@ -278,6 +287,12 @@ async function tearDown(participants: readonly Participant[], target: TeardownTa
     const now = mine.filter((id) => planned.has(id))
     if (now.length === 0) continue
     const labels = now.map((id) => planned.get(id)!.label)
+    const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
+    const left = deadline - Date.now()
+    if (left <= 0) {
+      // The time ran out before this one: it isn't started, so nothing of it lingers.
+      throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: no time was left for it${done}`, { reason: 'teardown', tornDown: [...tornDown] })
+    }
     const work = Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1))))
     let settled = false
     const settle = (): void => {
@@ -285,10 +300,9 @@ async function tearDown(participants: readonly Participant[], target: TeardownTa
     }
     work.then(settle, settle)
     try {
-      await withTimeout(work, teardownTimeoutMs)
+      await withTimeout(work, left)
     } catch (err) {
       if (!settled) hold.linger(work)
-      const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
       throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: ${messageOf(err)}${done}`, { reason: 'teardown', tornDown: [...tornDown] })
     }
     tornDown.push(...labels)

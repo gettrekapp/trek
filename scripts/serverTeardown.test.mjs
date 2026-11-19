@@ -4,10 +4,10 @@
 // ids refused before anything runs, and the repository veto.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
+import { TEARDOWN_RUN_TIMEOUT_MS, assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
 import { envParticipant, inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
-import { defaultTeardown } from '../src/shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
   project: { id: 'p1' },
@@ -177,6 +177,52 @@ test('runTeardown: a teardown that hangs past the cap fails, naming it', async (
     runTeardown([hung], { ...target, worktree: { ...target.worktree, id: 'w9', path: '/r/app-hung' } }, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }),
     (e) => e.code === 'TOOL_ERROR' && e.details?.reason === 'teardown' && e.message === "Couldn't stop the VM: no answer in 0.05 s"
   )
+})
+
+test('runTeardown: the limit is one deadline for the whole teardown, shared by its participants', async () => {
+  const slow = { id: 'stack', plan: async () => [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], teardown: () => new Promise((resolve) => setTimeout(resolve, 120)) }
+  const hung = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => new Promise(() => {}) }
+  const started = Date.now()
+  await assert.rejects(
+    runTeardown([slow, hung], { ...target, worktree: { ...target.worktree, id: 'w8', path: '/r/app-shared' } }, 'remove', ['stack:destroy', 'env:destroy'], { teardownTimeoutMs: 200 }),
+    (e) => {
+      assert.equal(e.code, 'TOOL_ERROR')
+      assert.deepEqual(e.details, { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
+      // The VM got what the stack left (about 0.08 s), not a fresh 0.2 s.
+      const m = /^Couldn't stop the VM: no answer in ([\d.]+) s \(already done: Tear down the dev stack\)$/.exec(e.message)
+      assert.ok(m, e.message)
+      assert.ok(Number(m[1]) < 0.2, e.message)
+      return true
+    }
+  )
+  assert.ok(Date.now() - started < 350, 'the whole teardown ends near its one deadline')
+  assert.throws(() => assertNotTearingDown('/r/app-shared'), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is still finishing for this worktree')
+})
+
+test('runTeardown: a participant reached after the deadline is not started', async () => {
+  let started = false
+  const slow = { id: 'stack', plan: async () => [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], teardown: async () => {} }
+  const next = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: async () => void (started = true) }
+  // The clock jumps past the deadline once the stack has started (Date.now: the deadline, the stack's time left, then the VM's).
+  const where = { ...target, worktree: { ...target.worktree, id: 'w7', path: '/r/app-late' } }
+  const origNow = Date.now
+  let calls = 0
+  Date.now = () => origNow() + (++calls > 2 ? 10_000 : 0)
+  try {
+    await assert.rejects(runTeardown([slow, next], where, 'remove', ['stack:destroy', 'env:destroy'], { teardownTimeoutMs: 5_000 }), (e) => {
+      assert.equal(e.message, "Couldn't stop the VM: no time was left for it (already done: Tear down the dev stack)")
+      assert.deepEqual(e.details, { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
+      return true
+    })
+  } finally {
+    Date.now = origNow
+  }
+  assert.equal(started, false)
+  assertNotTearingDown(where.worktree.path)
+})
+
+test('TEARDOWN_RUN_TIMEOUT_MS: a minute under the clients\' wait for the request', () => {
+  assert.equal(TEARDOWN_RUN_TIMEOUT_MS, TEARDOWN_REQUEST_TIMEOUT_MS - 60_000)
 })
 
 test('runTeardown: an id of a plugin that is now off is skipped; an unknown one is refused with a hint', async () => {
