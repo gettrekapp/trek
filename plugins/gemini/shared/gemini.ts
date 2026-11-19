@@ -2,7 +2,7 @@
 // Gemini CLI 0.46.0: --session-id/--resume take a UUID, MCP servers come from a settings file
 // (pointed at by GEMINI_CLI_SYSTEM_SETTINGS_PATH), and there is no flag to append a system prompt —
 // it is sent ahead of the first message.
-import { launchSpec, quoted, word, type AgentApprovalMode, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
+import { launchSpec, quoted, setting, word, type AgentApprovalMode, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
 
 const GEMINI_APPROVAL_MODES: AgentApprovalMode[] = [
   { value: 'auto_edit', label: 'Auto-approve edits' },
@@ -14,7 +14,6 @@ const GEMINI_APPROVAL_MODES: AgentApprovalMode[] = [
 /** Its system settings file with the trek-dev server: `<mcp dir>/<projectId>.gemini.json`, as before plugins A1. */
 export const GEMINI_MCP_SUFFIX = '.gemini.json'
 
-const setting = (value: string | undefined): string | undefined => value?.trim() || undefined
 const geminiCommand = (c: AgentConfig): string => setting(c.server.command) ?? 'gemini'
 
 export const geminiAgent: AgentProvider = {

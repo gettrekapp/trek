@@ -4,6 +4,7 @@ import {
   launchSpec,
   quoted,
   raw,
+  setting,
   word,
   type AgentApprovalMode,
   type AgentConfig,
@@ -35,9 +36,6 @@ export const CLAUDE_MCP_SUFFIX = '.json'
 /** A Global Claude session's role, when it has Trek's MCP tools (src/shared/providers/prompts.ts before plugins A1). */
 export const GLOBAL_SYSTEM_PROMPT =
   'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
-
-/** A setting's value, trimmed; undefined when it is unset or blank. */
-export const setting = (value: string | undefined): string | undefined => value?.trim() || undefined
 
 /** What a claude command line takes beside the launch's options. */
 export interface ClaudeRun {

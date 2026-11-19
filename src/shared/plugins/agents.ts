@@ -18,6 +18,9 @@ export const AGENT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/
  */
 export const MCP_FILE_RE = /^(\.[a-z][a-z0-9-]{0,31})?\.json$/
 
+/** A config value (AgentConfig's server or project), trimmed; undefined when it is unset or blank. */
+export const setting = (value: string | undefined): string | undefined => value?.trim() || undefined
+
 export interface AgentCapabilities {
   /** The session id can be chosen at launch (otherwise it is discovered afterwards) */
   presetSessionId: boolean
@@ -165,10 +168,30 @@ export function agentProblem(value: unknown): string | null {
   const caps = a.capabilities as Record<string, unknown> | undefined
   if (!caps || typeof caps !== 'object' || CAPABILITY_KEYS.some((k) => typeof caps[k] !== 'boolean')) return `must say each capability (${CAPABILITY_KEYS.join(', ')}) as a boolean`
   if (![a.models, a.efforts, a.approvalModes, a.statusMarkers].every(Array.isArray)) return 'must list its models, efforts, approval modes and status markers (each may be empty)'
+  const strings = (list: unknown): boolean => Array.isArray(list) && list.every((s) => typeof s === 'string')
+  for (const model of a.models as unknown[]) {
+    const m = model as Partial<AgentModel> | null
+    if (typeof m?.id !== 'string' || typeof m.label !== 'string') return 'has a model without a string id and label'
+    if (m.efforts !== undefined && !strings(m.efforts)) return 'has a model whose efforts are not strings'
+  }
+  if (!strings(a.efforts)) return 'has efforts that are not all strings'
+  for (const mode of a.approvalModes as unknown[]) {
+    const m = mode as Partial<AgentApprovalMode> | null
+    if (typeof m?.value !== 'string' || typeof m.label !== 'string') return 'has an approval mode without a string value and label'
+  }
+  if (!strings(a.statusMarkers)) return 'has status markers that are not all strings'
   if (a.order !== undefined && !Number.isFinite(a.order)) return 'has an order that is not a number'
   const file = a.mcpFile
   if (file !== undefined && (typeof file?.suffix !== 'string' || !MCP_FILE_RE.test(file.suffix) || typeof file.content !== 'function')) {
     return 'has an MCP file whose suffix is not like .json or .name.json'
+  }
+  for (const hook of ['globalPrompt', 'discoverSessionId'] as const) {
+    if (a[hook] !== undefined && typeof a[hook] !== 'function') return `has a ${hook} that is not a function`
+  }
+  if (a.history !== undefined) {
+    const history = a.history as Partial<AgentHistory> | null
+    if (typeof history?.migrate !== 'function') return 'has a history without a migrate function'
+    if (history.file !== undefined && typeof history.file !== 'function') return 'has a history whose file is not a function'
   }
   return null
 }

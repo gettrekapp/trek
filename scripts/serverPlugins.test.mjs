@@ -1320,20 +1320,44 @@ test("agentProviders (plugins A1): a plugin with a malformed agent, a taken id o
     agentPlugin('nolaunch', [agent('theta', { buildLaunch: undefined })]),
     agentPlugin('samefile', [agent('zeta', file('.json'))]),
     agentPlugin('badfile', [agent('eta', file('../x.json'))]),
-    agentPlugin('notalist', 'alpha')
+    agentPlugin('notalist', 'alpha'),
+    agentPlugin('badprompt', [agent('iota', { globalPrompt: 'be global' })]),
+    agentPlugin('baddiscover', [agent('kappa', { discoverSessionId: true })]),
+    agentPlugin('nomigrate', [agent('lambda', { history: { file: () => '/h' } })]),
+    agentPlugin('badhistoryfile', [agent('mu', { history: { migrate: async () => ({ moved: true }), file: '/h' } })]),
+    agentPlugin('badhistory', [agent('nu', { history: 'yes' })]),
+    agentPlugin('badmodel', [agent('xi', { models: ['opus'] })]),
+    agentPlugin('badmodelefforts', [agent('omicron', { models: [{ id: 'm', label: 'M', efforts: [1] }] })]),
+    agentPlugin('badefforts', [agent('pi', { efforts: [null] })]),
+    agentPlugin('badmarkers', [agent('rho', { statusMarkers: ['esc', 3] })]),
+    agentPlugin('badmodes', [agent('sigma', { approvalModes: ['auto'] })]),
+    agentPlugin('okhooks', [
+      agent('tau', { globalPrompt: () => 'g', discoverSessionId: async () => undefined, history: { migrate: async () => ({ moved: false }) }, models: [{ id: 'm', label: 'M', efforts: ['low'] }], statusMarkers: ['esc'] })
+    ])
   ])
-  assert.deepEqual(registry.agentProviders().map((a) => a.agent.id), ['alpha'])
-  assert.deepEqual(registry.presence().map((p) => p.id), ['one'])
+  assert.deepEqual(registry.agentProviders().map((a) => a.agent.id), ['alpha', 'tau'])
+  assert.deepEqual(registry.presence().map((p) => p.id), ['one', 'okhooks'])
   const expected = [
-    ['dupe', /its agent alpha has the id of another agent/],
-    ['twice', /its agent delta has the id of another agent/],
+    ['dupe', /its agent "alpha" has the id of another agent/],
+    ['twice', /its agent "delta" has the id of another agent/],
     ['badid', /has no usable id/],
     ['nocaps', /must say each capability/],
     ['nolaunch', /has no command or buildLaunch/],
-    ['samefile', /MCP file \.json is another agent's/],
+    ['samefile', /its agent "zeta"'s MCP file "\.json" is the agent "alpha"'s/],
     ['badfile', /suffix is not like \.json/],
-    ['notalist', /agentProviders must be a list/]
+    ['notalist', /agentProviders must be a list/],
+    ['badprompt', /its agent "iota" has a globalPrompt that is not a function/],
+    ['baddiscover', /its agent "kappa" has a discoverSessionId that is not a function/],
+    ['nomigrate', /its agent "lambda" has a history without a migrate function/],
+    ['badhistoryfile', /its agent "mu" has a history whose file is not a function/],
+    ['badhistory', /its agent "nu" has a history without a migrate function/],
+    ['badmodel', /its agent "xi" has a model without a string id and label/],
+    ['badmodelefforts', /its agent "omicron" has a model whose efforts are not strings/],
+    ['badefforts', /its agent "pi" has efforts that are not all strings/],
+    ['badmarkers', /its agent "rho" has status markers that are not all strings/],
+    ['badmodes', /its agent "sigma" has an approval mode without a string value and label/]
   ]
+  assert.equal(warnings.some((w) => w.includes('] okhooks not loaded')), false, 'well-formed hooks are taken')
   for (const [id, why] of expected) {
     assert.ok(warnings.some((w) => w.includes(`] ${id} not loaded: `) && why.test(w)), `${id}: ${warnings.join(' | ')}`)
   }
@@ -1342,5 +1366,5 @@ test("agentProviders (plugins A1): a plugin with a malformed agent, a taken id o
 test('agentProviders (plugins A1): an installable plugin (a theme manifest) offering agents is not loaded', (t) => {
   const { registry, warnings } = setup(t, [agentPlugin('skin', [agent('alpha')], { type: 'theme', contract: 1 })])
   assert.deepEqual(registry.agentProviders(), [])
-  assert.match(warnings.join('\n'), /skin not loaded: an installable plugin cannot offer agents/)
+  assert.match(warnings.join('\n'), /skin not loaded: a theme plugin \(type\/contract\) cannot offer agents/)
 })

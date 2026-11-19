@@ -1,13 +1,11 @@
 // The codex plugin's agent (plugins A1; src/shared/providers/codex.ts before): how Trek runs the
 // Codex CLI, and the pure parts of finding the session id Codex picks for itself.
-import { launchSpec, quoted, shellQuote, word, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
+import { launchSpec, quoted, setting, shellQuote, word, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
 
 const CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high']
 
 /** The headers file Codex's helper prints: `<mcp dir>/<projectId>.codex.json`, as before plugins A1. */
 export const CODEX_MCP_SUFFIX = '.codex.json'
-
-const setting = (value: string | undefined): string | undefined => value?.trim() || undefined
 
 /** `-c key=value` override; the value is TOML, and a JSON string is a valid TOML basic string. */
 function config(key: string, value: string): LaunchArg[] {

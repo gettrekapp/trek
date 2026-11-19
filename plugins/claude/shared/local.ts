@@ -1,8 +1,8 @@
 // The claude plugin's Local agent (plugins A1; src/shared/providers/local.ts before): Claude Code
 // against a local model's Anthropic-compatible endpoint (Ollama, LM Studio), so session ids, resume,
 // MCP and system prompts all work as for Claude.
-import type { AgentConfig, AgentModel, AgentProvider } from '../../../src/shared/plugins/agents.ts'
-import { buildClaudeLaunch, CLAUDE_PERMISSION_MODES, DEFAULT_PERMISSION_MODE, setting } from './claude.ts'
+import { setting, type AgentConfig, type AgentModel, type AgentProvider } from '../../../src/shared/plugins/agents.ts'
+import { buildClaudeLaunch, CLAUDE_PERMISSION_MODES, DEFAULT_PERMISSION_MODE } from './claude.ts'
 
 export type LocalBackend = 'ollama' | 'lmstudio'
 

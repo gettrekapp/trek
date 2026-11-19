@@ -1,5 +1,6 @@
 // Provider-neutral types for the agent CLIs Trek can run in a terminal tab.
 // Type-only file: safe for `node --test` and the daemon.
+import type { LaunchArg, LaunchSpec } from '../plugins/agents.ts'
 
 export const PROVIDER_IDS = ['claude', 'codex', 'gemini', 'grok', 'local'] as const
 export type LlmProviderId = (typeof PROVIDER_IDS)[number]
@@ -77,26 +78,8 @@ export interface LaunchOptions {
   baseUrl?: string
 }
 
-/**
- * One argument of an agent's command line: `word` is text Trek controls, `quoted` a value from the
- * user or a setting (single-quoted on the POSIX line, after its `prefix`), `raw` arguments the user
- * typed as text (taken as typed on POSIX, split by splitArgs where there is no shell).
- */
-export type LaunchArg =
-  | { kind: 'word'; value: string }
-  | { kind: 'quoted'; value: string; prefix?: string }
-  | { kind: 'raw'; text: string }
-
-export interface LaunchSpec {
-  /** The POSIX command line (head + args), run through the login shell */
-  command: string
-  /** The user's command override as typed, or the provider's binary */
-  head: string
-  /** The arguments after the head */
-  args: LaunchArg[]
-  /** Extra env for this pty only */
-  env?: Record<string, string>
-}
+/** One definition (plugins A1): the agent contract's. */
+export type { LaunchArg, LaunchSpec }
 
 export interface LlmProvider {
   id: LlmProviderId

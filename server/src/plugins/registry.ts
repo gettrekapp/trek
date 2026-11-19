@@ -113,11 +113,12 @@ export interface PluginAgent {
 /** Why a plugin's agents can't be taken (plugins A1), or null. */
 function agentsRefusal(manifest: PluginManifest, agents: unknown, owners: ReadonlyMap<string, string>, suffixes: ReadonlyMap<string, string>): string | null {
   if (agents === undefined) return null
-  // An installed plugin is a theme with no server half; its manifest's marks say it was installable.
-  if (manifest.type !== undefined || manifest.contract !== undefined) return 'an installable plugin cannot offer agents'
+  // A theme plugin (its manifest's type/contract marks say it is installable) has no server half, so it cannot offer agents.
+  if (manifest.type !== undefined || manifest.contract !== undefined) return 'a theme plugin (type/contract) cannot offer agents'
   if (!Array.isArray(agents)) return 'its agentProviders must be a list'
   const ids = new Set<string>()
-  const files = new Set<string>()
+  /** This plugin's MCP file suffixes → the agent that writes each */
+  const files = new Map<string, string>()
   for (const value of agents as unknown[]) {
     const problem = agentProblem(value)
     if (problem) {
@@ -125,11 +126,12 @@ function agentsRefusal(manifest: PluginManifest, agents: unknown, owners: Readon
       return `its agent ${typeof id === 'string' ? JSON.stringify(id) : '(no id)'} ${problem}`
     }
     const agent = value as AgentProvider
-    if (owners.has(agent.id) || ids.has(agent.id)) return `its agent ${agent.id} has the id of another agent`
+    if (owners.has(agent.id) || ids.has(agent.id)) return `its agent ${JSON.stringify(agent.id)} has the id of another agent`
     ids.add(agent.id)
     if (agent.mcpFile) {
-      if (suffixes.has(agent.mcpFile.suffix) || files.has(agent.mcpFile.suffix)) return `its agent ${agent.id}'s MCP file ${agent.mcpFile.suffix} is another agent's`
-      files.add(agent.mcpFile.suffix)
+      const owner = suffixes.get(agent.mcpFile.suffix) ?? files.get(agent.mcpFile.suffix)
+      if (owner !== undefined) return `its agent ${JSON.stringify(agent.id)}'s MCP file ${JSON.stringify(agent.mcpFile.suffix)} is the agent ${JSON.stringify(owner)}'s`
+      files.set(agent.mcpFile.suffix, agent.id)
     }
   }
   return null

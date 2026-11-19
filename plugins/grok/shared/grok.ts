@@ -1,8 +1,8 @@
 // The grok plugin's agent (plugins A1; src/shared/providers/grok.ts before): xAI's grok CLI with
 // its baseline flags only, until they are verified.
-import { launchSpec, quoted, word, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
+import { launchSpec, quoted, setting, word, type AgentConfig, type AgentProvider, type LaunchArg } from '../../../src/shared/plugins/agents.ts'
 
-const grokCommand = (c: AgentConfig): string => c.server.command?.trim() || 'grok'
+const grokCommand = (c: AgentConfig): string => setting(c.server.command) ?? 'grok'
 
 export const grokAgent: AgentProvider = {
   id: 'grok',

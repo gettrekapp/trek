@@ -21,23 +21,21 @@ const ID = '11111111-2222-3333-4444-555555555555'
 const MCP = {
   configPath: '/u/mcp-1.json',
   url: 'http://127.0.0.1:5000/mcp',
-  token: 'tok',
   geminiSettingsPath: '/u/mcp-gemini-1.json',
-  codexFile: '/u/mcp-codex-1.json',
-  codexHeadersHelper: "/bin/cat '/u/mcp-codex-1.json'"
+  codexFile: '/u/mcp-codex-1.json'
 }
 
 /**
  * Before plugins A1, a launch's options also held the provider-only inputs. The agents take those
  * in their config: the server config's (command, approval mode, Local's backend and URL) and the
  * project's (Claude's extra arguments). The inputs are the same, so the expectations are too. The
- * platform is POSIX's, as MCP.codexHeadersHelper is.
+ * platform is POSIX's unless a case names another.
  */
-function launch(agent, { command, approvalMode, extraArgs, localBackend, baseUrl, mcp, ...opts }) {
+function launch(agent, { command, approvalMode, extraArgs, localBackend, baseUrl, mcp, platform = 'linux', ...opts }) {
   const server = Object.fromEntries(Object.entries({ command, approvalMode, backend: localBackend, baseUrl }).filter(([, v]) => v !== undefined))
   const project = extraArgs === undefined ? {} : { claudeArgs: extraArgs }
   const files = mcp && { '.json': mcp.configPath, '.gemini.json': mcp.geminiSettingsPath, '.codex.json': mcp.codexFile }
-  return agent.buildLaunch({ ...opts, ...(mcp ? { mcp: { url: mcp.url, files } } : {}), platform: 'linux' }, { server, project })
+  return agent.buildLaunch({ ...opts, ...(mcp ? { mcp: { url: mcp.url, files } } : {}), platform }, { server, project })
 }
 
 test('claude: a plain new session matches today', () => {
@@ -174,13 +172,30 @@ test('codex: the headers helper reads a file, quoted for sh, or with type on Win
   assert.equal(codexHeadersHelper('C:\\Users\\me\\mcp-codex-1.json', 'win32'), 'type "C:\\Users\\me\\mcp-codex-1.json"')
 })
 
-test('no provider puts the MCP token in its environment or argv', () => {
-  const mcp = { ...MCP, token: 'SECRET-TOKEN-XYZ' }
+test('the MCP token goes only into the MCP file: never the command line, its args or its env', () => {
+  const token = 'SECRET-TOKEN-XYZ'
+  const withFiles = PROVIDER_LIST.filter((p) => p.mcpFile)
+  assert.deepEqual(withFiles.map((p) => p.id), ['claude', 'codex', 'gemini'])
+  // Every agent's file, by its suffix, as core hands a launch them (Local reads Claude's .json).
+  const files = Object.fromEntries(withFiles.map((p) => [p.mcpFile.suffix, `/u/mcp/p1${p.mcpFile.suffix}`]))
   for (const provider of PROVIDER_LIST.filter((p) => p.capabilities.mcp)) {
-    const spec = launch(provider, { sessionId: ID, resume: false, mcp, initialMessage: 'hi' })
-    assert.ok(!spec.command.includes(mcp.token), `${provider.id} argv`)
-    assert.ok(!JSON.stringify(spec.env ?? {}).includes(mcp.token), `${provider.id} env`)
+    if (provider.mcpFile) assert.ok(provider.mcpFile.content({ url: MCP.url, token }).includes(token), `${provider.id} file`)
+    for (const platform of ['linux', 'win32']) {
+      const spec = provider.buildLaunch({ sessionId: ID, resume: false, mcp: { url: MCP.url, files }, initialMessage: 'hi', platform }, { server: {}, project: {} })
+      assert.ok(!spec.command.includes(token), `${provider.id} command`)
+      assert.ok(!JSON.stringify(spec.args).includes(token), `${provider.id} args`)
+      assert.ok(!JSON.stringify(spec.env ?? {}).includes(token), `${provider.id} env`)
+    }
   }
+})
+
+test('codex on win32: the headers helper is `type "…"`, one argv entry', () => {
+  const spec = launch(codex, { sessionId: ID, resume: false, platform: 'win32', mcp: { ...MCP, codexFile: 'C:\\Users\\me\\mcp\\p1.codex.json' } })
+  assert.deepEqual(argvOf(spec.args), [
+    '--full-auto',
+    '-c', 'mcp_servers.trek-dev.url="http://127.0.0.1:5000/mcp"',
+    '-c', 'mcp_servers.trek-dev.http_headers_helper="type \\"C:\\\\Users\\\\me\\\\mcp\\\\p1.codex.json\\""'
+  ])
 })
 
 test('codex: resume puts the subcommand and id first; no first message', () => {
