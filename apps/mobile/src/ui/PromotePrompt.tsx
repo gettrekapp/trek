@@ -10,6 +10,8 @@ import {
   CAPABILITY,
   TEARDOWN_REQUEST_TIMEOUT_MS,
   defaultTeardown,
+  promoteErrorText,
+  promotePrompt,
   promoteTeardownFailure,
   teardownFailed,
   teardownNote,
@@ -22,6 +24,7 @@ import {
   type TeardownItem
 } from '../shared.ts'
 import { Latest } from '../logic/latest.ts'
+import { errorCode } from '../logic/promote.ts'
 import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
 import { teardownBlocker, teardownPlan } from '../state/teardown.ts'
@@ -124,13 +127,8 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
           await fail(request, "The phone could not read the promote's plan (its dry run returned no plan). Ask again with the desktop app open.")
           return
         }
-        summary =
-          `${plan.branch} is checked out in the main checkout (${plan.mainPath}) and this worktree is removed.` +
-          (plan.dirty ? ' Its uncommitted work comes along, unstaged.' : '') +
-          (plan.sessions.length ? ` ${plan.sessions.length} session(s) move and resume.` : '') +
-          (plan.otherLoaded ? " The main checkout's running sessions keep running on the new branch." : '') +
-          (plan.ignoredCount ? ` ${plan.ignoredCount} ignored file(s) in the worktree are deleted with it.` : '') +
-          (plan.overwrittenIgnoredCount ? ` ${plan.overwrittenIgnoredCount} ignored file(s) in the main checkout are overwritten.` : '')
+        // The desktop's text (src/shared/promoteText.ts); who asked is the dialog's own line.
+        summary = promotePrompt(plan).detail ?? ''
       } catch (err) {
         // Refused (dirty main checkout, a lock…).
         await fail(request, errorMessage(err))
@@ -195,7 +193,7 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     } catch (err) {
       // The desktop's wording: a failed teardown's text names what was already done; a failure after it gets the note.
       const text = errorMessage(err)
-      const failure = teardownFailed(err) ? withTeardownBypass(promoteTeardownFailure(text), err, 'promote', 'phone') : `Could not promote: ${text}${teardownNote(err)}`
+      const failure = teardownFailed(err) ? withTeardownBypass(promoteTeardownFailure(text), err, 'promote', 'phone') : `Could not promote: ${promoteErrorText(text, errorCode(err))}${teardownNote(err)}`
       setPrompt({ kind: 'result', request, failed: true, text: failure })
     } finally {
       running.current = false

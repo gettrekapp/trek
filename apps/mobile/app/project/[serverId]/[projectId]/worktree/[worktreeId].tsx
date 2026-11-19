@@ -2,9 +2,11 @@
 // request's notice (ui/PrNotice.tsx); its sessions first (ui/SessionList.tsx), each a row with its
 // state mark, a decision answered in place, and Restart and Close behind its ⋯; New session (agent
 // and session type); then a short list: Changes (its review), Branch details (ui/BranchDetails.tsx:
-// tag, custom tags, note, ticket, pull request and its watch), Load or Unload sessions, and Remove
-// worktree (not for the main checkout; with its dev stack or Docker VM running, only the desktop
-// can). Its path is at the bottom.
+// tag, custom tags, note, ticket, pull request and its watch), Load or Unload sessions, Promote to
+// primary (the main checkout: Promote branch to worktree; both need the server's `promote`), and
+// Remove worktree (not for the main checkout). On a server older than plugins E1, with the
+// worktree's dev stack or Docker VM running, only the desktop can promote or remove it. Its path
+// is at the bottom.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
@@ -29,11 +31,12 @@ import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit } from '../../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree, teardownRemove } from '../../../../../src/logic/worktrees.ts'
-import { changesRoute, projectRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
+import { demoteBranch, promoteWorktree, type PromoteFlowOutcome } from '../../../../../src/logic/promote.ts'
+import { changesRoute, projectRoute, sessionRoute, worktreeRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
 import { useServers } from '../../../../../src/state/ServersProvider.tsx'
 import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../../../../../src/state/teardown.ts'
-import { confirmAlert } from '../../../../../src/ui/alerts.ts'
+import { confirmAlert, noticeAlert } from '../../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../../src/ui/Button.tsx'
 import { PrNotice } from '../../../../../src/ui/PrNotice.tsx'
@@ -60,7 +63,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, worktreeId } = useLocalSearchParams<{ serverId: string; projectId: string; worktreeId: string }>()
   const server = useServer(serverId)
   // The registry's connection at the time of the call: the phone replaces its connections after
-  // a while in the background, and a removal's questions can stay up across that.
+  // a while in the background, and a removal's or a promote's question can stay up across that.
   const { get: currentServer } = useServers()
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
@@ -72,14 +75,17 @@ export default function WorktreeScreen(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
-  // Why Remove is the desktop's to do (its dev stack or VM is running).
+  // Why Remove or Promote is the desktop's to do (its dev stack or VM is running).
   const [blocked, setBlocked] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
-  // One removal at a time, also for two taps before the button is drawn disabled.
+  // The promote or demote that runs from this screen (its row says so).
+  const [moving, setMoving] = useState<'promote' | 'demote' | null>(null)
+  // One removal, promote or demote at a time, also for two taps before the rows are drawn disabled.
   const removingNow = useRef(false)
-  // Whether this screen is the one shown: a removal that goes on after it went (Back), or under
-  // another screen, does not ask its first question and does not navigate. Its discard question,
-  // after git refuses for changes, can still come up over another screen: it names the worktree.
+  // Whether this screen is the one shown: a removal or a promote that goes on after it went (Back),
+  // or under another screen, does not ask its first question and does not navigate. A removal's
+  // discard question, after git refuses for changes, can still come up over another screen: it
+  // names the worktree. So can a promote's notes (closed sessions, a recovery file).
   const shown = useRef(false)
   useFocusEffect(
     useCallback(() => {
@@ -142,6 +148,13 @@ export default function WorktreeScreen(): React.JSX.Element {
     if (started) router.push(sessionRoute(serverId, projectId, started.sessionId))
   }
 
+  // Each request goes over the connection the server has when it is made, not the tap's.
+  const now = (): RegisteredServer => {
+    const current = currentServer(serverId)
+    if (!current) throw new Error('Not connected')
+    return current
+  }
+
   // The desktop's order (backendV2.ts' worktree remove). On a server with `worktreeTeardown`
   // (plugins E1) the server tears down what the plan ticks by default; on an older one, with the dev
   // stack or VM running, nothing is done here. Then the question, that check again (older servers),
@@ -151,12 +164,6 @@ export default function WorktreeScreen(): React.JSX.Element {
     const { repo, worktree: target } = found
     const name = target.branch ?? target.name
     const ref = { projectId, worktreeId: target.id }
-    // Each request goes over the connection the server has when it is made, not the tap's.
-    const now = (): RegisteredServer => {
-      const current = currentServer(serverId)
-      if (!current) throw new Error('Not connected')
-      return current
-    }
     // Strict: a check that fails stops the removal (its dev stack may be running).
     const check = async (): Promise<string | null> => teardownBlocker(now(), projectId, repo.id, latest.current?.worktree ?? target, { strict: true })
     const sayBlocker = (why: string): void => {
@@ -239,6 +246,99 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
   }
 
+  // Promote to primary and "Promote branch to worktree" (5e; logic/promote.ts has the order). The
+  // rows' other actions are off meanwhile. When it is done the screen is replaced by the checkout
+  // the branch is in now, so Back does not return to a worktree that is gone.
+  const beginMove = (op: 'promote' | 'demote'): void => {
+    removingNow.current = true
+    setPicking(false)
+    setBusy(true)
+    setMoving(op)
+    setError(null)
+    setBlocked(null)
+  }
+  const resetMove = (): void => {
+    removingNow.current = false
+    if (mounted.current) {
+      setBusy(false)
+      setMoving(null)
+    }
+  }
+  const endMove = async (outcome: PromoteFlowOutcome, op: 'promote' | 'demote'): Promise<void> => {
+    // The rows come back before the notes are read.
+    resetMove()
+    if (!mounted.current) return
+    if (outcome.kind === 'done') {
+      // The notes say what did not come along: shown also when another screen is over this one.
+      if (outcome.notes) await noticeAlert(op === 'promote' ? 'Promoted, with notes' : 'Moved, with notes', outcome.notes)
+      if (shown.current) router.replace(worktreeRoute(serverId, projectId, outcome.worktreeId))
+      return
+    }
+    if (outcome.kind === 'failed') setError(outcome.text)
+    else if (outcome.kind === 'blocked') {
+      if (outcome.why === TEARDOWN_UNCHECKED) setError("Could not check whether this worktree's dev stack or Docker VM is running, so it was not promoted. Try again.")
+      else setBlocked(`Promote this worktree on the desktop: ${outcome.why}, and only the desktop can tear it down first.`)
+    }
+  }
+  // The flows never reject; should one throw all the same, the rows still come back.
+  const runMove = async (op: 'promote' | 'demote', flow: () => Promise<PromoteFlowOutcome>): Promise<void> => {
+    beginMove(op)
+    try {
+      await endMove(await flow(), op)
+    } catch (err) {
+      if (mounted.current) setError(errorMessage(err))
+    } finally {
+      resetMove()
+    }
+  }
+  const ask = { shown: () => shown.current, confirm: (q: { message: string; detail?: string; confirmLabel: string }) => confirmAlert(q.message, q.detail ?? '', q.confirmLabel) }
+
+  const promote = async (): Promise<void> => {
+    if (!server || !found || found.worktree.isMain || removingNow.current) return
+    const { repo, worktree: target } = found
+    const ref = { projectId, worktreeId: target.id }
+    await runMove('promote', () => promoteWorktree({
+      ...ask,
+      plan: async () => {
+        const plan = await now().connection.request('worktree.promote', { ...ref, dryRun: true })
+        if (!('mainPath' in plan)) throw new Error('The server returned no plan for the promote.')
+        return plan
+      },
+      teardownPlan: async () => teardownPlan(now(), projectId, target.id, 'promote'),
+      // Strict, as a removal: the worktree goes, so a check that fails stops it.
+      blocker: async () => {
+        try {
+          return await teardownBlocker(now(), projectId, repo.id, latest.current?.worktree ?? target, { strict: true })
+        } catch {
+          return TEARDOWN_UNCHECKED
+        }
+      },
+      promote: async (teardown) => {
+        const result = await now().connection.request('worktree.promote', { ...ref, ...(teardown.length > 0 ? { teardown } : {}) }, { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS })
+        if (!('notes' in result)) throw new Error('The server returned no result for the promote.')
+        return result
+      }
+    }))
+  }
+
+  const demote = async (): Promise<void> => {
+    if (!server || !found || !found.worktree.isMain || removingNow.current) return
+    const ref = { projectId, repoId: found.repo.id }
+    await runMove('demote', () => demoteBranch({
+      ...ask,
+      plan: async () => {
+        const plan = await now().connection.request('worktree.demote', { ...ref, dryRun: true })
+        if (!('mainPath' in plan)) throw new Error('The server returned no plan for the move.')
+        return plan
+      },
+      demote: async () => {
+        const result = await now().connection.request('worktree.demote', ref, { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS })
+        if (!('notes' in result)) throw new Error('The server returned no result for the move.')
+        return result
+      }
+    }))
+  }
+
   const trackers = project ? activeTicketProviders(server?.connection.welcome, project.settings) : []
   const prHosts = project ? activePrProviders(server?.connection.welcome, project.settings) : []
   const facts = project && found ? branchParts(project.settings, found.repo, found.worktree.branch, trackers, prHosts) : []
@@ -254,6 +354,7 @@ export default function WorktreeScreen(): React.JSX.Element {
       ]
     : []
   const off = busy || !server
+  const canPromote = server?.connection.welcome?.capabilities.includes(CAPABILITY.promote) === true
   const listRow = ({ pressed }: { pressed: boolean }) => [ui.listRow, { alignItems: 'baseline' as const }, pressed ? { backgroundColor: colors.panel } : null]
 
   // The Branch details' boxes stay above the keyboard, and one tap on Save works with it up.
@@ -349,6 +450,19 @@ export default function WorktreeScreen(): React.JSX.Element {
             >
               <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{worktree.loaded ? 'Unload sessions' : 'Load sessions'}</Text>
             </Pressable>
+            {/* 5e: worktree.promote on a worktree, worktree.demote on the main checkout. */}
+            {canPromote && worktree.branch && !worktree.missing ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={off}
+                style={(state) => [...listRow(state), { opacity: off ? 0.4 : 1 }]}
+                onPress={() => void (worktree.isMain ? demote() : promote())}
+              >
+                <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>
+                  {worktree.isMain ? (moving === 'demote' ? 'Moving…' : 'Promote branch to worktree…') : moving === 'promote' ? 'Promoting…' : 'Promote to primary…'}
+                </Text>
+              </Pressable>
+            ) : null}
             {worktree.isMain ? null : (
               <Pressable accessibilityRole="button" disabled={off} style={(state) => [...listRow(state), { opacity: off ? 0.4 : 1 }]} onPress={() => void remove()}>
                 <Text style={{ flex: 1, color: colors.danger, fontSize: 15 }}>{removing ? 'Removing…' : 'Remove worktree'}</Text>
