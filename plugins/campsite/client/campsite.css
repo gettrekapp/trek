@@ -93,18 +93,47 @@
 .campsite {
   position: relative;
   flex: none;
-  height: 110px;
-  overflow: hidden;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: #121726;
+  height: 112px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: #1a1622;
   user-select: none;
 }
 .campsite.collapsed {
-  height: 20px;
+  height: 36px;
   display: flex;
   align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+  overflow: hidden;
+}
+.campsite.collapsed .cs-summary {
+  padding: 0;
+  background: none;
+}
+/* Takes the room that is left; collapsedRow cuts the hikers to it */
+.cs-mini-row {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  display: flex;
+  align-items: flex-end;
   gap: 6px;
-  padding-left: 28px;
+  overflow: hidden;
+  /* Room for the hikers' focus rings inside the clip */
+  padding: 3px;
+  margin: -3px;
+}
+.cs-mini {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.cs-mini-more {
+  align-self: center;
+  color: #9a9aa2;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .cs-paused,
 .cs-paused * {
@@ -113,50 +142,176 @@
 .cs-scene {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  overflow: hidden;
 }
-.cs-chevron {
+.cs-scene i {
+  position: absolute;
+  display: block;
+}
+.cs-star {
+  width: 2px;
+  height: 2px;
+  background: #5a5068;
+}
+.cs-moon {
+  right: 9%;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #f0c9a0;
+}
+/* The bite that makes it a crescent */
+.cs-moon::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #1a1622;
+}
+.cs-ridge {
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  height: 46px;
+  background: #272031;
+  clip-path: polygon(0 100%, 0 60%, 8% 30%, 15% 55%, 24% 15%, 33% 60%, 42% 40%, 52% 70%, 61% 25%, 70% 55%, 79% 20%, 88% 60%, 95% 35%, 100% 55%, 100% 100%);
+}
+.cs-pine {
+  bottom: 14px;
+  background: #17141d;
+  clip-path: polygon(50% 0, 80% 40%, 65% 40%, 95% 78%, 58% 78%, 58% 100%, 42% 100%, 42% 78%, 5% 78%, 35% 40%, 20% 40%);
+}
+.cs-pine.light {
+  background: #1e1a27;
+}
+.cs-ground {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 14px;
+  background: #16141b;
+  border-top: 2px solid #2c2536;
+  box-sizing: border-box;
+}
+.cs-trail {
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  height: 3px;
+  background: #221e2a;
+}
+/* Clips hikers walking in from off-stage; the header and the popover sit beside it */
+.cs-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.cs-header {
   position: absolute;
   left: 6px;
-  top: 2px;
+  top: 6px;
   z-index: 5;
-  background: none;
-  border: none;
-  color: #9aa4b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cs-toggle {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #ededf0;
   cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
+}
+/* On the sky's color, so it stays legible over a tent's sign at a narrow window */
+.cs-summary {
+  padding: 0 4px;
+  background: rgba(26, 22, 34, 0.85);
+  color: #9a9aa2;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .cs-waiting-chip {
+  flex: none;
+  height: 20px;
+  padding: 0 8px;
   background: var(--attention, #e2a336);
-  color: #111111;
+  color: #111113;
   border: none;
-  font: 700 10px monospace;
-  padding: 0 5px;
+  border-radius: 4px;
+  font: 700 11px ui-monospace, 'SF Mono', Menlo, monospace;
   cursor: pointer;
 }
 .cs-fire {
   position: absolute;
-  bottom: 12px;
-  width: 20px;
-  height: 22px;
+  bottom: 10px;
+  width: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+}
+.cs-flames {
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 1px;
-  z-index: 1;
+  height: 22px;
 }
-.cs-fire span {
+.cs-flames span {
   display: block;
   width: 6px;
   background: #ff9a3c;
   transform-origin: bottom;
   animation: cs-flick 0.3s steps(2) infinite;
 }
-.cs-fire span:nth-child(1) { height: 12px; background: #ff5a2a; }
-.cs-fire span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
-.cs-fire span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
+.cs-flames span:nth-child(1) { height: 12px; background: #ff5a2a; }
+.cs-flames span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
+.cs-flames span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
+/* A ring of stones either side of the logs */
+.cs-hearth {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+.cs-hearth b {
+  width: 4px;
+  height: 4px;
+  background: #55555e;
+}
+.cs-hearth b:nth-child(2),
+.cs-hearth b:nth-child(4) {
+  height: 6px;
+  background: #44444c;
+}
+.cs-hearth em {
+  width: 26px;
+  height: 4px;
+  background: #5a3a22;
+}
+.cs-ember {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  height: 2px;
+}
+.cs-ember.a { top: -7px; margin-left: 6px; background: #ffb347; }
+.cs-ember.b { top: -14px; margin-left: -6px; background: #ff7a3c; }
+.cs-fire.cold .cs-flames,
+.cs-fire.cold .cs-ember {
+  display: none;
+}
 @keyframes cs-flick {
   0%, 100% { transform: scaleY(1); }
   50% { transform: scaleY(1.25); }
@@ -178,73 +333,123 @@
   border-radius: 3px;
   z-index: 1;
 }
-.cs-log .cs-camp-badge {
-  top: auto;
-  bottom: 10px;
-}
 .cs-tent {
   position: absolute;
-  bottom: 18px;
+  bottom: 12px;
   /* width: TENT_W, inline (Tent.tsx) */
   z-index: 1;
 }
 .cs-tent svg {
   display: block;
 }
+/* Across the tent's peak: 60–76 px above the strip's bottom, clear of a 3× hiker's hat in front (58 px) and of the header (from 82 px) */
 .cs-tent-sign {
   position: absolute;
-  left: 56px;
-  /* On its post, 56 px above the strip's bottom: clear of a 2.5× hiker (40 px, standing at 10 px) */
-  bottom: 38px;
-  background: #7a5230;
-  color: #f1e6cc;
-  font: 9px ui-monospace, Menlo, monospace;
-  padding: 1px 3px;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  max-width: 94px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+  background: #2a2118;
+  border: 1px solid #5a3a22;
+  color: #e6d9b8;
+  font: 10px/14px ui-monospace, 'SF Mono', Menlo, monospace;
+  padding: 0 5px;
   white-space: nowrap;
 }
+/* Grouped: in the sign's place. Narrower than the tents' pitch (TENT_W + GAP = 100), so neighbours never overlap */
 .cs-camp-badge {
   position: absolute;
   left: 50%;
-  /* Above the tent's peak and its sign */
-  top: -18px;
+  bottom: 46px;
   transform: translateX(-50%);
-  background: #1d2433;
-  color: #dfe5ee;
-  border: 1px solid #3a4356;
-  font: 10px ui-monospace, Menlo, monospace;
-  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 96px;
+  box-sizing: border-box;
+  background: #1c1d1f;
+  color: #ededf0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  font: 10px/16px ui-monospace, 'SF Mono', Menlo, monospace;
+  padding: 0 6px;
   cursor: pointer;
   white-space: nowrap;
 }
-.cs-camp-badge.waiting {
+.cs-camp-badge span,
+.cs-camp-badge b {
+  flex: none;
+}
+.cs-camp-badge .cs-badge-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cs-log .cs-camp-badge {
+  bottom: 10px;
+}
+.cs-camp-badge.attention {
   border-color: var(--attention, #e2a336);
   color: var(--attention, #e2a336);
 }
-/* A child of .campsite (no z-index), placed from its badge's rect when it opens */
+.cs-camp-badge.decision {
+  border-color: var(--decision, #b18cff);
+  color: var(--decision, #b18cff);
+}
+/* Fixed, so the stage does not clip it: placed from its badge's rect when it opens */
 .cs-tent-popover {
   position: fixed;
   transform: translateY(-100%);
+  min-width: 230px;
   max-width: calc(100vw - 16px);
-  background: #1d2433;
-  border: 1px solid #3a4356;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 4px;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   z-index: 50;
 }
 .cs-tent-popover button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 8px;
   background: none;
   border: none;
-  color: #dfe5ee;
-  text-align: left;
-  padding: 4px 10px;
-  cursor: pointer;
+  border-radius: 5px;
+  color: #ededf0;
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
   white-space: nowrap;
+}
+.cs-tent-popover button:hover {
+  background: #2a2a30;
+}
+.cs-row-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cs-tent-popover button:hover {
-  background: #2a3346;
+.cs-row-status {
+  font-size: 11px;
+  color: #9a9aa2;
+}
+.cs-row-status.attention {
+  color: var(--attention, #e2a336);
+}
+.cs-row-status.decision {
+  color: var(--decision, #b18cff);
 }
 .cs-camp-hiker {
   position: absolute;
@@ -271,17 +476,19 @@
 }
 .cs-camp-hiker.inside {
   z-index: 0;
-  bottom: 20px;
+  bottom: 14px;
 }
+/* The lantern: a flat pool of light under the shown session's hiker */
 .cs-camp-hiker.selected::after {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: -6px;
-  width: 44px;
-  height: 24px;
+  bottom: -3px;
+  width: 40px;
+  height: 6px;
   transform: translateX(-50%);
-  background: radial-gradient(rgba(255, 230, 128, 0.35), transparent 70%);
+  border-radius: 50%;
+  background: rgba(255, 230, 128, 0.5);
   pointer-events: none;
 }
 .cs-camp-hiker:focus-visible {
@@ -292,18 +499,20 @@
 .cs-empty {
   position: absolute;
   bottom: 40px;
-  color: #9aa4b8;
+  color: #9a9aa2;
   font: 11px ui-monospace, Menlo, monospace;
 }
 .cs-more {
   right: 12px;
   z-index: 3;
   padding: 0 4px;
-  background: rgba(18, 23, 38, 0.85);
+  background: rgba(26, 22, 34, 0.85);
 }
 /* Waiting hikers the fire has no room for: just above it */
 .cs-more-waiting {
   right: auto;
+  /* Between the two nearest sign boards, above the hikers' heads */
+  bottom: 62px;
   transform: translateX(-50%);
   border: none;
   color: var(--attention, #e2a336);
@@ -314,10 +523,13 @@
 .cs-empty {
   left: 50%;
   transform: translateX(-50%);
-  bottom: 44px;
+  top: 30px;
+  bottom: auto;
+  white-space: nowrap;
 }
 
-.cs-chevron:focus-visible,
+.cs-toggle:focus-visible,
+.cs-mini:focus-visible,
 .cs-camp-badge:focus-visible,
 .cs-waiting-chip:focus-visible,
 .cs-more-waiting:focus-visible,

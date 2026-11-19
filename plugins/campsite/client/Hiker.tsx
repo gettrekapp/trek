@@ -18,7 +18,7 @@ interface Props {
   look: Look
   pose: Pose
   gear?: Gear | 'none'
-  /** Pixel size: 1 on a tab, 2.5 at camp, 3 in the terminal corner */
+  /** Pixel size: 1 on a tab, 3 at camp and in the terminal corner */
   scale: number
   label: string
   grey?: boolean

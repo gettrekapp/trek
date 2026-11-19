@@ -1,13 +1,14 @@
 // The campsite strip along the bottom of the window: a night scene with the fire in the middle, a
 // tent per worktree with sessions, Global on a log, and every session's hiker. Click a hiker to
-// show its session. Collapsed, it is a thin bar of "!" for those waiting.
+// show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
-import { campLayout, type CampHikerSpot } from '../shared/layout.ts'
+import { campLayout, campSummary, collapsedRow, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
 import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
 import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
+import { MiniHiker } from './MiniHiker.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
 
 export function Campsite(): React.JSX.Element | null {
@@ -18,6 +19,8 @@ export function Campsite(): React.JSX.Element | null {
   const now = useNow()
   const hidden = useDocumentHidden()
   const [ref, width] = useWidth<HTMLDivElement>()
+  // The collapsed bar's row of hikers: measured, to know how many fit
+  const [rowRef, rowWidth] = useWidth<HTMLDivElement>()
   const [openTent, setOpenTent] = useState<OpenTent | null>(null)
   const badge = useRef<HTMLButtonElement | null>(null)
   const layout = useMemo(() => campLayout(sessions, width), [sessions, width])
@@ -35,19 +38,40 @@ export function Campsite(): React.JSX.Element | null {
   useEffect(() => {
     if (openGone) setOpenTent(null)
   }, [openGone])
+  // The toggle is a different element collapsed and expanded: after a press, focus follows it to the new one
+  const toggle = useRef<HTMLButtonElement | null>(null)
+  const pressed = useRef(false)
+  useEffect(() => {
+    if (!pressed.current) return
+    pressed.current = false
+    toggle.current?.focus()
+  }, [prefs.campsiteCollapsed])
+  const flip = (collapsed: boolean): void => {
+    pressed.current = true
+    setPref('campsiteCollapsed', collapsed)
+  }
   if (!loaded || !prefs.showCampsite) return null
 
   if (prefs.campsiteCollapsed) {
+    const waiting = sessions.filter(isWaiting)
+    const row = collapsedRow(sessions, rowWidth)
     return (
-      <div className="campsite collapsed">
-        <button className="cs-chevron" title="Show the campsite" aria-label="Show the campsite" onClick={() => setPref('campsiteCollapsed', false)}>
-          ▴
+      <div className={`campsite collapsed${hidden ? ' cs-paused' : ''}`}>
+        <button ref={toggle} className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => flip(false)}>
+          <Chevron up />
         </button>
-        {sessions.filter(isWaiting).map((s) => (
-          <button key={s.terminalId} className="cs-waiting-chip" title={hikerLabel(s)} aria-label={hikerLabel(s)} onClick={() => host.focusSession(s.terminalId)}>
-            !
+        <span className="cs-summary">{campSummary(sessions)}</span>
+        {waiting.length > 0 && (
+          <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
+            {waiting.length} waiting
           </button>
-        ))}
+        )}
+        <div ref={rowRef} className="cs-mini-row">
+          {row.shown.map((s) => (
+            <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => host.focusSession(s.terminalId)} />
+          ))}
+          {row.more > 0 && <span className="cs-mini-more">+{row.more}</span>}
+        </div>
       </div>
     )
   }
@@ -57,25 +81,40 @@ export function Campsite(): React.JSX.Element | null {
   const unspottedWaiting = layout.moreWaiting > 0 ? sessions.find((s) => isWaiting(s) && !spotted.has(s.terminalId)) : undefined
   // The open camp's name ('Global' for the log), while it is still drawn
   const popName = !openTent || openGone ? undefined : openTent.worktreeId === null ? 'Global' : layout.tents.find((t) => t.worktreeId === openTent.worktreeId)?.name
-  const toggleCamp = (worktreeId: string | null, el: HTMLButtonElement): void => {
+  const toggleCamp = (worktreeId: string | null, el: HTMLButtonElement, side: FireSide): void => {
     badge.current = el
     const r = el.getBoundingClientRect()
-    setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, top: r.top }))
+    setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, right: r.right, top: r.top, side }))
   }
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       <CampScene />
-      <button className="cs-chevron" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => setPref('campsiteCollapsed', true)}>
-        ▾
-      </button>
+      <div className="cs-header">
+        <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
+          <Chevron />
+        </button>
+        <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
+      </div>
       {width > 0 && (
-        <>
-          <div className="cs-fire" style={{ left: layout.fireX - 10 }} aria-hidden="true">
-            <span />
-            <span />
-            <span />
+        <div className="cs-stage">
+          {/* Out with no sessions: stones and logs, no flames or glow */}
+          <div className={`cs-fire${sessions.length === 0 ? ' cold' : ''}`} style={{ left: layout.fireX - 23 }} aria-hidden="true">
+            <i className="cs-ember a" />
+            <i className="cs-ember b" />
+            <div className="cs-flames">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="cs-hearth">
+              <b />
+              <b />
+              <em />
+              <b />
+              <b />
+            </div>
           </div>
-          <div className="cs-glow" style={{ left: layout.fireX - 70 }} aria-hidden="true" />
+          {sessions.length > 0 && <div className="cs-glow" style={{ left: layout.fireX - 70 }} aria-hidden="true" />}
           {layout.moreWaiting > 0 && (
             <button
               className="cs-more cs-more-waiting"
@@ -83,32 +122,19 @@ export function Campsite(): React.JSX.Element | null {
               title={unspottedWaiting ? `Show ${hikerLabel(unspottedWaiting)}` : undefined}
               onClick={() => unspottedWaiting && host.focusSession(unspottedWaiting.terminalId)}
             >
-              +{layout.moreWaiting} waving
+              +{layout.moreWaiting} waiting
             </button>
           )}
-          {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el)} />}
+          {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el, 'left')} />}
           {layout.tents.map((t) => (
             <Tent
               key={t.worktreeId}
               tent={t}
               grouped={layout.grouped}
               open={openTent !== null && openTent.worktreeId === t.worktreeId}
-              onToggle={(el) => toggleCamp(t.worktreeId, el)}
+              onToggle={(el) => toggleCamp(t.worktreeId, el, t.x < layout.fireX ? 'left' : 'right')}
             />
           ))}
-          {openTent && popName !== undefined && (
-            <TentPopover
-              key={openTent.worktreeId === null ? 'global' : `worktree:${openTent.worktreeId}`}
-              at={openTent}
-              name={popName}
-              members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
-              onPick={(id) => {
-                setOpenTent(null)
-                host.focusSession(id)
-              }}
-            />
-          )}
-          {layout.moreTents > 0 && <span className="cs-more">+{layout.moreTents} more camps</span>}
           {layout.hikers.map((h) => {
             const s = byId.get(h.terminalId)
             if (!s) return null
@@ -130,8 +156,22 @@ export function Campsite(): React.JSX.Element | null {
           {departing.map((d) => (
             <CampHiker key={`gone:${d.seq}`} session={d.session} x={d.x} startX={d.from} place="tent" width={width} chore="map" selected={false} leaving />
           ))}
-          {sessions.length === 0 && <span className="cs-empty">No one&apos;s at camp yet</span>}
-        </>
+          {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
+        </div>
+      )}
+      {/* Beside the stage, not in it: fixed to the window, and nothing of the stage's can clip it */}
+      {openTent && popName !== undefined && (
+        <TentPopover
+          key={openTent.worktreeId === null ? 'global' : `worktree:${openTent.worktreeId}`}
+          at={openTent}
+          name={popName}
+          members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
+          now={now}
+          onPick={(id) => {
+            setOpenTent(null)
+            host.focusSession(id)
+          }}
+        />
       )}
     </div>
   )
@@ -226,4 +266,12 @@ function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): vo
       window.removeEventListener('resize', onResize)
     }
   }, [open, close])
+}
+
+function Chevron({ up = false }: { up?: boolean }): React.JSX.Element {
+  return (
+    <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={up ? 'M2.5 7.5 6 4l3.5 3.5' : 'M2.5 4.5 6 8l3.5-3.5'} />
+    </svg>
+  )
 }
