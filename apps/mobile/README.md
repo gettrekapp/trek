@@ -3,7 +3,7 @@
 Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS and
 Android: what needs you on every paired trek-server, sessions and their terminals,
 prompts, quick buttons, decisions, Changes with its review (line comments on a diff, sent to
-a session), adding and removing worktrees, a branch's tag, custom tags, note, ticket and pull
+a session), adding, removing and promoting worktrees, a branch's tag, custom tags, note, ticket and pull
 request, the pull request's watch and its notices, a branch's history, a project's automations
 (their runs, Run now, on and off, name and prompt, missed runs), and pushes while it is closed.
 The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it
@@ -387,7 +387,7 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - **Promote to primary…** in a worktree's Worktree list (not on the main checkout, a missing worktree, or a server without `promote`): the question names what moves and what the server tears down first. **Promote** shows "Promoting…" with the other rows disabled, then the main checkout's screen replaces this one; Back goes to the project, not to the removed worktree.
    - With a dirty main checkout the promote is refused before any question, and the reason shows in red.
    - **Promote branch to worktree…** on the main checkout: after **Move to Worktree** the new worktree's screen shows (not "This worktree is gone."), and the main checkout is on the default branch.
-   - A promote that closes a session shows "Promoted, with notes" before the screen changes.
+   - A promote that closes a session shows "Promoted, with notes" before the screen changes, also when another screen (Changes) was opened meanwhile.
    - On a tablet, both run in the detail pane and the sidebar selection follows to the resulting checkout.
 8. **Add worktree** (a repository's **Add worktree** on the project screen):
    - Typing in the branch field lists up to 8 branches containing the text; tapping one fills

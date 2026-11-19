@@ -1,6 +1,6 @@
 // Promote to primary and "Promote branch to worktree" in a server window (phase 5e): the
-// confirmation's text and the errors (re-exported from src/shared/promoteText.ts), the worktrees a promote is running on (their commands are
-// disabled meanwhile), and the window's side of the trek-dev tool promote_to_primary: each
+// confirmation's text and the errors (re-exported from src/shared/promoteText.ts), the worktrees a
+// promote is running on (their commands are disabled meanwhile), and the window's side of the trek-dev tool promote_to_primary: each
 // `promote.request` runs the same promote the menu item does, one at a time. The user's confirm
 // claims the request (`promote.claim`) before any teardown; the claimant's `worktree.promote
 // {requestId}` settles it on the server. The backend (backendV2.ts) does the requests; this file

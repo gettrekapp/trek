@@ -143,6 +143,29 @@ test('demote: the plan, the question, then the demote', async () => {
   assert.match((await failed.demote()).text, /^Another project on the server has this checkout loaded\./)
 })
 
+test('promote: never rejects, whatever the plan or the check does', async () => {
+  // A plan the question can't be made from (no sessions): a failure, and nothing is sent.
+  const odd = flow({ plan: { mainPath: '/r' } })
+  assert.equal((await odd.promote()).kind, 'failed')
+  assert.deepEqual(odd.calls, ['plan', 'teardownPlan'])
+
+  const thrown = flow({ teardownPlan: null, blocker: rejects(new Error('check threw')) })
+  assert.deepEqual(await thrown.promote(), { kind: 'failed', text: 'check threw' })
+
+  const left = flow({ teardownPlan: null, shown: () => false })
+  assert.deepEqual(await left.promote(), { kind: 'cancelled' })
+  assert.deepEqual(left.calls, ['plan', 'teardownPlan', 'blocker'])
+})
+
+test("demote: a result's notes come back, and a plan the question can't be made from is a failure", async () => {
+  const f = flow({ demote: result({ worktreeId: 'main-id', notes: ['The new worktree could not be read.'] }) })
+  assert.deepEqual(await f.demote(), { kind: 'done', worktreeId: 'main-id', notes: 'The new worktree could not be read.' })
+
+  const odd = flow({ plan: { mainPath: '/r' } })
+  assert.equal((await odd.demote()).kind, 'failed')
+  assert.deepEqual(odd.calls, ['plan'])
+})
+
 test('errorCode: a coded error, else null', () => {
   assert.equal(errorCode(coded('IN_USE', 'x')), 'IN_USE')
   assert.equal(errorCode(new Error('x')), null)

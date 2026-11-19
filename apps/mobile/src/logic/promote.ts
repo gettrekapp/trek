@@ -74,16 +74,21 @@ export async function promoteWorktree(deps: PromoteDeps): Promise<PromoteFlowOut
   } catch (err) {
     return { kind: 'failed', text: errorText(err) }
   }
-  if (items === null) {
-    const why = await deps.blocker()
-    if (why !== null) return { kind: 'blocked', why }
-  }
-  if (!deps.shown()) return { kind: 'cancelled' }
-  const question = promotePrompt(plan)
-  if (!(await deps.confirm({ ...question, detail: (question.detail ?? '') + (items ? teardownSentence(items) : '') }))) return { kind: 'cancelled' }
-  if (items === null) {
-    const why = await deps.blocker()
-    if (why !== null) return { kind: 'blocked', why }
+  try {
+    if (items === null) {
+      const why = await deps.blocker()
+      if (why !== null) return { kind: 'blocked', why }
+    }
+    if (!deps.shown()) return { kind: 'cancelled' }
+    const question = promotePrompt(plan)
+    if (!(await deps.confirm({ ...question, detail: (question.detail ?? '') + (items ? teardownSentence(items) : '') }))) return { kind: 'cancelled' }
+    if (items === null) {
+      const why = await deps.blocker()
+      if (why !== null) return { kind: 'blocked', why }
+    }
+  } catch (err) {
+    // A plan the question can't be made from, or a check that threw: nothing was sent.
+    return { kind: 'failed', text: errorText(err) }
   }
   try {
     const result = await deps.promote(items ? defaultTeardown(items) : [])

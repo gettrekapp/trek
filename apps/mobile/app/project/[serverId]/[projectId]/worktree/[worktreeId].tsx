@@ -63,7 +63,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, worktreeId } = useLocalSearchParams<{ serverId: string; projectId: string; worktreeId: string }>()
   const server = useServer(serverId)
   // The registry's connection at the time of the call: the phone replaces its connections after
-  // a while in the background, and a removal's questions can stay up across that.
+  // a while in the background, and a removal's or a promote's question can stay up across that.
   const { get: currentServer } = useServers()
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
@@ -75,16 +75,17 @@ export default function WorktreeScreen(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
-  // Why Remove is the desktop's to do (its dev stack or VM is running).
+  // Why Remove or Promote is the desktop's to do (its dev stack or VM is running).
   const [blocked, setBlocked] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
   // The promote or demote that runs from this screen (its row says so).
   const [moving, setMoving] = useState<'promote' | 'demote' | null>(null)
   // One removal, promote or demote at a time, also for two taps before the rows are drawn disabled.
   const removingNow = useRef(false)
-  // Whether this screen is the one shown: a removal that goes on after it went (Back), or under
-  // another screen, does not ask its first question and does not navigate. Its discard question,
-  // after git refuses for changes, can still come up over another screen: it names the worktree.
+  // Whether this screen is the one shown: a removal or a promote that goes on after it went (Back),
+  // or under another screen, does not ask its first question and does not navigate. A removal's
+  // discard question, after git refuses for changes, can still come up over another screen: it
+  // names the worktree. So can a promote's notes (closed sessions, a recovery file).
   const shown = useRef(false)
   useFocusEffect(
     useCallback(() => {
@@ -256,23 +257,38 @@ export default function WorktreeScreen(): React.JSX.Element {
     setError(null)
     setBlocked(null)
   }
-  const endMove = async (outcome: PromoteFlowOutcome, op: 'promote' | 'demote'): Promise<void> => {
+  const resetMove = (): void => {
     removingNow.current = false
     if (mounted.current) {
       setBusy(false)
       setMoving(null)
     }
+  }
+  const endMove = async (outcome: PromoteFlowOutcome, op: 'promote' | 'demote'): Promise<void> => {
+    // The rows come back before the notes are read.
+    resetMove()
+    if (!mounted.current) return
     if (outcome.kind === 'done') {
-      if (!shown.current) return
+      // The notes say what did not come along: shown also when another screen is over this one.
       if (outcome.notes) await noticeAlert(op === 'promote' ? 'Promoted, with notes' : 'Moved, with notes', outcome.notes)
       if (shown.current) router.replace(worktreeRoute(serverId, projectId, outcome.worktreeId))
       return
     }
-    if (!mounted.current) return
     if (outcome.kind === 'failed') setError(outcome.text)
     else if (outcome.kind === 'blocked') {
       if (outcome.why === TEARDOWN_UNCHECKED) setError("Could not check whether this worktree's dev stack or Docker VM is running, so it was not promoted. Try again.")
       else setBlocked(`Promote this worktree on the desktop: ${outcome.why}, and only the desktop can tear it down first.`)
+    }
+  }
+  // The flows never reject; should one throw all the same, the rows still come back.
+  const runMove = async (op: 'promote' | 'demote', flow: () => Promise<PromoteFlowOutcome>): Promise<void> => {
+    beginMove(op)
+    try {
+      await endMove(await flow(), op)
+    } catch (err) {
+      if (mounted.current) setError(errorMessage(err))
+    } finally {
+      resetMove()
     }
   }
   const ask = { shown: () => shown.current, confirm: (q: { message: string; detail?: string; confirmLabel: string }) => confirmAlert(q.message, q.detail ?? '', q.confirmLabel) }
@@ -281,8 +297,7 @@ export default function WorktreeScreen(): React.JSX.Element {
     if (!server || !found || found.worktree.isMain || removingNow.current) return
     const { repo, worktree: target } = found
     const ref = { projectId, worktreeId: target.id }
-    beginMove('promote')
-    const outcome = await promoteWorktree({
+    await runMove('promote', () => promoteWorktree({
       ...ask,
       plan: async () => {
         const plan = await now().connection.request('worktree.promote', { ...ref, dryRun: true })
@@ -303,15 +318,13 @@ export default function WorktreeScreen(): React.JSX.Element {
         if (!('notes' in result)) throw new Error('The server returned no result for the promote.')
         return result
       }
-    })
-    await endMove(outcome, 'promote')
+    }))
   }
 
   const demote = async (): Promise<void> => {
     if (!server || !found || !found.worktree.isMain || removingNow.current) return
     const ref = { projectId, repoId: found.repo.id }
-    beginMove('demote')
-    const outcome = await demoteBranch({
+    await runMove('demote', () => demoteBranch({
       ...ask,
       plan: async () => {
         const plan = await now().connection.request('worktree.demote', { ...ref, dryRun: true })
@@ -323,8 +336,7 @@ export default function WorktreeScreen(): React.JSX.Element {
         if (!('notes' in result)) throw new Error('The server returned no result for the move.')
         return result
       }
-    })
-    await endMove(outcome, 'demote')
+    }))
   }
 
   const trackers = project ? activeTicketProviders(server?.connection.welcome, project.settings) : []
