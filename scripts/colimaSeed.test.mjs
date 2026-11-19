@@ -76,6 +76,42 @@ test("prepareRegistry with --import-env-from: the app's registry taken over once
   assert.deepEqual(JSON.parse(readFileSync(empty, 'utf8')), {}, 'what appears in the app later is not taken')
 })
 
+test("prepareRegistry: a take-over from the app also writes the old <dataDir>/environments.json (0600), E1's marker, so a server rolled back to E1 never takes the app's over again", (t) => {
+  const { app, data } = dirs(t)
+  writeFileSync(join(app, 'environments.json'), JSON.stringify({ 'twb-a-000001': entry() }))
+  const file = prepareRegistry(fakeHost(data, app))
+  const legacy = join(data, 'environments.json')
+  assert.equal(readFileSync(legacy, 'utf8'), readFileSync(file, 'utf8'), 'the same text in both places')
+  if (posix) assert.equal(statSync(legacy).mode & 0o777, 0o600)
+  // Nothing to take: the empty registry is the marker too.
+  const other = dirs(t)
+  prepareRegistry(fakeHost(other.data, other.app))
+  assert.deepEqual(JSON.parse(readFileSync(join(other.data, 'environments.json'), 'utf8')), {})
+  // An old file that appeared meanwhile is never replaced (write-once).
+  const third = dirs(t)
+  writeFileSync(join(third.app, 'environments.json'), JSON.stringify({ 'twb-a-000001': entry() }))
+  const pluginFile = join(third.data, 'plugins', 'env', 'environments.json')
+  const host = fakeHost(third.data, third.app)
+  const realDataFile = host.dataFile
+  // The old path takes something between prepareRegistry's look at it and the marker's write.
+  host.dataFile = (name) => {
+    const f = realDataFile(name)
+    host.legacyImportFile = ((orig) => (n) => {
+      mkdirSync(third.data, { recursive: true })
+      writeFileSync(join(third.data, n), '{"mine":true}')
+      return orig(n)
+    })(host.legacyImportFile)
+    return f
+  }
+  prepareRegistry(host)
+  assert.equal(readFileSync(join(third.data, 'environments.json'), 'utf8'), '{"mine":true}', 'never replaced')
+  assert.ok(existsSync(pluginFile))
+  // Without a take-over (no --import-env-from), no old file is made.
+  const plain = dirs(t)
+  prepareRegistry(fakeHost(plain.data))
+  assert.equal(existsSync(join(plain.data, 'environments.json')), false)
+})
+
 test("prepareRegistry: an app registry it cannot read is logged and nothing is written (the next start tries again); without --import-env-from nothing is made", (t) => {
   const { app, data } = dirs(t)
   writeFileSync(join(app, 'environments.json'), '{not json')
@@ -258,9 +294,12 @@ test("prepareRegistry removes stray seed temp files (another pid's crash) before
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(data, 'environments.json'), '{}')
   for (const pid of ['1', '99999']) writeFileSync(join(dir, `environments.json.${pid}.seed.tmp`), '{"twb-secret-000001":{}}', { mode: 0o644 })
+  // Beside the old file too: the take-over's marker is written there the same way.
+  writeFileSync(join(data, 'environments.json.2.seed.tmp'), '{"twb-secret-000001":{}}', { mode: 0o644 })
   writeFileSync(join(dir, 'other.json'), 'kept')
   prepareRegistry(fakeHost(data))
   assert.deepEqual(readdirSync(dir).sort(), ['environments.json', 'other.json'])
+  assert.deepEqual(readdirSync(data).sort(), ['environments.json', 'plugins'])
 })
 
 test('a registry that does not parse never quotes its contents: not in a log line, a thrown error, or the wire message', async (t) => {

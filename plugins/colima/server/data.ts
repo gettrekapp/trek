@@ -9,6 +9,8 @@
 // anything at the old path is the server's own (it was 5a's take-over marker), so the app's is
 // then never taken. Both writes are write-once (seed.ts's writeFileOnce: a temp file hard-linked
 // into place), so a plugin copy that appeared meanwhile is never overwritten by an older one.
+// A take-over from the app also writes its registry at the old path, E1's marker, so a data dir
+// started fresh on E2 and rolled back to E1 doesn't take the app's over a second time.
 import { readdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { ServerPluginHost } from '../../../src/shared/plugins/server.ts'
@@ -33,12 +35,6 @@ function readLegacy(file: string): string {
 }
 
 /**
- * The registry's file, ready to use. Throws when the plugin's data directory can't be made (the
- * plugin then isn't loaded, and says why). An old registry that can't be read or doesn't parse is
- * logged and read in place (the service then says it is unreadable, naming that file), and copied
- * at a later start once it is fixed; a take-over that fails is logged and retried at the next start.
- */
-/**
  * Removes the seed temp files (`<file>.<pid>.seed.tmp`) a start that crashed mid-write left beside
  * `file`, under any pid: each may hold a copy of a registry (a branch's variables). Best effort.
  */
@@ -61,11 +57,32 @@ function removeStrayTemps(file: string): void {
   }
 }
 
+/**
+ * After a take-over from the app, the same registry at the old `<dataDir>/environments.json` too
+ * (0600, write-once): E1's take-over marker, so a server rolled back to E1 reads it and never takes
+ * the app's registry and stack pid files over again. A failure is only logged: the plugin's own
+ * file is in place.
+ */
+function markLegacy(host: Pick<ServerPluginHost, 'log'>, legacy: string, file: string): void {
+  try {
+    writeFileOnce(legacy, readFileSync(file, 'utf8'))
+  } catch (err) {
+    host.log.warn(`could not write ${legacy} (${messageOf(err)}): a server rolled back to before plugins may take the app's registry over again`)
+  }
+}
+
+/**
+ * The registry's file, ready to use. Throws when the plugin's data directory can't be made (the
+ * plugin then isn't loaded, and says why). An old registry that can't be read or doesn't parse is
+ * logged and read in place (the service then says it is unreadable, naming that file), and copied
+ * at a later start once it is fixed; a take-over that fails is logged and retried at the next start.
+ */
 export function prepareRegistry(host: Pick<ServerPluginHost, 'dataFile' | 'legacyDataFile' | 'legacyImportFile' | 'log'>): string {
   const file = host.dataFile(REGISTRY_FILE)
-  removeStrayTemps(file)
-  if (present(file)) return file
   const legacy = host.legacyDataFile(REGISTRY_FILE)
+  removeStrayTemps(file)
+  removeStrayTemps(legacy)
+  if (present(file)) return file
   if (present(legacy)) {
     try {
       // false: a plugin registry appeared meanwhile, and it wins.
@@ -82,6 +99,7 @@ export function prepareRegistry(host: Pick<ServerPluginHost, 'dataFile' | 'legac
     const seed = seedRegistryFromApp(app, file)
     if (seed.seeded) host.log.info(`took over ${seed.environments} environment(s) from ${app}`)
     if (seed.skipped.length > 0) host.log.warn(`left out ${seed.skipped.join('; ')}`)
+    if (seed.seeded) markLegacy(host, legacy, file)
   } catch (err) {
     // The VMs are still there; the next start tries again (nothing was written).
     host.log.warn(`could not take over ${app}: ${messageOf(err)}`)
