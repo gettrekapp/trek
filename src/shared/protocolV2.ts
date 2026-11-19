@@ -109,7 +109,12 @@ export interface WireErrorDetails {
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string
-  /** With reason `teardown`: the labels of the items already torn down before the one that failed (plugins E1) */
+  /**
+   * With reason `teardown`: the labels of the items already torn down before the one that failed.
+   * On any other failure of `worktree.remove`, `worktree.promote` or `move.finish` that comes after
+   * its teardown ran (a git error, a CONFLICT, `dirty` from git itself): the labels of what was torn
+   * down; those stay torn down though the operation was not done. Absent when nothing was (plugins E1).
+   */
   tornDown?: string[]
 }
 
