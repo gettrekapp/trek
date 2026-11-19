@@ -36,7 +36,7 @@ import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, 
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
-import { BAR_HEIGHT, inTray, snapHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../apps/mobile/src/logic/globalTray.ts'
+import { BAR_HEIGHT, focusPlace, inTray, snapHeight, stepHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../apps/mobile/src/logic/globalTray.ts'
 import { globalAgentLabel, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
@@ -3201,4 +3201,37 @@ test('global tray: it holds the Global sessions but an automation run', () => {
   assert.equal(inTray(sessions, 'run'), false)
   assert.equal(inTray(sessions, 's1'), false)
   assert.equal(inTray(undefined, 'g1'), false)
+})
+
+test('global tray: the first snapshot, a remembered tab that closed while the project was away', () => {
+  // GlobalTray passes the remembered tab as the one listed before: gone now, its neighbour.
+  assert.equal(trayTab(['a', 'b'], 'gone', ['gone']), 'a')
+  // Still listed: kept.
+  assert.equal(trayTab(['a', 'b'], 'b', ['b']), 'b')
+})
+
+test('global tray: the heights with the keyboard up, as the tray asks for them', () => {
+  // An 800pt pane less a 300pt keyboard; the bottom inset is under the keyboard.
+  assert.deepEqual(trayHeights(800 - 300, 47, 0), { collapsed: 44, half: 250, full: 401 })
+})
+
+test('global tray: one step up or down, for the accessibility actions', () => {
+  assert.equal(stepHeight('collapsed', 1), 'half')
+  assert.equal(stepHeight('half', 1), 'full')
+  assert.equal(stepHeight('full', 1), 'full')
+  assert.equal(stepHeight('full', -1), 'half')
+  assert.equal(stepHeight('half', -1), 'collapsed')
+  assert.equal(stepHeight('collapsed', -1), 'collapsed')
+})
+
+test('global tray: where a ui.focus for a session goes', () => {
+  const project = {
+    globalSessions: [{ id: 'g1' }, { id: 'run', context: { kind: 'automation', automationId: 'a' } }],
+    repositories: [{ worktrees: [{ sessions: [{ id: 's1' }] }] }]
+  }
+  assert.equal(focusPlace(project, 'g1'), 'tray')
+  assert.equal(focusPlace(project, 's1'), 'screen')
+  assert.equal(focusPlace(project, 'run'), 'screen', "an automation's run is shown on a screen")
+  assert.equal(focusPlace(project, 'new'), 'unknown', 'not listed yet')
+  assert.equal(focusPlace(null, 'g1'), 'unknown', 'no snapshot yet')
 })

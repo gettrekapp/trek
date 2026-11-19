@@ -2,18 +2,19 @@
 // desktop's Global drawer. Collapsed it is a bar ("Global · 2 sessions", a decision / needs-you mark);
 // a tap opens it to half the pane, a drag moves it between collapsed, half and full
 // (logic/globalTray.ts). Open, it covers the screen above (which keeps its layout and keeps telling
-// the server what it shows: the tray never reports) with a strip of tabs — each Global session but
-// an automation's run, a long press for Restart / Close…, ＋ for a new one — and the shown tab's
-// terminal (ui/SessionTerminal.tsx), mounted only while open. At full height the phone sizes the
-// session's pty to it; at half it follows the size another client set.
+// the server what it shows: the tray never reports) and dims the rest behind a backdrop that closes
+// the tray on a tap, so nothing above takes a touch or the keyboard meanwhile. It shows a strip of
+// tabs — each Global session but an automation's run, a long press for Restart / Close…, ＋ for a
+// new one — and the shown tab's terminal (ui/SessionTerminal.tsx), mounted only while open. At full
+// height the phone sizes the session's pty to it; at half it follows the size another client set.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, type PressableStateCallbackType, type StyleProp, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CAPABILITY, type AgentInfo, type LlmSelection } from '../shared.ts'
 import { globalAgentLabel, globalRow, normalGlobalSessions } from '../logic/globalSessions.ts'
-import { BAR_HEIGHT, snapHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../logic/globalTray.ts'
+import { BAR_HEIGHT, snapHeight, stepHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../logic/globalTray.ts'
 import { sessionMark } from '../logic/worktreeRow.ts'
-import { errorMessage, useServer, useTopic } from '../state/hooks.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../state/hooks.ts'
 import { useGlobalTray } from './globalTrayContext.tsx'
 import { SessionTerminal } from './SessionTerminal.tsx'
 import { sessionMenu } from './SessionList.tsx'
@@ -22,13 +23,14 @@ import { Button } from './Button.tsx'
 import { useKeyboardHeight } from './useKeyboardHeight.ts'
 import { colors, ui } from './theme.ts'
 
-/** As the Global screen's was: the phone never sizes a new pty; the desktop sizes it when it attaches. */
+/** A new Global session's pty size: the phone does not size it at start; the desktop sizes it when it attaches. */
 const START_SIZE = { cols: 80, rows: 24 }
 
 export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: string; projectId: string; paneHeight: number }): React.JSX.Element | null {
   const tray = useGlobalTray()
   const server = useServer(serverId)
   const topic = useTopic(serverId, `project:${projectId}`)
+  const notice = useConnectionNotice(serverId)
   const insets = useSafeAreaInsets()
   const keyboard = useKeyboardHeight()
   const project = topic.state === 'ready' ? topic.snapshot : null
@@ -41,9 +43,14 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
   const heights = useMemo(() => trayHeights(paneHeight - lift, insets.top, lift > 0 ? 0 : insets.bottom), [paneHeight, lift, insets.top, insets.bottom])
 
   // The tab shown: the chosen one, or its neighbour when it closed (logic/globalTray.ts' trayTab).
-  const before = useRef<string[]>(ids)
-  const shown = trayTab(ids, tray?.tab ?? null, before.current)
+  // Nothing is decided before the project's snapshot is there. `before` is null until the first
+  // one: then the remembered tab counts as listed before, so one that closed while the project was
+  // away gives way to its neighbour instead of being kept as just started.
+  const before = useRef<string[] | null>(null)
+  const chosen = tray?.tab ?? null
+  const shown = project ? trayTab(ids, chosen, before.current ?? (chosen ? [chosen] : [])) : null
   useEffect(() => {
+    if (!project) return
     before.current = ids
     if (tray && shown !== tray.tab) tray.setTab(shown)
   })
@@ -81,7 +88,7 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
     })
   }, [anim])
 
-  // New session: the project's Global agent, or another installed one (as the Global screen offered).
+  // New session (＋ or the empty tray's button): a picker of the project's Global agent and the other installed ones.
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [serverDefault, setServerDefault] = useState<LlmSelection | undefined>(undefined)
   const [picking, setPicking] = useState(false)
@@ -122,17 +129,22 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
     if (started) tray?.setTab(started.sessionId)
   }
 
-  if (!tray || hidden || (project && project.repositories.length === 0)) return null
+  if (!tray || hidden) return null
+  // No repositories, no tray; the screens above still end over the home indicator.
+  if (project && project.repositories.length === 0) return <View style={{ height: insets.bottom }} />
   const open = height !== 'collapsed'
   const label = open ? 'Global' : (row?.text ?? 'Global')
   const markText = row?.mark === 'decision' ? 'decision' : row?.mark === 'attention' ? 'needs you' : null
   const globalLabel = project ? globalAgentLabel(project.settings, serverDefault, agents) : null
+  const canStart = !busy && !!server && !!project
   const pickRow = ({ pressed }: PressableStateCallbackType): StyleProp<ViewStyle> => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]
 
   return (
     <>
-      {/* The bar's room under the stack: the screens end above it. */}
-      <View style={{ height: heights.collapsed }} />
+      {/* The bar's room under the stack, whatever the keyboard does: the screens end above it. */}
+      <View style={{ height: BAR_HEIGHT + insets.bottom }} />
+      {/* Open, the screen above is dimmed and a tap on it closes the tray: any keyboard is the tray's. */}
+      {open ? <Pressable accessibilityRole="button" accessibilityLabel="Close the Global tray" onPress={() => tray.setHeight('collapsed')} style={[StyleSheet.absoluteFill, styles.backdrop]} /> : null}
       <Animated.View style={[styles.tray, { bottom: lift, height: anim }]}>
         <View {...pan.panHandlers}>
           <Pressable
@@ -141,6 +153,14 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
             accessibilityHint={open ? 'Closes the Global tray' : "Opens the project's Global sessions"}
             accessibilityState={{ expanded: open }}
             onPress={() => tray.setHeight(tapHeight(height))}
+            accessibilityActions={[
+              { name: 'increment', label: 'Expand' },
+              { name: 'decrement', label: 'Collapse' }
+            ]}
+            onAccessibilityAction={(e) => {
+              if (e.nativeEvent.actionName === 'increment') tray.setHeight(stepHeight(height, 1))
+              else if (e.nativeEvent.actionName === 'decrement') tray.setHeight(stepHeight(height, -1))
+            }}
             style={styles.bar}
           >
             <View style={styles.handle} />
@@ -182,16 +202,20 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={picking ? 'Cancel new session' : 'New session'}
-                disabled={busy || !server}
+                disabled={!canStart}
                 onPress={() => setPicking((p) => !p)}
-                style={({ pressed }) => [ui.chip, picking ? { backgroundColor: colors.border } : null, { opacity: busy || !server ? 0.4 : pressed ? 0.7 : 1 }]}
+                style={({ pressed }) => [ui.chip, picking ? { backgroundColor: colors.border } : null, { opacity: !canStart ? 0.4 : pressed ? 0.7 : 1 }]}
               >
                 <Text style={ui.chipText}>＋</Text>
               </Pressable>
             </ScrollView>
             {error ? <Text style={[ui.error, { paddingHorizontal: 16, paddingBottom: 6 }]}>{error}</Text> : null}
             <View style={styles.body}>
-              {picking ? (
+              {!project ? (
+                <View style={ui.pad}>
+                  <Text style={ui.muted}>{notice ?? (topic.state === 'error' ? topic.message : 'Loading…')}</Text>
+                </View>
+              ) : picking ? (
                 <ScrollView keyboardShouldPersistTaps="handled">
                   <View style={ui.section}>
                     <Text style={ui.sectionText}>Start with</Text>
@@ -211,7 +235,7 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
               ) : (
                 <View style={[ui.pad, { alignItems: 'flex-start' }]}>
                   <Text style={ui.muted}>No Global sessions.</Text>
-                  <Button label="New session" disabled={busy || !server} onPress={() => setPicking(true)} />
+                  <Button label="New session" disabled={!canStart} onPress={() => setPicking(true)} />
                 </View>
               )}
             </View>
@@ -239,5 +263,6 @@ const styles = StyleSheet.create({
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 6 },
   barRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10, paddingHorizontal: 16 },
   tab: { flexDirection: 'row', gap: 6, paddingVertical: 6 },
+  backdrop: { backgroundColor: 'rgba(0,0,0,0.3)' },
   body: { flex: 1, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }
 })

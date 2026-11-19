@@ -1,8 +1,8 @@
 // The Global tray at the bottom of a project's screens (ui/GlobalTray.tsx): its three heights in
 // a pane, where a drag lands, what a tap on its bar does, which tab it shows as sessions come and
-// go, how the keyboard moves it, and which sessions it holds (an automation's run stays under
-// Automations). Pure.
-import type { Session } from '../shared.ts'
+// go, how the keyboard moves it, which sessions it holds (an automation's run stays under
+// Automations), and where a ui.focus for a session goes. Pure.
+import type { Project, Session } from '../shared.ts'
 import { normalGlobalSessions } from './globalSessions.ts'
 
 export type TrayHeight = 'collapsed' | 'half' | 'full'
@@ -36,6 +36,12 @@ export function tapHeight(height: TrayHeight): TrayHeight {
   return height === 'collapsed' ? 'half' : 'collapsed'
 }
 
+/** One step up (1: collapsed → half → full) or down (-1: full → half → collapsed), stopping at the ends. */
+export function stepHeight(height: TrayHeight, dir: 1 | -1): TrayHeight {
+  const i = ORDER.indexOf(height) + dir
+  return ORDER[Math.min(ORDER.length - 1, Math.max(0, i))]
+}
+
 /**
  * The tab to show among `ids` (the tray's sessions in tab order): the chosen one while listed; when
  * it was listed before (`before`) and is gone, the one now in its place, or the last; a chosen id
@@ -59,4 +65,17 @@ export function trayLayout(height: TrayHeight, keyboard: number): { hidden: bool
 /** Whether the session is one of the tray's: a Global session, but not an automation's run. */
 export function inTray(globalSessions: readonly Pick<Session, 'id' | 'context'>[] | undefined, sessionId: string): boolean {
   return normalGlobalSessions(globalSessions).some((s) => s.id === sessionId)
+}
+
+/**
+ * Where a ui.focus for `sessionId` goes: 'tray' for one of the tray's sessions, 'screen' for any
+ * other session of the project (a worktree's, an automation's run), 'unknown' while the project's
+ * snapshot is not there or does not list it (a session just started, before the snapshot names it).
+ */
+export function focusPlace(project: Pick<Project, 'globalSessions' | 'repositories'> | null, sessionId: string): 'tray' | 'screen' | 'unknown' {
+  if (!project) return 'unknown'
+  if (inTray(project.globalSessions, sessionId)) return 'tray'
+  if (project.globalSessions.some((s) => s.id === sessionId)) return 'screen'
+  for (const repo of project.repositories) for (const wt of repo.worktrees) if (wt.sessions.some((s) => s.id === sessionId)) return 'screen'
+  return 'unknown'
 }
