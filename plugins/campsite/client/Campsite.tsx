@@ -117,6 +117,7 @@ export function Campsite(): React.JSX.Element | null {
               at={openTent}
               name={popName}
               members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
+              now={now}
               onPick={(id) => {
                 setOpenTent(null)
                 host.focusSession(id)

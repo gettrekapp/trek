@@ -297,10 +297,6 @@
   border-radius: 3px;
   z-index: 1;
 }
-.cs-log .cs-camp-badge {
-  top: auto;
-  bottom: 10px;
-}
 .cs-tent {
   position: absolute;
   bottom: 18px;
@@ -310,60 +306,103 @@
 .cs-tent svg {
   display: block;
 }
+/* A 2 px post from the tent's peak to its sign */
+.cs-tent-post {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  width: 2px;
+  height: 4px;
+  margin-left: -1px;
+  background: #5a3a22;
+}
+/* On its post: 74 px above the strip's bottom, clear of a 3× hiker in front (48 px, standing at 10 px) */
 .cs-tent-sign {
   position: absolute;
-  left: 56px;
-  /* On its post, 56 px above the strip's bottom: clear of a 2.5× hiker (40 px, standing at 10 px) */
-  bottom: 38px;
-  background: #7a5230;
-  color: #f1e6cc;
-  font: 9px ui-monospace, Menlo, monospace;
-  padding: 1px 3px;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  background: #2a2118;
+  border: 1px solid #5a3a22;
+  color: #e6d9b8;
+  font: 10px/14px ui-monospace, Menlo, monospace;
+  padding: 0 5px;
   white-space: nowrap;
 }
+/* Grouped: in the sign's place, with the camp's name and count */
 .cs-camp-badge {
   position: absolute;
   left: 50%;
-  /* Above the tent's peak and its sign */
-  top: -18px;
+  bottom: 54px;
   transform: translateX(-50%);
-  background: #1d2433;
-  color: #dfe5ee;
-  border: 1px solid #3a4356;
-  font: 10px ui-monospace, Menlo, monospace;
-  padding: 0 5px;
+  background: #1c1d1f;
+  color: #ededf0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  font: 10px/16px ui-monospace, Menlo, monospace;
+  padding: 0 6px;
   cursor: pointer;
   white-space: nowrap;
 }
-.cs-camp-badge.waiting {
+.cs-log .cs-camp-badge {
+  bottom: 10px;
+}
+.cs-camp-badge.attention {
   border-color: var(--attention, #e2a336);
   color: var(--attention, #e2a336);
 }
-/* A child of .campsite (no z-index), placed from its badge's rect when it opens */
+.cs-camp-badge.decision {
+  border-color: var(--decision, #b18cff);
+  color: var(--decision, #b18cff);
+}
+/* Fixed, so the stage does not clip it: placed from its badge's rect when it opens */
 .cs-tent-popover {
   position: fixed;
   transform: translateY(-100%);
+  min-width: 230px;
   max-width: calc(100vw - 16px);
-  background: #1d2433;
-  border: 1px solid #3a4356;
+  padding: 4px;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   z-index: 50;
 }
 .cs-tent-popover button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 8px;
   background: none;
   border: none;
-  color: #dfe5ee;
-  text-align: left;
-  padding: 4px 10px;
-  cursor: pointer;
+  border-radius: 5px;
+  color: #ededf0;
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
   white-space: nowrap;
+}
+.cs-tent-popover button:hover {
+  background: #2a2a30;
+}
+.cs-row-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cs-tent-popover button:hover {
-  background: #2a3346;
+.cs-row-status {
+  font-size: 11px;
+  color: #9a9aa2;
+}
+.cs-row-status.attention {
+  color: var(--attention, #e2a336);
+}
+.cs-row-status.decision {
+  color: var(--decision, #b18cff);
 }
 .cs-camp-hiker {
   position: absolute;
