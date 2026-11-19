@@ -93,6 +93,7 @@ test('claude: permission modes keep today\'s list', () => {
 })
 
 test('local: runs claude against the endpoint, env on the spec only, no effort', () => {
+  const before = process.env.ANTHROPIC_BASE_URL
   const spec = local.buildLaunch({
     sessionId: ID,
     resume: false,
@@ -107,7 +108,7 @@ test('local: runs claude against the endpoint, env on the spec only, no effort',
     ANTHROPIC_AUTH_TOKEN: 'ollama',
     ANTHROPIC_API_KEY: ''
   })
-  assert.equal(process.env.ANTHROPIC_BASE_URL, undefined)
+  assert.equal(process.env.ANTHROPIC_BASE_URL, before, "the server's own environment is left alone")
 })
 
 test('local: LM Studio defaults its URL and token', () => {
