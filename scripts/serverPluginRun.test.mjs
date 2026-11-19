@@ -54,6 +54,20 @@ test('runCommand: env is added to this process\'s env', async () => {
   assert.equal(await runCommand(node, ['-e', 'process.stdout.write(process.env.TREK_RUN_TEST)'], { env: { TREK_RUN_TEST: 'yes' } }), 'yes')
 })
 
+test('runCommand: a plugin\'s env cannot set PATH (any case), so it cannot change which program runs', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-run-path-'))
+  t.after(() => removeDir(dir))
+  // A `node` on the plugin's PATH that would be found first if that PATH were used.
+  const fake = join(dir, 'node')
+  writeFileSync(fake, '#!/bin/sh\necho HIJACKED\n')
+  chmodSync(fake, 0o755)
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+  const out = await runCommand('node', ['-e', `process.stdout.write(String(process.env[${JSON.stringify(pathKey)}]) + "|" + process.env.TREK_RUN_TEST)`], {
+    env: { PATH: dir, Path: dir, path: dir, TREK_RUN_TEST: 'kept' }
+  })
+  assert.equal(out, `${process.env[pathKey]}|kept`)
+})
+
 test('runCommand on Windows: a .mjs stub runs with this binary and ELECTRON_RUN_AS_NODE=1', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-run-'))
   t.after(() => removeDir(dir))

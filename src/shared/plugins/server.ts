@@ -52,7 +52,7 @@ export interface RunOptions {
   /** stdout or stderr (each) past this fails the call; default 1 MiB, at most 16 MiB */
   maxBytes?: number
   signal?: AbortSignal
-  /** Added to the program's env (the server's env plus these); it doesn't change how the program is found */
+  /** Added to the program's env (the server's env plus these); PATH (in any case) is dropped, so it doesn't change how the program is found */
   env?: Record<string, string>
 }
 

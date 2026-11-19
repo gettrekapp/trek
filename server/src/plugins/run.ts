@@ -18,7 +18,7 @@ export interface RunCommandOptions {
   timeoutMs?: number
   maxBytes?: number
   signal?: AbortSignal
-  /** Added to this process's env */
+  /** Added to this process's env; PATH (in any case) is dropped, so it can't change which program runs */
   env?: Record<string, string>
   /** For tests */
   platform?: NodeJS.Platform
@@ -45,7 +45,9 @@ export function runCommand(command: string, args: readonly string[], options: Ru
   const viaNode = platform === 'win32' && win32.isAbsolute(command) && /\.[cm]?js$/i.test(command)
   if (options.signal?.aborted) return Promise.reject(stopped(command))
   const timeoutMs = clamp(options.timeoutMs, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS)
-  const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}), ...(viaNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }
+  // A plugin's env never sets PATH (in any case): it would change which program a bare name runs.
+  const added = Object.fromEntries(Object.entries(options.env ?? {}).filter(([k]) => k.toUpperCase() !== 'PATH'))
+  const env: NodeJS.ProcessEnv = { ...process.env, ...added, ...(viaNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }
   return new Promise((resolve, reject) => {
     try {
       // On Windows a bare name is found on PATH, never in the server's current directory.
