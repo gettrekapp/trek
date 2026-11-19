@@ -20,6 +20,7 @@ import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/histo
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type { UiFocusEvent, UiReportParams } from './ui.ts'
 import type { McpToolCatalog } from './mcpTools.ts'
+import type { TeardownItem, WorktreeOp } from './teardown.ts'
 import type {
   ComposeAction,
   ContainerAction,
@@ -294,7 +295,12 @@ export const CAPABILITY = {
   /** `plugins.install` and `plugins.remove`: a client may install a plugin on the server, or remove one (theme plugins) */
   pluginInstall: 'pluginInstall',
   /** `pr.resolve` reads a pull request link or number through the project's PR providers, with its head branch; `worktree.create` takes `prUrl` (plugins P3) */
-  prResolve: 'prResolve'
+  prResolve: 'prResolve',
+  /**
+   * Worktree teardown on the server (plugins E1): `worktree.teardownPlan`, and `teardown` on
+   * `worktree.remove`, `worktree.promote` and `move.finish`; `repo.remove` asks the participants first
+   */
+  worktreeTeardown: 'worktreeTeardown'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
@@ -412,8 +418,13 @@ export interface MethodParamsV2 {
     /** The PR's link: its provider names the ref `fromPr` fetches (`prResolve`) */
     prUrl?: string
   }
-  /** Without `force`, a dirty worktree fails with GIT_ERROR; a loaded one is IN_USE */
-  'worktree.remove': WorktreeRef & { force?: boolean }
+  /** What would be torn down first (plugins E1, `worktreeTeardown`): every participant's items, ids `<participant>:<item>` */
+  'worktree.teardownPlan': WorktreeRef & { op: WorktreeOp }
+  /**
+   * Without `force`, a dirty worktree fails with GIT_ERROR; a loaded one is IN_USE. `teardown`
+   * (`worktreeTeardown`): ids from the plan, run before the removal; absent: nothing is torn down
+   */
+  'worktree.remove': WorktreeRef & { force?: boolean; teardown?: string[] }
   /** Marks the worktree loaded and resumes its sessions that are not running */
   'worktree.load': WorktreeRef
   /** Ends the worktree's ptys and marks it unloaded; its sessions stay, idle */
@@ -439,7 +450,13 @@ export interface MethodParamsV2 {
    * claimed now, or by an earlier connection of the claimant: `claimToken`); the server settles it
    * with this promote's result.
    */
-  'worktree.promote': WorktreeRef & { dryRun?: boolean; requestId?: string; claimToken?: string }
+  'worktree.promote': WorktreeRef & {
+    dryRun?: boolean
+    requestId?: string
+    claimToken?: string
+    /** Ids from `worktree.teardownPlan {op: 'promote'}`, run before the promote (`worktreeTeardown`); never on a dry run */
+    teardown?: string[]
+  }
   /**
    * 5e ("Promote branch to worktree"): the main checkout's branch, and its uncommitted work, into a
    * new worktree at the default path; the main checkout goes back to the default branch.
@@ -623,7 +640,13 @@ export interface MethodParamsV2 {
   /** Target: drops a transfer; an unknown one is fine */
   'move.abort': { transferId: string }
   /** Source: removes the worktree if it is unchanged since `move.export` (its `fingerprint`); else CONFLICT */
-  'move.finish': WorktreeRef & { fingerprint: string; verifyOnly?: boolean; toServer?: string }
+  'move.finish': WorktreeRef & {
+    fingerprint: string
+    verifyOnly?: boolean
+    toServer?: string
+    /** Ids from `worktree.teardownPlan {op: 'move'}`, run before the removal (`worktreeTeardown`); not with `verifyOnly` */
+    teardown?: string[]
+  }
   /** Target: where a branch of a repository with this origin can go, in every project */
   'move.candidates': { origin: string; branch: string }
   /** Target: builds the worktree from origin and the export, or undoes all of it */
@@ -675,6 +698,7 @@ export interface MethodResultsV2 {
   'repo.listBranches': string[]
   /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
   'worktree.create': { worktreeId: string; linkWarnings?: string[] }
+  'worktree.teardownPlan': { items: TeardownItem[] }
   'worktree.remove': null
   'worktree.load': null
   'worktree.unload': null

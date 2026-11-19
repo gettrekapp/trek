@@ -42,6 +42,8 @@ import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
 import type { PluginRegistry } from './plugins/registry.ts'
+import { participantsFor } from './teardown/participants.ts'
+import { repoRemoveVeto } from './teardown/teardown.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
@@ -316,7 +318,15 @@ const handlers: Record<string, Handler> = {
     return { repoId }
   },
 
-  'repo.remove': (p, ctx) => {
+  'repo.remove': async (p, ctx) => {
+    const current = ctx.projects.require(p.projectId)
+    const target = repoIn(current, p.repoId)
+    // What runs for its worktrees on the server's machine may stop it (plugins E1: a running VM).
+    // Asked only when it is not the last repository, whose own refusal comes first.
+    if (current.repositories.length > 1) {
+      const veto = await repoRemoveVeto(participantsFor(ctx, current.id), current, target)
+      if (veto) throw codedError('BAD_REQUEST', veto)
+    }
     const { projectId, repoId } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       if (d.repositories.length === 1) throw codedError('BAD_REQUEST', 'a project needs at least one repository')

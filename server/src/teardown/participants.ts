@@ -1,0 +1,91 @@
+// The participants in a worktree's teardown (plugins E1), in order: core's dev stack
+// (`stack:destroy`), then core's Colima VM (`env:destroy`; plugins E2 hands it to the Colima
+// plugin under the same id), then each plugin on in the project with a worktreeLifecycle, in
+// registration order. Neither core one runs on Windows, where the server has no dev stacks or
+// environments (machineHandlersFor), or without machine services.
+import { deriveProfileName, envRepoKey } from '../../../src/shared/environments.ts'
+import type { EnvironmentInfo } from '../../../src/shared/types.ts'
+import type { Repository, Worktree } from '../../../src/shared/model/types'
+import { missingTool, type Machine } from '../integrations/machineHandlers.ts'
+import type { V2Context } from '../v2.ts'
+import { pluginParticipant, type Participant } from './teardown.ts'
+
+const stackLabel = (slug: string): string => `Tear down the dev stack “trek-${slug}” (drops its databases)`
+const vmLabel = (profile: string): string => `Stop and delete this worktree's Colima VM “${profile}”`
+
+/** Whether the server's allowlist covers the path (each machine method's rule): outside it nothing runs there. */
+function allowed(ctx: Pick<V2Context, 'store'>, path: string): boolean {
+  try {
+    ctx.store.guard.check(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The worktree's dev stack (docker/stack/stack.sh), once it has run there. */
+export function stackParticipant(ctx: Pick<V2Context, 'store'>, machine: Machine): Participant {
+  return {
+    id: 'stack',
+    plan: async ({ worktree }) => {
+      if (worktree.missing === true || !allowed(ctx, worktree.path)) return []
+      const status = await machine.stacks.status(worktree.path)
+      return status.available && status.created && status.slug ? [{ id: 'destroy', label: stackLabel(status.slug), checked: true }] : []
+    },
+    teardown: async ({ worktree }) => {
+      const code = await machine.stacks.destroy(worktree.path)
+      if (code !== 0) throw new Error(`stack.sh destroy exited with code ${code}`)
+    }
+  }
+}
+
+/** The branch's VM profile (named after the repository's envRepoKey and the branch); null when detached. */
+const profileOf = (repo: Repository, worktree: Worktree): string | null => (worktree.branch ? deriveProfileName(envRepoKey(repo), worktree.branch) : null)
+
+/** The repository's VMs; none on a machine without colima (env.list's TOOL_ERROR `missing`). */
+async function vmsOf(machine: Machine, repo: Repository): Promise<EnvironmentInfo[]> {
+  try {
+    return await machine.env.list(envRepoKey(repo))
+  } catch (err) {
+    if (missingTool(err)) return []
+    throw err
+  }
+}
+
+/** The worktree's Colima VM (interim, until plugins E2): its output goes to the asking connection as env.log. */
+export function envParticipant(ctx: Pick<V2Context, 'store' | 'events'>, machine: Machine): Participant {
+  return {
+    id: 'env',
+    plan: async ({ repo, worktree }) => {
+      const profile = profileOf(repo, worktree)
+      if (!profile) return []
+      return (await vmsOf(machine, repo)).some((e) => e.profile === profile) ? [{ id: 'destroy', label: vmLabel(profile), checked: true }] : []
+    },
+    teardown: async ({ repo, worktree }) => {
+      const profile = profileOf(repo, worktree)
+      if (!profile) return
+      const code = await machine.env.destroy(profile, (event) => ctx.events?.send('env.log', event), (path) => allowed(ctx, path))
+      if (code !== 0) throw new Error(`deleting the VM exited with code ${code}`)
+    },
+    beforeRepoRemove: async (_project, repo) =>
+      (await vmsOf(machine, repo)).some((e) => e.vmState === 'running' && e.orphaned !== true) ? 'It has a running environment. Stop it in the Env tab first.' : null
+  }
+}
+
+/** The project's participants, in order. */
+export function participantsFor(
+  ctx: Pick<V2Context, 'store' | 'events' | 'machine' | 'plugins' | 'caller'>,
+  projectId: string,
+  platform: NodeJS.Platform = process.platform
+): Participant[] {
+  const core = ctx.machine && platform !== 'win32' ? [stackParticipant(ctx, ctx.machine), envParticipant(ctx, ctx.machine)] : []
+  // A test's stand-in for the registry may have no lifecycles.
+  const plugins = ctx.plugins?.lifecycles?.(projectId) ?? []
+  return [...core, ...plugins.map((entry) => pluginParticipant(entry, ctx.caller ?? ''))]
+}
+
+/** The participants known here but not taking part in the project (a plugin switched off since the confirm): runTeardown's `inactive`. */
+export function inactiveParticipants(ctx: Pick<V2Context, 'plugins'>, projectId: string): string[] {
+  // A test's stand-in for the registry may not say.
+  return ctx.plugins?.inactiveLifecycles?.(projectId) ?? []
+}

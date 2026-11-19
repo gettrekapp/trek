@@ -129,6 +129,7 @@ new optional field needs no capability: its absence says enough.
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
 | `pluginInstall` | The server takes `plugins.install` and `plugins.remove` from a client (see [Installed plugins](#installed-plugins)). Not listed when its config has `"plugins": {"remoteInstall": false}`; the local server lists it too. Read from the config as each welcome is sent |
 | `prResolve` | A pull request provider plugin is registered on the server (plugins P3; the built-in `github`), signed in or not: `pr.resolve`, and `worktree.create`'s `prUrl` (see [Pull request watch](#pull-request-watch)). Decided when the server starts |
+| `worktreeTeardown` | The server tears down what runs for a worktree before it is removed, promoted or moved, as the client chooses (plugins E1; see [Worktree teardown](#worktree-teardown)): `worktree.teardownPlan`, `teardown` on `worktree.remove`, `worktree.promote` and `move.finish`, and `repo.remove`'s check |
 | `phoneAccess` | The local server only: its listener for phones on this machine's Tailscale address (see [Phone access on the local server](#phone-access-on-the-local-server)): `phoneAccess.get`, `phoneAccess.set`, `phoneAccess.revoke` and the `phoneAccess.changed` event, all for its own `local` token |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only unless phone access is on (see [Phone access on the local server](#phone-access-on-the-local-server)): it then also listens on this machine's Tailscale address, where the `local` token is refused, and a paired phone's token has the same any-path access. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
@@ -198,7 +199,7 @@ server restarts. A server without this field simply leaves it out.
 |---|---|
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
-| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.commits`, `worktree.dirty` |
+| Worktrees | `worktree.create`, `worktree.teardownPlan`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.commits`, `worktree.dirty` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setPrWatch`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
@@ -327,6 +328,7 @@ an unmounted volume. A `missing` worktree's row is just dropped, without running
 git, so a directory that still exists on disk at that path is left untouched.
 Other projects' rows for the same path are left to the poller, which drops them
 or, if they hold sessions or a review draft, keeps them as `missing`.
+With `teardown` (`worktreeTeardown`), see [Worktree teardown](#worktree-teardown).
 `worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` first
 re-read the repository's worktrees, then act on the branch git has checked out
 in the worktree now, which may differ from the branch the row last showed.
@@ -371,7 +373,10 @@ absolute or reach outside with `..` (`BAD_REQUEST`; such entries already stored
 are skipped wherever the list is used).
 
 `repo.remove` refuses to remove a project's last repository (`BAD_REQUEST`) and
-drops that repository's `worktreeOrder` entries. `repo.listBranches` fails with
+drops that repository's `worktreeOrder` entries. On a server with
+`worktreeTeardown` it is also refused (`BAD_REQUEST`, with the reason) while a
+teardown participant says so: core's, while a Colima VM of one of its worktrees
+runs. `repo.listBranches` fails with
 `GIT_ERROR` when git does. A `branch.*` call with `null` or an empty string
 clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
 `customTags: null` or `[]` clears the custom tags; omitting `customTags` is
@@ -915,6 +920,28 @@ app settings in one tab's local storage aren't synced to another open tab; there
 app menu shortcuts, and Close buttons that close an Electron window do nothing; a Local
 model's id is typed, as in any server window (the browser lists no models).
 
+
+## Worktree teardown
+
+Before a worktree is removed, promoted or moved off the server, what runs for it on the server's machine can be torn down by the server, in the same request (capability `worktreeTeardown`, plugins E1). The participants, in this order:
+- core's dev stack (`stack:destroy`, once the worktree's stack has run);
+- core's Colima VM (`env:destroy`, when its branch has one; neither on Windows);
+- each plugin on in the project that takes part.
+
+| Method | Params | Result |
+|---|---|---|
+| `worktree.teardownPlan` | `{projectId, worktreeId, op}` (`op`: `remove`, `promote` or `move`) | `{items: [{id, label, checked}]}`: what each participant would tear down, in the order it would run. `id` is `<participant>:<item>`, `label` what the confirm shows, `checked` its default. A participant whose plan fails or takes over 10 s is left out. `BAD_REQUEST` for the main checkout or another `op`; `NOT_FOUND` for an unknown worktree |
+
+`worktree.remove`, `worktree.promote` and `move.finish` take `teardown: string[]`, ids from the plan. The server runs them after the operation's own checks and before it, each participant once with its own ids, in participant order.
+- An id whose participant is not there is `BAD_REQUEST`, and nothing runs. An id of a plugin switched off in the project since the plan is skipped.
+- Each chosen participant is asked again first; an id it no longer plans (gone meanwhile) is skipped, and one whose check fails stops the request (`TOOL_ERROR`, `details.reason: 'teardown'`) before anything is torn down.
+- A failure ends the request with `TOOL_ERROR`, `details.reason: 'teardown'`, a message naming the step ("Couldn't tear down the dev stack …: …"), `details.tornDown` the labels of the steps already done, and the worktree untouched. Steps before it stay done.
+- One operation at a time per worktree: while one is tearing a worktree down (or a teardown that ran out of time is still finishing), `worktree.remove`, `worktree.promote` and `move.finish` on it are `CONFLICT`, with or without `teardown`. No session or load starts in it from before its teardown until it is removed.
+- `worktree.remove {teardown}` without `force` refuses a worktree with changes (`GIT_ERROR`, `details.reason: 'dirty'`) before anything is torn down.
+- `worktree.promote`'s `dryRun` runs nothing.
+- `move.finish` runs the items once the source checks unchanged, and refuses `teardown` with `verifyOnly`.
+
+**No `teardown`: nothing is torn down.** A client older than this tears down itself first, and sends none.
 
 ## Docker, environments and stacks
 

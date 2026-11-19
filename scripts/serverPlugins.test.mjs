@@ -834,6 +834,9 @@ test("lifecycles (plugins E1): the worktree lifecycles of plugins on in the proj
   )
   assert.deepEqual(registry.lifecycles('p1').map((l) => l.id), ['vms'])
   assert.deepEqual(registry.lifecycles('p2'), [])
+  // Off in p2: its ids there are skipped, not refused (runTeardown's inactive); a plugin with no lifecycle is never listed.
+  assert.deepEqual(registry.inactiveLifecycles('p1'), [])
+  assert.deepEqual(registry.inactiveLifecycles('p2'), ['vms'])
   const { pluginParticipant, planTeardown, runTeardown, repoRemoveVeto } = await import('../server/src/teardown/teardown.ts')
   const participant = pluginParticipant(registry.lifecycles('p1')[0], 'conn-1')
   const repo = { id: 'r1', name: 'app', path: '/r/app', branchData: {}, worktrees: [] }

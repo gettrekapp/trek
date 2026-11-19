@@ -103,6 +103,8 @@ export interface PluginRegistry {
   allPrProviders(): PrServerProvider[]
   /** The worktree lifecycles of the plugins on in the project, in registration order (plugins E1) */
   lifecycles(projectId: string): PluginLifecycle[]
+  /** The ids of the registered plugins with a worktree lifecycle that are off in the project (plugins E1): their teardown ids are skipped, not refused */
+  inactiveLifecycles(projectId: string): string[]
   /** The project settings the registered plugins own (phase 2), whether or not they are on in a project */
   readonly settingRules: PluginSettingRules
   /** A registered plugin's `repoSettings` or `branchSettings` (plugins E1); undefined when it is not registered here or declares none */
@@ -418,6 +420,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     ticketProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.ticketProvider ? [e.instance.ticketProvider] : [])),
     prProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     lifecycles: (projectId) => on(projectId).flatMap((e) => (e.instance.worktreeLifecycle ? [{ id: e.manifest.id, lifecycle: e.instance.worktreeLifecycle }] : [])),
+    inactiveLifecycles: (projectId) =>
+      [...entries.values()].filter((e) => e.instance.worktreeLifecycle && !enabled(projectId, e.manifest.id)).map((e) => e.manifest.id),
     allPrProviders: () => [...entries.values()].flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     settingRules,
     settingFields: (pluginId, scope) => entries.get(pluginId)?.manifest[scope === 'repo' ? 'repoSettings' : 'branchSettings'],

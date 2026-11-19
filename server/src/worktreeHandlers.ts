@@ -17,6 +17,8 @@ import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
 import { isInside } from '../../src/host/pathContainment.ts'
 import { prOwner, safeParse } from '../../src/shared/plugins/pullRequests.ts'
+import { holdWorktree, optionalTeardown, planTeardown, requireOp, runTeardown } from './teardown/teardown.ts'
+import { inactiveParticipants, participantsFor } from './teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -263,9 +265,20 @@ export const worktreeHandlers: Record<string, Handler> = {
     return linkWarnings.length > 0 ? { worktreeId, linkWarnings } : { worktreeId }
   },
 
+  /** What would be torn down before the worktree is removed, promoted or moved (plugins E1): every participant's items, ids namespaced. */
+  'worktree.teardownPlan': async (p, ctx) => {
+    const op = requireOp(p.op)
+    const project = ctx.projects.require(p.projectId)
+    const { repo, worktree } = locate(project, p.worktreeId)
+    if (worktree.isMain) throw bad('the main checkout is never removed, promoted or moved, so it has no teardown')
+    return { items: await planTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, op) }
+  },
+
   'worktree.remove': async (p, ctx) => {
     const force = p.force === undefined ? false : requireBoolean(p.force, 'force')
-    const { repo, worktree } = locate(ctx.projects.require(p.projectId), p.worktreeId)
+    const teardown = optionalTeardown(p.teardown)
+    const project = ctx.projects.require(p.projectId)
+    const { repo, worktree } = locate(project, p.worktreeId)
     if (worktree.isMain) throw bad('the main worktree cannot be removed')
     assertNotPromoting(repo.path)
     const key = real(worktree.path)
@@ -279,20 +292,32 @@ export const worktreeHandlers: Record<string, Handler> = {
       await assertRemovable(ctx, repo.path, worktree.path)
       // Another registered repo's checkout may be listed as a row here.
       assertNotRepository(ctx.store.config.repos, real(worktree.path), 'worktree')
-      // A directory that is already gone is removed from git's list too, and
-      // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
-      // While git removes the directory, no session or load may start in it.
-      // The block lasts until the re-read has marked the row missing.
+    }
+    // The chosen teardown (plugins E1), after every check: a removal git would refuse for changes
+    // tears nothing down (the client asks, then forces with the same ids).
+    if (teardown.length > 0 && !force && !worktree.missing && (await hasChanges(worktree.path))) {
+      throw codedError('GIT_ERROR', `${worktree.path} has modified or untracked files; nothing was torn down`, { reason: 'dirty' })
+    }
+
+    // Held for the teardown and the removal: a worktree being torn down (by this or another
+    // operation) is CONFLICT, with or without `teardown`. From before the teardown until the
+    // re-read has marked the row missing, no session or load may start in it.
+    await holdWorktree(worktree.path, async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
-        if (force) await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
-        else await removeUnforced(repo.path, worktree.path, repo.linkedDirs ?? [])
-        // Git has removed it. Even if the re-read fails, the row goes below.
-        await ctx.poller.refresh(repo.path)
+        await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        // A directory that is already gone is removed from git's list too, and
+        // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
+        if (!worktree.missing) {
+          if (force) await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
+          else await removeUnforced(repo.path, worktree.path, repo.linkedDirs ?? [])
+          // Git has removed it. Even if the re-read fails, the row goes below.
+          await ctx.poller.refresh(repo.path)
+        }
       } finally {
         unblock()
       }
-    }
+    })
 
     // The poller keeps a vanished row that has sessions (as missing); an explicit remove drops it.
     ctx.projects.apply(p.projectId, (d) => {

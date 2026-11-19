@@ -15,6 +15,8 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
  * `history.added` event, the worktree history. `ui`: `ui.report` and the `ui.focus` event, what
  * each client shows, for the MCP tools get_selected_worktree and focus_session. `mcpTools`:
  * `mcpTools.list`, the tools a session can call (Trek's and the other configured MCP servers').
+ * `worktreeTeardown` (plugins E1): the server tears a worktree's dev stack, VM and plugins' parts
+ * down itself, as the client chooses.
  */
 export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.topicEnd,
@@ -32,7 +34,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.automations,
   CAPABILITY.history,
   CAPABILITY.ui,
-  CAPABILITY.mcpTools
+  CAPABILITY.mcpTools,
+  CAPABILITY.worktreeTeardown
 ]
 
 /**

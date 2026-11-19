@@ -86,7 +86,7 @@ const bad = (message: string): Error => codedError('BAD_REQUEST', message)
  * The program a failed execFile or spawn ran, when it was not found on PATH. Only a spawn's ENOENT:
  * a file's (a log removed between its stat and its open) is an ordinary failure.
  */
-function missingTool(err: unknown): string | null {
+export function missingTool(err: unknown): string | null {
   const e = err as { code?: unknown; path?: unknown; syscall?: unknown } | null
   if (e?.code !== 'ENOENT' || typeof e.syscall !== 'string' || !e.syscall.startsWith('spawn')) return null
   if (typeof e.path === 'string' && e.path !== '') return e.path

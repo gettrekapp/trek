@@ -565,3 +565,121 @@ test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, n
   rmSync(registryFile)
   assert.deepEqual((await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => [e.profile, e.orphaned]), [['twb-real-000000', true]])
 })
+
+test('worktree.teardownPlan (plugins E1): the dev stack once it has run and the VM the branch has; none for the main checkout', { skip }, async (t) => {
+  const s = await setup(t)
+  const worktreeId = s.worktreeAt(s.feature).id
+  const plan = async (op = 'remove') => (await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op })).result.items
+  assert.deepEqual(await plan(), [])
+  mkdirSync(join(s.feature, '.trek', 'stack'), { recursive: true })
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })).result.code, 0)
+  const profile = deriveProfileName(s.a, 'feature-x')
+  const items = [
+    { id: 'stack:destroy', label: 'Tear down the dev stack “trek-a-feature-x” (drops its databases)', checked: true },
+    { id: 'env:destroy', label: `Stop and delete this worktree's Colima VM “${profile}”`, checked: true }
+  ]
+  for (const op of ['remove', 'promote', 'move']) assert.deepEqual(await plan(op), items, op)
+  refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op: 'delete' }), 'BAD_REQUEST')
+  const main = s.repo().worktrees.find((w) => w.isMain)
+  refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: main.id, op: 'remove' }), 'BAD_REQUEST')
+  refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: 'nope', op: 'remove' }), 'NOT_FOUND')
+})
+
+test('worktree.remove {teardown} (plugins E1): the chosen items, the stack then the VM, while the worktree is there; then git removes it', { skip }, async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  const worktreeId = s.worktreeAt(s.feature).id
+  mkdirSync(join(s.feature, '.trek', 'stack'), { recursive: true })
+  await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
+  resetCalls()
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId, teardown: ['stack:destroy', 'env:destroy'] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  const steps = calls()
+    .map((c) => c.split('|'))
+    .filter(([tool, , args]) => (tool === 'stack' && args === 'destroy') || (tool === 'colima' && args.startsWith('delete ')))
+  assert.deepEqual(steps.map(([tool, cwd]) => [tool, tool === 'stack' ? cwd : '']), [['stack', s.feature], ['colima', '']])
+  assert.equal(existsSync(s.feature), false)
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8'))), [])
+})
+
+test('worktree.remove {teardown}: a dirty worktree is refused first; a failing item stops it with the worktree kept; an unknown id is refused; no teardown tears nothing down', { skip }, async (t) => {
+  const s = await setup(t, { stackBody: 'if [ "$1" = destroy ]; then exit 4; fi' })
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  mkdirSync(join(s.feature, '.trek', 'stack'), { recursive: true })
+  await s.call('env.up', { ...ref, settings: { enabled: true, networkAddress: false } })
+  const destroyed = () => calls().filter((c) => c.endsWith('|destroy') || c.includes('|delete '))
+  resetCalls()
+  writeFileSync(join(s.feature, 'scratch.txt'), 'x\n')
+  refused(await s.call('worktree.remove', { ...ref, teardown: ['stack:destroy', 'env:destroy'] }), 'GIT_ERROR', 'dirty')
+  assert.deepEqual(destroyed(), [], 'nothing torn down for a refused removal')
+  const failed = await s.call('worktree.remove', { ...ref, force: true, teardown: ['stack:destroy', 'env:destroy'] })
+  refused(failed, 'TOOL_ERROR', 'teardown')
+  assert.match(failed.error.message, /^Couldn't tear down the dev stack “trek-a-feature-x” \(drops its databases\): stack\.sh destroy exited with code 4/)
+  assert.deepEqual(destroyed().map((c) => c.split('|')[0]), ['stack'], 'the VM was not deleted')
+  assert.ok(existsSync(s.feature))
+  refused(await s.call('worktree.remove', { ...ref, force: true, teardown: ['ghost:x'] }), 'BAD_REQUEST')
+  refused(await s.call('worktree.remove', { ...ref, force: true, teardown: 'stack:destroy' }), 'BAD_REQUEST')
+  resetCalls()
+  assert.equal((await s.call('worktree.remove', { ...ref, force: true })).ok, true)
+  assert.deepEqual(destroyed(), [], 'no teardown field: nothing torn down')
+})
+
+test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with or without teardown; the path is blocked from before the teardown to after the removal; a plugin now off is skipped', { skip }, async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  // A plugin participant whose teardown waits until released, and records whether the path was blocked then.
+  const log = []
+  let release
+  const gate = new Promise((r) => (release = r))
+  const blocked = new Set()
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async (_ctx, worktree, op, ids) => {
+      log.push([op, ids, blocked.has(worktree.path)])
+      await gate
+    }
+  }
+  const ctx = {
+    ...s.ctx,
+    sessions: {
+      ...s.ctx.sessions,
+      blockPath: (path) => {
+        blocked.add(path)
+        return () => blocked.delete(path)
+      }
+    },
+    plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => ['gone'] }
+  }
+  const call = (method, params) => dispatchV2(method, params, ctx)
+  const removing = call('worktree.remove', { ...ref, force: true, teardown: ['probe:vm', 'gone:x'] })
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual(log, [['remove', ['vm'], true]])
+  refused(await call('worktree.remove', { ...ref, force: true }), 'CONFLICT')
+  refused(await call('worktree.remove', { ...ref, force: true, teardown: [] }), 'CONFLICT')
+  release()
+  const res = await removing
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(existsSync(s.feature), false)
+  assert.deepEqual([...blocked], [], 'unblocked once removed')
+})
+
+test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs, with the reason; allowed once it is stopped', { skip }, async (t) => {
+  const s = await setup(t)
+  s.ctx.sessions.forgetRepo = () => {}
+  s.ctx.sessions.forgetGlobal = () => {}
+  const b = join(s.dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', '-b', 'main', b], { env: gitEnv })
+  git(b, 'commit', '--allow-empty', '-q', '-m', 'init')
+  s.store.addRepo(b, { id: 'b' })
+  assert.equal((await s.call('repo.add', { projectId: s.projectId, path: b })).ok, true)
+  await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })
+  const profile = deriveProfileName(s.a, 'feature-x')
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running' })}\n`)
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  const res = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
+  refused(res, 'BAD_REQUEST')
+  assert.equal(res.error.message, 'It has a running environment. Stop it in the Env tab first.')
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n`)
+  assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
+})

@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
+import { inactiveParticipants, participantsFor } from '../server/src/teardown/participants.ts'
 import { defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
@@ -279,4 +280,21 @@ test('toWireError: a teardown failure carries tornDown (strings only)', () => {
   assert.deepEqual(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { reason: 'teardown', tornDown: [1, 'a'] })).details, { reason: 'teardown' })
   assert.deepEqual(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { tornDown: ['a'] })).details, { tornDown: ['a'] })
   assert.equal(toWireError('worktree.remove', codedError('TOOL_ERROR', 'x', { tornDown: 'a' })).details, undefined)
+})
+
+test("participantsFor: core's stack and VM with machine services, never on Windows; then the plugins' in order", () => {
+  const machine = { stacks: {}, env: {} }
+  const lifecycle = { plan: async () => [], teardown: async () => {} }
+  const ctx = { store: {}, machine, caller: 'c1', plugins: { lifecycles: () => [{ id: 'one', lifecycle }, { id: 'two', lifecycle }] } }
+  assert.deepEqual(participantsFor(ctx, 'p1', 'linux').map((p) => p.id), ['stack', 'env', 'one', 'two'])
+  assert.deepEqual(participantsFor(ctx, 'p1', 'win32').map((p) => p.id), ['one', 'two'])
+  assert.deepEqual(participantsFor({ ...ctx, machine: undefined }, 'p1', 'darwin').map((p) => p.id), ['one', 'two'])
+  // A test's stand-in for the registry may have no lifecycles.
+  assert.deepEqual(participantsFor({ store: {}, plugins: { prProviders: () => [] } }, 'p1', 'linux'), [])
+})
+
+test('inactiveParticipants: the plugins with a lifecycle that are off in the project; none without a registry that says', () => {
+  assert.deepEqual(inactiveParticipants({ plugins: { inactiveLifecycles: (projectId) => [`off-in-${projectId}`] } }, 'p1'), ['off-in-p1'])
+  assert.deepEqual(inactiveParticipants({ plugins: { prProviders: () => [] } }, 'p1'), [])
+  assert.deepEqual(inactiveParticipants({}, 'p1'), [])
 })
