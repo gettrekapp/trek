@@ -1,7 +1,8 @@
-// A worktree delete's teardown on the server's machine (backendV2's `worktrees.remove` calls it as
-// `teardown`, with the `stacks` and `env` features): the confirm (with the dev stack's checkbox),
-// a fresh dirty check through the server's git (`worktree.dirty`), then the stack and the branch's
-// Colima VM, before the server removes the worktree (4c's order). Every call goes to the backend
+// A worktree delete's teardown on the server's machine, on a server without `worktreeTeardown`
+// (backendV2's `worktrees.remove` calls it as `teardown`): the confirm (with the dev stack's
+// checkbox), a fresh dirty check through the server's git (`worktree.dirty`), then the stack and
+// the plugins' parts (their legacyTeardown: the Colima VM), before the server removes the worktree
+// (4c's order). Every call goes to the backend
 // doing the remove, which it hands each step: a window that leaves mid-confirm sends nothing to
 // the next one's. The store and the dialogs come in as deps (installV2.ts), so this file runs
 // under node --test. On a server with `worktreeTeardown` (plugins E1) only `confirmPlan` is used:
@@ -12,10 +13,10 @@ import type { WindowBackend } from './backend'
 import type { ConfirmPrompt, WorktreeTeardown } from './v2/backendV2'
 
 export interface WorktreeTeardownDeps {
-  /** The branch's live environment, from the environments poll */
-  environment(info: GitWorktreeInfo): { profile: string } | undefined
-  /** Deletes the branch's VM through `backend`; a warning instead of a rejection */
-  destroyEnvironment(backend: WindowBackend, info: GitWorktreeInfo): Promise<string | undefined>
+  /** What the active plugins tear down themselves (their legacyTeardown), from their own state: the confirm's sentence */
+  pluginPart(info: GitWorktreeInfo): { notice: string } | undefined
+  /** Tears those down through `backend`: their warnings, instead of a rejection */
+  destroyPluginPart(backend: WindowBackend, info: GitWorktreeInfo): Promise<string[]>
   showError(title: string, message: string): Promise<void>
   confirm(prompt: ConfirmPrompt): Promise<boolean>
   confirmWithCheckbox(options: ConfirmPrompt & { checkboxLabel: string; checkboxChecked: boolean }): Promise<{ confirmed: boolean; checked: boolean }>
@@ -32,7 +33,7 @@ export const DIRTY_CHECK_TIMED_OUT =
 
 export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTeardown {
   return {
-    environment: (info) => deps.environment(info),
+    pluginPart: (info) => deps.pluginPart(info),
 
     // The server's plan, a checkbox per item in the window (teardownPrompt.ts), with the participants
     // it could not ask (plugins E3); no items and none of those: the plain confirm.
@@ -78,11 +79,10 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
       }
     },
 
-    // The VM, its failure shown without blocking the caller.
+    // The plugins' parts, each failure shown (in the plugin's words) without blocking the caller.
     // Old-server fallback (no worktreeTeardown): remove in a later release.
-    destroyEnvironment: async (info, backend) => {
-      const warning = await deps.destroyEnvironment(backend, info)
-      if (warning) await deps.showError('Environment cleanup failed', `${warning}\n\nThe VM is listed under Orphaned environments in Settings.`)
+    destroyPluginPart: async (info, backend) => {
+      for (const warning of await deps.destroyPluginPart(backend, info)) await deps.showError('Cleanup failed', warning)
     },
 
     // A fresh check through the server's git. null (git can't read it) or a failure (a server

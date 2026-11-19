@@ -308,22 +308,23 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
 }
 
 /**
- * Whether a move's teardown choice (a source with `worktreeTeardown`) keeps Move off: an unticked
- * item that is `running` would be left running with its folder gone (`blocking`, its ids). A stack
- * or VM this window sees running (`seen`) that the plan has no item for (its participant's plan
- * failed and was left out) can't be torn down either (`unplanned`, as the summary names it).
+ * Whether a move's teardown choice (a source with `worktreeTeardown`) keeps Move off:
+ * - `blocking`: an unticked item that is `running` would be left running with its folder gone (its ids);
+ * - `unplanned`: a stack this window sees running (`seen.stack`) that the plan has no item for can't be torn down either;
+ * - `unchecked`: the participants the server could not ask (`seen.unchecked`: teardownPlan's `unplanned`, plugins E3), by `nameOf`'s names.
  */
 export function moveTeardownCheck(
   items: readonly TeardownItem[],
   ticked: ReadonlySet<string>,
-  seen: { stack: boolean; vm: boolean }
-): { blocks: boolean; blocking: string[]; unplanned: string[] } {
+  seen: { stack: boolean; unchecked?: readonly string[] },
+  nameOf: (participant: string) => string = (participant) => participant
+): { blocks: boolean; blocking: string[]; unplanned: string[]; unchecked: string[] } {
   const blocking = teardownBlocking(items, ticked)
   const planned = new Set(items.map((item) => item.id))
-  const unplanned = [seen.stack && !planned.has('stack:destroy') ? 'its dev stack' : null, seen.vm && !planned.has('env:destroy') ? 'its VM' : null].filter(
-    (what): what is string => what !== null
-  )
-  return { blocks: blocking.length > 0 || unplanned.length > 0, blocking, unplanned }
+  const failed = seen.unchecked ?? []
+  const unplanned = seen.stack && !planned.has('stack:destroy') && !failed.includes('stack') ? ['its dev stack'] : []
+  const unchecked = failed.map((participant) => (participant === 'stack' ? 'its dev stack' : nameOf(participant)))
+  return { blocks: blocking.length > 0 || unplanned.length > 0 || unchecked.length > 0, blocking, unplanned, unchecked }
 }
 
 /**

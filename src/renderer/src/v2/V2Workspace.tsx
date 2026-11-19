@@ -3,7 +3,6 @@ import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore 
 import { globalPanelMode } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
 import { getBackend } from '../backend'
-import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from '../components/Sidebar'
 import { toggleSidebar } from '../sidebarToggle'
 import { WorktreeDetail } from '../components/WorktreeDetail'
@@ -22,9 +21,9 @@ import { answerTeardown, hostTeardownPrompt, teardownHeld, uncheckedText, useTea
 /**
  * A server project's workspace: the Sidebar, WorktreeDetail and Global panel
  * over the projected slice (applyV2Project fills the store). It polls no git:
- * the server's mirror patches carry every worktree, git status and session. A
- * window whose server runs the environments (`features.env`, any 5a server)
- * polls them, on the server's machine.
+ * the server's mirror patches carry every worktree, git status and session.
+ * The plugins' Runtimes poll what they need (the Colima environments: the env
+ * plugin's).
  */
 export function V2Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
@@ -38,7 +37,6 @@ export function V2Workspace(): React.JSX.Element {
   const projectPage = useAppStore((s) => s.projectPage)
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
-  useEnvironmentPoll(features.env)
   // promote_to_primary (5e): an agent's request shows this window's promote confirmation. Started
   // here, once the window's connection exists, by the first render with the feature; the backend
   // keeps its one follower until the window leaves the project (a reconnect's new welcome, or this

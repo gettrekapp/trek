@@ -178,7 +178,9 @@ test('branch data becomes the six legacy maps; empty values are left out', () =>
   assert.deepEqual(one.branchCustomTags, { feat: ['hot'] })
   assert.deepEqual(one.branchTickets, { feat: 'TOW-1' })
   assert.deepEqual(one.branchPullRequests, { feat: 'https://github.com/o/r/pull/7' })
-  assert.deepEqual(one.branchEnvVars, { feat: 'A=1' })
+  // The .env is the env plugin's branch setting since plugins E3 (made from `env` on a server before E2).
+  assert.equal('branchEnvVars' in one, false)
+  assert.deepEqual(one.branchPluginSettings, { feat: { env: { env: 'A=1' } } })
   assert.deepEqual(one.branchPrWatches, {})
   assert.deepEqual(one.worktreePrNotices, {})
   assert.deepEqual(one.linkedDirs, ['.trek'])

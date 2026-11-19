@@ -13,16 +13,12 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
   { id: 'agents', label: 'Agents' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'worktrees', label: 'Worktrees' },
-  { id: 'environments', label: 'Environments' },
   { id: 'plugins', label: 'Plugins' }
 ]
 
-/**
- * The tabs to show: Environments where the server runs them, the plugins' repository settings
- * tabs (plugins E3) right before Plugins, Plugins where there is one to list.
- */
-export function visibleSettingsTabs(has: { environments: boolean; plugins: boolean; pluginTabs?: readonly SettingsTab[] }): SettingsTab[] {
-  const core = SETTINGS_TABS.filter((t) => t.id !== 'plugins' && (t.id !== 'environments' || has.environments))
+/** The tabs to show: the plugins' repository settings tabs (plugins E3) right before Plugins, Plugins where there is one to list. */
+export function visibleSettingsTabs(has: { plugins: boolean; pluginTabs?: readonly SettingsTab[] }): SettingsTab[] {
+  const core = SETTINGS_TABS.filter((t) => t.id !== 'plugins')
   return [...core, ...(has.pluginTabs ?? []), ...(has.plugins ? SETTINGS_TABS.filter((t) => t.id === 'plugins') : [])]
 }
 

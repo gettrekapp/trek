@@ -28,8 +28,6 @@ export interface HoverCardProps {
   pullRequest?: { label: string; watch?: 'watching' | 'paused'; notice?: string }
   /** gitWords() — empty when clean and level */
   git: string
-  /** "running — 10.0.0.4" */
-  environment?: string
   /** The worktree as the plugins' hover rows see it (plugins E3) */
   worktree: PluginWorktree
   /** A plugin fills the hover rows: the facts list shows for them (it hides when they render nothing) */
@@ -68,7 +66,7 @@ export function WorktreeHoverCard(props: HoverCardProps): React.JSX.Element {
           ))}
         </div>
       )}
-      {(ticket || pullRequest || props.git || props.environment || props.pluginRows) && (
+      {(ticket || pullRequest || props.git || props.pluginRows) && (
         <dl className="wt-card-facts">
           {ticket && (
             <>
@@ -101,12 +99,6 @@ export function WorktreeHoverCard(props: HoverCardProps): React.JSX.Element {
             <>
               <dt>Git</dt>
               <dd>{props.git}</dd>
-            </>
-          )}
-          {props.environment && (
-            <>
-              <dt>Env</dt>
-              <dd>{props.environment}</dd>
             </>
           )}
           {props.pluginRows && <PluginWorktreeSlot name="hoverRow" worktree={props.worktree} />}

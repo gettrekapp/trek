@@ -16,7 +16,7 @@ test('promotePrompt says what moves, what is closed, what is lost and who asked'
       sessions: [{ title: 'Claude 1', provider: 'claude', carried: true }, { title: 'Codex 1', provider: 'codex', carried: false, reason: 'x' }],
       reviewComments: 2, reviewCarried: false, ignored: ['a/', 'b', 'c', 'd', 'e', 'f'], ignoredCount: 7, hiddenChanges: ['h'], hiddenChangesCount: 1
     }),
-    { vm: 'trek-feat', asked: { from: 'Claude 1', dialogId: 'promote:r1' } }
+    { also: ['Its VM “trek-feat” goes too.'], asked: { from: 'Claude 1', dialogId: 'promote:r1' } }
   )
   assert.equal(p.title, 'Promote to Primary')
   assert.equal(p.confirmLabel, 'Promote')
@@ -28,7 +28,7 @@ test('promotePrompt says what moves, what is closed, what is lost and who asked'
   assert.match(p.detail, /review draft \(2 comments\) is dropped/)
   assert.match(p.detail, /a\/, b, c, d, e and 2 more/)
   assert.match(p.detail, /skip-worktree or assume-unchanged\): h\./)
-  assert.match(p.detail, /Colima VM “trek-feat”/)
+  assert.match(p.detail, /Its VM “trek-feat” goes too\.$/)
   assert.equal(p.dialogId, 'promote:r1')
   assert.doesNotMatch(promotePrompt(plan()).detail, /asked|resume|review|ignored/)
   assert.equal(promotePrompt(plan()).dialogId, undefined)

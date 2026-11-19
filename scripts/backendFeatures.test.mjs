@@ -24,7 +24,7 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'ui', 'automations', 'history', 'mcpTools', 'settingsEdit', 'globalPanel', 'prResolve'])
+  assert.deepEqual(on, ['docker', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'ui', 'automations', 'history', 'mcpTools', 'settingsEdit', 'globalPanel', 'prResolve'])
 })
 
 test('moving a worktree to another server follows move (5d)', () => {
@@ -76,24 +76,19 @@ test('skills are the server\'s (5b): they follow their capability, on any server
   assert.deepEqual(on(['mcp', 'local', 'docker'], { localEntry: true }), [])
 })
 
-test("docker, env and stacks run on the server's machine: each follows its own capability, on any server (5a)", () => {
-  const on = (caps, options) => ['docker', 'env', 'stacks'].filter((name) => v2Features(caps, options)[name])
-  assert.deepEqual(on(['mcp', 'docker', 'env', 'stacks']), ['docker', 'env', 'stacks'])
+test("docker and stacks run on the server's machine: each follows its own capability, on any server (5a); env is the plugin's (plugins E3)", () => {
+  const on = (caps, options) => ['docker', 'stacks'].filter((name) => v2Features(caps, options)[name])
+  assert.deepEqual(on(['mcp', 'docker', 'env', 'stacks']), ['docker', 'stacks'])
   assert.deepEqual(on(['docker']), ['docker'])
-  assert.deepEqual(on(['env', 'stacks']), ['env', 'stacks'])
-  // A server older than 5a: none, even on the Local entry with `local`.
   assert.deepEqual(on(['mcp', 'local'], { localEntry: true }), [])
-  // The Local entry needs nothing more than the capabilities.
-  assert.deepEqual(on(['docker', 'env', 'stacks'], { localEntry: false }), ['docker', 'env', 'stacks'])
+  assert.equal(FEATURE_NAMES.includes('env'), false)
 })
 
 test("the settings sections: a server window shows what its server has and keeps the project's agents", () => {
   const v2 = settingsSections(v2Features(['mcp']))
   assert.deepEqual(Object.keys(v2), [...SETTINGS_SECTIONS])
   const by = (mode) => SETTINGS_SECTIONS.filter((name) => v2[name] === mode)
-  // The environments where the server has them. (The plugins' sections, Linear's and voice's, are
-  // PluginsSettings', not these.)
-  assert.deepEqual(by('hidden'), ['environments'])
+  assert.deepEqual(by('hidden'), [], "every section shows (the plugins' are PluginsSettings' and their own tabs)")
   assert.deepEqual(by('project'), ['agents'])
   assert.deepEqual(by('edit'), [
     'sessionMode',
@@ -111,13 +106,12 @@ test("the settings sections: a server window shows what its server has and keeps
 })
 
 const MACHINE = ['reveal', 'openInEditor']
-const SERVER_MACHINE = ['mcp', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills']
+const SERVER_MACHINE = ['mcp', 'docker', 'stacks', 'linear', 'voice', 'skills']
 
 test("the Local entry's server, welcomed with `local`, has this machine's features too", () => {
   const on = (caps, options) => FEATURE_NAMES.filter((name) => v2Features(caps, options)[name])
   assert.deepEqual(on([...SERVER_MACHINE, 'local'], { localEntry: true }), [
     'docker',
-    'env',
     'stacks',
     'skills',
     'reveal',
@@ -139,11 +133,11 @@ test("this machine's features need both the Local entry and the `local` capabili
   assert.deepEqual(any(SERVER_MACHINE, { localEntry: true }), [])
 })
 
-test('a window whose server runs environments shows them in Settings, on Local or not', () => {
+test('the Settings sections are the same on Local or not', () => {
   for (const [caps, options] of [[[...SERVER_MACHINE, 'local'], { localEntry: true }], [SERVER_MACHINE, {}]]) {
     const sections = settingsSections(v2Features(caps, options))
     assert.deepEqual(SETTINGS_SECTIONS.filter((name) => sections[name] === 'hidden'), [])
-    assert.deepEqual([sections.environments, sections.agents], ['edit', 'project'])
+    assert.equal(sections.agents, 'project')
   }
 })
 

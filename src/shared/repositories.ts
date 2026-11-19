@@ -1,6 +1,6 @@
 // src/shared/repositories.ts
 // Runtime imports stay out of this file so `node --test` can load it directly.
-import type { EnvironmentInfo, ProjectFile, Repository } from './types'
+import type { ProjectFile, Repository } from './types'
 
 const PRIMARY_PREFIX = '__primary__:'
 
@@ -18,13 +18,12 @@ export function repositoryRemovalBlock(
   project: Pick<ProjectFile, 'repositories' | 'globalSessions'>,
   repo: Repository,
   hasLiveSessions: boolean,
-  environments: Pick<EnvironmentInfo, 'repoPath' | 'vmState'>[] = []
+  /** A plugin's reason (plugins E3: its legacyTeardown, the Colima VM still running), or null */
+  pluginBlock: string | null = null
 ): string | null {
   if (project.repositories.length === 1) return 'It is the only repository in this project.'
   if (hasLiveSessions) return 'It has live Claude sessions. Unload them first.'
-  if (environments.some((e) => e.repoPath === repo.path && e.vmState === 'running')) {
-    return 'It has a running environment. Stop it in the Env tab first.'
-  }
+  if (pluginBlock) return pluginBlock
   const saved = [repo.primaryTerminals ?? [], ...repo.worktrees.map((w) => w.terminals ?? [])].flat()
   if (saved.some((t) => t.ptyId)) {
     return 'It has a remote session still running on a server. Load the worktree, then close that session.'

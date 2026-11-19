@@ -187,5 +187,7 @@ test('the old-server fallback: the VM as the confirm says it; run deletes it thr
   fail = true
   assert.match(await colimaLegacyTeardown.run(host, feat), /^Failed to remove environment VM ".+": Error: colima delete failed\. It is listed under Orphaned environments in Settings\.$/)
   assert.deepEqual(useColimaStore.getState().busy, {}, 'not busy after either')
+  store.setEnvironments([vm('stopped')])
+  assert.equal(colimaLegacyTeardown.repoRemoveBlock(host, repo({ enabled: true })), null, 'a stopped VM keeps nothing')
   store.reset()
 })

@@ -168,7 +168,6 @@ type BranchMaps = Required<
     | 'branchPrWatches'
     | 'worktreePrNotices'
     | 'worktreeReviews'
-    | 'branchEnvVars'
   >
 >
 
@@ -181,8 +180,7 @@ function branchMaps(repo: V2Repository): BranchMaps {
     branchPullRequests: {},
     branchPrWatches: {},
     worktreePrNotices: {},
-    worktreeReviews: {},
-    branchEnvVars: {}
+    worktreeReviews: {}
   }
   for (const [branch, data] of Object.entries(repo.branchData)) {
     if (data.note) maps.branchNotes[branch] = data.note
@@ -191,7 +189,6 @@ function branchMaps(repo: V2Repository): BranchMaps {
     if (data.ticket) maps.branchTickets[branch] = data.ticket
     if (data.pr) maps.branchPullRequests[branch] = data.pr
     if (data.prWatch) maps.branchPrWatches[branch] = true
-    if (data.env) maps.branchEnvVars[branch] = data.env
   }
   // By the worktree's path, not its branch: a missing worktree on the same branch keeps its own notice,
   // and a row's × dismisses the worktree that holds it.
@@ -317,7 +314,6 @@ export function projectV2(project: Project, options: ProjectionOptions = {}): V2
       ...(primaryTerminals ? { primaryTerminals } : {}),
       ...branchMaps(repo),
       ...(repo.linkedDirs ? { linkedDirs: [...repo.linkedDirs] } : {}),
-      ...(repo.environments ? { environments: repo.environments } : {}),
       ...pluginMaps(repo, options.envLegacy === true)
     }
   })

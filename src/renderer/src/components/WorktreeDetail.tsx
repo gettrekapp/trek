@@ -4,7 +4,6 @@ import {
   branchCustomTags,
   branchTag,
   dormantSessions,
-  environmentFor,
   instanceForInfo,
   repoOfInfo,
   useAppStore
@@ -25,7 +24,6 @@ import { SkillMenu } from './SkillMenu'
 import { NewSessionMenu } from './NewSessionMenu'
 import { DockerMenu } from './DockerMenu'
 import { DockerPanel } from './DockerPanel'
-import { EnvironmentPanel } from './EnvironmentPanel'
 import { StackPanel } from './StackPanel'
 import { STACK_STATE_LABELS, stackState, stackUrls } from '../../../shared/stacks'
 import { NotesPanel } from './NotesPanel'
@@ -41,7 +39,6 @@ import { MoveWorktreeModal } from './MoveWorktreeModal'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { moveTargets } from '../v2/moveFlow'
 import { isPromoting, subscribePromoting } from '../v2/promoteFlow'
-import { envRepoKey } from '../../../shared/environments'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
 import type { GitWorktreeInfo, Repository, StackStatus } from '../../../shared/types'
@@ -60,7 +57,6 @@ type Panel =
   | 'notes'
   | 'history'
   | 'docker'
-  | 'environment'
   | 'stack'
   | `plugin:${string}`
 
@@ -152,8 +148,6 @@ export function WorktreeDetail({
   const offline = useAppStore((s) => s.serverOffline)
   // A project page (Settings, Automations) covers the detail: its panes are hidden meanwhile.
   const projectPage = useAppStore((s) => s.projectPage)
-  const environments = useAppStore((s) => s.environments)
-  const envBusy = useAppStore((s) => s.envBusy)
 
   const features = useFeatures()
   const prProviders = usePrProviders()
@@ -286,16 +280,6 @@ export function WorktreeDetail({
   // Notes are keyed to the live branch, so they follow it through promote/demote.
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
 
-  const envEnabled = !!repo.environments?.enabled
-  const showEnv = features.env && envEnabled && !!info.branch
-  const env = showEnv ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
-  const envOpBusy = env ? envBusy[env.profile] : undefined
-  const envChipLabel = envOpBusy
-    ? { start: 'Env starting…', stop: 'Env stopping…', destroy: 'Env resetting…' }[envOpBusy]
-    : env?.vmState === 'running'
-      ? `Env${env.address ? ` · ${env.address}` : ''}`
-      : 'Env stopped'
-
   const showStack = features.stacks && !!stack?.available
   const showDocker = features.docker && info.isMain
   const stackStateNow = stack ? stackState(stack) : 'stopped'
@@ -349,16 +333,12 @@ export function WorktreeDetail({
     }
   }
 
-  // The runtime panels: Docker (the repository's compose), the worktree's environment, the plugins'
-  // panels (plugins E3), its stack.
-  const runGrouped = [showDocker, showEnv, showStack].filter(Boolean).length + pluginPanels.length >= 2
-  const runActive = panel === 'docker' || panel === 'environment' || panel === 'stack' || panel.startsWith('plugin:')
+  // The runtime panels: Docker (the repository's compose), the plugins' panels (plugins E3: the
+  // worktree's Colima environment), its stack.
+  const runGrouped = [showDocker, showStack].filter(Boolean).length + pluginPanels.length >= 2
+  const runActive = panel === 'docker' || panel === 'stack' || panel.startsWith('plugin:')
   const stackBusy = showStack && stackStateNow !== 'running' && stackStateNow !== 'stopped'
-  const runDot = runMenuDot([
-    envOpBusy ? 'attention' : showEnv && env?.vmState === 'running' ? 'running' : undefined,
-    stackBusy ? 'attention' : showStack && stackStateNow === 'running' ? 'running' : undefined,
-    ...pluginPanels.map((p) => p.entry.dot)
-  ])
+  const runDot = runMenuDot([stackBusy ? 'attention' : showStack && stackStateNow === 'running' ? 'running' : undefined, ...pluginPanels.map((p) => p.entry.dot)])
   const runtimeButtons = (
     <>
           {showDocker && (
@@ -367,20 +347,6 @@ export function WorktreeDetail({
               onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
             >
               Docker <DockerMenu key={repo.id} repoId={repo.id} />
-            </button>
-          )}
-          {showEnv && (
-            <button
-              className={`panel-btn ${panel === 'environment' ? 'active' : ''}`}
-              title="Isolated Docker environment for this worktree"
-              onClick={() => setPanel(panel === 'environment' ? 'sessions' : 'environment')}
-            >
-              Env
-              {env && (
-                <span
-                  className={`docker-dot ${envOpBusy ? 'attention' : env.vmState === 'running' ? 'running' : 'exited'}`}
-                />
-              )}
             </button>
           )}
           {pluginPanels.map((p) => (
@@ -567,15 +533,6 @@ export function WorktreeDetail({
               <span className="chip chip-git">
                 <span className="wt-dirty-dot" />
                 Uncommitted changes
-              </span>
-            )}
-            {showEnv && (env || envOpBusy) && (
-              <span
-                className={`chip chip-env ${envOpBusy ? 'busy' : env?.vmState === 'running' ? 'running' : 'stopped'}`}
-                title="Open environment panel"
-                onClick={() => setPanel('environment')}
-              >
-                {envChipLabel}
               </span>
             )}
             {pluginWorktree && <PluginWorktreeSlot name="worktreeChip" worktree={pluginWorktree} openPanel={setPanel} />}
@@ -962,12 +919,12 @@ export function WorktreeDetail({
             History
           </button>
         )}
-        {/* Two or more of Docker, Env and Stack share one Run button; one alone stays its own button */}
+        {/* Two or more of Docker, the plugins' panels (Env) and Stack share one Run button; one alone stays its own button */}
         {runGrouped ? (
           <div className="run-group">
             <button
               className={`run-btn ${runActive ? 'active' : ''}`}
-              title="What this worktree runs: Docker, its environment, its stack"
+              title="What this worktree runs"
               aria-expanded={runOpen}
               onClick={() => setRunOpen((v) => !v)}
             >
@@ -1051,7 +1008,6 @@ export function WorktreeDetail({
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {features.history && info.branch && <HistoryPanel visible={panel === 'history'} repoId={repo.id} branch={info.branch} />}
         {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
-        {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}
         {pluginWorktree && <PluginPanels worktree={pluginWorktree} panels={pluginPanels} open={panel} />}
         {showStack && stack && (
           <StackPanel

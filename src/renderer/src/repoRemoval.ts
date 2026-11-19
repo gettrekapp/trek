@@ -2,6 +2,7 @@
 import { repositoryRemovalBlock } from '../../shared/repositories'
 import type { Repository } from '../../shared/types'
 import { repoWorktrees, useAppStore } from './store'
+import { legacyRepoBlock } from './plugins/legacyTeardown'
 
 /** Live sessions anywhere in the repository block its removal. */
 function hasLiveSessions(repo: Repository): boolean {
@@ -11,9 +12,6 @@ function hasLiveSessions(repo: Repository): boolean {
 
 /** Why the repository can't be removed right now, or null if it can. */
 export function removalBlock(repo: Repository): string | null {
-  const { project, environments } = useAppStore.getState()
-  return (
-    project &&
-    repositoryRemovalBlock(project, repo, hasLiveSessions(repo), Object.values(environments))
-  )
+  const { project } = useAppStore.getState()
+  return project && repositoryRemovalBlock(project, repo, hasLiveSessions(repo), legacyRepoBlock(repo))
 }

@@ -36,13 +36,13 @@ test('the first repository cannot be removed while global sessions are saved', (
   assert.equal(repositoryRemovalBlock(project, project.repositories[1], false), null)
 })
 
-test('removal is blocked by a running environment of that repository only', () => {
+test("removal is blocked by a plugin's reason (a running environment, its legacyTeardown), after live sessions", () => {
   const project = { repositories: [repo('a'), repo('b')], globalSessions: [] }
-  const [a, b] = project.repositories
-  const env = (repoPath, vmState) => [{ repoPath, vmState }]
-  assert.match(repositoryRemovalBlock(project, a, false, env('/r/a', 'running')), /Stop/)
-  assert.equal(repositoryRemovalBlock(project, a, false, env('/r/a', 'stopped')), null)
-  assert.equal(repositoryRemovalBlock(project, b, false, env('/r/a', 'running')), null)
+  const [a] = project.repositories
+  const reason = 'It has a running environment. Stop it in the Env tab first.'
+  assert.equal(repositoryRemovalBlock(project, a, false, reason), reason)
+  assert.equal(repositoryRemovalBlock(project, a, false, null), null)
+  assert.match(repositoryRemovalBlock(project, a, true, reason), /live Claude sessions/)
 })
 
 test('removal is blocked by a saved remote session, on the primary or a worktree', () => {

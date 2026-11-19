@@ -41,7 +41,7 @@ function mainIgnoredParts(plan: PromotePlan, demote: boolean): string[] {
 }
 
 /** The confirmation of a promote: what moves, what stays, what goes. */
-export function promotePrompt(plan: PromotePlan, options: { vm?: string; asked?: { from?: string; dialogId: string } } = {}): PromoteQuestion {
+export function promotePrompt(plan: PromotePlan, options: { also?: readonly string[]; asked?: { from?: string; dialogId: string } } = {}): PromoteQuestion {
   const carried = plan.sessions.filter((s) => s.carried)
   const closed = plan.sessions.filter((s) => !s.carried)
   const parts: string[] = []
@@ -67,7 +67,8 @@ export function promotePrompt(plan: PromotePlan, options: { vm?: string; asked?:
   if (plan.ignoredCount > 0) parts.push(`Deleted with the worktree, never moved (ignored by git): ${listed(plan.ignored, plan.ignoredCount)}.`)
   if (plan.hiddenChangesCount > 0) parts.push(`Lost with the worktree (hidden from git by skip-worktree or assume-unchanged): ${listed(plan.hiddenChanges, plan.hiddenChangesCount)}.`)
   parts.push(...mainIgnoredParts(plan, false))
-  if (options.vm) parts.push(`Its Docker environment (Colima VM “${options.vm}”) and all its data will also be deleted.`)
+  // What the window's plugins tear down themselves first, said (a server without worktreeTeardown).
+  if (options.also) parts.push(...options.also)
   return {
     title: 'Promote to Primary',
     message: `Promote “${plan.branch}” to the primary checkout?`,

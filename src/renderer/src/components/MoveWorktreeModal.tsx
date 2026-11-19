@@ -5,11 +5,11 @@
 // on the worktree it was opened on (WorktreeDetail holds it from the click), and from Move on, on
 // the place picked then: the move removes the worktree's row, and the detail behind moves on.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { environmentFor, repoOfInfo, useAppStore } from '../store'
+import { useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
-import { destroyEnvironmentIfAny } from '../environmentActions'
-import { envRepoKey } from '../../../shared/environments'
+import { legacyParts, runLegacyParts } from '../plugins/legacyTeardown'
+import { usePluginEntries } from '../plugins/PluginHost'
 import { errorText } from '../v2/errors'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { MOVE_STEPS, moveTeardownCheck, moveWorktree, setRunningMove, type MoveOutcome, type MoveStepKey, type MoveStepStatus, type Requester } from '../v2/moveFlow'
@@ -52,7 +52,7 @@ interface Frozen {
 type StackRead = { kind: 'loading' } | { kind: 'ok'; status: StackStatus | null } | { kind: 'error'; message: string }
 
 /** The source's teardown plan (plugins E1): unknown while it is read, or when the read failed */
-type TeardownRead = { kind: 'loading' } | { kind: 'ok'; items: TeardownItem[] } | { kind: 'error'; message: string }
+type TeardownRead = { kind: 'loading' } | { kind: 'ok'; items: TeardownItem[]; unplanned: string[] } | { kind: 'error'; message: string }
 
 const requester = (server: RegisteredServer): Requester => (method, params, options) => server.connection.request(method, params, options)
 
@@ -124,12 +124,13 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
 
   const source = useMemo(() => (ownEntry ? registeredServerEntry(ownEntry) : undefined), [ownEntry])
 
-  // The worktree's Docker VM and dev stack on the source's machine (the same ones Delete tears down).
+  // The worktree's dev stack and the plugins' parts on the source's machine (the same ones Delete tears down).
   const features = useFeatures()
-  const project = useAppStore((s) => s.project)
-  const environments = useAppStore((s) => s.environments)
-  const repo = project ? (() => { try { return repoOfInfo(project, info) } catch { return undefined } })() : undefined
-  const env = features.env && repo ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
+  // Old-server fallback (no worktreeTeardown): what the plugins tear down themselves (the Colima VM). Remove in a later release.
+  const parts = legacyParts(info)
+  // The participants the server could not ask, by their plugins' names (plugins E3).
+  const pluginEntries = usePluginEntries()
+  const nameOf = (id: string): string => pluginEntries.find((e) => e.plugin.manifest.id === id)?.plugin.manifest.name ?? id
   // Read when the dialog opens, and again on Retry. Until a read succeeds Move stays disabled: a
   // running stack can't be told from none, and a stack not known can't be torn down.
   const [stackRead, setStackRead] = useState<StackRead>(features.stacks ? { kind: 'loading' } : { kind: 'ok', status: null })
@@ -154,10 +155,10 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const stack = stackRead.kind === 'ok' ? stackRead.status : null
   const stackUnknown = stackRead.kind !== 'ok'
   const stackName = stack?.available && stack.created ? stack.slug : undefined
-  const machine = [env ? `its VM “${env.profile}”` : null, stackName ? `its dev stack “trek-${stackName}”` : null].filter(Boolean).join(' and ')
+  const machine = [...parts.map((p) => p.label), stackName ? `its dev stack “trek-${stackName}”` : null].filter(Boolean).join(' and ')
   const stackRunning = !!stackName && !!stack && (stack.containers > 0 || stack.upRunning)
-  const vmRunning = env?.vmState === 'running'
-  const machineRunning = vmRunning || stackRunning
+  const partRunning = parts.some((p) => p.running)
+  const machineRunning = partRunning || stackRunning
   const [tearDown, setTearDown] = useState(true)
   const teardown = async (): Promise<string[]> => {
     const warnings: string[] = []
@@ -170,10 +171,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
         warnings.push(`The dev stack was not destroyed: ${errorText(err)}`)
       }
     }
-    if (env && repo) {
-      const warning = await destroyEnvironmentIfAny(envRepoKey(repo), info.branch, backend)
-      if (warning) warnings.push(`${warning} It is listed under Orphaned environments in Settings.`)
-    }
+    warnings.push(...(await runLegacyParts(info, backend)))
     return warnings
   }
 
@@ -188,9 +186,9 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
     let live = true
     setTeardownRead({ kind: 'loading' })
     source.connection.request('worktree.teardownPlan', { projectId: from.projectId, worktreeId: from.worktreeId, op: 'move' }).then(
-      ({ items }) => {
+      ({ items, unplanned }) => {
         if (!live) return
-        setTeardownRead({ kind: 'ok', items })
+        setTeardownRead({ kind: 'ok', items, unplanned: unplanned ?? [] })
         setTicked(new Set(defaultTeardown(items)))
       },
       (err: unknown) => live && setTeardownRead({ kind: 'error', message: errorText(err) })
@@ -201,8 +199,9 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   }, [source, serverTeardown, from.projectId, from.worktreeId, teardownTry])
   const planItems = serverTeardown && teardownRead.kind === 'ok' ? teardownRead.items : []
   const teardownUnknown = serverTeardown && teardownRead.kind !== 'ok'
-  // Only an unticked item that is running keeps Move off, or a running stack or VM the plan left out.
-  const teardownCheck = moveTeardownCheck(planItems, ticked, { stack: stackRunning, vm: vmRunning })
+  // Only an unticked item that is running keeps Move off, or a running stack the plan left out, or a
+  // participant the server could not ask.
+  const teardownCheck = moveTeardownCheck(planItems, ticked, { stack: stackRunning, unchecked: teardownRead.kind === 'ok' ? teardownRead.unplanned : [] }, nameOf)
   const tick = (id: string, on: boolean): void =>
     setTicked((prev) => {
       const next = new Set(prev)
@@ -487,6 +486,14 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                       setStackTry((n) => n + 1)
                     }}
                   >
+                    Retry
+                  </button>
+                </li>
+              )}
+              {serverTeardown && teardownRead.kind === 'ok' && teardownCheck.unchecked.length > 0 && (
+                <li className="warn move-teardown-unchecked">
+                  This server could not check what {teardownCheck.unchecked.join(' and ')} would tear down, so Move waits until it can.{' '}
+                  <button className="btn move-retry" onClick={() => setTeardownTry((n) => n + 1)}>
                     Retry
                   </button>
                 </li>

@@ -68,12 +68,12 @@ export interface ConfirmPrompt {
 
 /**
  * The teardown on the server's machine before a worktree is removed (worktreeTeardown.ts). Used
- * only with the features: `env` for the VM, `stacks` for the dev stack. Each call that reaches the
+ * only on a server without `worktreeTeardown`: the plugins' parts (their legacyTeardown), and with `stacks` the dev stack. Each call that reaches the
  * server gets `backend`, the one doing the remove, and sends through it alone.
  */
 export interface WorktreeTeardown {
-  /** The branch's Colima VM, if the environments poll lists one */
-  environment(info: GitWorktreeInfo): { profile: string } | undefined
+  /** What the plugins tear down themselves (their legacyTeardown: the Colima VM): the confirm's sentence; undefined for nothing */
+  pluginPart(info: GitWorktreeInfo): { notice: string } | undefined
   /**
    * The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when
    * that is ticked. `stillWanted` false right before the dialog would show: not shown, not confirmed.
@@ -81,8 +81,8 @@ export interface WorktreeTeardown {
   confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt, backend: WindowBackend, stillWanted?: () => boolean): Promise<{ confirmed: boolean; stackName?: string }>
   /** `stack.sh destroy`; shows its own failure (saying the `action` goes on) and never rejects */
   destroyStack(info: GitWorktreeInfo, stackName: string, backend: WindowBackend, action?: 'delete' | 'promote'): Promise<void>
-  /** Deletes the VM; shows its own failure and never rejects */
-  destroyEnvironment(info: GitWorktreeInfo, backend: WindowBackend): Promise<void>
+  /** Tears the plugins' parts down through `backend`; shows its own failures and never rejects */
+  destroyPluginPart(info: GitWorktreeInfo, backend: WindowBackend): Promise<void>
   /**
    * A fresh `git status` of the worktree on its server (`worktree.dirty`); the cached flag if it
    * can't be read. Rejects, with the text to show, when the server did not answer in time.
@@ -111,8 +111,8 @@ export function tornDownNote(stack: boolean, vm: boolean): string {
   return ''
 }
 
-/** Delete's confirmation. `vm`: a VM this window tears down itself (a server without `worktreeTeardown`). */
-function removePrompt(info: GitWorktreeInfo, loaded: boolean, dirty: boolean, vm?: string): ConfirmPrompt {
+/** Delete's confirmation. `also`: what the window's plugins tear down themselves, said (a server without `worktreeTeardown`). */
+function removePrompt(info: GitWorktreeInfo, loaded: boolean, dirty: boolean, also?: string): ConfirmPrompt {
   const name = info.branch ?? info.path
   return {
     title: 'Delete Worktree',
@@ -122,7 +122,7 @@ function removePrompt(info: GitWorktreeInfo, loaded: boolean, dirty: boolean, vm
       `The branch itself is kept. ` +
       (loaded ? 'Its running sessions will be stopped. ' : '') +
       (dirty ? 'This worktree has uncommitted changes — they will be permanently deleted.' : 'Uncommitted changes will block the deletion.') +
-      (vm ? ` Its Docker environment (Colima VM “${vm}”) and all its data will also be deleted.` : ''),
+      (also ? ` ${also}` : ''),
     confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
   }
 }
@@ -145,7 +145,7 @@ export interface V2BackendDeps {
   welcomePlugins(): readonly PluginPresence[] | undefined
   /** The window's entry is the Local server's: with `local` in the welcome, its paths are this machine's (`v2Features`) */
   localEntry: boolean
-  /** The server's events of one name on the window's connection (`docker.log`, `env.log`); returns the unsubscribe */
+  /** The server's events of one name on the window's connection (`docker.log`; the plugins' own); returns the unsubscribe */
   onEvent<E extends keyof EventPayloadsV2>(event: E, listener: (payload: EventPayloadsV2[E]) => void): () => void
   /** The id map of the projection in the store now */
   ids(): V2IdMap | null
@@ -169,7 +169,7 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
-  /** The server machine's teardown for a removed worktree; only the `env` and `stacks` features reach it */
+  /** The server machine's teardown for a removed worktree, on a server without worktreeTeardown */
   teardown: WorktreeTeardown
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void
@@ -503,10 +503,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return { path, worktreeId }
       },
       // The server's rules: a loaded worktree is IN_USE, so it is unloaded
-      // first, and loaded again when the removal doesn't go through. With the
-      // `stacks` and `env` features it also tears down the worktree's dev stack
-      // (if ticked) and its VM on the server's machine, after the unload and
-      // before git's removal (4c's order).
+      // first, and loaded again when the removal doesn't go through. On a server
+      // without `worktreeTeardown` it also tears down the worktree's dev stack
+      // (if ticked, with `stacks`) and the plugins' parts (the Colima VM) on the
+      // server's machine, after the unload and before git's removal (4c's order).
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
@@ -527,8 +527,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
         const machine = currentFeatures()
-        const env = machine.env ? deps.teardown.environment(info) : undefined
-        const prompt = removePrompt(info, loaded, dirty, env?.profile)
+        const part = deps.teardown.pluginPart(info)
+        const prompt = removePrompt(info, loaded, dirty, part?.notice)
         const { confirmed, stackName } = machine.stacks
           ? await deps.teardown.confirm(info, prompt, backend)
           : { confirmed: await deps.confirm(prompt), stackName: undefined }
@@ -536,7 +536,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const askDiscard = (): Promise<boolean> => deps.confirm(discardPrompt(name))
         // The stack and the VM can't come back: git's refusal after them would be too late to ask
         // (legacy runs worktreeIsDirty first). Asked before anything is unloaded or destroyed.
-        if ((stackName || env) && !dirty) {
+        if ((stackName || part) && !dirty) {
           let fresh: boolean
           try {
             fresh = await deps.teardown.isDirty(info, backend)
@@ -568,8 +568,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           // Stack and environment first: they need the worktree's files, and their
           // containers hold bind-mount handles into it. Neither rejects.
           if (stackName) await deps.teardown.destroyStack(info, stackName, backend)
-          if (env) await deps.teardown.destroyEnvironment(info, backend)
-          tornDown = { stack: !!stackName, vm: !!env }
+          if (part) await deps.teardown.destroyPluginPart(info, backend)
+          tornDown = { stack: !!stackName, vm: !!part }
           await removeWorktree(worktreeId, dirty)
           return
         } catch (err) {
@@ -660,8 +660,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         }
         // Old-server fallback (no worktreeTeardown): remove in a later release.
         const machine = currentFeatures()
-        const env = machine.env ? deps.teardown.environment(info) : undefined
-        const prompt = promotePrompt(plan, { vm: env?.profile, asked })
+        const part = deps.teardown.pluginPart(info)
+        const prompt = promotePrompt(plan, { ...(part ? { also: [part.notice] } : {}), asked })
         // Checked again right before the dialog shows (the stack's status is read first).
         const stillWanted = asked ? (): boolean => asked.stillAsked() : undefined
         const { confirmed, stackName } = machine.stacks
@@ -680,7 +680,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         try {
           try {
             if (stackName) await deps.teardown.destroyStack(info, stackName, backend, 'promote')
-            if (env) await deps.teardown.destroyEnvironment(info, backend)
+            if (part) await deps.teardown.destroyPluginPart(info, backend)
           } catch (err) {
             const error = `The teardown before the promote failed: ${errorText(err)}. Nothing was promoted.${tornDownNote(!!stackName, false)}`
             if (asked) await asked.answer({ outcome: 'failed', error })
@@ -695,12 +695,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             if (notes) await deps.showError('Promoted, with notes', notes)
             return { outcome: 'promoted', worktreeId: result.worktreeId }
           } catch (err) {
-            if (asked && (stackName || env) && errorCode(err) === 'NOT_FOUND' && /promote request/i.test(errorText(err))) {
+            if (asked && (stackName || part) && errorCode(err) === 'NOT_FOUND' && /promote request/i.test(errorText(err))) {
               const error = PROMOTE_REQUEST_ENDED_IN_TEARDOWN
               await deps.showError(PROMOTE_FAILED, error)
               return { outcome: 'failed', error }
             }
-            return failed(err, tornDownNote(!!stackName, !!env))
+            return failed(err, tornDownNote(!!stackName, !!part))
           }
         } finally {
           stopHolding()
@@ -860,19 +860,6 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       compose: (repoId, action) => request('docker.compose', { projectId, repoId, action }, { timeoutMs: LONG_MS }),
       onLog: (listener) => deps.onEvent('docker.log', listener)
     },
-    env: {
-      check: () => request('env.check', {}),
-      list: (repoId) => request('env.list', { projectId, repoId }),
-      up: async (loc, settings, envVars) =>
-        request('env.up', { projectId, worktreeId: worktreeAt(loc.path), settings, ...(envVars ? { envVars } : {}) }, { timeoutMs: LONG_MS }),
-      stop: (profile) => request('env.stop', { profile }, { timeoutMs: SLOW_MS }),
-      destroy: (profile) => request('env.destroy', { profile }, { timeoutMs: SLOW_MS }),
-      ps: async (loc, composeFile) => request('env.ps', { projectId, worktreeId: worktreeAt(loc.path), ...(composeFile ? { composeFile } : {}) }),
-      composeFiles: async (loc) => request('env.composeFiles', { projectId, worktreeId: worktreeAt(loc.path) }),
-      logs: async (loc, composeFile, service, tail) =>
-        request('env.logs', { projectId, worktreeId: worktreeAt(loc.path), ...(composeFile ? { composeFile } : {}), service, tail }),
-      onLog: (listener) => deps.onEvent('env.log', listener)
-    },
     stacks: {
       status: async (loc) => request('stack.status', { projectId, worktreeId: worktreeAt(loc.path) }),
       up: async (loc, starter) => {
@@ -931,9 +918,6 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       dismissPrNotice: async (path) => {
         await request('prWatch.dismiss', { projectId, worktreeId: worktreeAt(path) })
-      },
-      setEnvVars: async (repoId, branch, text) => {
-        await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
       }
     },
     pullRequests: {

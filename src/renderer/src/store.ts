@@ -3,7 +3,6 @@ import { pathBaseName } from '../../shared/pathName'
 import { OFF_VIEW, type BotEvent, type BotView } from '../../shared/bot'
 import type { BotSettings } from '../../shared/types'
 import { hostKey, sameWorktree } from '../../shared/types'
-import { deriveProfileName } from '../../shared/environments'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
@@ -13,9 +12,6 @@ import { viaServerAll } from './projectSetters.ts'
 import { nextProjectPage, type ProjectPage } from './projectPage.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
-  EnvCheckResult,
-  EnvironmentInfo,
-  EnvironmentSettings,
   GitWorktreeInfo,
   PersistedTerminal,
   ProjectFile,
@@ -208,14 +204,6 @@ export interface AppState {
   loadedWorktrees: Record<string, true>
   /** Live git worktrees per repository (keyed by repoHostKey), repoId stamped. */
   hostWorktrees: Record<string, GitWorktreeInfo[]>
-  /** Live Colima environments, keyed by profile name (not persisted). */
-  environments: Record<string, EnvironmentInfo>
-  /** In-flight environment operation per profile — drives spinners/disabled buttons. */
-  envBusy: Record<string, EnvBusyAction>
-  /** colima/docker toolchain availability; null until checked. */
-  envToolCheck: EnvCheckResult | null
-  /** Why the server's env.list cannot list the environments (its registry unreadable); null when it can. */
-  envListError: string | null
   /** Queued prompt blocks per terminal id, oldest first (persisted with the project). */
   terminalQueues: Record<string, string[]>
   /** Whether the queue panel beside the terminal is expanded (app-wide UI state). */
@@ -261,7 +249,6 @@ export interface AppState {
   /** A plugin's settings for a branch (plugins E3), as setPluginRepoSettings */
   setPluginBranchSettings: (pluginId: string, repoId: string, branch: string, values: PluginSettingValues, label?: string) => void
   setBranchNote: (repoId: string, branch: string, text: string) => void
-  setBranchEnvVars: (repoId: string, branch: string, text: string) => void
   setBranchTag: (repoId: string, branch: string, tagId: string | null) => void
   setWorktreeTags: (tags: WorktreeTag[]) => void
   setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
@@ -282,11 +269,6 @@ export interface AppState {
   setWorktreeOrder: (keys: string[]) => void
   /** undefined clears the project's mode, so the app-wide Claude mode applies */
   setClaudePermissionMode: (mode: string | undefined) => void
-  setEnvironmentSettings: (repoId: string, patch: Partial<EnvironmentSettings>) => void
-  setEnvironments: (infos: EnvironmentInfo[]) => void
-  setEnvBusy: (profile: string, action: EnvBusyAction | null) => void
-  setEnvToolCheck: (result: EnvCheckResult) => void
-  setEnvListError: (message: string | null) => void
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
@@ -301,8 +283,6 @@ export interface AppState {
   enqueueTerminalText: (id: string, text: string) => void
   removeQueuedText: (id: string, index: number) => void
 }
-
-export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
 /** The setters that edit the project's sessions, branch data and worktree order on its server. */
 const SESSION_SETTERS = [
@@ -322,7 +302,7 @@ const SESSION_SETTERS = [
 ] as const
 export type SessionSetter = (typeof SESSION_SETTERS)[number]
 
-/** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Env and Docker panels). */
+/** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Docker panel, the plugins' settings). */
 const SETTINGS_SETTERS = [
   'setClaudePermissionMode',
   'setAudioAlerts',
@@ -342,9 +322,7 @@ const SETTINGS_SETTERS = [
   'setPluginSetting',
   'setProjectName',
   'setLinkedDirs',
-  'setEnvironmentSettings',
   'toggleDockerFavorite',
-  'setBranchEnvVars',
   'setPluginRepoSettings',
   'setPluginBranchSettings'
 ] as const
@@ -378,10 +356,6 @@ export const useAppStore = create<AppState>((set) => ({
   activeTerminal: {},
   loadedWorktrees: {},
   hostWorktrees: {},
-  environments: {},
-  envBusy: {},
-  envToolCheck: null,
-  envListError: null,
   terminalQueues: {},
   queuePanelOpen: false,
   globalQueuePanelOpen: false,
@@ -426,25 +400,6 @@ export const useAppStore = create<AppState>((set) => ({
       activeTerminal: { ...state.activeTerminal, [worktreeId]: terminalId }
     })),
 
-  setEnvironments: (infos) =>
-    set((state) => {
-      const next: Record<string, EnvironmentInfo> = {}
-      for (const info of infos) next[info.profile] = info
-      if (JSON.stringify(state.environments) === JSON.stringify(next)) return state
-      return { environments: next }
-    }),
-
-  setEnvBusy: (profile, action) =>
-    set((state) => {
-      const envBusy = { ...state.envBusy }
-      if (action) envBusy[profile] = action
-      else delete envBusy[profile]
-      return { envBusy }
-    }),
-
-  setEnvToolCheck: (result) => set({ envToolCheck: result }),
-  setEnvListError: (message) => set((state) => (state.envListError === message ? state : { envListError: message })),
-
   setQueuePanelOpen: (open) => set({ queuePanelOpen: open }),
 
   setGlobalQueuePanelOpen: (open) => set({ globalQueuePanelOpen: open }),
@@ -472,16 +427,6 @@ export const useAppStore = create<AppState>((set) => ({
   // The project setters call the server window's (projectSetters.ts), each by its own name.
   ...viaServerAll([...SESSION_SETTERS, ...SETTINGS_SETTERS])
 }))
-
-/** The live environment for a branch's worktree, if one is known. */
-export function environmentFor(
-  environments: Record<string, EnvironmentInfo>,
-  repoPath: string,
-  branch: string | undefined
-): EnvironmentInfo | undefined {
-  if (!branch) return undefined
-  return environments[deriveProfileName(repoPath, branch)]
-}
 
 /** Each repository's rows, in repository order. */
 export function mergedWorktrees(

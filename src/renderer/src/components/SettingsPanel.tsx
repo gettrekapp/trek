@@ -11,7 +11,6 @@ import { GeneralTab } from './settings/GeneralTab'
 import { AgentsTab } from './settings/AgentsTab'
 import { SessionsTab } from './settings/SessionsTab'
 import { WorktreesTab } from './settings/WorktreesTab'
-import { EnvironmentsTab } from './settings/EnvironmentsTab'
 import { RepoSelector } from './settings/RepoSelector'
 import { PluginRepoSettings, usePluginSettingsTabs } from '../plugins/WorktreeSlots'
 
@@ -23,8 +22,8 @@ const tabDomId = (id: SettingsTabId): string => `settings-tab-${id}`
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // The project's settings are edited on the server: text is committed on blur (each commit is a
-  // request, and leaving a tab blurs), the environments show where the window's server has them
-  // (its VMs are the server's), the plugins where it has them (PluginsSettings), and a conflict's
+  // request, and leaving a tab blurs), a plugin's repository settings show as its own tab where it is
+  // on (WorktreeSlots), the plugins where it has them (PluginsSettings), and a conflict's
   // Reload remounts the tab on screen.
   const features = useFeatures()
   const sections = settingsSections(features)
@@ -34,7 +33,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // Default applied outside the selector — `?? []` inside it would return a
   // fresh array every snapshot and loop React's store re-render (error #185).
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
-  // Which repository the per-repository settings edit, on Worktrees and Environments alike.
+  // Which repository the per-repository settings edit, on Worktrees and the plugins' tabs alike.
   const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null)
   const settingsRepo = repositories.find((r) => r.id === settingsRepoId) ?? repositories[0]
   const repoSelector = <RepoSelector repositories={repositories} repo={settingsRepo} onSelect={setSettingsRepoId} />
@@ -48,7 +47,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const [pluginPick, setPluginPick] = useState<{ backend: WindowBackend; selection: PluginSelection } | null>(null)
   const pluginSelection = pluginPick?.backend === backend ? pluginPick.selection : null
   const tabs = visibleSettingsTabs({
-    environments: sections.environments !== 'hidden',
     plugins: hasPluginSettings(pluginEntries),
     pluginTabs
   })
@@ -98,7 +96,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           {active === 'agents' && <AgentsTab projectOnly={sections.agents === 'project'} />}
           {active === 'sessions' && <SessionsTab />}
           {active === 'worktrees' && <WorktreesTab repo={settingsRepo} repoSelector={repoSelector} />}
-          {active === 'environments' && <EnvironmentsTab repo={settingsRepo} repoSelector={repoSelector} />}
           {active === 'plugins' && <PluginsSettings chosen={pluginSelection} onChoose={(selection) => setPluginPick({ backend, selection })} />}
           {/* A plugin's repository settings (plugins E3): core's heading and repository picker, then its own part. */}
           {pluginTab && (

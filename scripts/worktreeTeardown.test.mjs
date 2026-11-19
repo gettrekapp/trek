@@ -8,13 +8,13 @@ import { createWorktreeTeardown, DIRTY_CHECK_TIMED_OUT } from '../src/renderer/s
 const info = { path: '/r-feat', repoId: 'r1', isMain: false, branch: 'feat', dirty: true }
 const coded = (code, message) => Object.assign(new Error(message), { code })
 
-function setup({ envWarning, checkbox = { confirmed: true, checked: true }, items = (all) => ({ confirmed: true, teardown: all.map((i) => i.id) }) } = {}) {
+function setup({ partWarnings = [], checkbox = { confirmed: true, checked: true }, items = (all) => ({ confirmed: true, teardown: all.map((i) => i.id) }) } = {}) {
   const ui = []
   const teardown = createWorktreeTeardown({
-    environment: (i) => (i.branch === 'feat' ? { profile: 'twb-feat-abc123' } : undefined),
-    destroyEnvironment: async (owner, i) => {
-      ui.push(['destroy env', owner.name, i.path])
-      return envWarning
+    pluginPart: (i) => (i.branch === 'feat' ? { notice: 'Its Docker environment (Colima VM “twb-feat-abc123”) and all its data will also be deleted.' } : undefined),
+    destroyPluginPart: async (owner, i) => {
+      ui.push(['destroy part', owner.name, i.path])
+      return partWarnings
     },
     showError: async (title, message) => void ui.push(['error', title, message]),
     confirm: async (prompt) => {
@@ -88,13 +88,14 @@ test('destroyStack: a promote says the promote goes on, a delete that the worktr
   assert.match(remove.ui[0][2], /The worktree is deleted anyway/)
 })
 
-test('destroyEnvironment: through the backend doing the remove; a warning is shown, pointing at the orphan list', async () => {
+test("destroyPluginPart: through the backend doing the remove; each plugin's warning is shown, as it says it", async () => {
   const quiet = setup()
-  await quiet.teardown.destroyEnvironment(info, backendWith())
-  assert.deepEqual(quiet.ui, [['destroy env', 'owner', '/r-feat']])
-  const warned = setup({ envWarning: 'Failed to remove environment VM "twb-feat-abc123": boom' })
-  await warned.teardown.destroyEnvironment(info, backendWith())
-  assert.deepEqual(warned.ui.at(-1), ['error', 'Environment cleanup failed', 'Failed to remove environment VM "twb-feat-abc123": boom\n\nThe VM is listed under Orphaned environments in Settings.'])
+  await quiet.teardown.destroyPluginPart(info, backendWith())
+  assert.deepEqual(quiet.ui, [['destroy part', 'owner', '/r-feat']])
+  const warning = 'Failed to remove environment VM "twb-feat-abc123": boom. It is listed under Orphaned environments in Settings.'
+  const warned = setup({ partWarnings: [warning] })
+  await warned.teardown.destroyPluginPart(info, backendWith())
+  assert.deepEqual(warned.ui.at(-1), ['error', 'Cleanup failed', warning])
 })
 
 test("isDirty: the server's answer; null or a failure falls back to the cached flag; a timeout stops the delete", async () => {

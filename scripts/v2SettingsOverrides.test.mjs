@@ -59,9 +59,7 @@ const SETTINGS_SETTERS = [
   'setPluginSetting',
   'setProjectName',
   'setLinkedDirs',
-  'setEnvironmentSettings',
   'toggleDockerFavorite',
-  'setBranchEnvVars',
   'setPluginRepoSettings',
   'setPluginBranchSettings'
 ]
@@ -174,23 +172,6 @@ test('a pending edit shows in the overlaid project: settings, name and linked di
   assert.equal(shown.name, 'Renamed')
   assert.equal('linkedDirs' in shown.repositories[0], false)
   assert.equal(mirror.settings.audioAlerts, false, 'the mirror itself is untouched')
-})
-
-test("a Local window's environment settings: the repository's whole setting through repo.update, built on what is shown", () => {
-  const { o, calls, writer, mirror } = setup()
-  o.setEnvironmentSettings('r1', { enabled: true })
-  // The second edit builds on the first, still pending: the overlay is what the panel shows.
-  o.setEnvironmentSettings('r1', { cpu: 2 })
-  o.setEnvironmentSettings('r2', { memory: 16 })
-  assert.deepEqual(calls, [
-    ['setEnvironments', 'r1', { enabled: true }, null],
-    ['setEnvironments', 'r2', { enabled: true, cpu: 4, memory: 16 }, { enabled: true, cpu: 4 }]
-  ])
-  // r1's second edit waits for the first (one request per field) and shows meanwhile.
-  assert.deepEqual(writer.overlay(mirror).repositories[0].environments, { enabled: true, cpu: 2 })
-  // An unknown repository sends nothing.
-  o.setEnvironmentSettings('nope', { enabled: true })
-  assert.equal(calls.length, 2)
 })
 
 test('a Docker favourite toggles in the dockerFavorites setting, sorted, and the last one off removes the key', () => {
@@ -340,52 +321,6 @@ test('a toggle whose rebase leaves the newer list as it is sends nothing more', 
   sends[0].conflict((m) => (m.settings.dockerFavorites = ['api', 'db']))
   await tick()
   assert.deepEqual([sends.length, asked], [1, []])
-})
-
-test("an environment sub-field set meets a CONFLICT: it goes over the other client's other sub-fields, silently", async () => {
-  const { o, sends, asked } = pendingSetup()
-  o.setEnvironmentSettings('r2', { memory: 16 })
-  sends[0].conflict((m) => (m.repositories[1].environments = { enabled: true, cpu: 8, disk: 100 }))
-  await tick()
-  assert.deepEqual(asked, [])
-  assert.deepEqual(sends[1].args, ['r2', { enabled: true, cpu: 8, disk: 100, memory: 16 }, { enabled: true, cpu: 8, disk: 100 }])
-})
-
-test('an environment sub-field the other client changed too asks; Keep Mine keeps its other sub-fields', async () => {
-  const { o, sends, asked, choices } = pendingSetup()
-  choices.push('keep')
-  o.setEnvironmentSettings('r2', { cpu: 2 })
-  sends[0].conflict((m) => (m.repositories[1].environments = { enabled: true, cpu: 8, disk: 100 }))
-  await tick()
-  await tick()
-  assert.deepEqual(asked, ['Docker environments'])
-  assert.deepEqual(sends[1].args, ['r2', { enabled: true, cpu: 2, disk: 100 }, { enabled: true, cpu: 8, disk: 100 }])
-})
-
-test("a branch's environment variables: branch.setEnv with expected, and shown pending in the overlay", async () => {
-  const { o, sends, writer, mirror } = pendingSetup()
-  o.setBranchEnvVars('r1', 'feat', 'A=1')
-  assert.deepEqual(sends[0].args, ['r1', 'feat', 'A=1', null])
-  // What the panel's Start reads before the server has answered.
-  assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, 'A=1')
-  assert.equal(mirror.repositories[0].branchData.feat, undefined)
-  // An edit made meanwhile goes next, expecting the first.
-  o.setBranchEnvVars('r1', 'feat', '')
-  assert.equal('feat' in writer.overlay(mirror).repositories[0].branchData, false, 'cleared, and the empty entry goes')
-  sends[0].ok()
-  await tick()
-  assert.deepEqual(sends[1].args, ['r1', 'feat', null, 'A=1'])
-})
-
-test("a branch's environment variables changed elsewhere: the CONFLICT asks Reload or Keep Mine", async () => {
-  const { o, sends, asked, choices } = pendingSetup()
-  choices.push('keep')
-  o.setBranchEnvVars('r1', 'feat', 'A=1')
-  sends[0].conflict((m) => (m.repositories[0].branchData.feat = { env: 'B=2' }))
-  await tick()
-  await tick()
-  assert.deepEqual(asked, ['Environment variables of feat'])
-  assert.deepEqual(sends[1].args, ['r1', 'feat', 'A=1', 'B=2'])
 })
 
 test("a plugin's repository settings (plugins E3): repo.setPluginSettings with the plugin's values as expected, shown pending; an unknown repository sends nothing", () => {
@@ -570,4 +505,15 @@ test('a pending env change of a repository shows its old environments as the ser
   mirror.repositories[1].environments = { enabled: true, cpu: 4 }
   o.setPluginRepoSettings('other', 'r2', { on: false })
   assert.equal('environments' in writer.overlay(mirror).repositories[1], false, 'the pending env clear still shows')
+})
+
+test("on a server without the env plugin, a branch's .env changed elsewhere: the CONFLICT asks Reload or Keep Mine", async () => {
+  const { o, sends, asked, choices } = pendingSetup({ listsPlugin: () => false })
+  choices.push('keep')
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
+  sends[0].conflict((m) => (m.repositories[0].branchData.feat = { env: 'B=2' }))
+  await tick()
+  await tick()
+  assert.deepEqual(asked, ['Environment variables of feat'])
+  assert.deepEqual(sends[1].args, ['r1', 'feat', 'A=1', 'B=2'])
 })

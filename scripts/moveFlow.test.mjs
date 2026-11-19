@@ -380,18 +380,21 @@ test('worktreeTeardown with some items ticked: only those are sent, and the step
   assert.deepEqual(steps.filter(([s]) => s === 'teardown').map(([, st]) => st), ['active', 'done'])
 })
 
-test('moveTeardownCheck: only an unticked item that is running blocks; a running stack or VM the plan left out blocks too', () => {
+test('moveTeardownCheck: only an unticked item that is running blocks; a running stack the plan left out, or a participant the server could not ask, blocks too', () => {
   const stack = { id: 'stack:destroy', label: 'Tear down the dev stack', checked: true, running: true }
   const vm = { id: 'env:destroy', label: 'Delete the VM', checked: true }
-  const none = { stack: false, vm: false }
-  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id, vm.id]), none), { blocks: false, blocking: [], unplanned: [] })
-  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id]), none), { blocks: false, blocking: [], unplanned: [] }, 'the stopped VM unticked stays behind')
-  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([vm.id]), none), { blocks: true, blocking: [stack.id], unplanned: [] }, 'the running stack unticked')
-  assert.deepEqual(moveTeardownCheck([], new Set(), none), { blocks: false, blocking: [], unplanned: [] })
-  // The plan left a participant out (its plan failed) though this window sees it running.
-  assert.deepEqual(moveTeardownCheck([vm], new Set([vm.id]), { stack: true, vm: false }), { blocks: true, blocking: [], unplanned: ['its dev stack'] })
-  assert.deepEqual(moveTeardownCheck([stack], new Set([stack.id]), { stack: true, vm: true }), { blocks: true, blocking: [], unplanned: ['its VM'] })
-  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id, vm.id]), { stack: true, vm: true }), { blocks: false, blocking: [], unplanned: [] })
+  const none = { stack: false }
+  const ok = { blocks: false, blocking: [], unplanned: [], unchecked: [] }
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id, vm.id]), none), ok)
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id]), none), ok, 'the stopped VM unticked stays behind')
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([vm.id]), none), { ...ok, blocks: true, blocking: [stack.id] }, 'the running stack unticked')
+  assert.deepEqual(moveTeardownCheck([], new Set(), none), ok)
+  // The plan left the stack out (its plan failed) though this window sees it running.
+  assert.deepEqual(moveTeardownCheck([vm], new Set([vm.id]), { stack: true }), { ...ok, blocks: true, unplanned: ['its dev stack'] })
+  // The server says it could not ask a participant (teardownPlan's `unplanned`, plugins E3): named, and Move waits.
+  const names = { env: 'Colima environments' }
+  assert.deepEqual(moveTeardownCheck([stack], new Set([stack.id]), { stack: true, unchecked: ['env'] }, (id) => names[id] ?? id), { ...ok, blocks: true, unchecked: ['Colima environments'] })
+  assert.deepEqual(moveTeardownCheck([], new Set(), { stack: true, unchecked: ['stack'] }), { ...ok, blocks: true, unchecked: ['its dev stack'] }, 'the stack once, as the server says it')
 })
 
 test('worktreeTeardown with nothing chosen: the finish sends no teardown; unticked says so', async () => {

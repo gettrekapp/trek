@@ -3,13 +3,12 @@
 // backend, the store's project setters and the projected slice always change
 // together: a window that goes back to the start screen never keeps this
 // project's setters on the idle backend, nor a projected project.
-import { environmentFor, repoOfInfo, useAppStore } from '../store'
+import { useAppStore } from '../store'
 import { setProjectSetters } from '../projectSetters'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repoRemoval'
 import { createWorktreeTeardown } from '../worktreeTeardown'
-import { destroyEnvironmentIfAny } from '../environmentActions'
-import { envRepoKey } from '../../../shared/environments'
+import { legacyParts, runLegacyParts } from '../plugins/legacyTeardown'
 import { windowEventSubscriber } from './windowEvents'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { v2SetterOverrides } from './setterOverrides'
@@ -110,17 +109,15 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // An edit the link dropped under says so (Notes for 3c-3 #13); one dialog at a time.
   const reportEdit = editReporter(showError, report)
 
-  // The delete's teardown: the store's environments and the dialogs (none once the window left);
-  // each step's server calls go through the backend doing the remove.
+  // The delete's teardown on a server without worktreeTeardown: the plugins' parts (their
+  // legacyTeardown) and the dialogs (none once the window left); each step's server calls go
+  // through the backend doing the remove.
   const teardown = createWorktreeTeardown({
-    environment: (info) => {
-      const state = useAppStore.getState()
-      return state.project ? environmentFor(state.environments, envRepoKey(repoOfInfo(state.project, info)), info.branch) : undefined
+    pluginPart: (info) => {
+      const parts = left ? [] : legacyParts(info)
+      return parts.length > 0 ? { notice: parts.map((p) => p.notice).join(' ') } : undefined
     },
-    destroyEnvironment: async (owner, info) => {
-      const project = useAppStore.getState().project
-      return project ? destroyEnvironmentIfAny(envRepoKey(repoOfInfo(project, info)), info.branch, owner) : undefined
-    },
+    destroyPluginPart: (owner, info) => runLegacyParts(info, owner),
     showError,
     confirm: (prompt) => (left ? Promise.resolve(false) : window.api.confirm(prompt)),
     confirmWithCheckbox: (options) =>

@@ -3,7 +3,6 @@
 
 export type FeatureName =
   | 'docker'
-  | 'env'
   | 'stacks'
   | 'bot'
   | 'skills'
@@ -25,7 +24,6 @@ export type BackendFeatures = Readonly<Record<FeatureName, boolean>>
 
 export const FEATURE_NAMES: readonly FeatureName[] = [
   'docker',
-  'env',
   'stacks',
   'bot',
   'skills',
@@ -72,14 +70,14 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - The Changes tab's sources and line comments (5c-2) need `review`: an older server's
  *   `worktree.changes` knows only the branch against its base.
  * - The Global panel needs `mcp`.
- * - Docker, environments and stacks run on the server's machine (5a): each
- *   needs its capability, on any server.
+ * - Docker and stacks run on the server's machine (5a): each needs its
+ *   capability, on any server. The Colima environments are the `env` plugin's
+ *   since plugins E3 (its presence, not a feature).
  * - Reveal and Open in VS Code open things on this machine at the project's
  *   paths: only the Local server's paths are on this disk (`MACHINE_FEATURES`).
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: true,
-  env: true,
   stacks: true,
   bot: false,
   skills: true,
@@ -101,14 +99,13 @@ export const V2_FEATURES: BackendFeatures = {
 /**
  * The welcome capability a v2 feature needs, if any. Global sessions drive the
  * worktree sessions through the server's MCP tools, so without `mcp` they
- * could not do their job. Docker, the environments and the stacks are the
+ * could not do their job. Docker and the stacks are the
  * server's own methods (5a), and the skills (5b): a server older
  * than them has none of them.
  */
 const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   globalPanel: 'mcp',
   docker: 'docker',
-  env: 'env',
   stacks: 'stacks',
   skills: 'skills',
   prWatch: 'prWatch',
@@ -192,8 +189,7 @@ export const SETTINGS_SECTIONS = [
   'sessionPrompt',
   'globalPrompt',
   'globalButtons',
-  'sessionTypes',
-  'environments'
+  'sessionTypes'
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
@@ -209,13 +205,11 @@ export type SectionMode = 'edit' | 'project' | 'hidden'
 
 /**
  * Which Settings sections a window shows. A server window edits the project's
- * settings on the server; the Docker environments show where it has `env` (a
- * server that runs them, on its own machine).
+ * settings on the server.
  */
 export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>
   for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
-  if (!features.env) out.environments = 'hidden'
   out.agents = 'project'
   return out
 }

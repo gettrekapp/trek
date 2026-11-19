@@ -22,12 +22,6 @@ import type {
   ContainerAction,
   ContainerInfo,
   DockerLogEvent,
-  EnvCheckResult,
-  EnvLogEvent,
-  EnvService,
-  EnvUpResult,
-  EnvironmentInfo,
-  EnvironmentSettings,
   GitWorktreeInfo,
   Repository,
   SessionType,
@@ -158,19 +152,6 @@ export interface WindowBackend {
     /** The output of this window's compose runs; returns the unsubscribe */
     onLog(listener: (event: DockerLogEvent) => void): () => void
   }
-  /** The worktrees' Colima environments on the server's machine (feature `env`), by worktree path */
-  readonly env: {
-    check(): Promise<EnvCheckResult>
-    list(repoId: string): Promise<EnvironmentInfo[]>
-    up(loc: WorktreeLocator, settings: EnvironmentSettings, envVars: Record<string, string> | undefined): Promise<EnvUpResult>
-    stop(profile: string): Promise<number>
-    destroy(profile: string): Promise<number>
-    ps(loc: WorktreeLocator, composeFile: string | undefined): Promise<EnvService[]>
-    composeFiles(loc: WorktreeLocator): Promise<string[]>
-    logs(loc: WorktreeLocator, composeFile: string | undefined, service: string, tail: number): Promise<string>
-    /** The output and steps of this window's up, stop and destroy runs; returns the unsubscribe */
-    onLog(listener: (event: EnvLogEvent) => void): () => void
-  }
   /** The worktrees' dev stacks on the server's machine (feature `stacks`), by worktree path */
   readonly stacks: {
     status(loc: WorktreeLocator): Promise<StackStatus>
@@ -213,7 +194,6 @@ export interface WindowBackend {
     setPrWatch(repoId: string, branch: string, watch: boolean): Promise<void>
     /** Clears the pull request notice of the worktree at `path` */
     dismissPrNotice(path: string): Promise<void>
-    setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
   readonly pullRequests: {
     /** A link or number through the server's PR providers, with its head branch (`features.prResolve`) */
@@ -333,17 +313,6 @@ export const idleBackend: WindowBackend = {
   },
   git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
-  env: {
-    check: noProject,
-    list: noProject,
-    up: noProject,
-    stop: noProject,
-    destroy: noProject,
-    ps: noProject,
-    composeFiles: noProject,
-    logs: noProject,
-    onLog: () => () => {}
-  },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
   skills: { list: noProject },
   review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
@@ -354,8 +323,7 @@ export const idleBackend: WindowBackend = {
     setTicket: noProject,
     setPullRequest: noProject,
     setPrWatch: noProject,
-    dismissPrNotice: noProject,
-    setEnvVars: noProject
+    dismissPrNotice: noProject
   },
   pullRequests: { resolve: noProject },
   automations: { save: noProject, remove: noProject, runNow: noProject, resolveMissed: noProject },

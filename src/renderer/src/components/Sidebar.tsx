@@ -3,7 +3,6 @@ import {
   branchCustomTags,
   branchTag,
   dormantSessions,
-  environmentFor,
   GLOBAL_WORKTREE_ID,
   instanceForInfo,
   repoOfInfo,
@@ -41,7 +40,6 @@ import {
   type SidebarView
 } from '../sidebarRow'
 import { WorktreeHoverCard, type HoverCardProps } from './WorktreeHoverCard'
-import { envRepoKey } from '../../../shared/environments'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, Repository, TerminalStatus } from '../../../shared/types'
 
@@ -146,8 +144,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const terminalOrder = useAppStore((s) => s.terminalOrder)
   const decisions = useAppStore((s) => s.decisions)
   const loadedWorktrees = useAppStore((s) => s.loadedWorktrees)
-  const environments = useAppStore((s) => s.environments)
-  const envBusy = useAppStore((s) => s.envBusy)
   const features = useFeatures()
   // The plugins' badges and hover rows (plugins E3): a row's second line and its card make room for them.
   const badgeSlots = useSlotEntries('sidebarBadge').length > 0
@@ -324,8 +320,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       : undefined
     // A watched PR's report (5c-1) flags the row until it is dismissed.
     const prNotice = repo.worktreePrNotices?.[info.path]
-    const env = features.env ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
-    const envIsBusy = env ? !!envBusy[env.profile] : false
     // A project page is open over the detail: its row is the one highlighted.
     const isSelected =
       !projectPage &&
@@ -344,14 +338,14 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const unseen = dot === 'done' || dot === 'attention' || reason?.kind === 'decision' || reason?.kind === 'notice'
     return {
       repo, instance, order, loaded, rowDecisions, dormant, dot, name, prefix, git, tag, rowCustomTags,
-      ticket, ticketInfo, pullRequest, prNotice, env, envIsBusy, isSelected, missing, reason, unseen
+      ticket, ticketInfo, pullRequest, prNotice, isSelected, missing, reason, unseen
     }
   }
 
   const renderRow = (info: GitWorktreeInfo): React.JSX.Element => {
     const {
       instance, order, loaded, dormant, dot, name, git, tag, rowCustomTags, ticket, ticketInfo,
-      pullRequest, env, envIsBusy, isSelected, missing, reason, unseen
+      pullRequest, isSelected, missing, reason, unseen
     } = rowModel(info)
     const key = worktreeKey(info)
     const dropClass =
@@ -451,7 +445,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </div>
           ) : (
             !view.compact &&
-            (tag || rowCustomTags.length > 0 || ticket || pullRequest || env || badgeSlots) && (
+            (tag || rowCustomTags.length > 0 || ticket || pullRequest || badgeSlots) && (
               <div className="wt-meta">
                 {tag && (
                   <span className="mini-chip" style={{ color: tag.color }}>
@@ -478,18 +472,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                   </span>
                 )}
                 {pullRequest && <span className="mini-chip pr">{pullRequestLabel(pullRequest)}</span>}
-                {env && (
-                  <span
-                    className={`mini-chip env ${envIsBusy ? 'busy' : env.vmState === 'running' ? 'running' : ''}`}
-                    title={
-                      envIsBusy
-                        ? 'Environment operation in progress'
-                        : `Environment ${env.vmState}${env.address ? ` — ${env.address}` : ''}`
-                    }
-                  >
-                    env
-                  </span>
-                )}
                 {badgeSlots && <PluginWorktreeSlot name="sidebarBadge" worktree={asPluginWorktree(info)} />}
               </div>
             )
@@ -527,7 +509,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           }
         : undefined,
       git: gitWords(info),
-      environment: m.env ? `${m.envIsBusy ? 'busy' : m.env.vmState}${m.env.address ? ` — ${m.env.address}` : ''}` : undefined,
       worktree: asPluginWorktree(info),
       pluginRows: hoverSlots,
       questions: m.rowDecisions.map((d) => d.question).filter((q): q is string => !!q),

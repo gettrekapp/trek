@@ -3,18 +3,15 @@
 // window's settings writer. Values are turned into the server's form here: an
 // empty list, a blank prompt or undefined is sent as null, which removes the key.
 //
-// A Local window (4c) also edits a repository's Docker environments setting,
-// the Docker favourites and a branch's environment variables. The first two
-// build on a value: the overlaid project (the mirror's, with the pending
-// edits), which is what the window shows, so a second edit made while the
-// first is in flight keeps it. Both are operations, so a CONFLICT rebases
-// them on the newer value (`rebase`): a favourite toggled is toggled again
-// there, silently; an environment sub-field set is set again there, and only
-// asks when the other client changed that same sub-field.
+// A window also edits the Docker favourites, which build on a value: the overlaid project (the
+// mirror's, with the pending edits), which is what the window shows, so a second toggle made while
+// the first is in flight keeps it. It is an operation, so a CONFLICT rebases it on the newer value
+// (`rebase`): a favourite toggled is toggled again there, silently.
 //
-// The environment variables are a settings field too (`branch.setEnv` with
-// `expected`): the panel's Start reads the pending value from the overlay,
-// and a stale draft asks Reload or Keep Mine.
+// The plugins' repository and branch settings (plugins E3) are fields too, written whole by the
+// plugin from what the window shows; a CONFLICT re-applies the fields it changed over the other
+// client's, and asks only when that client changed the same field. A server before plugins E2 keeps
+// the env plugin's as core's old `environments` and `env` (legacyEnvFields.ts): they go there.
 //
 // Tags: only the new list is sent. The server clears a deleted workflow or
 // custom tag from every branch in the same change (project.updateSettings).
@@ -330,19 +327,12 @@ export function v2SettingsOverrides(
     setPluginSetting: (key, value, label) => write(key, label ?? key, textOrNull(value)),
     setProjectName: (value) => writer.write(name, value),
     setLinkedDirs: (repoId, dirs) => writer.write(linkedDirsField(repoId, requests), listOrNull(dirs)),
-    // As the store's setter: `enabled` defaults to off, and the patch goes over the rest.
-    setEnvironmentSettings: (repoId, patch) => {
-      const repo = overlaid()?.repositories.find((r) => r.id === repoId)
-      if (!repo) return
-      writer.write(environmentsField(repoId, requests), { enabled: false, ...repo.environments, ...patch })
-    },
     toggleDockerFavorite: (containerName) => {
       const favorites = new Set(overlaid()?.settings.dockerFavorites ?? [])
       if (favorites.has(containerName)) favorites.delete(containerName)
       else favorites.add(containerName)
       writer.write(favoritesField, listOrNull([...favorites].sort()))
     },
-    setBranchEnvVars: (repoId, branch, text) => writer.write(branchEnvField(repoId, branch, requests), text || null),
     // A plugin's settings (plugins E3): `values` replaces the plugin's ({} clears them), named in a
     // dialog by `label` (its name). A server before plugins E2 keeps the env plugin's as core's old
     // fields (legacyEnvFields.ts): they go there, compare-and-set as ever. So does a branch's .env
