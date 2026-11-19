@@ -27,11 +27,12 @@ import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
-import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
+import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree, teardownFailed, teardownNote, teardownRemove } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
-import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
+import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../apps/mobile/src/state/teardown.ts'
+import { defaultTeardown, teardownSentence } from '../src/shared/teardown.ts'
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
@@ -1093,6 +1094,69 @@ test('teardown: a promote asks and answers as before, whatever the rejection or 
   assert.deepEqual(await tdCheck(both, { 'stack.status': gone, 'env.list': [] }, undefined, missing), { why: null, asked: ['stack.status', 'env.list'] })
   assert.deepEqual(await tdCheck(both, { 'stack.status': new ClientError('PATH_DENIED', 'no'), 'env.list': [] }, {}), { why: null, asked: ['stack.status', 'env.list'] })
   assert.equal((await tdCheck(both, { 'stack.status': { containers: 1, upRunning: false }, 'env.list': [] }, undefined, missing)).why, 'its dev stack is running')
+})
+
+test('teardown (plugins E1): a server that tears down itself gives its plan, and the question names what goes; an older one gives null and is not asked', async () => {
+  const items = [{ id: 'stack:destroy', label: 'Tear down the dev stack', checked: true }, { id: 'env:cache', label: 'Drop the cache', checked: false }]
+  const { asked, server } = teardownServer(['worktreeTeardown'], { 'worktree.teardownPlan': { items } })
+  assert.deepEqual(await teardownPlan(server, 'p1', 'w1', 'remove'), items)
+  assert.deepEqual(asked, ['worktree.teardownPlan'])
+  const old = teardownServer(['stacks', 'env'], {})
+  assert.equal(await teardownPlan(old.server, 'p1', 'w1', 'remove'), null)
+  assert.deepEqual(old.asked, [])
+  assert.equal(teardownSentence(items), ' Also: Tear down the dev stack.')
+  assert.equal(teardownSentence([]), '')
+  assert.deepEqual(defaultTeardown(items), ['stack:destroy'])
+  assert.deepEqual(removeQuestion('feat', false, 'remove', teardownSentence(items)), { title: 'Remove feat?', message: "The worktree's folder is deleted. Its branch stays. Also: Tear down the dev stack." })
+  assert.deepEqual(removeQuestion('feat', true, 'discard', ' Also: X.'), { title: 'feat has uncommitted changes.', message: 'Removing it discards them. This cannot be undone. Its running sessions will be stopped. Also: X.' })
+})
+
+test('teardown (plugins E1): the forced retry sends the same ids, unless the refusal came after they ran', async () => {
+  const sent = []
+  const refuse = (details) => Object.assign(new Error('has changes'), { code: 'GIT_ERROR', details })
+  let next = [refuse({ reason: 'dirty' })]
+  const send = async (force, ids) => {
+    sent.push({ force, ids })
+    const err = next.shift()
+    if (err) throw err
+  }
+  const before = teardownRemove(['stack:destroy'], send)
+  await assert.rejects(before(false))
+  await before(true)
+  assert.deepEqual(sent, [{ force: false, ids: ['stack:destroy'] }, { force: true, ids: ['stack:destroy'] }])
+  sent.length = 0
+  next = [refuse({ reason: 'dirty', tornDown: ['Tear down the dev stack'] })]
+  const after = teardownRemove(['stack:destroy'], send)
+  await assert.rejects(after(false))
+  await after(true)
+  assert.deepEqual(sent, [{ force: false, ids: ['stack:destroy'] }, { force: true, ids: [] }])
+  // Through the remove flow: the discard question, then the retry without the ids.
+  sent.length = 0
+  next = [refuse({ reason: 'dirty', tornDown: ['Tear down the dev stack'] })]
+  const flow = await removeWorktree({
+    worktree: { id: 'w1', name: 'feat' },
+    loaded: () => false,
+    unload: async () => {},
+    load: async () => {},
+    remove: teardownRemove(['stack:destroy'], send),
+    confirmRemove: async () => true,
+    confirmDiscard: async () => true,
+    refusedAsDirty
+  })
+  assert.deepEqual(flow, { kind: 'removed' })
+  assert.deepEqual(sent, [{ force: false, ids: ['stack:destroy'] }, { force: true, ids: [] }])
+})
+
+test("teardown (plugins E1): a failure after the teardown says what was torn down; the teardown's own failure is told apart", () => {
+  const after = Object.assign(new Error('git failed'), { code: 'GIT_ERROR', details: { tornDown: ['Tear down the dev stack', 'Delete the VM'] } })
+  assert.equal(teardownNote(after), ' The teardown had already run and is not undone: Tear down the dev stack; Delete the VM.')
+  assert.equal(teardownFailed(after), false)
+  const own = Object.assign(new Error('stack.sh failed (already done: Delete the VM)'), { code: 'TOOL_ERROR', details: { reason: 'teardown', tornDown: ['Delete the VM'] } })
+  assert.equal(teardownFailed(own), true)
+  assert.equal(teardownNote(own), '')
+  assert.equal(teardownNote(new Error('plain')), '')
+  assert.equal(teardownNote(Object.assign(new Error('x'), { details: { tornDown: [] } })), '')
+  assert.equal(teardownNote(null), '')
 })
 
 test("tickets: the providers on for the project, by the server's plugin list and the project's plugins setting", () => {

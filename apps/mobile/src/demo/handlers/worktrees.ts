@@ -1,5 +1,6 @@
-// The demo's worktrees (apps/mobile/src/demo): create, load, unload and remove; their changes,
-// diffs and commits from demoData; the branch list, the agents and ui.report.
+// The demo's worktrees (apps/mobile/src/demo): create, load, unload and remove (with an empty
+// teardown plan); their changes, diffs and commits from demoData; the branch list, the agents and
+// ui.report.
 import type { ChangesSource, Worktree } from '../../shared.ts'
 import type { DemoChanges } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
@@ -28,6 +29,7 @@ function worktreeRef(ctx: DemoContext, p: { projectId: string; worktreeId: strin
 type WorktreeMethods =
   | 'worktree.create'
   | 'worktree.remove'
+  | 'worktree.teardownPlan'
   | 'worktree.load'
   | 'worktree.unload'
   | 'worktree.changes'
@@ -81,6 +83,11 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
     ctx.server.changed()
     // As the server answers: the demo tears nothing down.
     return { tornDown: [] }
+  },
+  // As a server with `worktreeTeardown` answers for a worktree with no stack, VM or plugin to tear down.
+  'worktree.teardownPlan': (ctx, p) => {
+    worktreeRef(ctx, p)
+    return { items: [] }
   },
   'worktree.load': (ctx, p) => {
     loadWorktree(ctx, worktreeRef(ctx, p).worktree)

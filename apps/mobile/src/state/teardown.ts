@@ -1,7 +1,8 @@
 // What only the desktop can tear down before a worktree goes (a promote, a removal): its running
 // dev stack, or its running Docker VM. The phone asks the server and, with either, leaves the
-// action to the desktop.
-import { CAPABILITY, type RegisteredServer } from '../shared.ts'
+// action to the desktop. A server with `worktreeTeardown` (plugins E1) tears down itself: the phone
+// sends its plan's default items (teardownPlan), and the blocker is for older servers only.
+import { CAPABILITY, type RegisteredServer, type TeardownItem, type WorktreeOp } from '../shared.ts'
 
 /** A strict check's answer when the server could not be asked: not a reason to go to the desktop, one to try again. */
 export const TEARDOWN_UNCHECKED = 'it could not be checked whether its dev stack or Docker VM is running'
@@ -55,4 +56,15 @@ export async function teardownBlocker(
   if (stack && (stack.containers > 0 || stack.upRunning)) return 'its dev stack is running'
   if (vm) return `its Docker VM (${vm.profile}) is running`
   return strict && unchecked ? TEARDOWN_UNCHECKED : null
+}
+
+/**
+ * A server that tears down itself (`worktreeTeardown`, plugins E1): its plan for the worktree. The
+ * phone sends the items checked by default and names them in its question. Null from an older
+ * server, where teardownBlocker still sends the user to the desktop.
+ */
+export async function teardownPlan(server: RegisteredServer, projectId: string, worktreeId: string, op: WorktreeOp): Promise<TeardownItem[] | null> {
+  const conn = server.connection
+  if (conn.welcome?.capabilities.includes(CAPABILITY.worktreeTeardown) !== true) return null
+  return (await conn.request('worktree.teardownPlan', { projectId, worktreeId, op })).items
 }

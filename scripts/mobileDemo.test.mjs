@@ -91,6 +91,8 @@ test('demo: welcome with the demo capabilities', async () => {
     assert.equal(h.conn.welcome.serverName, 'Demo server')
     assert.ok(h.conn.welcome.capabilities.includes('review'))
     assert.ok(!h.conn.welcome.capabilities.includes('push'))
+    // Plugins E1: the phone asks for the teardown plan, not the desktop's blocker.
+    assert.ok(h.conn.welcome.capabilities.includes('worktreeTeardown'))
   } finally {
     h.close()
   }
@@ -469,6 +471,8 @@ test('demo: worktrees are created, unloaded, loaded and removed', async () => {
     const branches = await h.conn.request('repo.listBranches', { ...ref, repoId: 'demo-repo' })
     assert.ok(branches.includes('feature/saved-carts'))
     const { worktreeId } = await h.conn.request('worktree.create', { ...ref, repoId: 'demo-repo', branch: 'feature/saved-carts', createBranch: false })
+    // Nothing to tear down in the demo
+    assert.deepEqual(await h.conn.request('worktree.teardownPlan', { ...ref, worktreeId, op: 'remove' }), { items: [] })
     await assert.rejects(h.conn.request('worktree.remove', { ...ref, worktreeId }), { code: 'IN_USE' })
     await h.conn.request('worktree.unload', { ...ref, worktreeId })
     await h.conn.request('worktree.remove', { ...ref, worktreeId })

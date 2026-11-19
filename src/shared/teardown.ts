@@ -38,3 +38,9 @@ export function teardownCheckbox(items: readonly TeardownItem[]): { label: strin
   if (items.length === 1) return { label: items[0].label, checked: items[0].checked, ids }
   return { label: `Also: ${items.map((i) => i.label).join('; ')}`, checked: items.some((i) => i.checked), ids }
 }
+
+/** The phone's question's last sentence (it has no checkbox): what the default ids tear down; '' for nothing. */
+export function teardownSentence(items: readonly TeardownItem[]): string {
+  const labels = items.filter((i) => i.checked).map((i) => i.label)
+  return labels.length > 0 ? ` Also: ${labels.join('; ')}.` : ''
+}

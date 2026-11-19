@@ -1,15 +1,27 @@
 // An agent's promote_to_primary, confirmed from the phone (6a) while the project is open, through
 // 5e's steps: promote.listen; on a request, a dry run; then the user confirms, the phone claims it
 // (promote.claim) and runs worktree.promote {requestId}, and the server settles it with its own
-// result. The phone can't tear down a dev stack or VM: with either running it says to confirm on
-// the desktop and neither claims nor answers. A request another window claims or ends closes here.
+// result. A server with `worktreeTeardown` (plugins E1) tears down what its plan ticks by default,
+// named in the summary; on an older one the phone can't, and with a stack or VM running it says to
+// confirm on the desktop and neither claims nor answers. A request another window claims or ends closes here.
 import { useEffect, useRef, useState } from 'react'
 import { Modal, Text, View } from 'react-native'
-import { CAPABILITY, type Project, type PromoteRequestEvent, type PromoteSettledEvent, type ServerConnection } from '../shared.ts'
+import {
+  CAPABILITY,
+  TEARDOWN_REQUEST_TIMEOUT_MS,
+  defaultTeardown,
+  teardownSentence,
+  type Project,
+  type PromoteRequestEvent,
+  type PromoteSettledEvent,
+  type ServerConnection,
+  type TeardownItem
+} from '../shared.ts'
 import { Latest } from '../logic/latest.ts'
 import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
-import { teardownBlocker } from '../state/teardown.ts'
+import { teardownBlocker, teardownPlan } from '../state/teardown.ts'
+import { teardownFailed, teardownNote } from '../logic/worktrees.ts'
 import { Button } from './Button.tsx'
 import { colors, ui } from './theme.ts'
 
@@ -20,7 +32,7 @@ const listeners = new WeakMap<ServerConnection, RefCounts>()
 const handling = new Set<string>()
 
 type Prompt =
-  | { kind: 'confirm'; request: PromoteRequestEvent; summary: string }
+  | { kind: 'confirm'; request: PromoteRequestEvent; summary: string; teardown: string[] }
   | { kind: 'desktop'; request: PromoteRequestEvent; why: string }
   | { kind: 'running'; request: PromoteRequestEvent }
   | { kind: 'result'; request: PromoteRequestEvent; text: string; failed: boolean }
@@ -119,11 +131,19 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
         await fail(request, errorMessage(err))
         return
       }
-      const why = await teardownBlocker(server, projectId, repo.id, worktree)
+      // A server that tears down itself (plugins E1): its plan's default items go with the promote.
+      let items: TeardownItem[] | null
+      try {
+        items = await teardownPlan(server, projectId, request.worktreeId, 'promote')
+      } catch (err) {
+        await fail(request, errorMessage(err))
+        return
+      }
+      const why = items === null ? await teardownBlocker(server, projectId, repo.id, worktree) : null
       // Settled meanwhile (another window, or the agent stopped waiting): no dialog.
       if (settledIds.has(request.requestId)) return
       if (why) show({ kind: 'desktop', request, why })
-      else show({ kind: 'confirm', request, summary })
+      else show({ kind: 'confirm', request, summary: summary + (items ? teardownSentence(items) : ''), teardown: items ? defaultTeardown(items) : [] })
     }
     return () => {
       gone = true
@@ -150,6 +170,7 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     close()
   }
   const confirm = async (): Promise<void> => {
+    const teardown = prompt.kind === 'confirm' ? prompt.teardown : []
     setPrompt({ kind: 'running', request })
     try {
       const claim = await conn.request('promote.claim', { projectId, requestId: request.requestId })
@@ -157,11 +178,20 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
         setPrompt({ kind: 'result', request, failed: true, text: 'This request has already ended (answered elsewhere, or the agent stopped waiting); nothing was done.' })
         return
       }
-      const result = await conn.request('worktree.promote', { projectId, worktreeId: request.worktreeId, requestId: request.requestId, claimToken: claim.claimToken })
+      const result = await conn.request(
+        'worktree.promote',
+        { projectId, worktreeId: request.worktreeId, requestId: request.requestId, claimToken: claim.claimToken, ...(teardown.length > 0 ? { teardown } : {}) },
+        teardown.length > 0 ? { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS } : {}
+      )
       const notes = 'notes' in result && result.notes.length ? ` ${result.notes.join(' ')}` : ''
       setPrompt({ kind: 'result', request, failed: false, text: `${request.branch} is in the main checkout now.${notes}` })
     } catch (err) {
-      setPrompt({ kind: 'result', request, failed: true, text: `Could not promote: ${errorMessage(err)}` })
+      // The desktop's wording: a failed teardown's text names what was already done; a failure after it gets the note.
+      const text = errorMessage(err)
+      const failure = teardownFailed(err)
+        ? `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
+        : `Could not promote: ${text}${teardownNote(err)}`
+      setPrompt({ kind: 'result', request, failed: true, text: failure })
     }
   }
 

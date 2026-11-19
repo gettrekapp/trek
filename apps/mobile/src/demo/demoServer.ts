@@ -22,7 +22,9 @@ export const DEMO_CAPABILITIES: string[] = [
   CAPABILITY.review,
   CAPABILITY.history,
   CAPABILITY.ui,
-  CAPABILITY.automations
+  CAPABILITY.automations,
+  // A current server tears down itself (plugins E1): the phone asks for the plan (always empty here) instead of the desktop's blocker.
+  CAPABILITY.worktreeTeardown
 ]
 
 /** How the demo's sockets close when it is disposed: `removed` stops the client retrying */

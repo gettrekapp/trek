@@ -20,6 +20,8 @@ export const MOBILE_ENTRIES = [
   'src/shared/protocolV2.ts',
   'src/shared/types.ts',
   'src/shared/promote.ts',
+  // Worktree teardown (plugins E1): the server's plan, what the phone sends and says.
+  'src/shared/teardown.ts',
   // What the phone shows (ui.report) and the session it is asked to show (ui.focus).
   'src/shared/ui.ts',
   'src/shared/push.ts',

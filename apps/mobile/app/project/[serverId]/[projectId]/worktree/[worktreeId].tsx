@@ -9,16 +9,28 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../../src/shared.ts'
+import {
+  CAPABILITY,
+  TEARDOWN_REQUEST_TIMEOUT_MS,
+  defaultTeardown,
+  teardownSentence,
+  type AgentInfo,
+  type Project,
+  type RegisteredServer,
+  type Repository,
+  type SessionType,
+  type TeardownItem,
+  type Worktree
+} from '../../../../../src/shared.ts'
 import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit } from '../../../../../src/logic/worktreeRow.ts'
-import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
+import { refusedAsDirty, removeQuestion, removeWorktree, teardownNote, teardownRemove } from '../../../../../src/logic/worktrees.ts'
 import { changesRoute, projectRoute, sessionRoute } from '../../../../../src/logic/routes.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../../src/state/hooks.ts'
 import { useServers } from '../../../../../src/state/ServersProvider.tsx'
-import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../../src/state/teardown.ts'
+import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../../../../../src/state/teardown.ts'
 import { confirmAlert } from '../../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../../src/ui/Button.tsx'
@@ -128,9 +140,10 @@ export default function WorktreeScreen(): React.JSX.Element {
     if (started) router.push(sessionRoute(serverId, projectId, started.sessionId))
   }
 
-  // The desktop's order (backendV2.ts' worktree remove) without what only it can do: with the dev
-  // stack or VM running, nothing is done here. Then the question, that check again, the unload,
-  // the removal, and the discard question when git refuses for changes (logic/worktrees.ts).
+  // The desktop's order (backendV2.ts' worktree remove). On a server with `worktreeTeardown`
+  // (plugins E1) the server tears down what the plan ticks by default; on an older one, with the dev
+  // stack or VM running, nothing is done here. Then the question, that check again (older servers),
+  // the unload, the removal, and the discard question when git refuses for changes (logic/worktrees.ts).
   const remove = async (): Promise<void> => {
     if (!server || !found || found.worktree.isMain || removingNow.current) return
     const { repo, worktree: target } = found
@@ -150,8 +163,10 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
     // The questions say that sessions stop: for a worktree loaded at the tap, or unloaded here since.
     let sessionsStop = target.loaded
+    // What the server tears down first, named in the questions (teardownSentence).
+    let also = ''
     const ask = (which: 'remove' | 'discard'): Promise<boolean> => {
-      const { title, message } = removeQuestion(name, sessionsStop, which)
+      const { title, message } = removeQuestion(name, sessionsStop, which, also)
       return confirmAlert(title, message, which === 'discard' ? 'Discard and remove' : 'Remove', true)
     }
     removingNow.current = true
@@ -162,23 +177,41 @@ export default function WorktreeScreen(): React.JSX.Element {
     setError(null)
     setBlocked(null)
     try {
-      const why = await check().catch(() => TEARDOWN_UNCHECKED)
-      if (!shown.current) return
-      if (why) {
-        sayBlocker(why)
+      // A server that tears down itself (plugins E1): its plan, its default items named in the
+      // question and sent with the removal. An older server: the desktop's blocker.
+      let plan: TeardownItem[] | null
+      try {
+        plan = await teardownPlan(now(), projectId, target.id, 'remove')
+      } catch (err) {
+        if (mounted.current) setError(errorMessage(err))
         return
       }
+      if (!shown.current) return
+      if (plan === null) {
+        const why = await check().catch(() => TEARDOWN_UNCHECKED)
+        if (!shown.current) return
+        if (why) {
+          sayBlocker(why)
+          return
+        }
+      }
+      const teardown = plan ? defaultTeardown(plan) : []
+      also = plan ? teardownSentence(plan) : ''
       const outcome = await removeWorktree({
         worktree: { id: target.id, name, dirty: target.dirty },
         loaded: () => latest.current?.worktree.loaded === true,
-        // The question can stay up a long time: a stack or VM started meanwhile stops the removal.
-        stillAllowed: check,
+        // The question can stay up a long time: on an older server, a stack or VM started meanwhile stops the removal.
+        ...(plan === null ? { stillAllowed: check } : {}),
         unload: async () => {
           sessionsStop = true
           await now().connection.request('worktree.unload', ref)
         },
         load: async () => void (await now().connection.request('worktree.load', ref)),
-        remove: async (force) => void (await now().connection.request('worktree.remove', { ...ref, force })),
+        // The forced retry sends the same ids, unless the refusal came after they ran.
+        remove: teardownRemove(teardown, async (force, ids) => {
+          const params = { ...ref, force, ...(ids.length > 0 ? { teardown: [...ids] } : {}) }
+          await now().connection.request('worktree.remove', params, ids.length > 0 ? { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS } : {})
+        }),
         confirmRemove: () => ask('remove'),
         confirmDiscard: () => ask('discard'),
         refusedAsDirty
@@ -189,7 +222,11 @@ export default function WorktreeScreen(): React.JSX.Element {
         if (shown.current) router.dismissTo(projectRoute(serverId, projectId))
       } else if (!mounted.current) return
       else if (outcome.kind === 'blocked') sayBlocker(outcome.why)
-      else if (outcome.kind === 'failed') setError(outcome.reloadFailed ? `${errorMessage(outcome.error)}\n${RELOAD_FAILED}` : errorMessage(outcome.error))
+      else if (outcome.kind === 'failed') {
+        // A failed teardown's text names what was already done; a failure after it gets the note.
+        const text = errorMessage(outcome.error) + teardownNote(outcome.error)
+        setError(outcome.reloadFailed ? `${text}\n${RELOAD_FAILED}` : text)
+      }
       else if (outcome.reloadFailed) setError(RELOAD_FAILED)
     } finally {
       removingNow.current = false

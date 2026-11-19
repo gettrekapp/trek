@@ -1,7 +1,8 @@
 // Adding and removing a worktree from the phone: a pull request's label and fallback branch, branch
 // suggestions, and the remove flow with its requests and questions injected (so it is tested in
-// node). The rules are the desktop's (AddWorktreeModal.tsx, backendV2.ts' worktree remove), without
-// what only the desktop can do: tearing down a dev stack or Docker VM. Pure.
+// node). The rules are the desktop's (AddWorktreeModal.tsx, backendV2.ts' worktree remove). On a
+// server older than plugins E1, without what only the desktop can do there: tearing down a dev
+// stack or Docker VM; a newer one tears them down itself (teardownRemove). Pure.
 
 /** "#12" from a pull request link, else "PR" (the desktop's generic label). */
 export { genericPrLabel as pullRequestLabel } from '../shared.ts'
@@ -37,11 +38,53 @@ export function refusedAsDirty(err: unknown): boolean {
 /** What both questions add for a loaded worktree: the desktop's wording (backendV2.ts' worktree remove). */
 const SESSIONS_STOP = ' Its running sessions will be stopped.'
 
-/** The plain question or the discard one, for an alert; `loaded` adds that its sessions stop. */
-export function removeQuestion(name: string, loaded: boolean, which: 'remove' | 'discard'): { title: string; message: string } {
+/** The plain question or the discard one, for an alert; `loaded` adds that its sessions stop; `also`: what the server tears down first (teardownSentence). */
+export function removeQuestion(name: string, loaded: boolean, which: 'remove' | 'discard', also = ''): { title: string; message: string } {
   const stop = loaded ? SESSIONS_STOP : ''
-  if (which === 'discard') return { title: `${name} has uncommitted changes.`, message: `Removing it discards them. This cannot be undone.${stop}` }
-  return { title: `Remove ${name}?`, message: `The worktree's folder is deleted. Its branch stays.${stop}` }
+  if (which === 'discard') return { title: `${name} has uncommitted changes.`, message: `Removing it discards them. This cannot be undone.${stop}${also}` }
+  return { title: `Remove ${name}?`, message: `The worktree's folder is deleted. Its branch stays.${stop}${also}` }
+}
+
+/** The error's `details` from a server that tears down itself (plugins E1). */
+function teardownDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
+  const details = (err as { details?: unknown } | null)?.details
+  return details && typeof details === 'object' ? details : {}
+}
+
+/** The teardown itself failed (`details.reason: 'teardown'`); its text names what was already done. The desktop's rule. */
+export const teardownFailed = (err: unknown): boolean => teardownDetails(err).reason === 'teardown'
+
+/** What a failure after the teardown found already torn down (`details.tornDown`); none for the teardown's own failure. */
+function tornDownBefore(err: unknown): string[] {
+  const { tornDown } = teardownDetails(err)
+  if (teardownFailed(err) || !Array.isArray(tornDown)) return []
+  return tornDown.filter((label): label is string => typeof label === 'string')
+}
+
+/**
+ * Added to a failed remove's or promote's error on a server that tore down first (plugins E1): the
+ * items ran, then something else failed, so they are gone though nothing else happened. The desktop's wording.
+ */
+export function teardownNote(err: unknown): string {
+  const labels = tornDownBefore(err)
+  return labels.length > 0 ? ` The teardown had already run and is not undone: ${labels.join('; ')}.` : ''
+}
+
+/**
+ * RemoveDeps.remove on a server that tears down itself (plugins E1): each removal sends `ids`. The
+ * server refuses a worktree with changes before anything is torn down, so the forced retry sends
+ * the same ids; a refusal after they ran (files written meanwhile: `details.tornDown`) drops them.
+ */
+export function teardownRemove(ids: readonly string[], send: (force: boolean, ids: readonly string[]) => Promise<void>): (force: boolean) => Promise<void> {
+  let next = ids
+  return async (force) => {
+    try {
+      await send(force, next)
+    } catch (err) {
+      if (tornDownBefore(err).length > 0) next = []
+      throw err
+    }
+  }
 }
 
 export interface RemoveDeps {
