@@ -1,6 +1,6 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
 // prefs, the document's visibility, reduced motion and an element's width.
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampsitePrefKey } from '../shared/prefs.ts'
 import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
@@ -75,11 +75,14 @@ export function useReducedMotion(): boolean {
 export function useWidth<T extends HTMLElement>(): [(el: T | null) => void, number] {
   const [el, setEl] = useState<T | null>(null)
   const [width, setWidth] = useState(0)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!el) {
       setWidth(0)
       return
     }
+    // Measured before the first paint (the content box, as the observer reports it), so nothing is drawn for a width of 0
+    const style = getComputedStyle(el)
+    setWidth(Math.round(el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)))
     const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)))
     observer.observe(el)
     return () => observer.disconnect()

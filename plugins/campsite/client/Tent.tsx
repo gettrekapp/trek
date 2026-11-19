@@ -1,4 +1,4 @@
-// A worktree's tent at the campsite strip, in its own color, with its branch on a sign at the peak,
+// A worktree's tent at the campsite strip, in its own color, with its branch on a sign across the peak,
 // and Global's log. Grouped (a crowded camp), each carries a badge (name, count, who is waiting)
 // that opens a list of its sessions (TentPopover, drawn beside the tents so it sits over the app,
 // not inside the tent's stacking context).
@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
 import { LOG_W, TENT_W, campTone, popoverLeft, signText, tentBadge, tentColors, type CampTent, type FireSide } from '../shared/layout.ts'
-import { choreFor, hikerLabel, stanceFor, statusText } from '../shared/pose.ts'
+import { SIGN_TEXT, choreFor, hikerLabel, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
 
 interface Props {
@@ -30,12 +30,9 @@ export function Tent({ tent, grouped, open, onToggle }: Props): React.JSX.Elemen
       {grouped ? (
         <CampBadge camp={tent} name={signText(tent.name)} title={tent.name} open={open} onToggle={onToggle} />
       ) : (
-        <>
-          <span className="cs-tent-post" aria-hidden="true" />
-          <span className="cs-tent-sign" title={tent.name}>
-            {signText(tent.name)}
-          </span>
-        </>
+        <span className="cs-tent-sign" title={tent.name}>
+          {signText(tent.name)}
+        </span>
       )}
     </div>
   )
@@ -55,8 +52,11 @@ export function CampLog({ log, grouped, open, onToggle }: { log: Camp & { x: num
 function CampBadge({ camp, name, title, open, onToggle }: { camp: Camp; name: string; title: string; open: boolean; onToggle: (badge: HTMLButtonElement) => void }): React.JSX.Element {
   const tone = campTone(camp)
   return (
-    <button className={`cs-camp-badge${tone ? ` ${tone}` : ''}`} onClick={(e) => onToggle(e.currentTarget)} aria-haspopup="true" aria-expanded={open} title={`Who's at ${title}`}>
-      {name} · {tentBadge(camp)}
+    // Narrower than the tents' pitch: the name is cut to fit, the count and the "!" or "?" never are
+    <button className={`cs-camp-badge${tone ? ` ${tone}` : ''}`} onClick={(e) => onToggle(e.currentTarget)} aria-expanded={open} aria-label={`${title}, ${tentBadge(camp)}`} title={`Who's at ${title}: ${tentBadge(camp)}`}>
+      <span className="cs-badge-name">{name}</span>
+      <span>· {camp.hikers}</span>
+      {tone && <b>{SIGN_TEXT[tone]}</b>}
     </button>
   )
 }
@@ -84,11 +84,12 @@ interface PopoverProps {
 export function TentPopover({ at, name, members, now, onPick }: PopoverProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [left, setLeft] = useState(at.left)
-  // Away from the fire and inside the window, once its width is known (before paint)
+  // Away from the fire and inside the window, once its width is known (before paint). Every render:
+  // a row's status can widen it, and a left camp's list must not grow back over the fire.
   useLayoutEffect(() => {
     const el = ref.current
     if (el) setLeft(popoverLeft(at, at.side, el.offsetWidth, window.innerWidth))
-  }, [at, members.length])
+  })
   // Keyboard users land in the list
   useEffect(() => {
     ref.current?.querySelector('button')?.focus()
@@ -106,7 +107,7 @@ function PopoverRow({ session, now, onPick }: { session: PluginSession; now: num
   const look = useMemo(() => lookFor(session.terminalId, session.provider), [session.terminalId, session.provider])
   const stance = stanceFor(session, choreFor(session.terminalId, now))
   return (
-    <button aria-label={hikerLabel(session)} onClick={() => onPick(session.terminalId)}>
+    <button onClick={() => onPick(session.terminalId)}>
       <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} scale={1} label={hikerLabel(session)} decorative />
       <span className="cs-row-name">{session.label}</span>
       <span className={`cs-row-status${stance.sign ? ` ${stance.sign}` : ''}`}>{statusText(session)}</span>

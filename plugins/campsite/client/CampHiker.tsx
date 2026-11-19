@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
-import type { Place } from '../shared/layout.ts'
+import { HIKER_W, type Place } from '../shared/layout.ts'
 import { hikerLabel, hikerTooltip, stanceFor, type Chore, type Stance } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
 import { useReducedMotion } from './hooks.ts'
 
-const SCALE = 3
+const SCALE = HIKER_W / 12
 const HALF = 6 * SCALE
 /** Matches .cs-camp-hiker's transform transition */
 export const WALK_MS = 1200

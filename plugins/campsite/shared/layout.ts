@@ -8,6 +8,8 @@ import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { fnv1a } from './hiker.ts'
 import { isWaiting, type Sign } from './pose.ts'
 
+/** A hiker at camp, 3× the 12 px grid */
+export const HIKER_W = 36
 const SLOT = 40
 export const TENT_W = 84
 export const LOG_W = 72
@@ -179,11 +181,13 @@ export function popoverLeft(badge: { left: number; right: number }, side: FireSi
 }
 
 /** The strip's header line */
-export function campSummary(sessions: readonly Pick<PluginSession, 'status' | 'decision'>[]): string {
+export function campSummary(sessions: readonly Pick<PluginSession, 'status' | 'decision'>[], moreCamps = 0): string {
   const parts = ['Campsite']
   if (sessions.length > 0) parts.push(`${sessions.length} ${sessions.length === 1 ? 'hiker' : 'hikers'}`)
   const waiting = sessions.filter(isWaiting).length
   if (waiting > 0) parts.push(`${waiting} waiting`)
+  // Camps the strip has no room for (grouped mode)
+  if (moreCamps > 0) parts.push(`+${moreCamps} ${moreCamps === 1 ? 'camp' : 'camps'} not shown`)
   return parts.join(' · ')
 }
 

@@ -2,7 +2,7 @@
 // (right, left, …), Global on a log, waiting hikers at the fire, grouped mode when it is crowded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_SPREAD, MINI_SLOT, TENT_COLORS, campLayout, campSummary, campTone, collapsedRow, popoverLeft, signText, tentBadge, tentColors } from '../plugins/campsite/shared/layout.ts'
+import { HIKER_W, MAX_SPREAD, MINI_SLOT, TENT_COLORS, campLayout, campSummary, campTone, collapsedRow, popoverLeft, signText, tentBadge, tentColors } from '../plugins/campsite/shared/layout.ts'
 
 let n = 0
 const s = (worktreeId, over = {}) => ({ terminalId: `t${++n}`, label: 'Claude', provider: 'claude', status: 'working', decision: false, worktreeId, worktreeName: worktreeId, branch: worktreeId && `b/${worktreeId}`, ...over })
@@ -171,4 +171,33 @@ test('collapsedRow: waiting hikers first; cut to the room, leaving two slots for
   assert.deepEqual(collapsedRow(all, 3 * MINI_SLOT + 5), { shown: [b], more: 3 })
   assert.deepEqual(collapsedRow(all, 0), { shown: [], more: 4 })
   assert.deepEqual(collapsedRow([], 100), { shown: [], more: 0 })
+})
+
+test('campSummary: one waiting hiker; camps the strip has no room for are counted', () => {
+  assert.equal(campSummary([s('w1', { status: 'attention' })]), 'Campsite · 1 hiker · 1 waiting')
+  assert.equal(campSummary([s('w1'), s('w2')], 3), 'Campsite · 2 hikers · +3 camps not shown')
+  assert.equal(campSummary([s('w1')], 1), 'Campsite · 1 hiker · +1 camp not shown')
+})
+
+test('hikers at 3×: each is whole inside the strip, none overlaps another, and those at the fire clear its hearth', () => {
+  const crowd = [s('w1'), s('w1'), s('w1'), s('w2'), s('w2'), s('w3'), s(null), s(null), s('w1', { status: 'attention' }), s('w2', { decision: true }), s('w3', { status: 'attention' })]
+  for (const sessions of [crowd, crowd.slice(0, 4), [...crowd, ...Array.from({ length: 12 }, (_, i) => s(`x${i % 5}`))]]) {
+    for (const width of [480, 600, 800, 1000, 1400, 2000]) {
+      const l = campLayout(sessions, width)
+      const out = l.hikers.filter((h) => h.place !== 'inside').sort((a, b) => a.x - b.x)
+      for (const h of out) assert.ok(h.x - HIKER_W / 2 >= 0 && h.x + HIKER_W / 2 <= width, `${width}: ${JSON.stringify(h)}`)
+      for (let i = 1; i < out.length; i++) assert.ok(out[i].x - out[i - 1].x >= HIKER_W, `${width}: ${JSON.stringify([out[i - 1], out[i]])}`)
+      // The hearth is 46 px wide
+      for (const h of out.filter((x) => x.place === 'fire')) assert.ok(Math.abs(h.x - l.fireX) - HIKER_W / 2 >= 23, `${width}: ${JSON.stringify(h)}`)
+    }
+  }
+})
+
+test('collapsedRow: what it shows, with its "+N", always fits the room', () => {
+  const all = Array.from({ length: 30 }, (_, i) => s(`w${i % 4}`))
+  for (let room = 0; room <= 30 * MINI_SLOT + 20; room += 7) {
+    const row = collapsedRow(all, room)
+    assert.equal(row.shown.length + row.more, all.length)
+    if (row.shown.length > 0) assert.ok(row.shown.length * MINI_SLOT + (row.more > 0 ? 2 * MINI_SLOT : 0) <= room, `room ${room}`)
+  }
 })

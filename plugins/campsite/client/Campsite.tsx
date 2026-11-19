@@ -38,14 +38,26 @@ export function Campsite(): React.JSX.Element | null {
   useEffect(() => {
     if (openGone) setOpenTent(null)
   }, [openGone])
+  // The toggle is a different element collapsed and expanded: after a press, focus follows it to the new one
+  const toggle = useRef<HTMLButtonElement | null>(null)
+  const pressed = useRef(false)
+  useEffect(() => {
+    if (!pressed.current) return
+    pressed.current = false
+    toggle.current?.focus()
+  }, [prefs.campsiteCollapsed])
+  const flip = (collapsed: boolean): void => {
+    pressed.current = true
+    setPref('campsiteCollapsed', collapsed)
+  }
   if (!loaded || !prefs.showCampsite) return null
 
   if (prefs.campsiteCollapsed) {
     const waiting = sessions.filter(isWaiting)
     const row = collapsedRow(sessions, rowWidth)
     return (
-      <div className="campsite collapsed">
-        <button className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => setPref('campsiteCollapsed', false)}>
+      <div className={`campsite collapsed${hidden ? ' cs-paused' : ''}`}>
+        <button ref={toggle} className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => flip(false)}>
           <Chevron up />
         </button>
         <span className="cs-summary">{campSummary(sessions)}</span>
@@ -78,10 +90,10 @@ export function Campsite(): React.JSX.Element | null {
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       <CampScene />
       <div className="cs-header">
-        <button className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => setPref('campsiteCollapsed', true)}>
+        <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
           <Chevron />
         </button>
-        <span className="cs-summary">{campSummary(sessions)}</span>
+        <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
       </div>
       {width > 0 && (
         <div className="cs-stage">
@@ -123,20 +135,6 @@ export function Campsite(): React.JSX.Element | null {
               onToggle={(el) => toggleCamp(t.worktreeId, el, t.x < layout.fireX ? 'left' : 'right')}
             />
           ))}
-          {openTent && popName !== undefined && (
-            <TentPopover
-              key={openTent.worktreeId === null ? 'global' : `worktree:${openTent.worktreeId}`}
-              at={openTent}
-              name={popName}
-              members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
-              now={now}
-              onPick={(id) => {
-                setOpenTent(null)
-                host.focusSession(id)
-              }}
-            />
-          )}
-          {layout.moreTents > 0 && <span className="cs-more cs-more-camps">+{layout.moreTents} camps</span>}
           {layout.hikers.map((h) => {
             const s = byId.get(h.terminalId)
             if (!s) return null
@@ -160,6 +158,20 @@ export function Campsite(): React.JSX.Element | null {
           ))}
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
+      )}
+      {/* Beside the stage, not in it: fixed to the window, and nothing of the stage's can clip it */}
+      {openTent && popName !== undefined && (
+        <TentPopover
+          key={openTent.worktreeId === null ? 'global' : `worktree:${openTent.worktreeId}`}
+          at={openTent}
+          name={popName}
+          members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
+          now={now}
+          onPick={(id) => {
+            setOpenTent(null)
+            host.focusSession(id)
+          }}
+        />
       )}
     </div>
   )
