@@ -40,6 +40,7 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
 
     // When the worktree's dev stack has run, the dialog offers to destroy it too; stackName is set when that was ticked.
     // `stillWanted` false once the stack's status is read: no dialog, not confirmed.
+    // Old-server fallback (no worktreeTeardown): remove in a later release.
     confirm: async (info, prompt, backend, stillWanted) => {
       const stack = await backend.stacks.status({ path: info.path }).catch(() => null)
       // Read again right before the dialog: an agent's request may have ended meanwhile.
@@ -55,6 +56,7 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
     },
 
     // stack.sh destroy, its failure shown without blocking the worktree's deletion (or its promote).
+    // Old-server fallback (no worktreeTeardown): remove in a later release.
     destroyStack: async (info, stackName, backend, action = 'delete') => {
       let failure: string | undefined
       try {
@@ -73,6 +75,7 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
     },
 
     // The VM, its failure shown without blocking the caller.
+    // Old-server fallback (no worktreeTeardown): remove in a later release.
     destroyEnvironment: async (info, backend) => {
       const warning = await deps.destroyEnvironment(backend, info)
       if (warning) await deps.showError('Environment cleanup failed', `${warning}\n\nThe VM is listed under Orphaned environments in Settings.`)
@@ -80,6 +83,7 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
 
     // A fresh check through the server's git. null (git can't read it) or a failure (a server
     // without worktree.dirty) falls back to the cached flag (Decision 13); a timeout rejects.
+    // Old-server fallback (no worktreeTeardown): remove in a later release.
     isDirty: async (info, backend) => {
       try {
         const dirty = await backend.git.dirty({ path: info.path })

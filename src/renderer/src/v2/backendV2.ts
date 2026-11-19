@@ -97,6 +97,7 @@ export interface WorktreeTeardown {
 }
 
 /** Added to a failed removal's error once its stack or VM is already gone. */
+// Old-server fallback (no worktreeTeardown): remove in a later release.
 export function tornDownNote(stack: boolean, vm: boolean): string {
   if (stack && vm) return ' Its dev stack and its VM were already removed.'
   if (stack) return ' Its dev stack was already removed.'
@@ -512,6 +513,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           await removeThroughPlan(info, worktreeId, legacyId)
           return
         }
+        // Old-server fallback (no worktreeTeardown): remove in a later release.
         // The server's status poll; a stale "clean" is caught by git below, unless the teardown
         // would destroy something first: that is checked afresh below, after the confirm.
         let dirty = info.dirty ?? false
@@ -647,6 +649,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             release()
           }
         }
+        // Old-server fallback (no worktreeTeardown): remove in a later release.
         const machine = currentFeatures()
         const env = machine.env ? deps.teardown.environment(info) : undefined
         const prompt = promotePrompt(plan, { vm: env?.profile, asked })

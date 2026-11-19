@@ -33,6 +33,7 @@ const noStackThere = (err: unknown): boolean => refusedWith(err, 'PATH_DENIED')
  * stack where it refuses the path, and none in a `missing` worktree (git no longer lists it;
  * stack.status refuses it, so it is not asked). A connection with no welcome yet is unchecked.
  */
+// Old-server fallback (no worktreeTeardown): remove in a later release.
 export async function teardownBlocker(
   server: RegisteredServer,
   projectId: string,

@@ -210,6 +210,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
       else next.delete(id)
       return next
     })
+  // The `: …` arm: Old-server fallback (no worktreeTeardown): remove in a later release.
   const machineBlocks = serverTeardown ? teardownRead.kind === 'ok' && teardownCheck.blocks : !!machine && !tearDown && machineRunning
   const unplanned = teardownCheck.unplanned.join(' and ')
 
@@ -317,7 +318,8 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                   teardownIds: planItems.filter((item) => ticked.has(item.id)).map((item) => item.id),
                   ...(planItems.length > 0 && ticked.size === 0 ? { teardownUnticked: true } : {})
                 }
-              : machine && tearDown
+              : // Old-server fallback (no worktreeTeardown): remove in a later release.
+                machine && tearDown
                 ? { teardown }
                 : machine
                   ? { teardownUnticked: true }
@@ -489,6 +491,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                   </button>
                 </li>
               )}
+              {/* Old-server fallback (no worktreeTeardown): remove in a later release. */}
               {!serverTeardown && machine && (
                 <li className={machineBlocks ? 'warn' : undefined}>
                   <label className="move-teardown">

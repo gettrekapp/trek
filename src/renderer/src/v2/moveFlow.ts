@@ -47,6 +47,7 @@ export interface MoveFlowDeps {
    * The source's Docker VM and dev stack, torn down (the user ticked it) once the target has the
    * worktree and the source is checked unchanged, before its folder goes; never earlier. Shows
    * nothing itself: its warnings come back as notes, and the move goes on (as Delete's does).
+   * Old-server fallback (no worktreeTeardown): remove in a later release.
    */
   teardown?: () => Promise<string[]>
   /** No teardown because the user unticked it (the step then says so, rather than "nothing to tear down") */
@@ -212,6 +213,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   let tornDownNote = ''
   if (serverIds.length > 0) progress('teardown', 'active')
   else if (deps.teardown) {
+    // Old-server fallback (no worktreeTeardown): remove in a later release.
     progress('teardown', 'active')
     try {
       await source('move.finish', { ...from, fingerprint: exported.fingerprint, verifyOnly: true }, { timeoutMs: STEP_MS })
