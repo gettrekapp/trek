@@ -122,10 +122,11 @@ else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}
 const BUILTIN_PLUGINS = [
   { id: 'voice', version: '1.0.0', defaultEnabled: true },
   { id: 'linear', version: '1.0.0', defaultEnabled: true },
-  { id: 'azure-devops', version: '1.0.0', defaultEnabled: true }
+  { id: 'azure-devops', version: '1.0.0', defaultEnabled: true },
+  { id: 'github', version: '1.0.0', defaultEnabled: true }
 ]
 if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify(BUILTIN_PLUGINS)) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
-else ok('welcome plugins: voice, linear, azure-devops')
+else ok('welcome plugins: voice, linear, azure-devops, github')
 try {
   // As 0.2.1 sends it, with no idea that voice is a plugin now.
   const settings = await conn.request('voice.settings', {})
