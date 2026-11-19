@@ -1,6 +1,6 @@
 // The Local server's one-time take-over of the environments registry the app kept before 5a
-// (plugins E2: the registry half of server/src/integrations/envSeed.ts, whose stacks half stays in
-// core as stackSeed.ts). The VM names do not change (deriveProfileName over the repository's
+// (plugins E2: the registry half of core's former env take-over, whose stacks half stays in core as
+// server/src/integrations/stackSeed.ts). The VM names do not change (deriveProfileName over the repository's
 // envRepoKey, which the import keeps as `profileKey`), so the VMs, containers and volumes stay where
 // they are: only the registry moves.
 //

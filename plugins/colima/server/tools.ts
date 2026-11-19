@@ -1,5 +1,5 @@
 // colima and docker for the Colima environments, through the plugin host's programs (plugins E2;
-// before, src/host/colimaService.ts ran them itself): the quick reads (`--version`, `colima list`,
+// before, core's own Colima service, since removed, ran them itself): the quick reads (`--version`, `colima list`,
 // compose ps) on host.run; the runs whose output streams (colima start, stop and delete, compose up
 // and down) and a service's logs (both streams) on host.spawn. colima runs in the plugin's data
 // directory, docker compose in the worktree. Never a shell: every argument is a list entry.

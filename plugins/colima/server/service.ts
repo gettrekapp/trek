@@ -1,5 +1,5 @@
-// The Colima environments on the server's machine (plugins E2; src/host/environmentService.ts
-// before): the registry that maps each VM back to its repository, branch and worktree, and the
+// The Colima environments on the server's machine (plugins E2; core's own environment service, since
+// removed, before): the registry that maps each VM back to its repository, branch and worktree, and the
 // operations on it, through the plugin's tools (tools.ts: the host's programs). The handlers check
 // every argument before they call these.
 import { access, readFile, readdir } from 'node:fs/promises'

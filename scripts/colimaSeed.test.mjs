@@ -1,7 +1,7 @@
 // scripts/colimaSeed.test.mjs — where the Colima plugin's registry comes from (plugins E2): its own
 // file once it has one; else a copy of the server's old <dataDir>/environments.json (kept where it
 // was); else, on a Local server started with --import-env-from, the app's registry, taken over once
-// (5a's upgrade, server/src/integrations/envSeed.ts before E2).
+// (5a's upgrade, core's own take-over before E2; its stacks half is serverStackSeed.test.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, existsSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'

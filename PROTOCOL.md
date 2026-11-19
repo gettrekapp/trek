@@ -112,7 +112,7 @@ new optional field needs no capability: its absence says enough.
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 | `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
 | `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
-| `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output |
+| `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output. Since plugins E2 they are the built-in `env` plugin's ("Colima environments", `plugins/colima`), with the same names, payloads and answers, and this is its legacy capability: listed while it is set up, so never on Windows, where `welcome.plugins` lists it `available: false` and `env.*` is no method (`NOT_FOUND`) |
 | `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
 | `linear` | The Linear plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the Linear plugin](plugins/linear/README.md)) |
 | `voice` | The voice plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the voice plugin](plugins/voice/README.md)) |
@@ -227,8 +227,8 @@ An error reply may carry `error.details`, an object a client can act on without
 reading the message (which may be git's own, localised text). Today the only key
 is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
 tool is not installed on the server), `registry` (the server's environments registry
-cannot be read; nothing was written) or `unsupported` (a Windows server's `env.*` and
-`stack.*`: not served there yet, and its welcome lists neither `env` nor `stacks`), or,
+cannot be read; nothing was written) or `unsupported` (a Windows server's `stack.*`:
+not served there yet, and its welcome lists no `stacks`), or,
 on a `CONFLICT` from `update.apply`, `disabled`, `busy` or `stale` (`busy` also from
 `update.check`; see [Updating the server](#updating-the-server)).
 Clients ignore keys and reasons they don't know.
@@ -375,11 +375,20 @@ repository: trimmed and without trailing slashes, it must not be empty, `.`,
 absolute or reach outside with `..` (`BAD_REQUEST`; such entries already stored
 are skipped wherever the list is used).
 
+Since plugins E2, `repo.update`'s `environments` and `branch.setEnv` write the `env` plugin's settings
+(`Repository.pluginSettings.env`, and its branch setting `env`), and for one release the server keeps
+`environments` and `branchData[branch].env` as their mirror: a write to either side changes both, and
+`expected` is compared with the mirror. `environments` keeps only the plugin's fields, each of its kind
+(`enabled`, `networkAddress`, `rosetta` booleans; `cpu`, `memory`, `disk` numbers; `composeFile`,
+`profileKey` one-line strings); `branch.setEnv` refuses text over 100 000 characters (`BAD_REQUEST`). A
+project imported (`project.import`) or moved in (`move.receive`) that carries the old fields has them
+taken into the plugin's settings.
+
 `repo.remove` refuses to remove a project's last repository (`BAD_REQUEST`) and
 drops that repository's `worktreeOrder` entries. On a server with
 `worktreeTeardown` it is also refused (`BAD_REQUEST`, with the reason) while a
-teardown participant says so: core's, while a Colima VM of one of its worktrees
-runs. `repo.listBranches` fails with
+teardown participant says so: the `env` plugin's, while a Colima VM of one of its
+worktrees runs. `repo.listBranches` fails with
 `GIT_ERROR` when git does. A `branch.*` call with `null` or an empty string
 clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
 `customTags: null` or `[]` clears the custom tags; omitting `customTags` is
@@ -953,6 +962,8 @@ Before a worktree is removed, promoted or moved off the server, what runs for it
 
 ## Docker, environments and stacks
 
+Since plugins E2 the `env.*` methods and `env.log` are the built-in `env` plugin's; everything below holds for them as it did.
+
 With the capabilities `docker`, `env` and `stacks`, the server runs these on its own machine,
 for any client (phase 5a; before it, the desktop ran them on its own machine, for its Local
 server's windows only). They add no power the token did not already grant (a shell as the
@@ -1009,9 +1020,9 @@ server user), and they follow the protocol's rules:
 | `docker.container` | `{action: start\|stop\|restart, id}` | `null` |
 | `docker.compose` | `{projectId, repoId, action}` | compose's exit code; it runs in the repository's main checkout |
 | `env.check` | `{}` | `EnvCheckResult`: colima and docker on the server's PATH (an `ok` answer is kept) |
-| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`); a local server also reads, never writes, the other local profiles' registries (`<platform data dir>/local` and `local-*`), and a VM one of them names is not listed |
+| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`); a local server also reads, never writes, the other local profiles' registries (`<platform data dir>/local` and `local-*`: each one's `plugins/env/environments.json`, or, for a profile not started since plugins E2, its `environments.json`), and a VM one of them names is not listed |
 | `env.up` | `{projectId, worktreeId, settings, envVars?}` | `EnvUpResult`: starts (or creates) the VM of the branch git has checked out (re-read first), then `docker compose up -d` in the worktree |
-| `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` first runs `compose down -v` (for up to a minute) in the registry's worktree while it is there and inside the path allowlist (outside it, the log says compose was skipped and only the VM goes), then deletes the VM and drops the registry entry |
+| `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` first runs `compose down -v` (for up to a minute) in the registry's worktree while it is there, is one of the projects' worktrees and is inside the path allowlist (outside it, the log says compose was skipped and only the VM goes), then deletes the VM and drops the registry entry |
 | `env.ps` | `{projectId, worktreeId, composeFile?}` | `EnvService[]` |
 | `env.composeFiles` | `{projectId, worktreeId}` | the compose files in the worktree's root |
 | `env.logs` | `{projectId, worktreeId, composeFile?, service, tail?}` | the service's last lines |
@@ -1021,12 +1032,14 @@ server user), and they follow the protocol's rules:
 | `stack.log` | `{projectId, worktreeId, fileId, offset}` | `StackLogChunk`: from `offset` in the file `fileId` names (at most 1 MiB), else the last 64 KiB of the current one |
 | `worktree.dirty` | `{projectId, worktreeId}` | `boolean`: whether `git status --porcelain`, read now, lists anything (the status poll's `dirty` can be 30 s old); `null` when git cannot read it |
 
-A VM is named `deriveProfileName(envRepoKey(repository), branch)` (`src/shared/environments.ts`):
-the repository's `environments.profileKey` when an import kept one, else its path. The server
-keeps a registry of its VMs (`<dataDir>/environments.json`, 0600) and each stack's log and `up`
-pid (`<dataDir>/stacks/`). The local server takes over the desktop's own files once, on its
-first start that has none (`start --local --import-env-from <app data dir>`; see the server's
-README).
+A VM is named `deriveProfileName(envRepoKey(repository), branch)` (`plugins/colima/shared/environments.ts`):
+the repository's `profileKey` (the `env` plugin's repo setting, mirrored in `environments.profileKey`)
+when an import kept one, else its path. The `env` plugin keeps a registry of its VMs
+(`<dataDir>/plugins/env/environments.json`, 0600; copied once from `<dataDir>/environments.json`, which
+a server before plugins E2 kept, and that file is left as it was). Each stack's log and `up` pid are in
+`<dataDir>/stacks/`. The local server takes over the desktop's own files once (`start --local
+--import-env-from <app data dir>`; see the server's README): the stacks' files at its first start
+(`<dataDir>/stacks.seeded` then says so), the registry when the `env` plugin has none yet.
 
 `docker.log` and `env.log` go only to the connection whose request started the run; another
 connection on the same project sees the result through `env.list` and `stack.status`, not the
@@ -1449,7 +1462,7 @@ The client's order, and what each step leaves behind when it fails:
 | Method | Params | Result |
 |---|---|---|
 | `move.prepare` | `{projectId, worktreeId}` | `{branch, origin, repoName, dirty, loaded, sessions, reviewComments, queuedPrompts, prWatch, ignored, ignoredCount, hiddenChanges, hiddenChangesCount, nestedRepos}`. `origin`: `git remote get-url origin` of its repository, or `null`. `sessions`: each `{title, provider, carried, reason?}`; a second session resuming the same `agentSessionId` as a carried one is not carried. `ignored`: the worktree's ignored files and folders outside its linked symlinks (the `linkedDirs` entries that are, in this worktree, symlinks into the main checkout; one that is a real folder here is the worktree's own and is listed like any other) (`git ls-files --others --ignored --exclude-standard --directory`, a folder ending in `/`), `hiddenChanges`: its files flagged assume-unchanged or skip-worktree and present on disk (`git ls-files -v`); neither moves, and both are deleted with the source. Each at most 50 paths, sorted; the counts are all of them. `nestedRepos`: its untracked folders that are git repositories of their own (`git ls-files --others` lists them as folders), without the trailing `/`, at most 50, sorted: `move.export` refuses while there is one. `BAD_REQUEST` for a main checkout or a detached HEAD |
-| `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint, history, serverName}` (the last two: see [Worktree history](#worktree-history)). `patch`: every change against HEAD, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`: `git add -A`, then the plumbing `git diff-index --cached -p --binary --full-index --no-textconv --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ -U3 HEAD`, with `core.quotepath=false` and `diff.suppressBlankEmpty=false`), so the worktree's own index is never touched and no git config or `.gitattributes` diff driver (textconv, `diff.noprefix`, `diff.context`, `diff.suppressBlankEmpty`, renames, color) shapes it; of the repository's `linkedDirs` (normalized as for `repo.update`), those that are in this worktree symlinks into the main checkout (what worktree creation links) are left out, since the target links them itself; one that is a real folder or file here (checked in, or never linked) is carried like any other path, and a target that links it instead refuses the move (`move.receive` below); `''` when clean, and refused (`GIT_ERROR`) when it is empty while the work tree differs from HEAD outside the linked symlinks. At most 8 MiB, the untracked files measured before git hashes them (`BAD_REQUEST`, as is a patch too big to read), valid UTF-8 (a text file in another encoding would not survive the frame), no untracked nested git repository (`git add -A` would carry only a gitlink; the message names it), and the whole answer at most 14 MiB as JSON (the escaping of quotes and control characters can grow a patch past the 16 MiB frame, and `move.receive` carries it again), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, historyBytes, historySha256, sessionTypeName?, systemPrompt?, complete?}` (the history's bytes travel by `move.history`). `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text (a client leaves it out for a target without `env`). `fingerprint`: a hash of `head`, `patch` and each carried history's `agentSessionId`, size and sha256. `IN_USE` while loaded |
+| `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint, history, serverName}` (the last two: see [Worktree history](#worktree-history)). `patch`: every change against HEAD, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`: `git add -A`, then the plumbing `git diff-index --cached -p --binary --full-index --no-textconv --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ -U3 HEAD`, with `core.quotepath=false` and `diff.suppressBlankEmpty=false`), so the worktree's own index is never touched and no git config or `.gitattributes` diff driver (textconv, `diff.noprefix`, `diff.context`, `diff.suppressBlankEmpty`, renames, color) shapes it; of the repository's `linkedDirs` (normalized as for `repo.update`), those that are in this worktree symlinks into the main checkout (what worktree creation links) are left out, since the target links them itself; one that is a real folder or file here (checked in, or never linked) is carried like any other path, and a target that links it instead refuses the move (`move.receive` below); `''` when clean, and refused (`GIT_ERROR`) when it is empty while the work tree differs from HEAD outside the linked symlinks. At most 8 MiB, the untracked files measured before git hashes them (`BAD_REQUEST`, as is a patch too big to read), valid UTF-8 (a text file in another encoding would not survive the frame), no untracked nested git repository (`git add -A` would carry only a gitlink; the message names it), and the whole answer at most 14 MiB as JSON (the escaping of quotes and control characters can grow a patch past the 16 MiB frame, and `move.receive` carries it again), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, historyBytes, historySha256, sessionTypeName?, systemPrompt?, complete?}` (the history's bytes travel by `move.history`). `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text, also in `pluginSettings.env.env`, which it mirrors (a client leaves both out for a target without `env`). `fingerprint`: a hash of `head`, `patch` and each carried history's `agentSessionId`, size and sha256. `IN_USE` while loaded |
 | `move.history` | `{projectId, worktreeId, agentSessionId, offset}` | `{data, offset, total, done}`: base64 of at most 4 MiB of the session's history from byte `offset`; `done` once `offset` plus the chunk reaches `total`. Only a carried session (a Claude one with a saved history of at most 64 MiB) of an unloaded worktree (`IN_USE`; `NOT_FOUND` for another session; `BAD_REQUEST` for an offset past the end). Only the conversation's `<id>.jsonl` travels: Claude's `<id>/` folder beside it (subagent transcripts, tool results) stays in the source machine's `~/.claude`; the resumed conversation still reads, but its subagents' transcripts are not there |
 | `move.finish` | `{projectId, worktreeId, fingerprint, verifyOnly?, toServer?, teardown?}` (`toServer`: see [Worktree history](#worktree-history); `teardown`: see [Worktree teardown](#worktree-teardown), not with `verifyOnly`) | `null`: with `verifyOnly`, only the checks below, nothing removed; else the worktree is removed (`git worktree remove --force`, then from the project, with its sessions and its review draft), and the branch's PR watch ends. `CONFLICT` if its HEAD, its uncommitted work or a carried session's history changed since `move.export` (`fingerprint`; a patch that can no longer be built, too big or not UTF-8, counts as changed), `IN_USE` if it was loaded again; then nothing changes. `CONFLICT` too while the worktree is being torn down |
 | `move.candidates` | `{origin, branch}` | `[{projectId, projectName, repoId, repoName, path, blocked?}]`: each project's registered repository whose origin names the same repository (ssh, https and `file://` forms compare equal: `normalizeOrigin` in `src/shared/move.ts`), with the default worktree path (`<repo>-<branch>`), and `blocked` when the branch name is not valid there (`git check-ref-format`), the branch is checked out there already, the path exists, or the path is outside what the server may use |

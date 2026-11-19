@@ -1,7 +1,7 @@
 // The Colima environments plugin's server half (plugins E2): one Colima VM per worktree's branch,
 // with docker compose inside it, on the server's machine (macOS and Linux). Wire names unchanged
-// from core's: env.*, event env.log. Before E2: src/host/colimaService.ts, src/host/environmentService.ts
-// and the env half of server/src/integrations/machineHandlers.ts.
+// from core's: env.*, event env.log. Before E2 these were core's own Colima and environment services
+// (removed in E2) and the env half of the server's machine handlers.
 import { dirname } from 'node:path'
 import { defineServerPlugin, type PluginInstance, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { COLIMA_MANIFEST } from '../manifest.ts'

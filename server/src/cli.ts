@@ -103,9 +103,10 @@ Options:
                     directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -,
                     starting with a letter or digit.
   --import-env-from <dir>
-                    With start --local: the Trek app's data dir. Once, while the local data dir
-                    has no environments.json, its Colima environments registry and dev stack files
-                    are copied in (the app ran them itself before; the files there are kept).
+                    With start --local: the Trek app's data dir. Its dev stack files, and the env
+                    plugin's VM registry, are taken over once (the app ran them itself before; the
+                    files there are kept). A local data dir from before plugins E2 took them over
+                    already: its stacks are not taken again, and its registry is copied instead.
   --id <id>         add: repo id (default: slug of the directory name)
   --name <name>     add: display name (default: the directory name)
   -h, --help        Show this help

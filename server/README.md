@@ -334,9 +334,11 @@ project is stored as one JSON file in the data dir:
 - Windows: `%LOCALAPPDATA%\trek-server\projects\`
 
 Set `"dataDir"` in the config or pass `--data-dir` to put them elsewhere.
-The data dir also holds the environments' registry (`environments.json`, 0600: each
-`twb-` Colima VM's repository, branch and worktree, and the branch's variables) and
-each dev stack's log and `stack.sh up` pid (`stacks/`).
+The data dir also holds each dev stack's log and `stack.sh up` pid (`stacks/`),
+and each built-in plugin's files (`plugins/<id>/`): among them the Colima
+environments' registry (`plugins/env/environments.json`, 0600: each `twb-` VM's
+repository, branch and worktree, and the branch's variables; before plugins E2 it
+was `environments.json`, copied across once and left there).
 `start --data-dir` remembers the directory in the config, so later commands use it too.
 `trek-server remove` refuses to remove a repo that a project still uses.
 
@@ -414,28 +416,34 @@ run by hand:
   last boot, is taken over; SIGKILL leaves both files for the next start to
   clean up (SIGINT, SIGTERM and SIGHUP remove them);
 - `--import-env-from <dir>` (only with `start --local`, and an absolute path; the
-  app passes its own data dir): once per local profile, on a start whose data
-  dir has no `environments.json` yet, the environments registry and the dev
-  stacks' files a Trek before 5a kept there are copied in. Only well-formed
-  `twb-` entries are copied; a variable `env.up` would refuse (`PATH`, `HOME`,
-  `DOCKER_*`, …) or a compose file outside the worktree is left out, the entry
-  kept. A stack's log is hard-linked (copied when it cannot be), so a stack still
-  running keeps logging to it: the log is the one file both share, and both only
-  append. A pid file is written afresh, and only while its process lives. The
-  registry and pids there stay. With nothing to copy it writes an empty
-  registry, so it never copies again; a registry there that cannot be read or
-  parse is a warning, nothing is written, and the next start tries again. An
-  older Trek still running on that data dir afterwards, or the other local
-  profile, starts stacks this server cannot see (each takes its own copy).
-  A local server started by hand without `--import-env-from` that then writes
-  `environments.json` (any `env.up`) has a registry of its own: later starts
-  never import;
-- a local server also reads, read-only, the other local profiles'
-  `environments.json` (`local` and `local-*` beside its data dir), and does not
-  list a VM one of them names as an orphan (each profile took its own copy, so a
-  VM the installed app or a dev build creates afterwards is in only one). A VM
-  another trek-server on this machine (`start` without `--local`) created still
-  shows as an orphan, and deleting it removes its containers and volumes;
+  app passes its own data dir): once per local profile, the dev stacks' files and
+  the environments registry a Trek before 5a kept there are taken over. The
+  stacks' files at the first start (`stacks.seeded` in the data dir then says so;
+  a data dir with the `environments.json` of a server before plugins E2 took them
+  over then, and only gets the marker); the registry by the `env` plugin, at a
+  start where it has none yet (`plugins/env/environments.json`) and the data dir
+  has no `environments.json` from before plugins E2 (the plugin copies that one
+  instead). Only well-formed `twb-` entries are copied; a variable `env.up` would
+  refuse (`PATH`, `HOME`, `DOCKER_*`, …) or a compose file outside the worktree is
+  left out, the entry kept. A stack's log is hard-linked (copied when it cannot
+  be), so a stack still running keeps logging to it: the log is the one file both
+  share, and both only append. A pid file is written afresh, and only while its
+  process lives. The registry and pids there stay. With no registry to copy the
+  plugin writes an empty one, so it never copies again; a registry there that
+  cannot be read or parse is a warning, nothing is written, and the next start
+  tries again. An older Trek still running on that data dir afterwards, or the
+  other local profile, starts stacks this server cannot see (each takes its own
+  copy). A local server started by hand without `--import-env-from` that then
+  writes its registry (any `env.up`) has one of its own: later starts never import
+  it;
+- a local server also reads, read-only, the other local profiles' registries
+  (`local` and `local-*` beside its data dir: each one's
+  `plugins/env/environments.json`, or its `environments.json` until it is started
+  on plugins E2), and does not list a VM one of them names as an orphan (each
+  profile took its own copy, so a VM the installed app or a dev build creates
+  afterwards is in only one). A VM another trek-server on this machine (`start`
+  without `--local`) created still shows as an orphan, and deleting it removes its
+  containers and volumes;
 - any path is allowed (the welcome lists the `local` capability), since the
   user picks paths on their own disk. That covers every path check, not only
   `server.addRepo` and `project.import`: `worktree.create`

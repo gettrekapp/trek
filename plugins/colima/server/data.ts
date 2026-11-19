@@ -4,7 +4,7 @@
 // config is, so a server rolled back still has its VMs. Else, on a Local server started with
 // --import-env-from, the app's registry is taken over (seed.ts).
 //
-// Nothing already there is replaced, as envSeed.ts's take-over before E2: anything at the plugin's
+// Nothing already there is replaced, as in core's take-over before E2: anything at the plugin's
 // path (a file, even one that does not parse, or a dangling symlink) is the plugin's registry, and
 // anything at the old path is the server's own (it was 5a's take-over marker), so the app's is
 // then never taken. Both writes are write-once (seed.ts's writeFileOnce: a temp file hard-linked
