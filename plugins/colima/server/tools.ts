@@ -27,8 +27,18 @@ export interface ColimaProfile {
 export interface StreamOptions {
   /** Kills the run when it aborts */
   signal?: AbortSignal
-  /** The host refused the working directory (not a project's worktree, or outside the allowed paths): told here, not as the log's error line */
+  /**
+   * The host refused the working directory (not a project's worktree, gone, or outside the allowed
+   * paths): told here, not as the log's error line. Only the host's refusal: a program that could
+   * not start (an OS error code such as EACCES) is an `error:` line as any other.
+   */
   refused?: (message: string) => void
+}
+
+/** For tests: shorter limits than the real ones */
+export interface ToolLimits {
+  /** How long a service's logs may take; default 30 s */
+  logsTimeoutMs?: number
 }
 
 export interface Tools {
@@ -45,9 +55,20 @@ export interface Tools {
   composePs(profile: string, worktreePath: string, composeFile: string, envVars?: EnvVars): Promise<EnvService[]>
 }
 
-/** The most text a service's logs may be, both streams together */
+/**
+ * The most text a service's logs may be, both streams together: about 16 MiB, counted in UTF-16
+ * characters as they arrive (not bytes, as the old execFile maxBuffer was). Past it the program is
+ * stopped.
+ */
 const LOGS_MAX_CHARS = 16 * 1024 * 1024
 
+/** The host's refusal of a cwd (the registry's programCwd: a plain Error; the path guard's PATH_DENIED), not a program's own failure to start (ENOENT, ABORT_ERR, an OS errno code). */
+const isCwdRefusal = (err: unknown): boolean => {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === undefined || code === 'PATH_DENIED'
+}
+
+const seconds = (ms: number): string => `${ms / 1000} s`
 /** A composeFile may be a comma-separated list, layered as several -f flags. */
 export const splitComposeFiles = (composeFile: string): string[] =>
   composeFile
@@ -91,7 +112,8 @@ function parsePublishers(publishers: unknown): EnvServicePort[] {
 }
 
 /** `colimaDir`: the plugin's data directory, where colima runs (host.spawn needs a cwd). */
-export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colimaDir: string): Tools {
+export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colimaDir: string, limits: ToolLimits = {}): Tools {
+  const { logsTimeoutMs = 30_000 } = limits
   /** Streams combined output through onData and resolves the exit code; a program that can't start is -1, said in the output. */
   const stream = async (command: string, args: string[], onData: OnData, cwd: string, envVars?: EnvVars, options: StreamOptions = {}): Promise<number> => {
     onData(`$ ${command} ${args.join(' ')}\n`)
@@ -100,8 +122,7 @@ export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colim
       program = await host.spawn(command, args, { cwd, ...withVars(envVars), ...(options.signal ? { signal: options.signal } : {}), onOutput: (_stream, chunk) => onData(chunk) })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      const code = (err as { code?: unknown } | null)?.code
-      if (options.refused && code !== 'ENOENT' && code !== 'ABORT_ERR') options.refused(message)
+      if (options.refused && isCwdRefusal(err)) options.refused(message)
       else onData(`error: ${message}\n`)
       return -1
     }
@@ -171,17 +192,29 @@ export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colim
     async composeLogs(profile, worktreePath, composeFile, service, tail, envVars) {
       const out = { stdout: '', stderr: '' }
       let size = 0
-      const program = await host.spawn('docker', composeArgs(profile, composeFile, ['logs', '--no-color', '--tail', String(tail), service]), {
-        cwd: worktreePath,
-        ...withVars(envVars),
-        signal: AbortSignal.timeout(30_000),
-        onOutput: (which, chunk) => {
-          size += chunk.length
-          if (size <= LOGS_MAX_CHARS) out[which] += chunk
-        }
-      })
+      let program: SpawnedProgram | undefined
+      const signal = AbortSignal.timeout(logsTimeoutMs)
+      const timedOut = (): Error => new Error(`docker compose logs timed out after ${seconds(logsTimeoutMs)}`)
+      try {
+        program = await host.spawn('docker', composeArgs(profile, composeFile, ['logs', '--no-color', '--tail', String(tail), service]), {
+          cwd: worktreePath,
+          ...withVars(envVars),
+          signal,
+          onOutput: (which, chunk) => {
+            size += chunk.length
+            if (size <= LOGS_MAX_CHARS) out[which] += chunk
+            else program?.kill()
+          }
+        })
+      } catch (err) {
+        if (signal.aborted) throw timedOut()
+        throw err
+      }
+      // Past the cap before spawn resolved (onOutput had no program to kill yet)
+      if (size > LOGS_MAX_CHARS) program.kill()
       const end = await program.done
-      if (size > LOGS_MAX_CHARS) throw new Error("docker compose logs' output passed 16 MiB")
+      if (size > LOGS_MAX_CHARS) throw new Error("docker compose logs' output passed about 16 MiB")
+      if (signal.aborted) throw timedOut()
       if (end.code !== 0) throw new Error(firstLine(out.stderr) ?? `docker compose logs exited with ${end.code ?? end.signal}`)
       return out.stdout + out.stderr
     },

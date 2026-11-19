@@ -67,10 +67,15 @@ const isSudoHelperFailure = (output: string): boolean => /sudo|vmnet|password/i.
 export const COMPOSE_FILE_RE = /^(docker-)?compose([.-][^.]+)*\.(yml|yaml)$/i
 
 export interface EnvironmentServiceOptions {
-  /** The registry's JSON file (`<dataDir>/plugins/env/environments.json`, data.ts) */
+  /**
+   * The registry's JSON file (`<dataDir>/plugins/env/environments.json`, data.ts). It comes from
+   * host.dataFile, which makes the plugin's data directory 0700 (mkdir and chmod); the file is 0600.
+   */
   registryFile: string
   /** colima and docker, through the host */
   tools: Tools
+  /** For tests: how long compose down may take in a destroy; default 60 s */
+  composeDownTimeoutMs?: number
   /** VMs mount only this directory by default (Colima's $HOME); the worktree must be under it */
   home?: string
   /**
@@ -88,6 +93,7 @@ function registryUnreadable(registryFile: string, why: string): Error {
 export function createEnvironmentService(options: EnvironmentServiceOptions): EnvironmentService {
   const { registryFile, tools } = options
   const home = options.home ?? homedir()
+  const composeDownTimeoutMs = options.composeDownTimeoutMs ?? 60_000
 
   /**
    * No file is an empty registry. Any other failure to read or parse it throws when `strict` (a
@@ -308,10 +314,12 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
         const entry = entryOf(await readRegistry(), profile)
         if (entry && (await exists(entry.worktreePath))) {
           const composeFile = entry.composeFile || ENV_DEFAULTS.composeFile
+          const signal = AbortSignal.timeout(composeDownTimeoutMs)
           await tools.composeDownVolumes(profile, entry.worktreePath, composeFile, log.onData, entry.envVars, {
-            signal: AbortSignal.timeout(60_000),
+            signal,
             refused: (why) => log.onData(`skipping docker compose down: ${why}\n`)
           })
+          if (signal.aborted) log.onData(`docker compose down timed out after ${composeDownTimeoutMs / 1000} s; deleting the VM anyway\n`)
         }
         const code = await tools.deleteVm(profile, log.onData)
         try {
