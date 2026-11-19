@@ -11,7 +11,7 @@ const coded = (code, message) => Object.assign(new Error(message), { code })
 function setup({ partWarnings = [], checkbox = { confirmed: true, checked: true }, items = (all) => ({ confirmed: true, teardown: all.map((i) => i.id) }) } = {}) {
   const ui = []
   const teardown = createWorktreeTeardown({
-    pluginPart: (i) => (i.branch === 'feat' ? { notice: 'Its Docker environment (Colima VM “twb-feat-abc123”) and all its data will also be deleted.' } : undefined),
+    pluginPart: (owner, i) => (i.branch === 'feat' ? { notice: 'Its Docker environment (Colima VM “twb-feat-abc123”) and all its data will also be deleted.' } : undefined),
     destroyPluginPart: async (owner, i) => {
       ui.push(['destroy part', owner.name, i.path])
       return partWarnings

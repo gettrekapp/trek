@@ -34,7 +34,7 @@ export interface PluginPanel {
 /** A plugin's panel or Settings tab id in the window: `plugin:<id>` */
 export const pluginSlotId = (pluginId: string): `plugin:${string}` => `plugin:${pluginId}`
 
-type Log = (message: string, err?: unknown) => void
+export type Log = (message: string, err?: unknown) => void
 
 const consoleLog: Log = (message, err) => console.error(message, err)
 
@@ -83,12 +83,25 @@ export function panelEntries(sources: readonly SlotSource[], worktree: PluginWor
   })
 }
 
+/** Which of a plugin's own subscriptions `subscribeAll` takes: its Run-menu entry's, or another slot's */
+export interface SlotSubscription {
+  subscribe(plugin: ClientPlugin, listener: () => void): unknown
+  has(plugin: ClientPlugin): boolean
+  what: string
+}
+
+const RUN_MENU: SlotSubscription = {
+  has: (plugin) => !!plugin.slots?.worktreePanel,
+  subscribe: (plugin, listener) => plugin.slots!.worktreePanel!.subscribe(listener),
+  what: 'Run menu subscription'
+}
+
 /**
- * Subscribes `listener` to each plugin's own state behind its Run-menu entry and to its host's
- * repositories. A subscribe that throws is warned about once; one that returns no function, and
+ * Subscribes `listener` to each plugin's own state behind its Run-menu entry (or `slot`'s) and to its
+ * host's repositories. A subscribe that throws is warned about once; one that returns no function, and
  * an unsubscribe that throws (logged), change nothing else. Returns the unsubscribe of them all.
  */
-export function subscribeAll(sources: readonly SlotSource[], listener: () => void, log: Log = consoleLog): () => void {
+export function subscribeAll(sources: readonly SlotSource[], listener: () => void, log: Log = consoleLog, slot: SlotSubscription = RUN_MENU): () => void {
   const offs: { pluginId: string; off: () => void }[] = []
   const add = (pluginId: string, subscribe: () => unknown, what: string): void => {
     try {
@@ -100,8 +113,7 @@ export function subscribeAll(sources: readonly SlotSource[], listener: () => voi
   }
   for (const { plugin, host } of sources) {
     const id = plugin.manifest.id
-    const slot = plugin.slots?.worktreePanel
-    if (slot) add(id, () => slot.subscribe(listener), 'Run menu subscription')
+    if (slot.has(plugin)) add(id, () => slot.subscribe(plugin, listener), slot.what)
     add(id, () => host.onReposChanged(listener), 'repositories subscription')
   }
   return () => {

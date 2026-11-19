@@ -73,7 +73,7 @@ export interface ConfirmPrompt {
  */
 export interface WorktreeTeardown {
   /** What the plugins tear down themselves (their legacyTeardown: the Colima VM): the confirm's sentence; undefined for nothing */
-  pluginPart(info: GitWorktreeInfo): { notice: string } | undefined
+  pluginPart(info: GitWorktreeInfo, backend: WindowBackend): { notice: string } | undefined
   /**
    * The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when
    * that is ticked. `stillWanted` false right before the dialog would show: not shown, not confirmed.
@@ -527,7 +527,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
         const machine = currentFeatures()
-        const part = deps.teardown.pluginPart(info)
+        const part = deps.teardown.pluginPart(info, backend)
         const prompt = removePrompt(info, loaded, dirty, part?.notice)
         const { confirmed, stackName } = machine.stacks
           ? await deps.teardown.confirm(info, prompt, backend)
@@ -660,7 +660,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         }
         // Old-server fallback (no worktreeTeardown): remove in a later release.
         const machine = currentFeatures()
-        const part = deps.teardown.pluginPart(info)
+        const part = deps.teardown.pluginPart(info, backend)
         const prompt = promotePrompt(plan, { ...(part ? { also: [part.notice] } : {}), asked })
         // Checked again right before the dialog shows (the stack's status is read first).
         const stillWanted = asked ? (): boolean => asked.stillAsked() : undefined

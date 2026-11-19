@@ -113,8 +113,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // legacyTeardown) and the dialogs (none once the window left); each step's server calls go
   // through the backend doing the remove.
   const teardown = createWorktreeTeardown({
-    pluginPart: (info) => {
-      const parts = left ? [] : legacyParts(info)
+    pluginPart: (owner, info) => {
+      const parts = left ? [] : legacyParts(info, owner)
       return parts.length > 0 ? { notice: parts.map((p) => p.notice).join(' ') } : undefined
     },
     destroyPluginPart: (owner, info) => runLegacyParts(info, owner),

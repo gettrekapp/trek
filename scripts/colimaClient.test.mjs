@@ -8,6 +8,7 @@ import { composeFileArg, createRunLogFilter, envStartArgs } from '../plugins/col
 import { branchVars, envOn, patchedSettings, repoKeyOf, withBranchVars } from '../plugins/colima/client/settings.ts'
 import { envPanelEntry } from '../plugins/colima/client/panelEntry.ts'
 import { colimaLegacyTeardown } from '../plugins/colima/client/legacyTeardown.ts'
+import { envApi } from '../plugins/colima/client/api.ts'
 import { refreshEnvironments } from '../plugins/colima/client/poll.ts'
 import { useColimaStore } from '../plugins/colima/client/store.ts'
 import { deriveProfileName } from '../plugins/colima/shared/environments.ts'
@@ -173,7 +174,9 @@ test('the old-server fallback: the VM as the confirm says it; run deletes it thr
       return 0
     }
   })
-  assert.equal(colimaLegacyTeardown.part(host, feat), null, 'no VM known')
+  store.setToolCheck({ ok: true })
+  store.setEnvironments([])
+  assert.equal(colimaLegacyTeardown.part(host, feat), null, 'listed, and no VM')
   store.setEnvironments([vm('running')])
   assert.deepEqual(colimaLegacyTeardown.part(host, feat), {
     label: `its VM “${profile}”`,
@@ -190,4 +193,85 @@ test('the old-server fallback: the VM as the confirm says it; run deletes it thr
   store.setEnvironments([vm('stopped')])
   assert.equal(colimaLegacyTeardown.repoRemoveBlock(host, repo({ enabled: true })), null, 'a stopped VM keeps nothing')
   store.reset()
+})
+
+test("the old-server fallback's part is unknown (undefined) until the poll has answered: no tool check yet, or a passed one with no list yet; then known", () => {
+  const store = useColimaStore.getState()
+  store.reset()
+  const host = fakeHost([repo({ enabled: true })])
+  assert.equal(colimaLegacyTeardown.part(host, feat), undefined, 'no tool check yet')
+  store.setToolCheck({ ok: true })
+  assert.equal(colimaLegacyTeardown.part(host, feat), undefined, 'the tools are there, the first list has not come')
+  store.setEnvironments([])
+  assert.equal(colimaLegacyTeardown.part(host, feat), null, 'listed: no VM')
+  store.reset()
+  store.setToolCheck({ ok: false, error: 'colima not found' })
+  assert.equal(colimaLegacyTeardown.part(host, feat), null, 'no colima on the server: nothing it could tear down')
+  store.reset()
+  store.setToolCheck({ ok: true })
+  store.setListError('the registry is unreadable')
+  assert.equal(colimaLegacyTeardown.part(host, feat), null, 'a list that cannot be read waits for nobody (as before E3)')
+  store.reset()
+  assert.equal(colimaLegacyTeardown.part(fakeHost([repo({ enabled: false })]), feat), null, 'environments off')
+  assert.equal(colimaLegacyTeardown.part(host, { ...feat, branch: undefined }), null, 'no branch, no VM')
+  // Its subscription follows the plugin's store.
+  let heard = 0
+  const off = colimaLegacyTeardown.subscribe(() => heard++)
+  store.setToolCheck({ ok: true })
+  off()
+  store.setEnvironments([])
+  assert.equal(heard, 1)
+  store.reset()
+})
+
+test("envApi: the env plugin's calls on the window's server, by the worktree's server id and the repository's; the long ones with long timeouts; env.log until unsubscribed", async () => {
+  const calls = []
+  const timeouts = []
+  const listeners = {}
+  const host = fakeHost([], {
+    request: async (method, params, options) => {
+      calls.push([method, params])
+      if (options?.timeoutMs) timeouts.push([method, options.timeoutMs / 60_000])
+      return method === 'up' ? { code: 0 } : 0
+    },
+    onEvent: (event, listener) => {
+      ;(listeners[event] ??= []).push(listener)
+      return () => (listeners[event] = listeners[event].filter((l) => l !== listener))
+    }
+  })
+  const api = envApi(host)
+  await api.check()
+  await api.list('r1')
+  await api.up(feat, { enabled: true, cpu: 3 }, { FOO: 'bar' })
+  await api.up(feat, { enabled: true }, undefined)
+  await api.stop('twb-feat-abc123')
+  await api.destroy('twb-feat-abc123')
+  await api.ps(feat, undefined)
+  await api.ps(feat, 'compose.dev.yaml')
+  await api.composeFiles(feat)
+  await api.logs(feat, undefined, 'web', 300)
+  const w = { projectId: 'p1', worktreeId: 'w2' }
+  assert.deepEqual(calls, [
+    ['check', {}],
+    ['list', { projectId: 'p1', repoId: 'r1' }],
+    ['up', { ...w, settings: { enabled: true, cpu: 3 }, envVars: { FOO: 'bar' } }],
+    ['up', { ...w, settings: { enabled: true } }],
+    ['stop', { profile: 'twb-feat-abc123' }],
+    ['destroy', { profile: 'twb-feat-abc123' }],
+    ['ps', w],
+    ['ps', { ...w, composeFile: 'compose.dev.yaml' }],
+    ['composeFiles', w],
+    ['logs', { ...w, service: 'web', tail: 300 }]
+  ])
+  assert.deepEqual(timeouts, [
+    ['up', 30],
+    ['up', 30],
+    ['stop', 10],
+    ['destroy', 10]
+  ])
+  const heard = []
+  const off = api.onLog((e) => heard.push([e.profile, e.step ?? null]))
+  for (const l of listeners.log) l({ profile: 'twb-x', data: '', step: 'vm' })
+  off()
+  assert.deepEqual([listeners.log, heard], [[], [['twb-x', 'vm']]])
 })

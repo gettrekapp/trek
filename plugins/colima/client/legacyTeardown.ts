@@ -6,7 +6,7 @@ import type { ClientPluginHost, LegacyTeardownSlot, PluginWorktree } from '../..
 import { envApi } from './api.ts'
 import { vmOf } from './panelEntry.ts'
 import { refreshEnvironments } from './poll.ts'
-import { repoKeyOf } from './settings.ts'
+import { envOn, repoKeyOf } from './settings.ts'
 import { useColimaStore } from './store.ts'
 
 const vmFor = (host: ClientPluginHost, worktree: PluginWorktree) => {
@@ -14,10 +14,21 @@ const vmFor = (host: ClientPluginHost, worktree: PluginWorktree) => {
   return vmOf(host.repos(), worktree, environments, busy).env
 }
 
+/**
+ * No VM listed, but the poll hasn't answered yet: the repository has environments on and the
+ * worktree a branch, and the tool check hasn't come, or passed with no list yet. A failed check (no
+ * colima there) or a list the server can't read waits for nobody, as before plugins E3.
+ */
+const unknownYet = (host: ClientPluginHost, worktree: PluginWorktree): boolean => {
+  if (!worktree.branch || !envOn(host.repos().find((r) => r.id === worktree.repoId))) return false
+  const { toolCheck, listed, listError } = useColimaStore.getState()
+  return toolCheck === null || (toolCheck.ok && !listed && listError === null)
+}
+
 export const colimaLegacyTeardown: LegacyTeardownSlot = {
   part: (host, worktree) => {
     const env = vmFor(host, worktree)
-    if (!env) return null
+    if (!env) return unknownYet(host, worktree) ? undefined : null
     return {
       label: `its VM “${env.profile}”`,
       notice: `Its Docker environment (Colima VM “${env.profile}”) and all its data will also be deleted.`,
@@ -44,5 +55,6 @@ export const colimaLegacyTeardown: LegacyTeardownSlot = {
     const keys = new Set([repo.path, repoKeyOf(repo)])
     const running = Object.values(useColimaStore.getState().environments).some((e) => keys.has(e.repoPath) && e.vmState === 'running')
     return running ? 'It has a running environment. Stop it in the Env tab first.' : null
-  }
+  },
+  subscribe: (listener) => useColimaStore.subscribe(() => listener())
 }

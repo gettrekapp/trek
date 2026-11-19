@@ -13,8 +13,8 @@ import type { WindowBackend } from './backend'
 import type { ConfirmPrompt, WorktreeTeardown } from './v2/backendV2'
 
 export interface WorktreeTeardownDeps {
-  /** What the active plugins tear down themselves (their legacyTeardown), from their own state: the confirm's sentence */
-  pluginPart(info: GitWorktreeInfo): { notice: string } | undefined
+  /** What the active plugins tear down themselves (their legacyTeardown), from their own state through `backend`'s hosts: the confirm's sentence */
+  pluginPart(backend: WindowBackend, info: GitWorktreeInfo): { notice: string } | undefined
   /** Tears those down through `backend`: their warnings, instead of a rejection */
   destroyPluginPart(backend: WindowBackend, info: GitWorktreeInfo): Promise<string[]>
   showError(title: string, message: string): Promise<void>
@@ -33,7 +33,7 @@ export const DIRTY_CHECK_TIMED_OUT =
 
 export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTeardown {
   return {
-    pluginPart: (info) => deps.pluginPart(info),
+    pluginPart: (info, backend) => deps.pluginPart(backend, info),
 
     // The server's plan, a checkbox per item in the window (teardownPrompt.ts), with the participants
     // it could not ask (plugins E3); no items and none of those: the plain confirm.

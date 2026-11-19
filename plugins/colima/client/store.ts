@@ -17,6 +17,8 @@ interface ColimaValues {
   toolCheck: EnvCheckResult | null
   /** Why env.list cannot list them (its registry unreadable); null when it can */
   listError: string | null
+  /** Whether a list has come since the reset (before it, an empty `environments` says nothing) */
+  listed: boolean
 }
 
 interface ColimaState extends ColimaValues {
@@ -27,7 +29,7 @@ interface ColimaState extends ColimaValues {
   reset(): void
 }
 
-const empty = (): ColimaValues => ({ environments: {}, busy: {}, toolCheck: null, listError: null })
+const empty = (): ColimaValues => ({ environments: {}, busy: {}, toolCheck: null, listError: null, listed: false })
 
 export const useColimaStore = create<ColimaState>((set) => ({
   ...empty(),
@@ -35,8 +37,8 @@ export const useColimaStore = create<ColimaState>((set) => ({
     set((state) => {
       const next: Record<string, EnvironmentInfo> = {}
       for (const info of infos) next[info.profile] = info
-      if (JSON.stringify(state.environments) === JSON.stringify(next)) return state
-      return { environments: next }
+      if (state.listed && JSON.stringify(state.environments) === JSON.stringify(next)) return state
+      return { environments: next, listed: true }
     }),
   setBusy: (profile, action) =>
     set((state) => {

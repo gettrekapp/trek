@@ -197,12 +197,18 @@ export interface WorktreePanelSlot {
  * its project. Remove with the fallbacks.
  */
 export interface LegacyTeardownSlot {
-  /** What it would tear down for the worktree now, from its own state: the move dialog's `label`, the confirm's `notice`; null for nothing */
-  part(host: ClientPluginHost, worktree: PluginWorktree): { label: string; notice: string; running: boolean } | null
+  /**
+   * What it would tear down for the worktree now, from its own state: the move dialog's `label`, the
+   * confirm's `notice`; null for nothing; undefined while it can't tell yet (its first read hasn't
+   * come: the move dialog waits)
+   */
+  part(host: ClientPluginHost, worktree: PluginWorktree): { label: string; notice: string; running: boolean } | null | undefined
   /** Tears it down: a warning to show instead of a rejection */
   run(host: ClientPluginHost, worktree: PluginWorktree): Promise<string | undefined>
   /** Why the repository can't leave its project now, or null */
   repoRemoveBlock(host: ClientPluginHost, repo: PluginRepo): string | null
+  /** Calls `listener` when the plugin's own state behind `part` and `repoRemoveBlock` changes; returns the unsubscribe */
+  subscribe(listener: () => void): () => void
 }
 
 export interface ClientPlugin {

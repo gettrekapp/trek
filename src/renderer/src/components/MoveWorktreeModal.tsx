@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
-import { legacyParts, runLegacyParts } from '../plugins/legacyTeardown'
+import { runLegacyParts, useLegacyParts } from '../plugins/legacyTeardown'
 import { usePluginEntries } from '../plugins/PluginHost'
 import { errorText } from '../v2/errors'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
@@ -126,8 +126,9 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
 
   // The worktree's dev stack and the plugins' parts on the source's machine (the same ones Delete tears down).
   const features = useFeatures()
-  // Old-server fallback (no worktreeTeardown): what the plugins tear down themselves (the Colima VM). Remove in a later release.
-  const parts = legacyParts(info)
+  // Old-server fallback (no worktreeTeardown): what the plugins tear down themselves (the Colima VM),
+  // kept current with their own state; Move waits while one can't tell yet. Remove in a later release.
+  const { parts, pending: partsPending } = useLegacyParts(info)
   // The participants the server could not ask, by their plugins' names (plugins E3).
   const pluginEntries = usePluginEntries()
   const nameOf = (id: string): string => pluginEntries.find((e) => e.plugin.manifest.id === id)?.plugin.manifest.name ?? id
@@ -198,7 +199,8 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
     }
   }, [source, serverTeardown, from.projectId, from.worktreeId, teardownTry])
   const planItems = serverTeardown && teardownRead.kind === 'ok' ? teardownRead.items : []
-  const teardownUnknown = serverTeardown && teardownRead.kind !== 'ok'
+  // The `: …` arm: Old-server fallback (no worktreeTeardown), a plugin that can't tell yet: remove in a later release.
+  const teardownUnknown = serverTeardown ? teardownRead.kind !== 'ok' : partsPending.length > 0
   // Only an unticked item that is running keeps Move off, or a running stack the plan left out, or a
   // participant the server could not ask.
   const teardownCheck = moveTeardownCheck(planItems, ticked, { stack: stackRunning, unchecked: teardownRead.kind === 'ok' ? teardownRead.unplanned : [] }, nameOf)
@@ -499,6 +501,11 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                 </li>
               )}
               {/* Old-server fallback (no worktreeTeardown): remove in a later release. */}
+              {!serverTeardown && partsPending.length > 0 && (
+                <li className="move-teardown-pending">
+                  Checking what {partsPending.join(' and ')} would tear down on this server, so Move waits until it knows.
+                </li>
+              )}
               {!serverTeardown && machine && (
                 <li className={machineBlocks ? 'warn' : undefined}>
                   <label className="move-teardown">
