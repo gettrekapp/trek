@@ -119,18 +119,23 @@ if (!(EXPECTED_CAPABILITIES.every((c) => conn.welcome?.capabilities.includes(c))
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 1b. plugins (plugin system phase 1): listed in the welcome; a 0.2.1 client's voice.* still answers ---
+// The server lists the plugins it set up in registration order (plugins/builtin.server.ts), then
+// those not for its platform, `available: false` (server/src/plugins/registry.ts presence()).
 const BUILTIN_PLUGINS = [
   { id: 'voice', version: '1.0.0', defaultEnabled: true },
   { id: 'linear', version: '1.0.0', defaultEnabled: true },
   { id: 'azure-devops', version: '1.0.0', defaultEnabled: true },
   { id: 'github', version: '1.0.0', defaultEnabled: true },
   // Colima environments (plugins E2): registered everywhere, set up only on macOS and Linux.
-  process.platform === 'win32' ? { id: 'env', version: '1.0.0', defaultEnabled: true, available: false } : { id: 'env', version: '1.0.0', defaultEnabled: true },
+  ...(process.platform === 'win32' ? [] : [{ id: 'env', version: '1.0.0', defaultEnabled: true }]),
   // The campsite (pixel hikers on tabs, terminals and a strip): client-only, on by default.
-  { id: 'campsite', version: '1.0.0', defaultEnabled: true }
+  { id: 'campsite', version: '1.0.0', defaultEnabled: true },
+  // On Windows env is not set up, so it comes last.
+  ...(process.platform === 'win32' ? [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }] : [])
 ]
+const PLUGIN_IDS = BUILTIN_PLUGINS.map((p) => p.id).join(', ')
 if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify(BUILTIN_PLUGINS)) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
-else ok('welcome plugins: voice, linear, azure-devops, github, env, campsite')
+else ok(`welcome plugins: ${PLUGIN_IDS}`)
 try {
   // As 0.2.1 sends it, with no idea that voice is a plugin now.
   const settings = await conn.request('voice.settings', {})

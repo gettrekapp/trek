@@ -258,7 +258,9 @@ try {
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the server says linear, voice and skills, and is not a local one', ['linear', 'voice', 'skills', 'local'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, false])
-  check('and lists its plugins: voice, linear, azure-devops, github, env, campsite', sdk.welcome?.plugins?.map((p) => p.id), ['voice', 'linear', 'azure-devops', 'github', 'env', 'campsite'])
+  // The plugins it set up in registration order, then those not for its platform (env on Windows).
+  const pluginIds = process.platform === 'win32' ? ['voice', 'linear', 'azure-devops', 'github', 'campsite', 'env'] : ['voice', 'linear', 'azure-devops', 'github', 'env', 'campsite']
+  check(`and lists its plugins: ${pluginIds.join(', ')}`, sdk.welcome?.plugins?.map((p) => p.id), pluginIds)
   const { projectId } = await sdk.request('project.create', { name: 'integrations', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
   const project = async () => {

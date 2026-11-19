@@ -1064,7 +1064,7 @@ try {
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
-    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub'], ['Voice summaries']],
+    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite'], ['Voice summaries']],
     ['Appearance', 'Notifications', 'Local server']
   ])
   await openSettingsTab(settings, 'Agents')

@@ -482,7 +482,8 @@ try {
   const app0 = lp.repositories[0]
   check('Local: one repository, at its realpath', lp.repositories.map((r) => [r.name, r.path]), [['app', realRepo]])
   check('Local: worktrees at their realpaths', app0.worktrees.map((w) => [w.name, w.path, w.isMain]), [['app', realRepo, true], ['feature-x', realFeature, false]])
-  check('Local: the branch data', app0.branchData['feature-x'], { tag: 'In Review', customTags: ['hot'], note: 'note x', ticket: 'TOW-7', pr: 'https://example.invalid/pr/7', env: 'FOO=1' })
+  // The .env twice since plugins E2: the old field and the env plugin's copy, mirrored for a release.
+  check('Local: the branch data', app0.branchData['feature-x'], { tag: 'In Review', customTags: ['hot'], note: 'note x', ticket: 'TOW-7', pr: 'https://example.invalid/pr/7', env: 'FOO=1', pluginSettings: { env: { env: 'FOO=1' } } })
   check('Local: linked dirs and the environments, with the profile key', [app0.linkedDirs, app0.environments], [['.trek'], { enabled: true, cpu: 3, profileKey: fileRepo }])
   check('Local: the VM names its file window made', deriveProfileName(envRepoKey(app0), 'feature-x'), deriveProfileName(fileRepo, 'feature-x'))
   check('Local: settings and the worktree order, re-keyed', [lp.settings.sessionSystemPrompt, lp.settings.audioAlerts, lp.settings.worktreeOrder?.length], ['Be brief.', true, 2])
