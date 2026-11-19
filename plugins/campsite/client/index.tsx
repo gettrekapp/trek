@@ -2,6 +2,7 @@
 // campsite strip, and its Settings section.
 import { defineClientPlugin } from '../../../src/shared/plugins/client.ts'
 import { CAMPSITE_MANIFEST } from '../manifest.ts'
+import './campsite.css'
 
 export const campsiteClientPlugin = defineClientPlugin({
   manifest: CAMPSITE_MANIFEST,

@@ -1,0 +1,60 @@
+/* The campsite plugin. Every class starts with cs- or campsite. */
+.cs-hiker {
+  overflow: visible;
+  flex: none;
+  display: block;
+}
+.cs-grey {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+.cs-frame-0 {
+  animation: cs-frame-a 0.5s steps(1) infinite;
+}
+.cs-frame-1 {
+  visibility: hidden;
+  animation: cs-frame-b 0.5s steps(1) infinite;
+}
+@keyframes cs-frame-a {
+  0% { visibility: visible; }
+  50% { visibility: hidden; }
+}
+@keyframes cs-frame-b {
+  0% { visibility: hidden; }
+  50% { visibility: visible; }
+}
+.cs-bob { animation: cs-bob 1.4s ease-in-out infinite; }
+.cs-wave { animation: cs-bob 0.5s ease-in-out infinite; }
+.cs-hop { animation: cs-hop 0.9s ease-in-out infinite; }
+.cs-breathe { animation: cs-breathe 3s ease-in-out infinite; transform-origin: bottom center; }
+.cs-step { animation: cs-bob 0.35s steps(2) infinite; }
+.cs-sign { animation: cs-pulse 1s steps(2) infinite; }
+@keyframes cs-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes cs-hop {
+  0%, 100% { transform: translateY(0); }
+  40%, 60% { transform: translateY(-4px); }
+}
+@keyframes cs-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.03, 0.97); }
+}
+@keyframes cs-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-hiker,
+  .cs-hiker *,
+  .campsite,
+  .campsite * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .cs-frame-1 {
+    visibility: hidden;
+  }
+}
