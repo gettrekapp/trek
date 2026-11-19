@@ -21,6 +21,7 @@ import { UiSelections } from '../server/src/ui/selections.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 import { removeDir } from './testPlatform.mjs'
 
 // The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
@@ -1107,6 +1108,14 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
   const notOwned = await refusal(s.call('get_pull_request', { worktree: 'main' }))
   assert.equal(notOwned[0], 'BAD_REQUEST')
   assert.match(notOwned[1], /no pull request provider is on for/)
+
+  // A provider whose parse throws: the link is not one it can read (BAD_REQUEST, not an internal error).
+  const throwing = { ...createGithubPrProvider(async () => ''), parse: () => { throw new Error('boom') } }
+  const odd = await toolSetup(t, { prWatch, plugins: { prProviders: () => [throwing] } })
+  odd.projects.apply(odd.projectId, (d) => { d.repositories[0].branchData.main = { pr: url } })
+  const thrown = await refusal(odd.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(thrown[0], 'BAD_REQUEST')
+  assert.match(thrown[1], /no pull request provider is on for/)
 
   // A server with no watcher at all.
   const bare = await toolSetup(t)

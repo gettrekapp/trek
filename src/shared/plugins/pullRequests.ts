@@ -50,6 +50,12 @@ function safely<T>(provider: PrProvider, method: string, fallback: T, call: () =
 const valid = (pr: ParsedPr | null | undefined): pr is ParsedPr =>
   !!pr && typeof pr.url === 'string' && pr.url !== '' && Number.isSafeInteger(pr.number) && pr.number > 0 && typeof pr.label === 'string' && pr.label !== ''
 
+/** `input` parsed by `provider`; null when it isn't the provider's, its parse throws (logged once), or the answer is unusable. */
+export function safeParse(provider: PrProvider, input: string): ParsedPr | null {
+  const parsed = safely(provider, 'parse', null, () => provider.parse(input))
+  return valid(parsed) ? parsed : null
+}
+
 /** The first provider (in order) that parses `input` into a link it owns; null when none does. */
 export function parsePrWith(providers: readonly PrProvider[], input: string): (ParsedPr & { providerId: string }) | null {
   const trimmed = input.trim()

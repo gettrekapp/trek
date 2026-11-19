@@ -526,7 +526,7 @@ test('welcomeCapabilities lists prWatch only while gh is signed in', () => {
 })
 
 /** dispatchV2 with what these methods use. */
-function ctxFor(initial, { available = true } = {}) {
+function ctxFor(initial, { available = true, providers } = {}) {
   const hub = new TopicHub()
   const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [initial])
   const polled = []
@@ -543,7 +543,7 @@ function ctxFor(initial, { available = true } = {}) {
     }
   }
   const githubPrsServer = createGithubPrProvider(async () => '')
-  const plugins = { prProviders: () => [githubPrsServer] }
+  const plugins = { prProviders: () => providers ?? [githubPrsServer] }
   const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, plugins, sessions: { refreshAttention() {} } })
   return { call, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
 }
@@ -725,4 +725,30 @@ test('stop() during a poll: an aborted read (ABORT_ERR) is not a failed poll and
   await polling
   assert.deepEqual(warned, [])
   assert.equal(s.worktree().prNotice, undefined)
+})
+
+test('the provider switched off for the project while it read: what it found is still reported', async () => {
+  let on = true
+  let release
+  const gate = new Promise((r) => (release = r))
+  const { github } = githubOver(async (args) => (args[0] === 'auth' ? '' : (await gate, JSON.stringify(view({ state: 'MERGED' })))))
+  const s = setup(project({ prWatch: { seen: { checks: 'aaa passing', conflict: false } } }), [], { providers: { forProject: () => (on ? [github] : []), all: () => [github] } })
+  await s.watcher.ready
+  const polling = s.watcher.poll(target)
+  on = false
+  release()
+  await polling
+  assert.deepEqual(s.data(), { pr: URL }, 'the watch ended')
+  assert.match(s.queued[0].text, /It was merged\./)
+  assert.equal(s.worktree().prNotice.text, 'Merged — prompt queued for Claude')
+})
+
+test('branch.setPrWatch: a provider whose parse throws, or does not give the stored link back, is refused as BAD_REQUEST', () => {
+  const owning = (parse) => ({ ...createGithubPrProvider(async () => ''), parse })
+  for (const parse of [() => { throw new Error('boom') }, () => ({ url: 'https://github.com/acme/app/pull/12/', number: 12, label: '#12' }), () => ({ url: URL, number: 0, label: '#0' })]) {
+    const c = ctxFor(project({ prWatch: null }), { providers: [owning(parse)] })
+    const error = c.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error
+    assert.equal(error?.code, 'BAD_REQUEST', String(parse))
+    assert.equal(c.data().prWatch, undefined)
+  }
 })

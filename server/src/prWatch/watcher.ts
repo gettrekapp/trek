@@ -1,12 +1,12 @@
-// The pull request watch (phase 5c-1; plugins P3): every few minutes the server asks each watched
-// branch's linked PR's provider (a plugin's PrServerProvider: GitHub's goes through gh) about it, compares it with the last poll (src/shared/prWatch.ts) and reports what changed:
-// a prompt queued on the worktree's newest agent session, and a notice on the worktree that the
+// The pull request watch (phase 5c-1; plugins P3): every few minutes the server asks the provider of
+// each watched branch's linked PR (a plugin's PrServerProvider; GitHub's goes through gh) about it,
+// compares it with the last poll (src/shared/prWatch.ts) and reports what changed: a prompt queued on the worktree's newest agent session, and a notice on the worktree that the
 // `attention` topic lists. Nothing starts a session. A watch is the branch's `prWatch` field: it
 // is saved with the project, so it survives a restart, and its `seen` keeps a restart from reporting
 // anything twice. Merged or closed is reported, then the watch turns itself off.
 import type { PrNotice, Project, Repository, Worktree } from '../../../src/shared/model/types'
 import { noticeText, promptText, watchStep, type PrEvent, type PrView, type PromptOutcome } from '../../../src/shared/prWatch.ts'
-import { prOwner, type ParsedPr } from '../../../src/shared/plugins/pullRequests.ts'
+import { prOwner, safeParse, type ParsedPr } from '../../../src/shared/plugins/pullRequests.ts'
 import type { PrServerProvider } from '../../../src/shared/plugins/server.ts'
 import type { HistoryStore } from '../history/store.ts'
 import { BY_TREK, recordHistory } from '../history/record.ts'
@@ -78,16 +78,6 @@ function worktreeOn(repo: Repository, branch: string): Worktree | undefined {
   return repo.worktrees.find((w) => w.branch === branch && !w.missing)
 }
 
-/** `url` parsed by `provider`; null when it throws or gives nothing usable. */
-function parsedBy(provider: PrServerProvider, url: string): ParsedPr | null {
-  try {
-    const parsed = provider.parse(url)
-    return parsed && Number.isSafeInteger(parsed.number) && parsed.number > 0 && typeof parsed.label === 'string' && parsed.label !== '' ? parsed : null
-  } catch {
-    return null
-  }
-}
-
 /** Every watched branch checked out in a worktree whose link a provider on for its project owns. */
 export function watchTargets(projects: Iterable<Project>, providersFor: (projectId: string) => readonly PrServerProvider[]): Target[] {
   const out: Target[] = []
@@ -98,7 +88,7 @@ export function watchTargets(projects: Iterable<Project>, providersFor: (project
       for (const [branch, data] of Object.entries(repo.branchData)) {
         if (!data.prWatch || !data.pr || !worktreeOn(repo, branch)) continue
         const owner = prOwner(providers, data.pr)
-        const parsed = owner && parsedBy(owner, data.pr)
+        const parsed = owner && safeParse(owner, data.pr)
         if (owner && parsed && parsed.url === data.pr) {
           out.push({ projectId: project.id, repoId: repo.id, branch, url: data.pr, number: parsed.number, label: parsed.label, providerId: owner.id })
         }
@@ -370,7 +360,7 @@ export class PrWatcher {
       }
       this.lastError.delete(key)
       this.failures.delete(key)
-      this.apply(target, key, view)
+      this.apply(target, key, view, provider)
     } finally {
       this.inFlight.delete(key)
     }
@@ -427,7 +417,7 @@ export class PrWatcher {
    * meanwhile is left alone (its `seen` does not move, so nothing is lost; the next round's
    * forgetUnpolled drops it if the worktree stays gone).
    */
-  private apply(target: Target, key: string, view: PrView): void {
+  private apply(target: Target, key: string, view: PrView, provider: PrServerProvider): void {
     const unreadableAt = this.unreadable.get(key)
     if (unreadableAt !== undefined) {
       this.unreadable.delete(key)
@@ -457,7 +447,7 @@ export class PrWatcher {
       return // the project is gone
     }
     if (ended) recordHistory({ history: this.deps.history }, target.projectId, target.repoId, target.branch, [{ kind: 'prWatch.off', to: { text: ended } }], BY_TREK)
-    if (events.length > 0) this.report(target, events)
+    if (events.length > 0) this.report(target, events, provider)
   }
 
   /**
@@ -466,12 +456,11 @@ export class PrWatcher {
    * session that refuses it otherwise (closed meanwhile) passes it to the next newest. With none
    * left, the notice alone reports it.
    */
-  private report(target: Target, events: PrEvent[]): void {
+  private report(target: Target, events: PrEvent[], provider: PrServerProvider): void {
     // apply() ran in this same tick and found the worktree; this guard only covers a future await.
     const worktree = this.worktreeOf(target)
     if (!worktree) return
-    const provider = this.providerFor(target)
-    if (!provider) return
+    // The provider that read it, even if its plugin was turned off since: `seen` has already moved.
     const text = promptText(target.url, target.label, events, provider.promptHint)
     let outcome: PromptOutcome = 'noSession'
     // Sessions are kept in the order they were started; every v2 session runs an agent.

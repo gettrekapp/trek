@@ -38,7 +38,7 @@ import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
 import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
-import { prOwner } from '../../../src/shared/plugins/pullRequests.ts'
+import { prOwner, safeParse } from '../../../src/shared/plugins/pullRequests.ts'
 import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
 import { checkSource } from '../review/draft.ts'
@@ -1170,7 +1170,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (!data.pr) throw bad(`${branch} has no linked pull request (set_worktree_pull_request links one)`)
         const providers = deps.plugins?.prProviders(project.id) ?? []
         const provider = prOwner(providers, data.pr)
-        const parsed = provider?.parse(data.pr)
+        const parsed = provider && safeParse(provider, data.pr)
         if (!provider || !parsed) throw bad(`no pull request provider is on for ${data.pr} in this project (Settings → Plugins)`)
         const watcher = deps.prWatch
         if (!watcher?.availableFor(provider.id)) throw codedError('TOOL_ERROR', notSignedIn(provider.signInName))

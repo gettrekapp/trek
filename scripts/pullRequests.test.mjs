@@ -3,7 +3,7 @@
 // counts as no match.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parsePrWith, prLabel, prOwner, resolvePrInput } from '../src/shared/plugins/pullRequests.ts'
+import { parsePrWith, prLabel, prOwner, resolvePrInput, safeParse } from '../src/shared/plugins/pullRequests.ts'
 
 /** A made-up host: https://code.example/<repo>/pr/<n>. */
 const example = {
@@ -68,4 +68,13 @@ test('parsePrWith and resolvePrInput: when two providers both take the input, th
   assert.equal(parsePrWith([example, twin], 'https://code.example/app/pr/7')?.providerId, 'example')
   const resolved = resolvePrInput([twin, example], '9', ['https://code.example/app/pr/7'])
   assert.equal(resolved.ok && resolved.pr.providerId, 'twin')
+})
+
+test('safeParse: a provider\'s parse, with a throw or an unusable answer read as null', () => {
+  assert.deepEqual(safeParse(example, 'https://code.example/app/pr/7'), { url: 'https://code.example/app/pr/7', number: 7, label: '!7' })
+  assert.equal(safeParse(example, 'https://elsewhere/app/pr/7'), null)
+  assert.equal(safeParse(broken, 'https://code.example/app/pr/7'), null)
+  for (const bad of [{ url: 'u', number: 0, label: '#0' }, { url: 'u', number: 1.5, label: '#1' }, { url: 'u', number: 1, label: '' }, { url: '', number: 1, label: '#1' }]) {
+    assert.equal(safeParse({ ...example, id: 'odd', parse: () => bad }, 'u'), null, JSON.stringify(bad))
+  }
 })

@@ -2,7 +2,7 @@
 // dismissing a worktree's notice. The `prWatch` capability says some PR provider is signed in on the
 // server; turning a watch on needs the one that owns the branch's link (plugins P3).
 import type { BranchData } from '../../../src/shared/model/types'
-import { prOwner } from '../../../src/shared/plugins/pullRequests.ts'
+import { prOwner, safeParse } from '../../../src/shared/plugins/pullRequests.ts'
 import { recordHistory } from '../history/record.ts'
 import { codedError } from '../errors.ts'
 import { repoIn } from '../projects/model.ts'
@@ -31,7 +31,10 @@ export const prWatchHandlers: Record<string, Handler> = {
       if (watch) {
         if (!data.pr) throw codedError('BAD_REQUEST', `${branch} has no linked pull request`)
         const owner = prOwner(ctx.plugins?.prProviders(d.id) ?? [], data.pr)
-        if (!owner) throw codedError('BAD_REQUEST', `no pull request provider is on for ${data.pr} in this project (Settings → Plugins)`)
+        // Exactly what the watch will poll (watchTargets): an owner whose parse gives the stored link back.
+        if (!owner || safeParse(owner, data.pr)?.url !== data.pr) {
+          throw codedError('BAD_REQUEST', `no pull request provider is on for ${data.pr} in this project (Settings → Plugins)`)
+        }
         if (!ctx.prWatch?.availableFor(owner.id)) throw codedError('TOOL_ERROR', notSignedIn(owner.signInName))
         data.prWatch ??= {}
       } else delete data.prWatch
