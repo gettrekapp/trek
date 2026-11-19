@@ -6,5 +6,6 @@ import { linearServerPlugin } from './linear/server/index.ts'
 import { azureDevOpsServerPlugin } from './azure-devops/server/index.ts'
 import { githubServerPlugin } from './github/server/index.ts'
 import { colimaServerPlugin } from './colima/server/index.ts'
+import { campsiteServerPlugin } from './campsite/server/index.ts'
 
-export const BUILTIN_SERVER_PLUGINS: readonly ServerPlugin[] = [voiceServerPlugin, linearServerPlugin, azureDevOpsServerPlugin, githubServerPlugin, colimaServerPlugin]
+export const BUILTIN_SERVER_PLUGINS: readonly ServerPlugin[] = [voiceServerPlugin, linearServerPlugin, azureDevOpsServerPlugin, githubServerPlugin, colimaServerPlugin, campsiteServerPlugin]
