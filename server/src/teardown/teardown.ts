@@ -157,10 +157,11 @@ function inSentence(label: string): string {
 }
 
 /**
- * The worktrees (by real path) being torn down or held for an operation: one at a time each.
- * `finishing`: a participant hit the cap and is still running; the entry goes once it settles.
+ * The worktrees (by real path) being torn down or held for an operation: one at a time each, with
+ * what holds it ("removing it"). `finishing`: a participant hit the cap and is still running; the
+ * entry goes once it settles.
  */
-const running = new Map<string, 'running' | 'finishing'>()
+const running = new Map<string, { label: string } | 'finishing'>()
 
 /** A worktree held for one operation (holdWorktree): runTeardown inside it takes this instead of its own hold. */
 export class WorktreeHold {
@@ -185,7 +186,7 @@ export class WorktreeHold {
 
 function assertFree(key: string): void {
   const busy = running.get(key)
-  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : 'a teardown is already running for this worktree')
+  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : `this worktree is busy: ${busy.label}`)
 }
 
 /** CONFLICT while the worktree at `path` is being torn down, or a timed-out teardown of it is still finishing. */
@@ -197,11 +198,12 @@ export function assertNotTearingDown(path: string): void {
  * Runs `fn` (an operation on the worktree at `path`: its teardown and then its removal, promote or
  * move) with the worktree held: CONFLICT if it is busy, and any other teardown or hold of it is
  * CONFLICT until `fn` ends (or, past a teardown that hit the cap, until that teardown settles).
+ * `label` says what holds it, for that CONFLICT: "this worktree is busy: <label>" ("removing it").
  */
-export async function holdWorktree<T>(path: string, fn: (hold: WorktreeHold) => Promise<T>): Promise<T> {
+export async function holdWorktree<T>(path: string, label: string, fn: (hold: WorktreeHold) => Promise<T>): Promise<T> {
   const key = realOrResolved(path)
   assertFree(key)
-  running.set(key, 'running')
+  running.set(key, { label })
   const hold = new WorktreeHold(key)
   try {
     return await fn(hold)
@@ -241,7 +243,7 @@ export async function runTeardown(participants: readonly Participant[], target: 
   for (const id of ids) {
     if (!known.has(id.slice(0, id.indexOf(':')))) warn(`[teardown] ${id} is no longer planned for ${target.worktree.path} (its plugin is off); skipped`)
   }
-  if (!options.hold) return holdWorktree(target.worktree.path, (hold) => tearDown(participants, target, op, ids, options, hold))
+  if (!options.hold) return holdWorktree(target.worktree.path, 'tearing it down', (hold) => tearDown(participants, target, op, ids, options, hold))
   return tearDown(participants, target, op, ids, options, options.hold)
 }
 

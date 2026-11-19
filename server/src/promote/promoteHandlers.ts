@@ -773,7 +773,7 @@ export const promoteHandlers: Record<string, Handler> = {
       // Held for the teardown and the promote: a worktree being torn down (by this or another
       // operation) is CONFLICT, with or without `teardown`. Its path is blocked from before the
       // teardown (no session or load may start in it) until its row is gone.
-      const { result, checked } = await holdWorktree(first.worktree.path, async (hold) => {
+      const { result, checked } = await holdWorktree(first.worktree.path, 'promoting it', async (hold) => {
         // Again, with no await since the hold: an operation that blocks the path without holding it.
         assertNotBlocked(ctx, [first.worktree.path])
         const unblockWorktree = ctx.sessions.blockPath(first.worktree.path)

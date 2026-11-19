@@ -139,7 +139,7 @@ test('runTeardown: one at a time per worktree; the next one may run once it ends
   }
   const first = runTeardown([slow], target, 'remove', ['slow:x'])
   await new Promise((resolve) => setImmediate(resolve))
-  await assert.rejects(runTeardown([slow], target, 'remove', ['slow:x']), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is already running for this worktree')
+  await assert.rejects(runTeardown([slow], target, 'remove', ['slow:x']), (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: tearing it down')
   const other = { ...target, worktree: { ...target.worktree, id: 'w3', path: '/r/app-other' } }
   const third = runTeardown([participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)], other, 'remove', ['stack:destroy'])
   await third
@@ -227,7 +227,7 @@ test('runTeardown: after a teardown hits the cap, the worktree stays busy until 
   await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy']), finishing)
   await assert.rejects(runTeardown([late], target, 'remove', []), finishing, 'even with nothing chosen')
   assert.throws(() => assertNotTearingDown(target.worktree.path), finishing)
-  await assert.rejects(holdWorktree(target.worktree.path, async () => 'x'), finishing)
+  await assert.rejects(holdWorktree(target.worktree.path, 'removing it', async () => 'x'), finishing)
   release()
   await new Promise((resolve) => setImmediate(resolve))
   assertNotTearingDown(target.worktree.path)
@@ -238,11 +238,12 @@ test('runTeardown: after a teardown hits the cap, the worktree stays busy until 
 test('holdWorktree: the worktree is busy for the whole operation; runTeardown inside it takes the hold', async () => {
   const log = []
   const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
-  const running = (e) => e.code === 'CONFLICT' && e.message === 'a teardown is already running for this worktree'
-  const answer = await holdWorktree(target.worktree.path, async (hold) => {
+  // The CONFLICT names what holds the worktree (an unreceive is no teardown).
+  const running = (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: undoing a move'
+  const answer = await holdWorktree(target.worktree.path, 'undoing a move', async (hold) => {
     assert.throws(() => assertNotTearingDown(target.worktree.path), running)
     await assert.rejects(runTeardown(ps, target, 'remove', ['stack:destroy']), running)
-    await assert.rejects(holdWorktree(target.worktree.path, async () => {}), running)
+    await assert.rejects(holdWorktree(target.worktree.path, 'promoting it', async () => {}), running)
     await runTeardown(ps, target, 'remove', ['stack:destroy'], { hold })
     await runTeardown(ps, target, 'remove', [], { hold })
     assert.throws(() => assertNotTearingDown(target.worktree.path), running, 'still held after its teardown')
@@ -251,12 +252,12 @@ test('holdWorktree: the worktree is busy for the whole operation; runTeardown in
   assert.equal(answer, 'removed')
   assert.deepEqual(log, [['stack', 'remove', ['destroy']]])
   assertNotTearingDown(target.worktree.path)
-  await assert.rejects(holdWorktree(target.worktree.path, async () => {
+  await assert.rejects(holdWorktree(target.worktree.path, 'removing it', async () => {
     throw new Error('git failed')
   }), /git failed/)
   assertNotTearingDown(target.worktree.path)
   const other = { ...target, worktree: { ...target.worktree, path: '/r/elsewhere' } }
-  await holdWorktree(target.worktree.path, async (hold) => {
+  await holdWorktree(target.worktree.path, 'removing it', async (hold) => {
     await assert.rejects(runTeardown(ps, other, 'remove', ['stack:destroy'], { hold }), /another worktree/)
   })
 })
@@ -266,8 +267,8 @@ test('holdWorktree: a teardown that hits the cap inside it keeps the worktree bu
   const gate = new Promise((resolve) => (release = resolve))
   const late = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => gate }
   const where = { ...target, worktree: { ...target.worktree, path: '/r/app-held' } }
-  await assert.rejects(holdWorktree(where.worktree.path, (hold) => runTeardown([late], where, 'remove', ['env:destroy'], { hold, teardownTimeoutMs: 50 })), /no answer/)
-  assert.throws(() => assertNotTearingDown(where.worktree.path), /still finishing/)
+  await assert.rejects(holdWorktree(where.worktree.path, 'removing it', (hold) => runTeardown([late], where, 'remove', ['env:destroy'], { hold, teardownTimeoutMs: 50 })), /no answer/)
+  assert.throws(() => assertNotTearingDown(where.worktree.path), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is still finishing for this worktree')
   release()
   await new Promise((resolve) => setImmediate(resolve))
   assertNotTearingDown(where.worktree.path)

@@ -494,7 +494,7 @@ export const moveHandlers: Record<string, Handler> = {
     loadedAgain()
     // Held for the checks, the teardown and the removal: a source being torn down (by this or
     // another operation) is CONFLICT, with or without `teardown`.
-    const verified = await holdWorktree(worktree.path, async (hold) => {
+    const verified = await holdWorktree(worktree.path, 'a move is finishing', async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
         // Again under the block: no load can land from here on.
@@ -638,7 +638,7 @@ export const moveHandlers: Record<string, Handler> = {
       // The worktree is held (plugins E1), as a remove, promote or move holds it: none of them runs
       // on it meanwhile, and an unreceive waits for none of theirs (CONFLICT). Taken with no await
       // since the checks above.
-      await holdWorktree(receipt.path, async () => {
+      await holdWorktree(receipt.path, 'undoing a move', async () => {
         await moveTestHooks.beforeUnreceive?.(receipt.path)
         await unreceive(ctx, project, repo, token, receipt, row)
       })

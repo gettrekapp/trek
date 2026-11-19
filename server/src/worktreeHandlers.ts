@@ -320,7 +320,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     // Held for the teardown and the removal: a worktree being torn down (by this or another
     // operation) is CONFLICT, with or without `teardown`. From before the teardown until the
     // re-read has marked the row missing, no session or load may start in it.
-    const tornDown = await holdWorktree(worktree.path, async (hold) => {
+    const tornDown = await holdWorktree(worktree.path, 'removing it', async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
         // Again under the block: a load that landed after the first check would have its sessions
