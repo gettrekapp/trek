@@ -109,3 +109,100 @@ test('optionalTeardown and requireOp: what a request may send', () => {
   assert.equal(requireOp('move'), 'move')
   for (const bad of ['delete', undefined, 1]) assert.throws(() => requireOp(bad), (e) => e.code === 'BAD_REQUEST')
 })
+
+test('runTeardown: a chosen participant whose re-check throws or hangs stops the operation before anything is torn down', async () => {
+  const log = []
+  const stack = participant('stack', [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], log)
+  for (const [items, text] of [['hang', /no answer/], ['throw', /cannot tell/]]) {
+    const ps = [stack, participant('env', items, log)]
+    await assert.rejects(
+      runTeardown(ps, target, 'remove', ['stack:destroy', 'env:destroy'], { timeoutMs: 50 }),
+      (e) => e.code === 'TOOL_ERROR' && e.details?.reason === 'teardown' && /^Couldn't check env before tearing it down: /.test(e.message) && text.test(e.message)
+    )
+  }
+  assert.deepEqual(log, [])
+})
+
+test('runTeardown: one at a time per worktree; the next one may run once it ends, failed or not', async () => {
+  const log = []
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  const slow = {
+    id: 'slow',
+    plan: async () => [{ id: 'x', label: 'Wait', checked: true }],
+    teardown: async () => {
+      log.push('slow')
+      await gate
+    }
+  }
+  const first = runTeardown([slow], target, 'remove', ['slow:x'])
+  await new Promise((resolve) => setImmediate(resolve))
+  await assert.rejects(runTeardown([slow], target, 'remove', ['slow:x']), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is already running for this worktree')
+  const other = { ...target, worktree: { ...target.worktree, id: 'w3', path: '/r/app-other' } }
+  const third = runTeardown([participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)], other, 'remove', ['stack:destroy'])
+  await third
+  release()
+  await first
+  const failing = participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log, { failOn: 'destroy' })
+  await assert.rejects(runTeardown([failing], target, 'remove', ['stack:destroy']), (e) => e.code === 'TOOL_ERROR')
+  await runTeardown([participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)], target, 'remove', ['stack:destroy'])
+  assert.deepEqual(log, ['slow', ['stack', 'remove', ['destroy']], ['stack', 'remove', ['destroy']], ['stack', 'remove', ['destroy']]])
+})
+
+test('runTeardown: a later failure says what was already torn down', async () => {
+  const log = []
+  const ps = [
+    participant('stack', [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], log),
+    participant('env', [{ id: 'destroy', label: 'Stop the VM', checked: true }], log, { failOn: 'destroy' })
+  ]
+  await assert.rejects(runTeardown(ps, target, 'remove', ['stack:destroy', 'env:destroy']), (e) => {
+    assert.equal(e.code, 'TOOL_ERROR')
+    assert.deepEqual(e.details, { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
+    assert.equal(e.message, "Couldn't stop the VM: it would not stop (already done: Tear down the dev stack)")
+    return true
+  })
+  await assert.rejects(runTeardown(ps.slice(1), target, 'remove', ['env:destroy']), (e) => {
+    assert.deepEqual(e.details, { reason: 'teardown', tornDown: [] })
+    assert.equal(e.message, "Couldn't stop the VM: it would not stop")
+    return true
+  })
+})
+
+test('runTeardown: a teardown that hangs past the cap fails, naming it', async () => {
+  const hung = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => new Promise(() => {}) }
+  await assert.rejects(
+    runTeardown([hung], target, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }),
+    (e) => e.code === 'TOOL_ERROR' && e.details?.reason === 'teardown' && e.message === "Couldn't stop the VM: no answer in 0.05 s"
+  )
+})
+
+test('runTeardown: an id of a plugin that is now off is skipped; an unknown one is refused with a hint', async () => {
+  const log = []
+  const warnings = []
+  const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
+  await runTeardown(ps, target, 'remove', ['vms:vm', 'stack:destroy'], { inactive: ['vms'], warn: (m) => warnings.push(m) })
+  assert.deepEqual(log, [['stack', 'remove', ['destroy']]])
+  assert.match(warnings.join('\n'), /vms:vm is no longer planned/)
+  await assert.rejects(runTeardown(ps, target, 'remove', ['ghost:y']), (e) => e.code === 'BAD_REQUEST' && e.message === '"ghost:y" is not offered for this worktree; reopen the confirm')
+})
+
+test("runTeardown: the label's first letter is lowercased only when it starts an ordinary word", async () => {
+  const log = []
+  const ps = [participant('env', [{ id: 'destroy', label: 'VM “dev” deleted', checked: true }], log, { failOn: 'destroy' })]
+  await assert.rejects(runTeardown(ps, target, 'remove', ['env:destroy']), (e) => e.message === "Couldn't VM “dev” deleted: it would not stop")
+})
+
+test('planTeardown and runTeardown: two participants with one id is an internal error', async () => {
+  const log = []
+  const ps = [participant('env', [], log), participant('env', [], log)]
+  await assert.rejects(planTeardown(ps, target, 'remove'), /twice/)
+  await assert.rejects(runTeardown(ps, target, 'remove', ['env:x']), /twice/)
+})
+
+test('repoRemoveVeto: an answer that is not a reason, and a check that hangs, refuse', async () => {
+  const p = (id, check) => ({ id, plan: async () => [], teardown: async () => {}, beforeRepoRemove: check })
+  assert.equal(await repoRemoveVeto([p('a', async () => 42)], target.project, target.repo), 'a could not check it: not a reason')
+  assert.equal(await repoRemoveVeto([p('a', async () => undefined)], target.project, target.repo), 'a could not check it: not a reason')
+  assert.equal(await repoRemoveVeto([p('a', async () => '')], target.project, target.repo), null)
+  assert.match(await repoRemoveVeto([p('a', () => new Promise(() => {}))], target.project, target.repo, { timeoutMs: 50 }), /^a could not check it: no answer in 0.05 s$/)
+})

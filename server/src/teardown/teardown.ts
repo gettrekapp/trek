@@ -4,14 +4,18 @@
 // request that does the operation runs the items the client chose, in participant order, before it.
 // A participant whose plan throws or takes over TEARDOWN_PLAN_TIMEOUT_MS is left out (logged); one
 // whose teardown throws stops the operation: TOOL_ERROR, `details.reason: 'teardown'`, naming it.
+// At the run, a chosen participant whose re-check fails stops it too, before anything is torn down.
 import type { Project, Repository, Worktree } from '../../../src/shared/model/types'
 import type { PluginCallContext } from '../../../src/shared/plugins/server.ts'
-import { WORKTREE_OPS, type TeardownItem, type WorktreeOp } from '../../../src/shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, WORKTREE_OPS, type TeardownItem, type WorktreeOp } from '../../../src/shared/teardown.ts'
 import { codedError } from '../errors.ts'
 import type { PluginLifecycle } from '../plugins/registry.ts'
 import { pluginRepo, pluginWorktree } from '../plugins/worktrees.ts'
+import { realOrResolved } from '../repos.ts'
 
 export const TEARDOWN_PLAN_TIMEOUT_MS = 10_000
+/** How long one participant's teardown may take: the clients wait no longer for the whole request */
+export const TEARDOWN_RUN_TIMEOUT_MS = TEARDOWN_REQUEST_TIMEOUT_MS
 /** At most this many ids in a request's `teardown` */
 export const MAX_TEARDOWN_IDS = 50
 const ITEM_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -33,7 +37,12 @@ export interface Participant {
 }
 
 export interface TeardownOptions {
+  /** A plan's (and a repository check's) limit; TEARDOWN_PLAN_TIMEOUT_MS */
   timeoutMs?: number
+  /** One participant's teardown's limit; TEARDOWN_RUN_TIMEOUT_MS */
+  teardownTimeoutMs?: number
+  /** runTeardown: participants that are known but not taking part (a plugin now off in the project); their ids are skipped, not refused */
+  inactive?: Iterable<string>
   warn?: (message: string) => void
 }
 
@@ -77,6 +86,15 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
 }
 
+/** Two participants under one id would mix their items: core's wiring is wrong. */
+function requireDistinct(participants: readonly Participant[]): void {
+  const ids = new Set<string>()
+  for (const p of participants) {
+    if (ids.has(p.id)) throw new Error(`teardown participant ${JSON.stringify(p.id)} is listed twice`)
+    ids.add(p.id)
+  }
+}
+
 /** A participant's answer, checked: a bad item is dropped (logged); ids namespaced. */
 function checkedItems(participant: Participant, raw: unknown, warn: (message: string) => void): TeardownItem[] {
   if (!Array.isArray(raw)) {
@@ -100,65 +118,114 @@ function checkedItems(participant: Participant, raw: unknown, warn: (message: st
   return out
 }
 
-/** Every participant's items, in participant order (asked at once). */
-export async function planTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, options: TeardownOptions = {}): Promise<TeardownItem[]> {
+/** One participant's plan: its checked items, or why it gave none (a throw, or no answer in time). */
+type PlanResult = { items: TeardownItem[] } | { error: string }
+
+/** Each participant's plan, asked at once, in participant order. */
+async function planEach(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, options: TeardownOptions): Promise<PlanResult[]> {
+  requireDistinct(participants)
   const warn = warnOf(options)
   const timeoutMs = options.timeoutMs ?? TEARDOWN_PLAN_TIMEOUT_MS
-  const plans = await Promise.all(
-    participants.map(async (p) => {
+  return Promise.all(
+    participants.map(async (p): Promise<PlanResult> => {
       try {
-        return checkedItems(p, await withTimeout(Promise.resolve().then(() => p.plan(target, op)), timeoutMs), warn)
+        return { items: checkedItems(p, await withTimeout(Promise.resolve().then(() => p.plan(target, op)), timeoutMs), warn) }
       } catch (err) {
-        warn(`[teardown] ${p.id}'s plan was left out: ${messageOf(err)}`)
-        return []
+        return { error: messageOf(err) }
       }
     })
   )
-  return plans.flat()
 }
+
+/** Every participant's items, in participant order (asked at once). One whose plan fails is left out (logged). */
+export async function planTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, options: TeardownOptions = {}): Promise<TeardownItem[]> {
+  const warn = warnOf(options)
+  const plans = await planEach(participants, target, op, options)
+  return plans.flatMap((plan, i) => {
+    if ('items' in plan) return plan.items
+    warn(`[teardown] ${participants[i].id}'s plan was left out: ${plan.error}`)
+    return []
+  })
+}
+
+/** A label inside "Couldn't …": its first letter lowercased only when it starts an ordinary word ("Tear down" → "tear down"; "VM …" stays). */
+function inSentence(label: string): string {
+  return /^\p{Lu}\p{Ll}/u.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label
+}
+
+/** The worktrees (by real path) a teardown is running for: one at a time each. */
+const running = new Set<string>()
 
 /**
  * Runs the chosen items before the operation: each participant once, with its own ids, in
- * participant order. An id whose participant is not here is BAD_REQUEST before anything runs; one
- * its participant no longer plans (the VM was deleted meanwhile) is skipped. A throw stops it.
+ * participant order. An id with no participant here (and not one of `options.inactive`) is
+ * BAD_REQUEST before anything runs. Each involved participant is asked again first: one that throws
+ * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
+ * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
+ * teardown that throws or takes over `teardownTimeoutMs` stops it: TOOL_ERROR, `details.tornDown`
+ * the labels already done. One teardown at a time per worktree: a second is CONFLICT.
  */
 export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<void> {
+  requireDistinct(participants)
   if (ids.length === 0) return
   const warn = warnOf(options)
   const known = new Set(participants.map((p) => p.id))
+  const inactive = new Set(options.inactive ?? [])
   for (const id of ids) {
     const at = id.indexOf(':')
-    if (at <= 0 || !known.has(id.slice(0, at))) throw codedError('BAD_REQUEST', `unknown teardown item ${JSON.stringify(id)}`)
+    const owner = at > 0 ? id.slice(0, at) : ''
+    if (!known.has(owner) && !inactive.has(owner)) throw codedError('BAD_REQUEST', `${JSON.stringify(id)} is not offered for this worktree; reopen the confirm`)
   }
-  const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
-  const planned = new Map((await planTeardown(involved, target, op, options)).map((item) => [item.id, item]))
-  for (const p of involved) {
-    const mine = ids.filter((id) => id.startsWith(`${p.id}:`))
-    for (const gone of mine.filter((id) => !planned.has(id))) warn(`[teardown] ${gone} is no longer planned for ${target.worktree.path}; skipped`)
-    const now = mine.filter((id) => planned.has(id))
-    if (now.length === 0) continue
-    try {
-      await p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1)))
-    } catch (err) {
-      const what = now.map((id) => planned.get(id)!.label).join('; ')
-      throw codedError('TOOL_ERROR', `Couldn't ${what.charAt(0).toLowerCase()}${what.slice(1)}: ${messageOf(err)}`, { reason: 'teardown' })
+  for (const id of ids) {
+    if (!known.has(id.slice(0, id.indexOf(':')))) warn(`[teardown] ${id} is no longer planned for ${target.worktree.path} (its plugin is off); skipped`)
+  }
+  const key = realOrResolved(target.worktree.path)
+  if (running.has(key)) throw codedError('CONFLICT', 'a teardown is already running for this worktree')
+  running.add(key)
+  try {
+    const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
+    const plans = await planEach(involved, target, op, options)
+    const planned = new Map<string, TeardownItem>()
+    plans.forEach((plan, i) => {
+      if ('error' in plan) throw codedError('TOOL_ERROR', `Couldn't check ${involved[i].id} before tearing it down: ${plan.error}`, { reason: 'teardown' })
+      for (const item of plan.items) planned.set(item.id, item)
+    })
+    const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_RUN_TIMEOUT_MS
+    const tornDown: string[] = []
+    for (const p of involved) {
+      const mine = ids.filter((id) => id.startsWith(`${p.id}:`))
+      for (const gone of mine.filter((id) => !planned.has(id))) warn(`[teardown] ${gone} is no longer planned for ${target.worktree.path}; skipped`)
+      const now = mine.filter((id) => planned.has(id))
+      if (now.length === 0) continue
+      const labels = now.map((id) => planned.get(id)!.label)
+      try {
+        await withTimeout(Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1)))), teardownTimeoutMs)
+      } catch (err) {
+        const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
+        throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: ${messageOf(err)}${done}`, { reason: 'teardown', tornDown: [...tornDown] })
+      }
+      tornDown.push(...labels)
     }
+  } finally {
+    running.delete(key)
   }
 }
 
-/** The first participant's reason the repository can't leave its project now, or null. A check that fails or hangs refuses too. */
+/** The first participant's reason the repository can't leave its project now, or null. A check that fails, hangs or answers something else refuses too. */
 export async function repoRemoveVeto(participants: readonly Participant[], project: Project, repo: Repository, options: TeardownOptions = {}): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? TEARDOWN_PLAN_TIMEOUT_MS
   for (const p of participants) {
     const check = p.beforeRepoRemove
     if (!check) continue
-    let reason: string | null
+    let reason: unknown
     try {
       reason = await withTimeout(Promise.resolve().then(() => check(project, repo)), timeoutMs)
     } catch (err) {
       return `${p.id} could not check it: ${messageOf(err)}`
     }
-    if (typeof reason === 'string' && reason.trim() !== '') return reason.trim()
+    if (reason === null) continue
+    if (typeof reason !== 'string') return `${p.id} could not check it: not a reason`
+    if (reason.trim() !== '') return reason.trim()
   }
   return null
 }

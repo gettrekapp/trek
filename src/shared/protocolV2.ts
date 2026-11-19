@@ -103,10 +103,13 @@ export interface WireErrorDetails {
    * `registry`: a TOOL_ERROR's environments registry cannot be read on the server.
    * `disabled`, `busy`, `stale`: why `update.apply` was refused (CONFLICT); `busy` also refuses an
    * `update.check` while an update is running.
-   * `teardown`: a `TOOL_ERROR` from a worktree's teardown before its remove, promote or move (plugins E1); nothing more was done.
+   * `teardown`: a `TOOL_ERROR` from a worktree's teardown before its remove, promote or move (plugins E1);
+   * the operation itself was not done. `tornDown` lists what was torn down before the failure.
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string
+  /** With reason `teardown`: the labels of the items already torn down before the one that failed (plugins E1) */
+  tornDown?: string[]
 }
 
 /** A repository the server has registered (`trek-server add`, `server.addRepo`). */
