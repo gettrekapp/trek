@@ -41,7 +41,13 @@ export default function SessionScreen(): React.JSX.Element {
   useUiSelection(serverId, projectId, { worktreeId: worktreeOfSession(project, sessionId), sessionId }, project !== null && !trayed)
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView
+      style={ui.screen}
+      behavior="padding"
+      keyboardVerticalOffset={headerHeight}
+      // Typing in an open Global tray must not shrink this terminal (and resize its pty).
+      enabled={tray === null || tray.height === 'collapsed'}
+    >
       <Stack.Screen
         options={{
           title: session?.title ?? 'Session',

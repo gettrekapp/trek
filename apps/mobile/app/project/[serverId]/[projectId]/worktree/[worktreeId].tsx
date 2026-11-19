@@ -43,6 +43,7 @@ import { PrNotice } from '../../../../../src/ui/PrNotice.tsx'
 import { SessionList } from '../../../../../src/ui/SessionList.tsx'
 import { useUiSelection } from '../../../../../src/ui/useUiSelection.ts'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { useGlobalTray } from '../../../../../src/ui/globalTrayContext.tsx'
 
 /**
  * A new session's size: session.start and session.restart need one, and the phone never resizes
@@ -70,6 +71,8 @@ export default function WorktreeScreen(): React.JSX.Element {
   // While this screen is the one shown, the server knows the phone shows this worktree.
   useUiSelection(serverId, projectId, { worktreeId, sessionId: null })
   const headerHeight = useHeaderHeight()
+  // An open Global tray has the keyboard: this screen, under it, keeps its size.
+  const tray = useGlobalTray()
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -359,7 +362,7 @@ export default function WorktreeScreen(): React.JSX.Element {
 
   // The Branch details' boxes stay above the keyboard, and one tap on Save works with it up.
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight} enabled={tray === null || tray.height === 'collapsed'}>
       <ScrollView style={ui.screen} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
         <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
         <View style={{ paddingHorizontal: 16, paddingTop: 8, gap: 8 }}>

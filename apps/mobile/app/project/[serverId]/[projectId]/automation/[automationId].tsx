@@ -33,6 +33,7 @@ import { useServers } from '../../../../../src/state/ServersProvider.tsx'
 import { confirmAlert } from '../../../../../src/ui/alerts.ts'
 import { Button } from '../../../../../src/ui/Button.tsx'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { useGlobalTray } from '../../../../../src/ui/globalTrayContext.tsx'
 import { sessionRoute } from '../../../../../src/logic/routes.ts'
 
 /** What a request was for: its error shows under that part of the screen. */
@@ -47,6 +48,8 @@ export default function AutomationScreen(): React.JSX.Element {
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
+  // An open Global tray has the keyboard: this screen, under it, keeps its size.
+  const tray = useGlobalTray()
   // Its next runs are counted from now, which moves on while the screen is open.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -202,7 +205,7 @@ export default function AutomationScreen(): React.JSX.Element {
 
   // The edit's boxes stay above the keyboard, and one tap on Save works with it up.
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight} enabled={tray === null || tray.height === 'collapsed'}>
       <Stack.Screen options={{ title: automation?.name ?? 'Automation' }} />
       <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
         {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
