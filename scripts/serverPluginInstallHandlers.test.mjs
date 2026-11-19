@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { removeDir, removeDirWhenFree } from './testPlatform.mjs'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { saveConfig } from '../server/src/config.ts'
@@ -437,4 +439,43 @@ test('on the wire (plugins E1): host.emitTo reaches only the connection that sen
   host.emitTo(aCaller, 'teller.told', { text: 'late' })
   await settle(b)
   assert.equal(b.frames.slice(before).filter((f) => f.event === 'teller.told').length, 0)
+})
+
+test("on the wire (plugins A1): the claude plugin's project fields on a server with the built-in plugins: a write, expected, a null delete, an import", async (t) => {
+  // A registered repo for the project, in its own temp folder (realpath: the server compares resolved paths).
+  const reposDir = (process.platform === 'win32' ? realpathSync.native : realpathSync)(mkdtempSync(join(tmpdir(), 'trek-claude-fields-')))
+  t.after(() => removeDir(reposDir))
+  const repo = join(reposDir, 'a')
+  execFileSync('git', ['init', '-q', repo], { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } })
+  const s = await server(t, { repos: [{ id: 'a', name: 'a', path: repo }] })
+  const c = await s.connect()
+  assert.ok(c.welcome.plugins.some((p) => p.id === 'claude'), 'the claude plugin is set up')
+  const settingsOf = async (projectId) => (await c.request('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot.settings
+
+  const created = await c.request('project.create', { name: 'P', repositories: [{ path: repo }] })
+  assert.equal(created.ok, true, JSON.stringify(created))
+  const { projectId } = created.result
+  const update = (settings, expected) => c.request('project.updateSettings', { projectId, settings, ...(expected ? { expected } : {}) })
+
+  assert.equal((await update({ claudeCommand: '/opt/claude' })).ok, true)
+  assert.equal((await settingsOf(projectId)).claudeCommand, '/opt/claude')
+
+  const stale = await update({ claudeCommand: '/x' }, { claudeCommand: '/old' })
+  assert.equal(stale.error?.code, 'CONFLICT')
+  assert.equal((await settingsOf(projectId)).claudeCommand, '/opt/claude', 'a stale expected writes nothing')
+  assert.equal((await update({ claudeCommand: '/new' }, { claudeCommand: '/opt/claude' })).ok, true)
+  assert.equal((await settingsOf(projectId)).claudeCommand, '/new')
+
+  assert.equal((await update({ claudeCommand: null })).ok, true)
+  assert.equal(Object.hasOwn(await settingsOf(projectId), 'claudeCommand'), false, 'null deletes it')
+
+  const { importProjectFile } = await import('../src/shared/model/importProject.ts')
+  let n = 0
+  const { projects } = importProjectFile({ version: 3, name: 'Imported', repositories: [{ id: 'x', name: 'a', path: repo, worktrees: [{ name: 'main', path: repo }] }] }, () => `imp-${++n}`)
+  const claudeFields = { claudeCommand: '/p/claude', claudeArgs: '--verbose', claudePermissionMode: 'acceptEdits' }
+  const project = { ...projects[0].project, settings: { ...projects[0].project.settings, ...claudeFields } }
+  const imported = await c.request('project.import', { project })
+  assert.equal(imported.ok, true, JSON.stringify(imported))
+  const after = await settingsOf(imported.result.projectId)
+  assert.deepEqual({ claudeCommand: after.claudeCommand, claudeArgs: after.claudeArgs, claudePermissionMode: after.claudePermissionMode }, claudeFields)
 })

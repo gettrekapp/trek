@@ -376,6 +376,17 @@ test("llmDefault and agentServerConfig (plugins A1): the default against the ser
   assert.deepEqual(b.agentServerConfig('local'), { backend: 'lmstudio', baseUrl: ' http://h:1 ' }, 'as written: the agent trims')
   assert.deepEqual(b.agentServerConfig('codex'), {}, 'not an object')
   assert.deepEqual(b.agentServerConfig('toString'), {}, "never Object's own")
+  // A hand-edited `__proto__` key (an own key, as JSON.parse reads it) stays out: no setting, no prototype.
+  writeFileSync(configPath, '{ "repos": [], "llm": { "providers": { "claude": { "__proto__": "x", "command": "/opt/claude" }, "codex": { "__proto__": { "command": "/evil" } } } } }')
+  const c = new ConfigStore(configPath)
+  t.after(() => c.close())
+  const claude = c.agentServerConfig('claude')
+  assert.deepEqual(claude, { command: '/opt/claude' })
+  assert.equal(Object.getPrototypeOf(claude), Object.prototype)
+  assert.equal(Object.hasOwn(claude, '__proto__'), false)
+  const codex = c.agentServerConfig('codex')
+  assert.deepEqual(codex, {})
+  assert.equal(codex.command, undefined, 'an object under __proto__ never becomes a prototype')
 })
 
 test('an llm section that is not an object is refused', () => {

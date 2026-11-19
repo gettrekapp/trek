@@ -120,7 +120,10 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     const providers = isRecord(llm.providers) ? llm.providers : {}
     const entry = Object.hasOwn(providers, id) && isRecord(providers[id]) ? providers[id] : {}
     const out: Record<string, string> = {}
-    for (const [key, value] of Object.entries(entry)) if (typeof value === 'string' && value !== '') out[key] = value
+    for (const [key, value] of Object.entries(entry)) {
+      // A hand-edited `__proto__` key is no setting of any agent's, and assigned it would reach the prototype.
+      if (key !== '__proto__' && typeof value === 'string' && value !== '') out[key] = value
+    }
     return out
   }
 
