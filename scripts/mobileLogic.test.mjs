@@ -1165,6 +1165,7 @@ test("worktree list: a branch's line is its tag, custom tags, ticket and pull re
     linearWorkspace: 'acme'
   }
   const linear = activeTicketProviders({ plugins: [{ id: 'linear', defaultEnabled: true }] }, settings)
+  const prs = activePrProviders({ capabilities: [] }, settings)
   const repo = {
     branchData: {
       full: { tag: 't1', customTags: ['c2', 'c1', 'gone'], ticket: 'TOW-12', pr: 'https://github.com/o/r/pull/42', note: 'not on the line' },
@@ -1175,21 +1176,26 @@ test("worktree list: a branch's line is its tag, custom tags, ticket and pull re
     }
   }
   // Custom tags in the project's order; one the project no longer has is left out.
-  assert.equal(branchLine(settings, repo, 'full', linear), 'In Review · urgent · blocked · TOW-12 · PR #42')
-  assert.equal(branchLine(settings, repo, 'tagOnly', linear), 'In Review')
+  assert.equal(branchLine(settings, repo, 'full', linear, prs), 'In Review · urgent · blocked · TOW-12 · PR #42')
+  assert.equal(branchLine(settings, repo, 'tagOnly', linear, prs), 'In Review')
   // A link without a number is still a pull request.
-  assert.equal(branchLine(settings, repo, 'prOnly', linear), 'PR')
-  assert.equal(branchLine(settings, repo, 'stale', linear), '')
-  assert.equal(branchLine(settings, repo, 'empty', linear), '')
-  assert.equal(branchLine(settings, repo, 'unknown', linear), '')
+  assert.equal(branchLine(settings, repo, 'prOnly', linear, prs), 'PR')
+  assert.equal(branchLine(settings, repo, 'stale', linear, prs), '')
+  assert.equal(branchLine(settings, repo, 'empty', linear, prs), '')
+  assert.equal(branchLine(settings, repo, 'unknown', linear, prs), '')
   // Not an inherited property of the record.
-  assert.equal(branchLine(settings, repo, 'toString', linear), '')
-  assert.equal(branchLine(settings, repo, undefined, linear), '')
+  assert.equal(branchLine(settings, repo, 'toString', linear, prs), '')
+  assert.equal(branchLine(settings, repo, undefined, linear, prs), '')
   // No tracker on: the ticket's id as stored.
-  assert.equal(branchLine(settings, { branchData: { b: { ticket: 'TOW-12' } } }, 'b', []), 'TOW-12')
+  assert.equal(branchLine(settings, { branchData: { b: { ticket: 'TOW-12' } } }, 'b', [], []), 'TOW-12')
   // A project that never set its tags has the default ones (their ids are their names).
-  assert.equal(branchLine({}, { branchData: { b: { tag: 'In Progress' } } }, 'b', []), 'In Progress')
-  assert.equal(branchLine({ worktreeTags: [] }, { branchData: { b: { tag: 'In Progress' } } }, 'b', []), '')
+  assert.equal(branchLine({}, { branchData: { b: { tag: 'In Progress' } } }, 'b', [], []), 'In Progress')
+  assert.equal(branchLine({ worktreeTags: [] }, { branchData: { b: { tag: 'In Progress' } } }, 'b', [], []), '')
+  // The PR's label is its provider's; a link no provider on owns gets the generic one.
+  const example = { id: 'example', hint: 'x', signInName: 'x', parse: (u) => (/^https:\/\/code\.example\/pr\/(\d+)$/.test(u) ? { url: u, number: Number(u.split('/').pop()), label: `!${u.split('/').pop()}` } : null), owns: (u) => u.startsWith('https://code.example/') }
+  assert.equal(branchLine({}, { branchData: { b: { pr: 'https://code.example/pr/7' } } }, 'b', [], [example]), 'PR !7')
+  assert.equal(branchLine({}, { branchData: { b: { pr: 'https://code.example/pr/7' } } }, 'b', [], []), 'PR')
+  assert.equal(branchLine({}, { branchData: { b: { pr: 'https://elsewhere.example/pull/7' } } }, 'b', [], [example]), 'PR #7')
 })
 
 test('worktree list: the worktree a branch is checked out in; a missing one does not count', () => {
@@ -1326,9 +1332,9 @@ test('watchSuffix names the provider\'s sign-in', () => {
 })
 
 test('branch details: a pull request reads "PR #<n>"; only a web link is opened', () => {
-  assert.equal(pullRequestText('https://github.com/o/r/pull/42'), 'PR #42')
-  assert.equal(pullRequestText('https://dev.azure.com/o/p/_git/r/pullrequest/9'), 'PR #9')
-  assert.equal(pullRequestText('https://github.com/o/r'), 'PR')
+  assert.equal(pullRequestText([], 'https://github.com/o/r/pull/42'), 'PR #42')
+  assert.equal(pullRequestText([], 'https://dev.azure.com/o/p/_git/r/pullrequest/9'), 'PR #9')
+  assert.equal(pullRequestText([], 'https://github.com/o/r'), 'PR')
   assert.equal(webLink('https://github.com/o/r/pull/42'), 'https://github.com/o/r/pull/42')
   assert.equal(webLink(' HTTP://example.com/x '), 'HTTP://example.com/x')
   for (const not of ['', 'github.com/o/r/pull/1', 'javascript:alert(1)', 'tel:+3112345678', 'file:///etc/passwd', 'intent://x#Intent;end', 'https://', 'https://a b']) {
@@ -2763,9 +2769,9 @@ test('rowLabel: what a screen reader says for a row', () => {
 test('branchParts: the line in pieces, tags with their colours', () => {
   const settings = { worktreeTags: [{ id: 't1', name: 'In Review', color: '#c9a0ff' }], customTags: [{ id: 'c1', name: 'urgent', color: '#ff0000' }] }
   const repo = { branchData: { b: { tag: 't1', customTags: ['c1'], pr: 'https://github.com/o/r/pull/42' } } }
-  assert.deepEqual(branchParts(settings, repo, 'b', []), [{ text: 'In Review', color: '#c9a0ff' }, { text: 'urgent', color: '#ff0000' }, { text: 'PR #42' }])
-  assert.deepEqual(branchParts(settings, repo, 'other', []), [])
-  assert.equal(branchLine(settings, repo, 'b', []), 'In Review · urgent · PR #42')
+  assert.deepEqual(branchParts(settings, repo, 'b', [], []), [{ text: 'In Review', color: '#c9a0ff' }, { text: 'urgent', color: '#ff0000' }, { text: 'PR #42' }])
+  assert.deepEqual(branchParts(settings, repo, 'other', [], []), [])
+  assert.equal(branchLine(settings, repo, 'b', [], []), 'In Review · urgent · PR #42')
 })
 
 test('attentionMark: blue for a finished session, amber for anything that waits on you', () => {

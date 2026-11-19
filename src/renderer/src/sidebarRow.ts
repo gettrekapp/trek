@@ -31,7 +31,7 @@ export function rowReason(input: {
   /** One per open decision; a decision may come without its question */
   questions: (string | undefined)[]
   prNotice?: string
-  /** pullRequestLabel(): "#123", or "PR" when the number is not parseable */
+  /** prLabel(): its provider's label ("#123"), or the generic "#123" / "PR" when no provider on owns the link */
   prLabel?: string
 }): RowReason | null {
   if (input.missing) {
@@ -51,7 +51,7 @@ export function rowReason(input: {
     }
   }
   if (input.prNotice) {
-    const pr = input.prLabel?.startsWith('#') ? `PR ${input.prLabel}` : 'PR'
+    const pr = input.prLabel && input.prLabel !== 'PR' ? `PR ${input.prLabel}` : 'PR'
     return { kind: 'notice', text: `${pr} · ${input.prNotice}`, title: input.prNotice }
   }
   return null

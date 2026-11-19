@@ -2,7 +2,7 @@
 // Its mark, branch, primary, git's dirty mark and counts, saved sessions, then its branch's tag, custom
 // tags, ticket and pull request on a line — or the reason it wants you.
 import { Pressable, Text, View } from 'react-native'
-import type { ProjectSettings, Repository, TicketProvider, Worktree } from '../shared.ts'
+import type { PrProvider, ProjectSettings, Repository, TicketProvider, Worktree } from '../shared.ts'
 import { branchParts } from '../logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved } from '../logic/worktreeRow.ts'
 import { StateMark } from './StateMark.tsx'
@@ -13,16 +13,18 @@ export function WorktreeRow(props: {
   repo: Repository
   worktree: Worktree
   trackers: readonly TicketProvider[]
+  /** The PR providers on for the project (activePrProviders), for the PR's label */
+  prHosts: readonly PrProvider[]
   selected?: boolean
   onPress: () => void
 }): React.JSX.Element {
-  const { settings, repo, worktree: wt, trackers, selected, onPress } = props
+  const { settings, repo, worktree: wt, trackers, prHosts, selected, onPress } = props
   const name = wt.branch ?? wt.name
   const mark = rowMark(wt)
   const git = rowGit(wt)
   const saved = rowSaved(wt)
   const reason = rowReason(wt)
-  const parts = reason ? [] : branchParts(settings, repo, wt.branch, trackers)
+  const parts = reason ? [] : branchParts(settings, repo, wt.branch, trackers, prHosts)
   const line = reason ? reason.text : parts.map((p) => p.text).join(' · ')
   // A row that wants you is bold; one with nothing loaded is quieter.
   const wants = mark === 'attention' || mark === 'done' || !!reason

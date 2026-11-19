@@ -58,6 +58,8 @@ test('rowReason: a pull request notice names the pull request when its number is
     title: 'Checks failed'
   })
   assert.equal(rowReason({ missing: false, questions: [], prNotice: 'Checks failed', prLabel: 'PR' }).text, 'PR · Checks failed')
+  // Another provider's label is shown as it is.
+  assert.equal(rowReason({ missing: false, questions: [], prNotice: 'Checks failed', prLabel: '!7' }).text, 'PR !7 · Checks failed')
   assert.equal(rowReason({ missing: false, questions: [], prNotice: 'Checks failed' }).text, 'PR · Checks failed')
 })
 

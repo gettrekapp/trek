@@ -2,8 +2,7 @@
 // edit with its compare-and-set and what a conflict does to it, what a pull request box takes, which
 // links are opened, and a tag chip's colours. The rules are the desktop's (backendV2.ts' branch
 // setCustomTag and setNote) and the server's (v2.ts' setBranchField, validate.ts' checkExpected). Pure.
-import { prLinkToSave, type PrProvider } from '../shared.ts'
-import { pullRequestLabel } from './worktrees.ts'
+import { prLabel, prLinkToSave, type PrProvider } from '../shared.ts'
 
 /**
  * A branch's custom tags after `id` is tapped: taken out when on, added at the end when off; null
@@ -73,10 +72,10 @@ export function pullRequestInput(providers: readonly PrProvider[], input: string
   return { error: `Not ${providers.map((p) => p.hint).join(', or ')}` }
 }
 
-/** "PR #42", or "PR" for a link without a number (as on the project screen's cards). */
-export function pullRequestText(url: string): string {
-  const label = pullRequestLabel(url)
-  return label.startsWith('#') ? `PR ${label}` : label
+/** "PR #42" (the label of the provider on that owns the link, else the generic one), or "PR" for a link without a number (as on the project screen's cards). */
+export function pullRequestText(providers: readonly PrProvider[], url: string): string {
+  const label = prLabel(providers, url)
+  return label === 'PR' ? label : `PR ${label}`
 }
 
 /**

@@ -6,13 +6,14 @@ import {
   environmentFor,
   GLOBAL_WORKTREE_ID,
   instanceForInfo,
-  pullRequestLabel,
   repoOfInfo,
   repoWorktrees,
   useAppStore,
   worktreeStatus
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
+import { usePrProviders } from '../plugins/usePrProviders'
+import { prLabel } from '../../../shared/plugins/pullRequests.ts'
 import { NotificationsMenu } from './NotificationsMenu'
 import { toggleSidebar } from '../sidebarToggle'
 import { PluginSlot } from '../plugins/PluginHost'
@@ -134,6 +135,9 @@ function NavIcon({ name }: { name: 'add' | 'notes' | 'automations' | 'settings' 
 export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const ticketViewOf = useTicketViews()
+  const prProviders = usePrProviders()
+  /** A PR chip's label: its provider's ('#12'), else the generic one. */
+  const pullRequestLabel = (url: string): string => prLabel(prProviders, url)
   const selected = useAppStore((s) => s.selected)
   const selectWorktree = useAppStore((s) => s.selectWorktree)
   const terminals = useAppStore((s) => s.terminals)

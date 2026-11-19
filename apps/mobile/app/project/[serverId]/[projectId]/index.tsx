@@ -16,6 +16,7 @@ import { automationsRow } from '../../../../src/logic/automations.ts'
 import { globalRow } from '../../../../src/logic/globalSessions.ts'
 import { isWide } from '../../../../src/logic/layout.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
+import { activePrProviders } from '../../../../src/logic/pullRequests.ts'
 import { cleanTagFilter, matchesTagFilter } from '../../../../src/logic/worktreeFilter.ts'
 import { addWorktreeRoute, automationsRoute, globalRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
@@ -38,6 +39,7 @@ export default function ProjectScreen(): React.JSX.Element {
   // The ticket's label comes from the trackers on for the project.
   const welcome = useServer(serverId)?.connection.welcome
   const trackers = topic.state === 'ready' ? activeTicketProviders(welcome, topic.snapshot.settings) : []
+  const prHosts = topic.state === 'ready' ? activePrProviders(welcome, topic.snapshot.settings) : []
   // Whether the server has automations, as its current welcome says; while its connection is being
   // made again the last answer holds, so the row does not come and go with a reconnect.
   const hasAutomations = useRef(false)
@@ -106,6 +108,7 @@ export default function ProjectScreen(): React.JSX.Element {
                   repo={repo}
                   worktree={wt}
                   trackers={trackers}
+                  prHosts={prHosts}
                   onPress={() => router.push(worktreeRoute(serverId, projectId, wt.id))}
                 />
               ))}

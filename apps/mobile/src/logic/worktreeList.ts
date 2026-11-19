@@ -1,9 +1,8 @@
 // What the project screen's worktree list says about a branch (its workflow tag, custom tags,
 // ticket and pull request on one line), which worktree a branch is checked out in (the Add
 // worktree screen's "the PR's branch already has a worktree"), and a repository's folder name. Pure.
-import { DEFAULT_WORKTREE_TAGS, type ProjectSettings, type Repository, type TicketProvider, type Worktree } from '../shared.ts'
+import { DEFAULT_WORKTREE_TAGS, prLabel, type PrProvider, type ProjectSettings, type Repository, type TicketProvider, type Worktree } from '../shared.ts'
 import { ticketView } from './tickets.ts'
-import { pullRequestLabel } from './worktrees.ts'
 
 /** One piece of a branch's line; a tag carries the colour the user gave it. */
 export interface BranchPart {
@@ -13,11 +12,12 @@ export interface BranchPart {
 
 /**
  * A branch's line on its worktree's row, in pieces: the workflow tag's name, the custom tags' names
- * (in the project's order), the ticket's label and "PR #<n>", each when present; none otherwise. A
+ * (in the project's order), the ticket's label and "PR #<n>" (its label from the PR provider on for
+ * the project that owns the link, `prs`, else the generic one), each when present; none otherwise. A
  * tag the project no longer has is left out. A project that never set its tags has the default
  * ones, as on the desktop.
  */
-export function branchParts(settings: ProjectSettings, repo: Pick<Repository, 'branchData'>, branch: string | undefined, providers: readonly TicketProvider[]): BranchPart[] {
+export function branchParts(settings: ProjectSettings, repo: Pick<Repository, 'branchData'>, branch: string | undefined, providers: readonly TicketProvider[], prs: readonly PrProvider[]): BranchPart[] {
   const data = branch !== undefined && Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : undefined
   if (!data) return []
   const parts: BranchPart[] = []
@@ -26,16 +26,16 @@ export function branchParts(settings: ProjectSettings, repo: Pick<Repository, 'b
   for (const custom of settings.customTags ?? []) if (data.customTags?.includes(custom.id)) parts.push({ text: custom.name, color: custom.color })
   if (data.ticket) parts.push({ text: ticketView(providers, settings, data.ticket).label })
   if (data.pr) {
-    // "#42", or "PR" for a link without a number.
-    const label = pullRequestLabel(data.pr)
-    parts.push({ text: label.startsWith('#') ? `PR ${label}` : label })
+    // "PR #42", or "PR" for a link without a number.
+    const label = prLabel(prs, data.pr)
+    parts.push({ text: label === 'PR' ? label : `PR ${label}` })
   }
   return parts
 }
 
 /** The same line as one string ('' with none). */
-export function branchLine(settings: ProjectSettings, repo: Pick<Repository, 'branchData'>, branch: string | undefined, providers: readonly TicketProvider[]): string {
-  return branchParts(settings, repo, branch, providers)
+export function branchLine(settings: ProjectSettings, repo: Pick<Repository, 'branchData'>, branch: string | undefined, providers: readonly TicketProvider[], prs: readonly PrProvider[]): string {
+  return branchParts(settings, repo, branch, providers, prs)
     .map((p) => p.text)
     .join(' · ')
 }

@@ -11,6 +11,7 @@ import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../../src/shared.ts'
 import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
+import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
 import { rowGit } from '../../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../../src/logic/worktrees.ts'
@@ -200,7 +201,8 @@ export default function WorktreeScreen(): React.JSX.Element {
   }
 
   const trackers = project ? activeTicketProviders(server?.connection.welcome, project.settings) : []
-  const facts = project && found ? branchParts(project.settings, found.repo, found.worktree.branch, trackers) : []
+  const prHosts = project ? activePrProviders(server?.connection.welcome, project.settings) : []
+  const facts = project && found ? branchParts(project.settings, found.repo, found.worktree.branch, trackers, prHosts) : []
   const git = worktree ? rowGit(worktree) : null
   // One line under the title: primary, the branch's tag, ticket and pull request, then git's state
   // (nothing about changes until the server's status poll has run).

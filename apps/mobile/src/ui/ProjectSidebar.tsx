@@ -14,6 +14,7 @@ import { automationsRow } from '../logic/automations.ts'
 import { globalGroupOpen, globalRow, normalGlobalSessions } from '../logic/globalSessions.ts'
 import { SIDEBAR_WIDTH, sidebarSelection, type SidebarSelection } from '../logic/layout.ts'
 import { activeTicketProviders } from '../logic/tickets.ts'
+import { activePrProviders } from '../logic/pullRequests.ts'
 import { addWorktreeRoute, automationsRoute, changesRoute, globalRoute, leavesProject, projectRoute, sessionRoute, showsRoute, worktreeRoute } from '../logic/routes.ts'
 import { cleanTagFilter, matchesTagFilter } from '../logic/worktreeFilter.ts'
 import { sessionMark } from '../logic/worktreeRow.ts'
@@ -42,6 +43,7 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
   const welcome = useServer(serverId)?.connection.welcome
   const project = topic.state === 'ready' ? topic.snapshot : null
   const trackers = project ? activeTicketProviders(welcome, project.settings) : []
+  const prHosts = project ? activePrProviders(welcome, project.settings) : []
   // As the project list: the last answer holds while the connection is made again.
   const hasAutomations = useRef(false)
   if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
@@ -125,6 +127,7 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
                         repo={repo}
                         worktree={wt}
                         trackers={trackers}
+                        prHosts={prHosts}
                         selected={open && selection.screen === 'worktree'}
                         onPress={() => openInPane(worktreeRoute(serverId, projectId, wt.id))}
                       />

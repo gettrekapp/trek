@@ -136,9 +136,6 @@ export function tagStyle(tag: WorktreeTag): React.CSSProperties {
   return { color: tag.color, background: `${tag.color}26` }
 }
 
-/** Short label for a pull request URL: "#123" when the number is parseable (no provider needed). */
-export { genericPrLabel as pullRequestLabel } from '../../shared/plugins/pullRequests.ts'
-
 /** repoId is stamped on selection, so a row that later vanishes still has a repository. */
 export type SelectedWorktree = WorktreeLocator & { repoId?: string }
 

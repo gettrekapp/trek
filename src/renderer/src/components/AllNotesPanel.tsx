@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import { instanceForInfo, pullRequestLabel, useAppStore } from '../store'
+import { instanceForInfo, useAppStore } from '../store'
 import type { GitWorktreeInfo } from '../../../shared/types'
 import { v2NoteDrafts } from '../v2/noteDrafts'
 import { useTicketViews } from '../plugins/useTickets'
+import { usePrProviders } from '../plugins/usePrProviders'
+import { prLabel } from '../../../shared/plugins/pullRequests.ts'
 import {
   afterDelete,
   collectNotes,
@@ -73,6 +75,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
   const offline = useAppStore((s) => s.serverOffline)
   const ticketViewOf = useTicketViews()
+  const prProviders = usePrProviders()
   const [chosen, setChosen] = useState<NoteRef | null>(null)
   const [query, setQuery] = useState('')
   /** The note being typed in: a search keeps it among its results until another row is chosen or the search changes. */
@@ -300,7 +303,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
                         ))}
                       {pullRequest && (
                         <button className="link-button" title={`Open pull request — ${pullRequest}`} onClick={() => window.open(pullRequest)}>
-                          PR {pullRequestLabel(pullRequest)}
+                          PR {prLabel(prProviders, pullRequest)}
                         </button>
                       )}
                     </div>
