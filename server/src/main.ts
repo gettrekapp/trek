@@ -19,6 +19,7 @@ import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { PLUGIN_STOP_MS } from './plugins/registry'
+import { localSiblingDataDirs } from './plugins/siblings'
 import { tailscaleAddress, testPhoneAddress } from './tailscale'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
@@ -362,7 +363,14 @@ const server = startServer(
     // Background push (6b): the phones' relay grants live in the same secrets file.
     push: { secretsFile: secretsPathFor(resolve(args.configPath)) },
     // The plugins (plugin system phase 1): their keys in the same secrets file, their files in `<dataDir>/plugins/<id>`.
-    plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
+    // A Local server's built-ins also read the other Local profiles' old files, and take the app's over once (plugins E2).
+    plugins: {
+      list: BUILTIN_SERVER_PLUGINS,
+      secretsFile: secretsPathFor(resolve(args.configPath)),
+      dataDir: serverDataDir,
+      ...(local !== undefined ? { siblingDataDirs: () => localSiblingDataDirs(serverDataDir) } : {}),
+      ...(args.importEnvFrom !== undefined ? { importFrom: args.importEnvFrom } : {})
+    },
     web: webBundle ? { bundle: webBundle } : undefined,
     onStopRequest: local ? () => shutdown('server.stop') : undefined,
     // The local server's listener for phones: this machine's Tailscale address, read each time it

@@ -140,7 +140,7 @@ export interface ServerOptions {
    * file and data dir they keep their keys and files in. Without it the server has none.
    * Installed plugins (theme plugins) live in `<dataDir>/plugins-installed`; `fetch` reads one from a URL (default: the global).
    */
-  plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv; fetch?: typeof fetch }
+  plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv; fetch?: typeof fetch; siblingDataDirs?: () => string[]; importFrom?: string }
   /**
    * false: what a killed server left in the temp directory is left alone. For `trek-server selfcheck`,
    * which runs beside a server that is in use and must remove nothing but its own folder.
@@ -206,7 +206,9 @@ export function startServer(
         projects,
         isCoreMethod,
         coreToolNames: MCP_TOOLS.map((t) => t.name),
-        paths: pluginPathChecks({ projects, store, poller })
+        paths: pluginPathChecks({ projects, store, poller }),
+        siblingDataDirs: options.plugins.siblingDataDirs,
+        importFrom: options.plugins.importFrom
       })
     : undefined
   // The installed plugins (theme plugins phase 1): stored and handed to clients, never run here.

@@ -193,9 +193,18 @@ export class WorktreeHold {
   }
 }
 
+const busyMessage = (busy: { label: string } | 'finishing'): string =>
+  busy === 'finishing' ? 'a teardown is still finishing for this worktree' : `this worktree is busy: ${busy.label}; try again once it is done`
+
 function assertFree(key: string): void {
   const busy = running.get(key)
-  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : `this worktree is busy: ${busy.label}; try again once it is done`)
+  if (busy) throw codedError('CONFLICT', busyMessage(busy))
+}
+
+/** Why the worktree at `path` is busy now (the CONFLICT message), or null (plugins E2: host.busyWorktrees). */
+export function busyReason(path: string): string | null {
+  const busy = running.get(realOrResolved(path))
+  return busy ? busyMessage(busy) : null
 }
 
 /**

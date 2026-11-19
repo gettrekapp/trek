@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { pluginPathChecks } from '../server/src/plugins/coreChecks.ts'
+import { localSiblingDataDirs } from '../server/src/plugins/siblings.ts'
 import { toWireError } from '../server/src/errors.ts'
 import { dispatchV2, isCoreMethod } from '../server/src/v2.ts'
 import { mcpContext } from '../server/src/plugins/mcp.ts'
@@ -1019,4 +1020,88 @@ test("pluginPathChecks (plugins E2): check rethrows the guard's own refusal", ()
   assert.deepEqual(checked, ['/r/app'])
   const denied = pluginPathChecks({ store: { guard: { check: () => { throw refusal } } } })
   assert.throws(() => denied.check('/r/app'), (e) => e === refusal)
+})
+
+test("host.checkedRepo and host.checkedWorktree (plugins E2): core's checks, answered as the plugin's repo and worktree; their errors keep their codes", async (t) => {
+  const repo = { id: 'r1', name: 'app', path: '/r/app', branchData: {}, worktrees: [{ id: 'w2', path: '/r/app-feat', branch: 'feat', isMain: false, sessions: [] }] }
+  const asked = []
+  const paths = {
+    check: () => {},
+    repo: (projectId, repoId) => {
+      asked.push(['repo', projectId, repoId])
+      if (repoId !== 'r1') throw Object.assign(new Error('/r/other is outside the allowed paths'), { code: 'PATH_DENIED' })
+      return repo
+    },
+    worktree: async (projectId, worktreeId, refresh) => {
+      asked.push(['worktree', projectId, worktreeId, refresh])
+      if (worktreeId !== 'w2') throw Object.assign(new Error('could not re-read the worktrees'), { code: 'GIT_ERROR' })
+      return { repo, worktree: repo.worktrees[0] }
+    }
+  }
+  let host
+  const runner = {
+    manifest: manifest('runner'),
+    setup: (h) => ((host = h), { handlers: { list: (p) => host.checkedRepo(p.projectId, p.repoId), up: (p) => host.checkedWorktree(p.projectId, p.worktreeId, { refresh: true }) } })
+  }
+  const { registry } = setup(t, [runner], { paths })
+  assert.deepEqual(host.checkedRepo('p1', 'r1'), { id: 'r1', path: '/r/app', name: 'app' })
+  assert.deepEqual(await host.checkedWorktree('p1', 'w2'), { id: 'w2', repoId: 'r1', repoPath: '/r/app', path: '/r/app-feat', branch: 'feat', present: true })
+  assert.deepEqual(asked, [['repo', 'p1', 'r1'], ['worktree', 'p1', 'w2', false]])
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { plugins: registry })
+  assert.equal((await call('runner.list', { repoId: 'r9' })).error.code, 'PATH_DENIED')
+  assert.equal((await call('runner.up', { worktreeId: 'w9' })).error.code, 'GIT_ERROR')
+  assert.deepEqual(asked.at(-1), ['worktree', 'p1', 'w9', true])
+})
+
+test('host.busyWorktrees (plugins E2): the worktrees held for a teardown or an operation, with their CONFLICT message', async (t) => {
+  const { holdWorktree } = await import('../server/src/teardown/teardown.ts')
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-busy-')))
+  t.after(() => removeDir(root))
+  const wtPath = join(root, 'app-feat')
+  mkdirSync(wtPath)
+  const repo = { id: 'r1', name: 'app', path: join(root, 'app'), branchData: {}, worktrees: [{ id: 'w2', path: wtPath, branch: 'feat', isMain: false, sessions: [] }] }
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } } })
+  assert.deepEqual(host.busyWorktrees(), [])
+  await holdWorktree(wtPath, 'removing it', async () => {
+    assert.deepEqual(host.busyWorktrees(), [
+      { projectId: 'p1', worktree: { id: 'w2', repoId: 'r1', repoPath: join(root, 'app'), path: wtPath, branch: 'feat', present: true }, reason: 'this worktree is busy: removing it; try again once it is done' }
+    ])
+  })
+  assert.deepEqual(host.busyWorktrees(), [])
+})
+
+test("localSiblingDataDirs (plugins E2): local and local-* beside a Local server's data dir, never itself or another dir", (t) => {
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'trek-datadirs-')))
+  t.after(() => removeDir(parent))
+  for (const name of ['local', 'local-dev', 'local-wt2', 'other', 'local-', 'local-Bad', 'localx']) mkdirSync(join(parent, name))
+  writeFileSync(join(parent, 'local-file'), '')
+  assert.deepEqual(localSiblingDataDirs(join(parent, 'local')).sort(), [join(parent, 'local-dev'), join(parent, 'local-wt2')].sort())
+  assert.deepEqual(localSiblingDataDirs(join(parent, 'local-dev')).sort(), [join(parent, 'local'), join(parent, 'local-wt2')].sort())
+  assert.deepEqual(localSiblingDataDirs(join(parent, 'gone', 'local')), [])
+})
+
+test("host.legacySiblingDataFiles and host.legacyImportFile (plugins E2): each sibling's plugin file where it has one, else its old one; the app's file only with --import-env-from", (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-siblings-')))
+  t.after(() => removeDir(root))
+  const own = join(root, 'local')
+  for (const name of ['local', 'local-dev', 'local-old']) mkdirSync(join(root, name))
+  mkdirSync(join(root, 'local-dev', 'plugins', 'runner'), { recursive: true })
+  writeFileSync(join(root, 'local-dev', 'plugins', 'runner', 'reg.json'), '{}')
+  writeFileSync(join(root, 'local-dev', 'reg.json'), '{"stale":{}}')
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const make = (more) =>
+    createPluginRegistry({ plugins: [runner], secretsFile: join(root, 'secrets.json'), dataDir: own, hub: fakeHub(), projects: fakeProjects({}), isCoreMethod, coreToolNames: [], warn: () => {}, ...more })
+  const local = make({ siblingDataDirs: () => localSiblingDataDirs(own), importFrom: join(root, 'Trek Dev') })
+  t.after(() => local.dispose())
+  assert.deepEqual(host.legacySiblingDataFiles('reg.json').sort(), [join(root, 'local-dev', 'plugins', 'runner', 'reg.json'), join(root, 'local-old', 'reg.json')].sort())
+  assert.equal(host.legacyImportFile('reg.json'), join(root, 'Trek Dev', 'reg.json'))
+  assert.throws(() => host.legacySiblingDataFiles('../x'), /not a data file name/)
+  assert.throws(() => host.legacyImportFile('a/b'), /not a data file name/)
+  const plain = make({})
+  t.after(() => plain.dispose())
+  assert.deepEqual(host.legacySiblingDataFiles('reg.json'), [])
+  assert.equal(host.legacyImportFile('reg.json'), undefined)
 })

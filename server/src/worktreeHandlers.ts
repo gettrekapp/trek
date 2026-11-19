@@ -151,7 +151,7 @@ export function locate(project: Project, worktreeId: unknown): { repo: Repositor
  * import may not be). The main worktree is its repository's own checkout;
  * any other row must not be, nor contain, a registered repository.
  */
-export function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree } {
+export function present(ctx: Pick<V2Context, 'projects' | 'store'>, p: any): { repo: Repository; worktree: Worktree } {
   const found = locate(ctx.projects.require(p.projectId), p.worktreeId)
   findRegistered(ctx.store.config.repos, found.repo.path)
   if (found.worktree.missing) {
@@ -168,7 +168,7 @@ export function present(ctx: V2Context, p: any): { repo: Repository; worktree: W
  * `git checkout` by a poll, so the repo is re-read first. The branch must be a
  * real branch name, since it goes on a git command line.
  */
-export async function checkedOut(ctx: V2Context, p: any): Promise<{ repo: Repository; worktree: Worktree; branch: string }> {
+export async function checkedOut(ctx: Pick<V2Context, 'projects' | 'store' | 'poller'>, p: any): Promise<{ repo: Repository; worktree: Worktree; branch: string }> {
   const { repo } = present(ctx, p)
   if (!(await ctx.poller.refresh(repo.path))) {
     throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)

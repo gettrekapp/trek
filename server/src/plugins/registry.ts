@@ -2,10 +2,11 @@
 // with its host (secrets, data files, its programs (run, spawn), its project's subscribers, the
 // session lookup), then asked for its methods (`<id>.*` when no core method has the name), its MCP
 // tools, instructions and session prompt in the projects where it is on.
-import { chmodSync, mkdirSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
+import type { Repository, Worktree } from '../../../src/shared/model/types'
 import {
   legacyCapabilitiesOf,
   isUsablePluginId,
@@ -28,6 +29,7 @@ import { findSession } from '../sessions/locate.ts'
 import { commandFromEnv, runCommand, spawnCommand, SPAWN_KILL_GRACE_MS } from './run.ts'
 import { realOrResolved } from '../repos.ts'
 import { pluginRepo, pluginWorktree } from './worktrees.ts'
+import { busyReason } from '../teardown/teardown.ts'
 import type { TopicHub } from '../topicHub'
 
 /**
@@ -62,6 +64,10 @@ export const PLUGIN_STOP_MS = SPAWN_KILL_GRACE_MS + 500
 export interface PluginPathChecks {
   /** Throws the server's own refusal (the path guard's PATH_DENIED, its wording and its UNC reason) when its allowlist does not cover the path */
   check(path: string): void
+  /** The repository a machine method may use (in the project, registered, allowed); throws as core's methods do */
+  repo(projectId: unknown, repoId: unknown): Repository
+  /** The present worktree a machine method may use; `refresh`: git re-read and the branch name checked (checkedOut) */
+  worktree(projectId: unknown, worktreeId: unknown, refresh: boolean): Promise<{ repo: Repository; worktree: Worktree }>
 }
 
 export interface PluginRegistryOptions {
@@ -82,6 +88,10 @@ export interface PluginRegistryOptions {
   platform?: NodeJS.Platform
   /** Core's path checks (plugins E2): without them a program's cwd is checked against the projects only */
   paths?: PluginPathChecks
+  /** A Local server's other Local profiles' data dirs (siblings.ts): host.legacySiblingDataFiles */
+  siblingDataDirs?: () => string[]
+  /** `start --local --import-env-from <dir>`: the app's data dir, for host.legacyImportFile */
+  importFrom?: string
 }
 
 /** A plugin's worktree lifecycle, with the id its items are namespaced by (plugins E1). */
@@ -209,6 +219,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       }
       throw new Error(`${cwd} is not a repository, a worktree or this plugin's data directory`)
     }
+    const requirePaths = (): PluginPathChecks => {
+      if (!options.paths) throw new Error('this server has no path checks for plugins')
+      return options.paths
+    }
     return {
       id: manifest.id,
       secret: (name) => {
@@ -285,6 +299,31 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         const repo = repoIn(options.projects.require(projectId), repoId)
         const data = Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : undefined
         return ownValues(data?.pluginSettings, manifest.id)
+      },
+      checkedRepo: (projectId, repoId) => pluginRepo(requirePaths().repo(projectId, repoId)),
+      checkedWorktree: async (projectId, worktreeId, opts = {}) => {
+        const { repo, worktree } = await requirePaths().worktree(projectId, worktreeId, opts.refresh === true)
+        return pluginWorktree(repo, worktree)
+      },
+      busyWorktrees: () =>
+        [...options.projects.all()].flatMap((project) =>
+          project.repositories.flatMap((repo) =>
+            repo.worktrees.flatMap((worktree) => {
+              const reason = busyReason(worktree.path)
+              return reason ? [{ projectId: project.id, worktree: pluginWorktree(repo, worktree), reason }] : []
+            })
+          )
+        ),
+      legacySiblingDataFiles: (name) => {
+        checkFileName(name)
+        return (options.siblingDataDirs?.() ?? []).map((sibling) => {
+          const own = fileIn(join(sibling, 'plugins', manifest.id), name)
+          return existsSync(own) ? own : fileIn(sibling, name)
+        })
+      },
+      legacyImportFile: (name) => {
+        checkFileName(name)
+        return options.importFrom === undefined ? undefined : fileIn(options.importFrom, name)
       },
       log: {
         info: (message) => console.log(`[plugin ${manifest.id}] ${message}`),

@@ -209,6 +209,34 @@ export interface ServerPluginHost {
   repoSettings(projectId: string, repoId: string): PluginSettingValues
   /** This plugin's settings for the branch (its manifest's `branchSettings`), a copy; {} when none are set */
   branchSettings(projectId: string, repoId: string, branch: string): PluginSettingValues
+  /**
+   * A repository a program may run in (plugins E2), checked as core's own machine methods check one:
+   * in the project, still registered on this server, inside its allowed paths. Throws NOT_FOUND,
+   * BAD_REQUEST or PATH_DENIED as those methods answer.
+   */
+  checkedRepo(projectId: unknown, repoId: unknown): PluginRepo
+  /**
+   * A worktree a program may run in (plugins E2), checked as core's own machine methods check one:
+   * present (a `missing` row is BAD_REQUEST), its repository registered, inside the allowed paths
+   * (PATH_DENIED). `refresh`: git's worktrees are re-read first (GIT_ERROR when git can't be read)
+   * and the branch checked out now must be a branch name (BAD_REQUEST when detached).
+   */
+  checkedWorktree(projectId: unknown, worktreeId: unknown, options?: { refresh?: boolean }): Promise<PluginWorktree>
+  /** The worktrees, in every project, the server is tearing down or holding for a remove, promote or move now (plugins E2), with the CONFLICT message for each */
+  busyWorktrees(): { projectId: string; worktree: PluginWorktree; reason: string }[]
+  /**
+   * The same data file (`name`, one path segment) of the other Local profiles on this machine
+   * (plugins E2), to read, never write: each one's `<its dataDir>/plugins/<id>/<name>` where it has
+   * one, else its `<its dataDir>/<name>` from before plugins. [] on a server that is not Local.
+   * Only for a built-in plugin's files from before plugins (the Colima registry).
+   */
+  legacySiblingDataFiles(name: string): string[]
+  /**
+   * `<app data dir>/<name>` on a Local server started with `--import-env-from <app data dir>`
+   * (plugins E2): a file the app kept before 5a, for a built-in plugin's one-time take-over.
+   * Undefined otherwise.
+   */
+  legacyImportFile(name: string): string | undefined
   readonly log: { info(message: string): void; warn(message: string): void }
 }
 
