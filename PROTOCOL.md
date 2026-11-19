@@ -1020,6 +1020,8 @@ the server's (`plugins: [{id, version, defaultEnabled}]`: a client goes by the s
 own); a server older than plugins sends no `plugins`, and a
 client then knows a plugin only by its legacy capability (`voice`), if it has one.
 
+A built-in plugin may run only on some server platforms (plugins E1). Elsewhere the server doesn't set it up, its methods are unknown, and the welcome lists it with `available: false` (a client shows it as missing there).
+
 **Names.** A plugin's methods are `<id>.<name>` and its events `<id>.<event>`, on the same socket.
 A method no core handler has goes to the plugin whose id is its prefix; a plugin's id can't be a
 core namespace. Its errors reach the client as `BAD_REQUEST`, `NOT_FOUND`, `CONFLICT` or

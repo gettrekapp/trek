@@ -6,10 +6,20 @@ import { chmodSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
-import { legacyCapabilitiesOf, PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
+import {
+  legacyCapabilitiesOf,
+  PLUGIN_ID_RE,
+  pluginEnabled,
+  pluginFieldsProblem,
+  type PluginFieldKind,
+  type PluginManifest,
+  type PluginPresence,
+  type PluginSettingValues
+} from '../../../src/shared/plugins/manifest.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
+import { repoIn } from '../projects/model.ts'
 import { codedError } from '../errors.ts'
 import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
@@ -17,6 +27,7 @@ import { createSecretFile } from '../secrets.ts'
 import { findSession } from '../sessions/locate.ts'
 import { commandFromEnv, runCommand, spawnCommand } from './run.ts'
 import { realOrResolved } from '../repos.ts'
+import { pluginRepo, pluginWorktree } from './worktrees.ts'
 import type { TopicHub } from '../topicHub'
 
 /**
@@ -58,6 +69,8 @@ export interface PluginRegistryOptions {
   coreToolNames: readonly string[]
   env?: NodeJS.ProcessEnv
   warn?: (message: string) => void
+  /** For tests: the platform the `platforms` manifests are matched against (default: process.platform) */
+  platform?: NodeJS.Platform
 }
 
 export interface PluginRegistry {
@@ -84,6 +97,8 @@ export interface PluginRegistry {
   allPrProviders(): PrServerProvider[]
   /** The project settings the registered plugins own (phase 2), whether or not they are on in a project */
   readonly settingRules: PluginSettingRules
+  /** A registered plugin's `repoSettings` or `branchSettings` (plugins E1); undefined when it is not registered here or declares none */
+  settingFields(pluginId: string, scope: 'repo' | 'branch'): Readonly<Record<string, PluginFieldKind>> | undefined
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
   onChanged(listener: (manifest: PluginManifest) => void): void
   dispose(): void
@@ -95,6 +110,11 @@ interface Entry {
 }
 
 /** A plugin's throw as the wire should see it: its own code if allowed, else TOOL_ERROR. */
+/** A plugin's own entry in stored `pluginSettings`, as a copy; {} when it has none (an own key only: never Object's members). */
+function ownValues(byId: Record<string, PluginSettingValues> | undefined, id: string): PluginSettingValues {
+  return byId && Object.hasOwn(byId, id) ? { ...byId[id] } : {}
+}
+
 function wireError(err: unknown): Error {
   const code = (err as { code?: unknown } | null)?.code
   if (typeof code === 'string' && PASSTHROUGH.has(code)) return err as Error
@@ -106,6 +126,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const env = options.env ?? process.env
   const secrets = createSecretFile(options.secretsFile)
   const entries = new Map<string, Entry>()
+  /** Registered plugins not for this server's platform (plugins E1): never set up, listed `available: false` */
+  const unavailable: PluginManifest[] = []
+  const platform = options.platform ?? process.platform
   const changedListeners: ((manifest: PluginManifest) => void)[] = []
   const coreTools = new Set(options.coreToolNames)
   const toolOwners = new Map<string, string>()
@@ -210,6 +233,21 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         const found = findSession(options.projects.require(projectId), terminalId)
         return { sessionId: found.session.id, global: !found.worktree }
       },
+      worktrees: (projectId) => options.projects.require(projectId).repositories.flatMap((r) => r.worktrees.map((w) => pluginWorktree(r, w))),
+      worktree: (projectId, worktreeId) => {
+        for (const repo of options.projects.require(projectId).repositories) {
+          const found = repo.worktrees.find((w) => w.id === worktreeId)
+          if (found) return pluginWorktree(repo, found)
+        }
+        throw codedError('NOT_FOUND', `No worktree with id "${worktreeId}" in this project`)
+      },
+      repos: (projectId) => options.projects.require(projectId).repositories.map(pluginRepo),
+      repoSettings: (projectId, repoId) => ownValues(repoIn(options.projects.require(projectId), repoId).pluginSettings, manifest.id),
+      branchSettings: (projectId, repoId, branch) => {
+        const repo = repoIn(options.projects.require(projectId), repoId)
+        const data = Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : undefined
+        return ownValues(data?.pluginSettings, manifest.id)
+      },
       log: {
         info: (message) => console.log(`[plugin ${manifest.id}] ${message}`),
         warn: (message) => warn(`[plugin ${manifest.id}] ${message}`)
@@ -224,7 +262,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       refuse('its id is not a plugin id')
       continue
     }
-    if (entries.has(manifest.id)) {
+    if (entries.has(manifest.id) || unavailable.some((m) => m.id === manifest.id)) {
       refuse('another plugin has that id')
       continue
     }
@@ -246,6 +284,21 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const taken = keys.find((key) => isCoreSettingsKey(key) || settingOwners.has(key) || key === '__proto__')
     if (taken) {
       refuse(`its project setting ${taken} is a core setting's or another plugin's`)
+      continue
+    }
+    const fieldsProblem = (['repoSettings', 'branchSettings'] as const)
+      .map((scope) => {
+        const problem = pluginFieldsProblem(manifest[scope])
+        return problem ? `its ${scope} ${problem}` : null
+      })
+      .find((problem) => problem !== null)
+    if (fieldsProblem) {
+      refuse(fieldsProblem)
+      continue
+    }
+    // Not for this server's platform (plugins E1): listed as unavailable, never set up.
+    if (manifest.platforms && !manifest.platforms.includes(platform)) {
+      unavailable.push(manifest)
       continue
     }
     let instance: PluginInstance
@@ -296,7 +349,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   }
 
   return {
-    presence: () => [...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
+    presence: () => [
+      ...[...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
+      ...unavailable.map((m) => ({ id: m.id, version: m.version, defaultEnabled: m.defaultEnabled, available: false as const }))
+    ],
     legacyCapabilities: () => [...entries.values()].flatMap((e) => legacyCapabilitiesOf(e.manifest)),
     handler: (method) => {
       const dot = method.indexOf('.')
@@ -355,6 +411,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     prProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     allPrProviders: () => [...entries.values()].flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     settingRules,
+    settingFields: (pluginId, scope) => entries.get(pluginId)?.manifest[scope === 'repo' ? 'repoSettings' : 'branchSettings'],
     onChanged: (listener) => {
       changedListeners.push(listener)
     },
@@ -362,6 +419,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       // Each plugin once: after it the registry is empty, and a second dispose does nothing.
       const disposing = [...entries.values()]
       entries.clear()
+      unavailable.length = 0
       changedListeners.length = 0
       for (const a of aborts.values()) a.abort()
       aborts.clear()

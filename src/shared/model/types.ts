@@ -3,6 +3,7 @@
 // it is safe for `node --test`, the daemon and a React Native client.
 import type { LlmSelection } from '../providers/types.ts'
 import type { ChangesSource, EnvironmentSettings, ProjectFile } from '../types.ts'
+import type { PluginSettingValues } from '../plugins/manifest.ts'
 
 /**
  * Computed on the server from the terminal's live output:
@@ -70,6 +71,8 @@ export interface BranchData {
   env?: string
   /** The server watches `pr` (5c-1): on while present; cleared with `pr`, and by the server after merged or closed */
   prWatch?: PrWatch
+  /** Each plugin's per-branch settings (plugins E1, its manifest's `branchSettings`), by plugin id; they move with the branch */
+  pluginSettings?: Record<string, PluginSettingValues>
 }
 
 /** A pull request watch. `seen` is what the last poll saw; absent until the first poll (the baseline, which reports nothing). */
@@ -180,6 +183,8 @@ export interface Repository {
   linkedDirs?: string[]
   /** Per-worktree isolated Docker environments */
   environments?: EnvironmentSettings
+  /** Each plugin's per-repository settings (plugins E1, its manifest's `repoSettings`), by plugin id */
+  pluginSettings?: Record<string, PluginSettingValues>
   /** Keyed by branch name */
   branchData: Record<string, BranchData>
   worktrees: Worktree[]

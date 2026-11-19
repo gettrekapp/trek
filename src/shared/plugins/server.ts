@@ -1,7 +1,7 @@
 // The server half of a Trek plugin (plugin system phase 1): what trek-server hands it (the host)
 // and what it gives back (its instance). A plugin's server code imports only this module, the
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
-import type { PluginManifest } from './manifest.ts'
+import type { PluginManifest, PluginSettingValues } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
 import type { ParsedPr, PromptHint, PrProvider, PrView } from './pullRequests.ts'
 
@@ -97,6 +97,26 @@ export interface PrServerProvider extends PrProvider {
   promptHint: PromptHint
 }
 
+/** A worktree as a plugin sees it (plugins E1): host.worktree(s) and the worktree lifecycle's hooks. Read only. */
+export interface PluginWorktree {
+  id: string
+  repoId: string
+  /** The repository's main checkout */
+  repoPath: string
+  path: string
+  /** Null when detached */
+  branch: string | null
+  /** False once git no longer lists it (a `missing` row) */
+  present: boolean
+}
+
+/** A repository as a plugin sees it (plugins E1). */
+export interface PluginRepo {
+  id: string
+  path: string
+  name: string
+}
+
 export interface ServerPluginHost {
   readonly id: string
   /** A name its manifest lists in `secrets`; any other throws */
@@ -148,6 +168,16 @@ export interface ServerPluginHost {
   changed(): void
   /** The session `terminalId` names in the project; BAD_REQUEST without one, NOT_FOUND when there is none */
   session(projectId: string, terminalId: unknown): { sessionId: string; global: boolean }
+  /** The project's worktrees, every repository's, in order (plugins E1); NOT_FOUND for a project that is not there */
+  worktrees(projectId: string): PluginWorktree[]
+  /** One of them; NOT_FOUND when there is none */
+  worktree(projectId: string, worktreeId: string): PluginWorktree
+  /** The project's repositories */
+  repos(projectId: string): PluginRepo[]
+  /** This plugin's settings for the repository (its manifest's `repoSettings`), a copy; {} when none are set */
+  repoSettings(projectId: string, repoId: string): PluginSettingValues
+  /** This plugin's settings for the branch (its manifest's `branchSettings`), a copy; {} when none are set */
+  branchSettings(projectId: string, repoId: string, branch: string): PluginSettingValues
   readonly log: { info(message: string): void; warn(message: string): void }
 }
 

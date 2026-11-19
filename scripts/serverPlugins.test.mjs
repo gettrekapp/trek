@@ -54,7 +54,7 @@ function fakeHub(subscribers = {}) {
 
 const manifest = (id, more = {}) => ({ id, version: '1.0.0', name: id, description: '', defaultEnabled: true, ...more })
 
-function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', { echo: { enabled: false } }) }, hub = fakeHub() } = {}) {
+function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', { echo: { enabled: false } }) }, hub = fakeHub(), platform } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-plugins-'))
   t.after(() => removeDir(dir))
   const warnings = []
@@ -67,7 +67,8 @@ function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', {
     isCoreMethod,
     coreToolNames: MCP_TOOLS.map((tool) => tool.name),
     env: { TREK_SERVER_ECHO_URL: 'http://127.0.0.1:9/x', TREK_SERVER_BAD_URL: 'https://example.com' },
-    warn: (m) => warnings.push(m)
+    warn: (m) => warnings.push(m),
+    ...(platform ? { platform } : {})
   })
   return { dir, registry, warnings, hub }
 }
@@ -649,4 +650,85 @@ test('a plugin may not take a core event namespace no method has: state, topic, 
   const { registry, warnings } = setup(t, ids.map((id) => ({ manifest: manifest(id), setup: () => ({ handlers: {} }) })))
   assert.deepEqual(registry.presence(), [])
   for (const id of ids) assert.match(warnings.join('\n'), new RegExp(`${id} not loaded: its id is a core namespace`))
+})
+
+test('platforms (plugins E1): on another platform a plugin is not set up, answers nothing, and the welcome lists it available: false', (t) => {
+  let ran = false
+  const elsewhere = { manifest: manifest('elsewhere', { platforms: ['plan9'], legacyCapability: ['oldcap'] }), setup: () => ((ran = true), { handlers: { hi: () => 'hi' } }) }
+  const here = { manifest: manifest('here', { platforms: ['linux'], legacyCapability: ['aa', 'bb'] }), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [elsewhere, here], { platform: 'linux' })
+  assert.equal(ran, false)
+  assert.deepEqual(registry.presence(), [
+    { id: 'here', version: '1.0.0', defaultEnabled: true },
+    { id: 'elsewhere', version: '1.0.0', defaultEnabled: true, available: false }
+  ])
+  assert.equal(registry.handler('elsewhere.hi'), undefined)
+  assert.equal(registry.enabled('p1', 'elsewhere'), false)
+  assert.deepEqual(registry.legacyCapabilities(), ['aa', 'bb'])
+  assert.equal(registry.settingFields('elsewhere', 'repo'), undefined)
+})
+
+test('platforms (plugins E1): a second plugin with an unavailable one\'s id is refused', (t) => {
+  const { registry, warnings } = setup(t, [
+    { manifest: manifest('twice', { platforms: ['plan9'] }), setup: () => ({ handlers: {} }) },
+    { manifest: manifest('twice'), setup: () => ({ handlers: {} }) }
+  ], { platform: 'linux' })
+  assert.deepEqual(registry.presence(), [{ id: 'twice', version: '1.0.0', defaultEnabled: true, available: false }])
+  assert.match(warnings.join('\n'), /twice not loaded: another plugin has that id/)
+})
+
+test('the host reads the project (plugins E1): its worktrees and repositories, and its own repo and branch settings, as copies', (t) => {
+  let host
+  const look = { manifest: manifest('look', { repoSettings: { enabled: 'boolean' }, branchSettings: { env: 'text' } }), setup: (h) => ((host = h), { handlers: {} }) }
+  const repo = {
+    id: 'r1', name: 'app', path: '/r/app',
+    pluginSettings: { look: { enabled: true }, other: { x: 1 } },
+    branchData: { feat: { note: 'n', pluginSettings: { look: { env: 'A=1\n' } } } },
+    worktrees: [
+      { id: 'w1', path: '/r/app', branch: 'main', isMain: true, sessions: [] },
+      { id: 'w2', path: '/r/app-feat', branch: 'feat', isMain: false, missing: true, sessions: [] },
+      { id: 'w3', path: '/r/app-detached', isMain: false, sessions: [] }
+    ]
+  }
+  const { registry } = setup(t, [look], { projects: { p1: { id: 'p1', settings: {}, globalSessions: [], repositories: [repo] } } })
+  assert.deepEqual(host.worktrees('p1'), [
+    { id: 'w1', repoId: 'r1', repoPath: '/r/app', path: '/r/app', branch: 'main', present: true },
+    { id: 'w2', repoId: 'r1', repoPath: '/r/app', path: '/r/app-feat', branch: 'feat', present: false },
+    { id: 'w3', repoId: 'r1', repoPath: '/r/app', path: '/r/app-detached', branch: null, present: true }
+  ])
+  assert.equal(host.worktree('p1', 'w2').path, '/r/app-feat')
+  assert.throws(() => host.worktree('p1', 'nope'), (e) => e.code === 'NOT_FOUND')
+  assert.throws(() => host.worktrees('gone'), (e) => e.code === 'NOT_FOUND')
+  assert.deepEqual(host.repos('p1'), [{ id: 'r1', path: '/r/app', name: 'app' }])
+  assert.deepEqual(host.repoSettings('p1', 'r1'), { enabled: true })
+  assert.deepEqual(host.branchSettings('p1', 'r1', 'feat'), { env: 'A=1\n' })
+  assert.deepEqual(host.branchSettings('p1', 'r1', 'other'), {})
+  assert.deepEqual(host.branchSettings('p1', 'r1', 'constructor'), {}, 'a prototype name is no branch')
+  assert.throws(() => host.repoSettings('p1', 'nope'), (e) => e.code === 'NOT_FOUND')
+  host.repoSettings('p1', 'r1').enabled = false
+  assert.equal(repo.pluginSettings.look.enabled, true, 'a copy')
+  assert.deepEqual(registry.settingFields('look', 'repo'), { enabled: 'boolean' })
+  assert.deepEqual(registry.settingFields('look', 'branch'), { env: 'text' })
+  assert.equal(registry.settingFields('nobody', 'repo'), undefined)
+  assert.equal(registry.settingFields('constructor', 'repo'), undefined)
+})
+
+test('the host reads only its own settings entry (plugins E1): a plugin id that is an Object.prototype name finds none', (t) => {
+  let host
+  const odd = { manifest: manifest('constructor', { repoSettings: { a: 'string' } }), setup: (h) => ((host = h), { handlers: {} }) }
+  const repo = { id: 'r1', name: 'app', path: '/r/app', pluginSettings: {}, branchData: { feat: { pluginSettings: {} } }, worktrees: [] }
+  setup(t, [odd], { projects: { p1: { id: 'p1', settings: {}, globalSessions: [], repositories: [repo] } } })
+  assert.ok(host, 'set up')
+  assert.deepEqual(host.repoSettings('p1', 'r1'), {})
+  assert.deepEqual(host.branchSettings('p1', 'r1', 'feat'), {})
+})
+
+test('refused before setup (plugins E1): repo or branch settings of an unknown kind or with a bad name', (t) => {
+  const { registry, warnings } = setup(t, [
+    { manifest: manifest('badkind', { repoSettings: { cpu: 'integer' } }), setup: () => ({ handlers: {} }) },
+    { manifest: manifest('badname', { branchSettings: { 'not ok': 'string' } }), setup: () => ({ handlers: {} }) }
+  ])
+  assert.deepEqual(registry.presence(), [])
+  assert.match(warnings.join('\n'), /badkind not loaded: its repoSettings cpu has the kind "integer"/)
+  assert.match(warnings.join('\n'), /badname not loaded: its branchSettings "not ok" is not a field name/)
 })
