@@ -103,6 +103,7 @@ export interface WireErrorDetails {
    * `registry`: a TOOL_ERROR's environments registry cannot be read on the server.
    * `disabled`, `busy`, `stale`: why `update.apply` was refused (CONFLICT); `busy` also refuses an
    * `update.check` while an update is running.
+   * `teardown`: a `TOOL_ERROR` from a worktree's teardown before its remove, promote or move (plugins E1); nothing more was done.
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string

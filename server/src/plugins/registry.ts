@@ -16,7 +16,7 @@ import {
   type PluginPresence,
   type PluginSettingValues
 } from '../../../src/shared/plugins/manifest.ts'
-import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost, WorktreeLifecycle } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
 import { repoIn } from '../projects/model.ts'
@@ -73,6 +73,12 @@ export interface PluginRegistryOptions {
   platform?: NodeJS.Platform
 }
 
+/** A plugin's worktree lifecycle, with the id its items are namespaced by (plugins E1). */
+export interface PluginLifecycle {
+  id: string
+  lifecycle: WorktreeLifecycle
+}
+
 export interface PluginRegistry {
   /** The welcome's `plugins` */
   presence(): PluginPresence[]
@@ -95,6 +101,8 @@ export interface PluginRegistry {
   prProviders(projectId: string): PrServerProvider[]
   /** Every registered plugin's PR provider, on in a project or not: the watch checks their sign-ins */
   allPrProviders(): PrServerProvider[]
+  /** The worktree lifecycles of the plugins on in the project, in registration order (plugins E1) */
+  lifecycles(projectId: string): PluginLifecycle[]
   /** The project settings the registered plugins own (phase 2), whether or not they are on in a project */
   readonly settingRules: PluginSettingRules
   /** A registered plugin's `repoSettings` or `branchSettings` (plugins E1); undefined when it is not registered here or declares none */
@@ -409,6 +417,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     },
     ticketProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.ticketProvider ? [e.instance.ticketProvider] : [])),
     prProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
+    lifecycles: (projectId) => on(projectId).flatMap((e) => (e.instance.worktreeLifecycle ? [{ id: e.manifest.id, lifecycle: e.instance.worktreeLifecycle }] : [])),
     allPrProviders: () => [...entries.values()].flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     settingRules,
     settingFields: (pluginId, scope) => entries.get(pluginId)?.manifest[scope === 'repo' ? 'repoSettings' : 'branchSettings'],

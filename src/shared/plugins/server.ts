@@ -4,6 +4,8 @@
 import type { PluginManifest, PluginSettingValues } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
 import type { ParsedPr, PromptHint, PrProvider, PrView } from './pullRequests.ts'
+import type { TeardownItem, WorktreeOp } from '../teardown.ts'
+export type { TeardownItem, WorktreeOp } from '../teardown.ts'
 
 export { readBodyCapped, MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES } from '../../host/httpBody.ts'
 export { writeFileAtomic } from '../../host/atomicWrite.ts'
@@ -117,6 +119,23 @@ export interface PluginRepo {
   name: string
 }
 
+/**
+ * A plugin's part in a worktree's teardown (plugins E1): before a remove, promote or move, the
+ * server asks each plugin on in the project for its items, shows them in the client's confirm, and
+ * runs the chosen ones before the operation.
+ */
+export interface WorktreeLifecycle {
+  /**
+   * What it would tear down (`id`: lowercase, digits, `.`, `_`, `-`; the server namespaces it as
+   * `<plugin id>:<id>`). Left out of the plan when it throws or takes over 10 s.
+   */
+  plan(ctx: PluginCallContext, worktree: PluginWorktree, op: WorktreeOp): Promise<TeardownItem[]>
+  /** Tears down the chosen items (its own ids, un-namespaced); a throw stops the operation, its message shown */
+  teardown(ctx: PluginCallContext, worktree: PluginWorktree, op: WorktreeOp, ids: readonly string[]): Promise<void>
+  /** Why the repository can't be removed from its project now, or null */
+  beforeRepoRemove?(ctx: PluginCallContext, repo: PluginRepo): Promise<string | null>
+}
+
 export interface ServerPluginHost {
   readonly id: string
   /** A name its manifest lists in `secrets`; any other throws */
@@ -218,6 +237,8 @@ export interface PluginInstance {
   ticketProvider?: TicketProvider
   /** A pull request host (plugins P3): the watch, `pr.resolve` and the PR tools go through it in the projects where the plugin is on */
   prProvider?: PrServerProvider
+  /** Its part in a worktree's teardown (plugins E1), in the projects where the plugin is on */
+  worktreeLifecycle?: WorktreeLifecycle
   /** A value for one of the manifest's `projectSettings` keys (already the declared kind): its problem, or null */
   checkProjectSetting?(key: string, value: string): string | null
   dispose?(): void

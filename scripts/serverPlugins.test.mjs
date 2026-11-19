@@ -816,3 +816,36 @@ test('a plugin settings write (plugins E1) that would leave the map unmovable (o
   assert.deepEqual(repo().pluginSettings, { big: { f0: 'small' } }, 'the earlier values stay')
   assert.deepEqual(repo().branchData.feat, { pluginSettings: { big: { f0: 'small' } } })
 })
+
+test("lifecycles (plugins E1): the worktree lifecycles of plugins on in the project; through pluginParticipant a plugin gets its context and the worktree, read only", async (t) => {
+  const seen = []
+  const lifecycle = {
+    plan: async (ctx, worktree, op) => (seen.push(['plan', ctx, worktree, op]), [{ id: 'vm', label: 'Stop the VM', checked: true }]),
+    teardown: async (ctx, worktree, op, ids) => void seen.push(['teardown', ctx.caller, worktree.id, op, ids]),
+    beforeRepoRemove: async (_ctx, repo) => (seen.push(['repo', repo]), null)
+  }
+  const { registry } = setup(
+    t,
+    [
+      { manifest: manifest('vms'), setup: () => ({ handlers: {}, worktreeLifecycle: lifecycle }) },
+      { manifest: manifest('plain'), setup: () => ({ handlers: {} }) }
+    ],
+    { projects: { p1: project('p1'), p2: project('p2', { vms: { enabled: false } }) } }
+  )
+  assert.deepEqual(registry.lifecycles('p1').map((l) => l.id), ['vms'])
+  assert.deepEqual(registry.lifecycles('p2'), [])
+  const { pluginParticipant, planTeardown, runTeardown, repoRemoveVeto } = await import('../server/src/teardown/teardown.ts')
+  const participant = pluginParticipant(registry.lifecycles('p1')[0], 'conn-1')
+  const repo = { id: 'r1', name: 'app', path: '/r/app', branchData: {}, worktrees: [] }
+  const where = { project: { id: 'p1' }, repo, worktree: { id: 'w2', path: '/r/app-feat', branch: 'feat', isMain: false, missing: true } }
+  assert.deepEqual(await planTeardown([participant], where, 'move'), [{ id: 'vms:vm', label: 'Stop the VM', checked: true }])
+  await runTeardown([participant], where, 'move', ['vms:vm'])
+  assert.equal(await repoRemoveVeto([participant], where.project, repo), null)
+  const worktree = { id: 'w2', repoId: 'r1', repoPath: '/r/app', path: '/r/app-feat', branch: 'feat', present: false }
+  assert.deepEqual(seen, [
+    ['plan', { projectId: 'p1', caller: 'conn-1' }, worktree, 'move'],
+    ['plan', { projectId: 'p1', caller: 'conn-1' }, worktree, 'move'],
+    ['teardown', 'conn-1', 'w2', 'move', ['vm']],
+    ['repo', { id: 'r1', path: '/r/app', name: 'app' }]
+  ])
+})
