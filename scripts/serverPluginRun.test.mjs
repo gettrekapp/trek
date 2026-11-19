@@ -13,8 +13,14 @@ const node = process.execPath
 
 test('runCommand: stdout on exit 0; the first stderr line on a failure; ENOENT for a missing program', async () => {
   assert.equal(await runCommand(node, ['-e', 'process.stdout.write("hi")']), 'hi')
-  await assert.rejects(runCommand(node, ['-e', 'console.error("bad thing\\nmore"); process.exit(3)']), (e) => e.message === 'bad thing')
+  await assert.rejects(runCommand(node, ['-e', 'console.error("\\nbad thing\\nmore"); process.exit(3)']), (e) => e.message === 'bad thing')
+  // No stderr: the exit code, never the arguments (they may hold a query or a token).
+  await assert.rejects(runCommand(node, ['-e', 'process.exit(3) // SECRET-ARG']), (e) => e.message === `${node} exited with 3` && !e.message.includes('SECRET-ARG'))
   await assert.rejects(runCommand('/no/such/program-trek', []), (e) => e.code === 'ENOENT')
+})
+
+test('runCommand: a child that dies of its own signal is not a timeout', { skip: posixOnly('POSIX signals') }, async () => {
+  await assert.rejects(runCommand(node, ['-e', 'process.kill(process.pid, "SIGKILL")']), (e) => e.message === `${node} exited with SIGKILL`)
 })
 
 test('runCommand: refuses a relative path; a bare name is looked up on PATH', async () => {
@@ -23,13 +29,25 @@ test('runCommand: refuses a relative path; a bare name is looked up on PATH', as
   assert.equal(await runCommand('node', ['-e', 'process.stdout.write("ok")']), 'ok')
 })
 
-test('runCommand: a timeout and an output past maxBytes fail; an abort kills the child', async () => {
-  await assert.rejects(runCommand(node, ['-e', 'setTimeout(() => {}, 10000)'], { timeoutMs: 200 }))
-  await assert.rejects(runCommand(node, ['-e', 'process.stdout.write("x".repeat(5000))'], { maxBytes: 1000 }))
+test('runCommand: a timeout and an output past maxBytes fail; an abort kills the child; no message holds the arguments', async () => {
+  const quiet = (e) => !e.message.includes('SECRET-ARG')
+  await assert.rejects(runCommand(node, ['-e', 'setTimeout(() => {}, 10000) // SECRET-ARG'], { timeoutMs: 200 }), (e) => e.message === `${node} timed out after 0.2 s` && quiet(e))
+  await assert.rejects(runCommand(node, ['-e', 'process.stdout.write("x".repeat(5000)) // SECRET-ARG'], { maxBytes: 1000 }), (e) => e.message === `${node}'s output passed the limit` && quiet(e))
   const ac = new AbortController()
-  const running = runCommand(node, ['-e', 'setTimeout(() => {}, 10000)'], { signal: ac.signal })
+  const running = runCommand(node, ['-e', 'setTimeout(() => {}, 10000) // SECRET-ARG'], { signal: ac.signal })
   ac.abort()
-  await assert.rejects(running)
+  await assert.rejects(running, (e) => e.code === 'ABORT_ERR' && e.message === `${node} was stopped` && quiet(e))
+})
+
+test('runCommand: a signal already aborted rejects without starting the program', async () => {
+  const ac = new AbortController()
+  ac.abort()
+  await assert.rejects(runCommand('/no/such/program-trek', [], { signal: ac.signal }), (e) => e.code === 'ABORT_ERR' && e.message === '/no/such/program-trek was stopped')
+})
+
+test('runCommand on Windows: a bare x.mjs is not run through node (it would be relative to the cwd)', async () => {
+  // Not Windows' PATH here either: commandPath finds no x.mjs (.exe/.com only) and says ENOENT.
+  await assert.rejects(runCommand('x.mjs', [], { platform: 'win32' }), (e) => e.code === 'ENOENT')
 })
 
 test('runCommand: env is added to this process\'s env', async () => {

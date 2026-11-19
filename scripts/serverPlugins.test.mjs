@@ -8,6 +8,7 @@ import { mkdtempSync, statSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
+import { toWireError } from '../server/src/errors.ts'
 import { dispatchV2, isCoreMethod } from '../server/src/v2.ts'
 import { mcpContext } from '../server/src/plugins/mcp.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
@@ -442,7 +443,7 @@ test("prProviders: the PR providers of plugins on for the project; one whose id 
   assert.ok(warnings.some((w) => w.includes('liar') && w.includes('pull request provider')))
 })
 
-test("a plugin's NOT_SIGNED_IN reaches the wire as it is; host.run is aborted by dispose", async (t) => {
+test("a plugin's NOT_SIGNED_IN passes the registry as it is and reaches the wire as TOOL_ERROR; host.run is aborted by dispose", async (t) => {
   let host
   const { registry: reg } = setup(t, [
     {
@@ -453,7 +454,10 @@ test("a plugin's NOT_SIGNED_IN reaches the wire as it is; host.run is aborted by
       }
     }
   ])
-  await assert.rejects(reg.handler('hosta.check')({ projectId: 'p1' }), (e) => e.code === 'NOT_SIGNED_IN')
+  const err = await reg.handler('hosta.check')({ projectId: 'p1' }).catch((e) => e)
+  assert.equal(err.code, 'NOT_SIGNED_IN')
+  // It is for the server's own watch; on the wire it is a TOOL_ERROR with its message.
+  assert.deepEqual(toWireError('hosta.check', err), { code: 'TOOL_ERROR', message: 'sign in' })
   const running = host.run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'])
   reg.dispose()
   await assert.rejects(running)

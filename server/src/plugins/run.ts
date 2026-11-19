@@ -5,7 +5,7 @@
 // gh runner did (server/src/prWatch/gh.ts before P3): Windows can't run a sh stub, and execFile
 // can't start a batch file without a shell.
 import { execFile } from 'node:child_process'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, win32 } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
 
@@ -27,14 +27,24 @@ export interface RunCommandOptions {
 const clamp = (value: number | undefined, fallback: number, max: number): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, max) : fallback
 
-/** Resolves with stdout; rejects with stderr's first line (or the error), `code: 'ENOENT'` when the program is not there. */
+const stopped = (command: string): Error => Object.assign(new Error(`${command} was stopped`), { code: 'ABORT_ERR' })
+
+/**
+ * Resolves with stdout. Rejects with stderr's first non-empty line, else a message naming only the
+ * program (never its arguments: they may hold a query or a token): `code: 'ENOENT'` when the program
+ * is not there, `code: 'ABORT_ERR'` when the signal stopped it.
+ */
 export function runCommand(command: string, args: readonly string[], options: RunCommandOptions = {}): Promise<string> {
   const platform = options.platform ?? process.platform
-  if (!command || (!isAbsolute(command) && /[\\/]/.test(command))) {
+  const absolute = (platform === 'win32' ? win32.isAbsolute : isAbsolute)(command)
+  if (!command || (!absolute && /[\\/]/.test(command))) {
     return Promise.reject(new Error(`not a command: ${JSON.stringify(command)} (a bare name or an absolute path)`))
   }
   if (args.some((a) => typeof a !== 'string')) return Promise.reject(new Error('every argument must be a string'))
-  const viaNode = platform === 'win32' && /\.m?js$/i.test(command)
+  // Only an absolute script: a bare `tool.mjs` would be a script relative to the server's cwd.
+  const viaNode = platform === 'win32' && win32.isAbsolute(command) && /\.[cm]?js$/i.test(command)
+  if (options.signal?.aborted) return Promise.reject(stopped(command))
+  const timeoutMs = clamp(options.timeoutMs, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS)
   const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}), ...(viaNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }
   return new Promise((resolve, reject) => {
     try {
@@ -43,18 +53,27 @@ export function runCommand(command: string, args: readonly string[], options: Ru
         viaNode ? process.execPath : commandPath(command, { platform }),
         viaNode ? [command, ...args] : [...args],
         hidden({
-          timeout: clamp(options.timeoutMs, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS),
+          timeout: timeoutMs,
           maxBuffer: clamp(options.maxBytes, RUN_DEFAULT_MAX_BYTES, RUN_MAX_BYTES),
           signal: options.signal,
           env
         }),
         (err, stdout, stderr) => {
           if (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-              reject(Object.assign(new Error(`${command} is not installed on the server`), { code: 'ENOENT' }))
-              return
+            // Never err.message: it holds the whole command line.
+            const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
+            if (options.signal?.aborted) reject(stopped(command))
+            else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') reject(new Error(`${command}'s output passed the limit`))
+            else if (e.code === 'ENOENT') reject(Object.assign(new Error(`${command} is not installed on the server`), { code: 'ENOENT' }))
+            // killed: Node ended it at the timeout (a child that died of its own signal was not)
+            else if (e.killed) reject(new Error(`${command} timed out after ${timeoutMs / 1000} s`))
+            else {
+              const line = String(stderr)
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .find(Boolean)
+              reject(new Error(line ?? `${command} exited with ${e.code ?? e.signal}`))
             }
-            reject(new Error(String(stderr).trim().split('\n')[0] || err.message))
             return
           }
           resolve(String(stdout))

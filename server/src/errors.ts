@@ -35,5 +35,7 @@ export function toWireError(method: string, err: unknown): WireError {
     if (typeof reason === 'string') return { code: code as WireErrorCode, message, details: { reason } }
     return { code: code as WireErrorCode, message }
   }
+  // A plugin's NOT_SIGNED_IN is for the server's own PR watch; a client sees it as a tool's failure.
+  if (code === 'NOT_SIGNED_IN') return { code: 'TOOL_ERROR', message }
   return { code: method.startsWith('git.') ? 'GIT_ERROR' : 'INTERNAL', message }
 }

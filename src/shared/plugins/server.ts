@@ -49,10 +49,10 @@ export function optionalFlag(value: unknown, field: string): boolean {
 export interface RunOptions {
   /** Default 30 s, at most 120 s */
   timeoutMs?: number
-  /** stdout past this fails the call; default 1 MiB, at most 16 MiB */
+  /** stdout or stderr (each) past this fails the call; default 1 MiB, at most 16 MiB */
   maxBytes?: number
   signal?: AbortSignal
-  /** Added to the server's env */
+  /** Added to the program's env (the server's env plus these); it doesn't change how the program is found */
   env?: Record<string, string>
 }
 
