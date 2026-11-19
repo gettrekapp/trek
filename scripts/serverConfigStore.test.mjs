@@ -353,6 +353,31 @@ test('llmSettings: defaults without an llm section, sanitized with one', (t) => 
   })
 })
 
+test("llmDefault and agentServerConfig (plugins A1): the default against the server's agents; an agent's non-empty strings", (t) => {
+  const configPath = join(tempDir(t), 'config.json')
+  saveConfig(configPath, { repos: [] })
+  const a = new ConfigStore(configPath)
+  t.after(() => a.close())
+  const agents = { has: (id) => ['claude', 'codex'].includes(id) }
+  assert.deepEqual(a.llmDefault(agents), { provider: 'claude' })
+  assert.deepEqual(a.agentServerConfig('claude'), {})
+  saveConfig(configPath, {
+    repos: [],
+    llm: {
+      llmDefault: { provider: 'codex', model: 'gpt-5', effort: '-x' },
+      providers: { claude: { command: '/opt/claude', approvalMode: '', bogus: 1 }, local: { backend: 'lmstudio', baseUrl: ' http://h:1 ' }, codex: 'nope' }
+    }
+  })
+  const b = new ConfigStore(configPath)
+  t.after(() => b.close())
+  assert.deepEqual(b.llmDefault(agents), { provider: 'codex', model: 'gpt-5' })
+  assert.deepEqual(b.llmDefault({ has: () => false }), { provider: 'claude' }, 'an agent this server lacks: Claude')
+  assert.deepEqual(b.agentServerConfig('claude'), { command: '/opt/claude' })
+  assert.deepEqual(b.agentServerConfig('local'), { backend: 'lmstudio', baseUrl: ' http://h:1 ' }, 'as written: the agent trims')
+  assert.deepEqual(b.agentServerConfig('codex'), {}, 'not an object')
+  assert.deepEqual(b.agentServerConfig('toString'), {}, "never Object's own")
+})
+
 test('an llm section that is not an object is refused', () => {
   assert.throws(() => validateConfig({ repos: [], llm: 'claude' }), /config.llm must be an object/)
 })

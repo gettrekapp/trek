@@ -8,6 +8,8 @@ import type { RemoteRepo } from '../../src/shared/protocolV2'
 import { sanitizeLlmSettings } from '../../src/shared/providers/settings.ts'
 import type { LlmSettings } from '../../src/shared/providers/types'
 import { isRecord } from './validate.ts'
+import { sanitizeAgentSelection, type AgentSelection } from '../../src/shared/agents/selection.ts'
+import { DEFAULT_AGENT_ID } from '../../src/shared/plugins/agents.ts'
 import { saveConfig, type TrekServerConfig } from './config.ts'
 import { codedError } from './errors.ts'
 import { PathGuard, type PathGuardOptions } from './paths.ts'
@@ -100,6 +102,26 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   /** The agent CLI settings, sanitized (unknown providers and fields dropped). */
   llmSettings(): LlmSettings {
     return sanitizeLlmSettings(this.current.llm)
+  }
+
+  /** The server's default agent (`llm.llmDefault`, plugins A1), against the agents it has: the default agent when unset or unknown. */
+  llmDefault(agents: { has(id: string): boolean }): AgentSelection {
+    const llm = isRecord(this.current.llm) ? this.current.llm : {}
+    return sanitizeAgentSelection(llm.llmDefault, (id) => agents.has(id)) ?? { provider: DEFAULT_AGENT_ID }
+  }
+
+  /**
+   * An agent's entry in `llm.providers` (plugins A1): its non-empty string values as written
+   * (command, approvalMode; Local's backend, baseUrl); {} when it has none. The agent trims and
+   * checks them.
+   */
+  agentServerConfig(id: string): Record<string, string> {
+    const llm = isRecord(this.current.llm) ? this.current.llm : {}
+    const providers = isRecord(llm.providers) ? llm.providers : {}
+    const entry = Object.hasOwn(providers, id) && isRecord(providers[id]) ? providers[id] : {}
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(entry)) if (typeof value === 'string' && value !== '') out[key] = value
+    return out
   }
 
   /** The most session ptys that may run at once. */

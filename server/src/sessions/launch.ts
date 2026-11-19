@@ -10,6 +10,9 @@ import { readFileSync, statSync } from 'node:fs'
 import { codedError } from '../errors.ts'
 import { NO_CWD_EXE_LOOKUP } from '../../../src/host/commandPath.ts'
 import { winSpawnPlan, type WinLaunchDeps } from './winLaunch.ts'
+import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
+import { effectiveEffortOf, sanitizeAgentSelection, type AgentSelection } from '../../../src/shared/agents/selection.ts'
+import type { AgentRegistry } from '../agents/registry.ts'
 
 export interface AgentLaunch {
   llm: LlmSelection
@@ -61,6 +64,56 @@ export function agentCommand(launch: AgentLaunch, settings: ProjectSettings, llm
     localBackend: llm.providers.local?.backend,
     baseUrl: llm.providers.local?.baseUrl
   })
+}
+
+/** A session's launch as core knows it (plugins A1): the agent's own inputs come from the registry. */
+export interface AgentLaunchInput {
+  llm: AgentSelection
+  /** The id passed to the agent (preset or the discovered one to resume) */
+  sessionId: string
+  resume: boolean
+  /** A Global panel session */
+  global: boolean
+  /** The session type's prompt (worktree sessions) */
+  systemPrompt?: string
+  /** The plugins' prompts; only for an agent that gets the MCP tools, which has theirs */
+  pluginPrompt?: string
+  /** Sent only on a fresh start */
+  initialMessage?: string
+  addDirs?: string[]
+  /** The project's MCP access (McpAccessStore): the agent gets its url and files, never the token */
+  mcp?: { url: string; files: Readonly<Record<string, string>> }
+}
+
+/**
+ * The agent's command line for a session (plugins A1): agentCommand's rules, with every
+ * agent-specific choice made by the agent (its command, approval mode, MCP flags, Global role).
+ */
+export function agentLaunch(launch: AgentLaunchInput, settings: ProjectSettings, agents: AgentRegistry, platform: string = process.platform): LaunchSpec {
+  const selection = sanitizeAgentSelection(launch.llm, (id) => agents.has(id)) ?? { provider: DEFAULT_AGENT_ID }
+  const agent = agents.get(selection.provider)
+  const mcp = launch.mcp && agent.capabilities.mcp ? { url: launch.mcp.url, files: launch.mcp.files } : undefined
+  const plugins = mcp ? launch.pluginPrompt : undefined
+  // Trek's own guidance (the Global role, the plugins' prompts) first, then the user's (the session
+  // type's prompt, the project's shared or Global prompt) last, so the user's can override it.
+  const prompts = launch.global
+    ? [mcp ? (agent.globalPrompt?.() ?? globalAgentPrompt(agent.label)) : undefined, plugins, settings.globalSystemPrompt?.trim()]
+    : [plugins, launch.systemPrompt?.trim(), settings.sessionSystemPrompt?.trim()]
+  const systemPrompt = prompts.filter(Boolean).join('\n\n') || undefined
+  return agent.buildLaunch(
+    {
+      sessionId: launch.sessionId,
+      resume: launch.resume,
+      model: selection.model,
+      effort: effectiveEffortOf(selection, agents),
+      systemPrompt,
+      mcp,
+      initialMessage: launch.resume ? undefined : launch.initialMessage,
+      addDirs: agent.capabilities.addDirs ? launch.addDirs : undefined,
+      platform
+    },
+    agents.config(agent.id, settings)
+  )
 }
 
 /**
