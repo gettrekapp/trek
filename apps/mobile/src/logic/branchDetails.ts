@@ -2,7 +2,7 @@
 // edit with its compare-and-set and what a conflict does to it, what a pull request box takes, which
 // links are opened, and a tag chip's colours. The rules are the desktop's (backendV2.ts' branch
 // setCustomTag and setNote) and the server's (v2.ts' setBranchField, validate.ts' checkExpected). Pure.
-import { parsePrWith, type PrProvider } from '../shared.ts'
+import { prLinkToSave, type PrProvider } from '../shared.ts'
 import { pullRequestLabel } from './worktrees.ts'
 
 /**
@@ -57,15 +57,20 @@ export function isNoteConflict(err: unknown): boolean {
 }
 
 /**
- * What a pull request box holds: the canonical link to save (through the PR providers on for the
- * project), why not (naming what they take), or null for nothing typed. With no provider on, the
- * phone says where one is turned on (not on the phone).
+ * What a pull request box holds: the link to save (a provider's canonical form, through the PR
+ * providers on for the project, else any other http(s) link as typed, which gets the generic chip
+ * and no watch), `unchanged` when it is the stored link (`current`) as is (closes without a save,
+ * even one no provider on can read), why not (naming what the providers take), or null for nothing
+ * typed. With no provider on, the phone says where one is turned on (not on the phone). As the
+ * desktop's PullRequestModal.
  */
-export function pullRequestInput(providers: readonly PrProvider[], input: string): { pr: string } | { error: string } | null {
+export function pullRequestInput(providers: readonly PrProvider[], input: string, current?: string | null): { pr: string } | { unchanged: true } | { error: string } | null {
   if (!input.trim()) return null
+  if (current && input.trim() === current) return { unchanged: true }
+  const pr = prLinkToSave(providers, input)
+  if (pr) return { pr }
   if (providers.length === 0) return { error: "No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins." }
-  const parsed = parsePrWith(providers, input)
-  return parsed ? { pr: parsed.url } : { error: `Not ${providers.map((p) => p.hint).join(', or ')}` }
+  return { error: `Not ${providers.map((p) => p.hint).join(', or ')}` }
 }
 
 /** "PR #42", or "PR" for a link without a number (as on the project screen's cards). */

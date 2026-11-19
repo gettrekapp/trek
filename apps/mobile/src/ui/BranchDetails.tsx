@@ -160,8 +160,12 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
   }
 
   const savePr = (): void => {
-    const parsed = pullRequestInput(prHosts, text)
+    const parsed = pullRequestInput(prHosts, text, data?.pr)
     if (!parsed || running.current) return
+    if ('unchanged' in parsed) {
+      cancel()
+      return
+    }
     if ('error' in parsed) {
       setError(parsed.error)
       return

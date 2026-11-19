@@ -1296,18 +1296,24 @@ test("branch details: after a conflict the user's text stays, and the next save 
   assert.deepEqual(noteConflicted(conflicted, 'theirs again'), { text: 'mine', expected: 'theirs again', conflict: true })
 })
 
-test('pullRequestInput: the canonical link through the providers; the error names what they take', () => {
+test('pullRequestInput: the canonical link through the providers; any other http(s) link as typed; the error names what they take', () => {
   const providers = activePrProviders({ capabilities: [] }, {})
   assert.deepEqual(pullRequestInput(providers, 'https://www.github.com/a/b/pull/3/files'), { pr: 'https://github.com/a/b/pull/3' })
   assert.deepEqual(pullRequestInput(providers, ' https://github.com/o/r/pull/42/files '), { pr: 'https://github.com/o/r/pull/42' })
-  assert.match(pullRequestInput(providers, 'https://example.com/x').error, /GitHub pull request link/)
-  for (const bad of ['https://gitlab.com/o/r/pull/1', 'https://github.com/o/r/issues/1', '42', 'pr 42']) {
+  // A link no provider on owns is saved as typed, as on the desktop (generic chip, no watch).
+  assert.deepEqual(pullRequestInput(providers, ' https://example.com/x '), { pr: 'https://example.com/x' })
+  assert.deepEqual(pullRequestInput(providers, 'https://github.com/o/r/issues/1'), { pr: 'https://github.com/o/r/issues/1' })
+  assert.deepEqual(pullRequestInput([], 'https://github.com/a/b/pull/3'), { pr: 'https://github.com/a/b/pull/3' })
+  for (const bad of ['42', 'pr 42', 'github.com/o/r/pull/1', 'ftp://x/1']) {
     assert.match(pullRequestInput(providers, bad).error, /^Not a GitHub pull request link/, bad)
   }
-  assert.deepEqual(pullRequestInput([], 'https://github.com/a/b/pull/3'), { error: "No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins." })
+  assert.deepEqual(pullRequestInput([], '42'), { error: "No pull request provider is on in this project. Turn one on in the desktop app's Settings → Plugins." })
   // Nothing typed is nothing to save (Clear is what unlinks).
   assert.equal(pullRequestInput(providers, '  '), null)
   assert.equal(pullRequestInput(providers, ''), null)
+  // The stored link, unchanged, closes as is (even one no provider on can read), as on the desktop.
+  assert.deepEqual(pullRequestInput([], ' https://code.example/pr/3 ', 'https://code.example/pr/3'), { unchanged: true })
+  assert.deepEqual(pullRequestInput(providers, 'https://github.com/a/b/pull/3/files', 'https://github.com/a/b/pull/3'), { pr: 'https://github.com/a/b/pull/3' })
 })
 
 test('watchSuffix names the provider\'s sign-in', () => {

@@ -3,7 +3,7 @@
 // counts as no match.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parsePrWith, prLabel, prOwner, resolvePrInput, safeParse } from '../src/shared/plugins/pullRequests.ts'
+import { parsePrWith, prLabel, prLinkToSave, prOwner, resolvePrInput, safeParse } from '../src/shared/plugins/pullRequests.ts'
 
 /** A made-up host: https://code.example/<repo>/pr/<n>. */
 const example = {
@@ -77,4 +77,12 @@ test('safeParse: a provider\'s parse, with a throw or an unusable answer read as
   for (const bad of [{ url: 'u', number: 0, label: '#0' }, { url: 'u', number: 1.5, label: '#1' }, { url: 'u', number: 1, label: '' }, { url: '', number: 1, label: '#1' }]) {
     assert.equal(safeParse({ ...example, id: 'odd', parse: () => bad }, 'u'), null, JSON.stringify(bad))
   }
+})
+
+test('prLinkToSave: a provider\'s canonical link; any other http(s) link as typed; else null', () => {
+  assert.equal(prLinkToSave([example], ' https://code.example/app/pr/7 '), 'https://code.example/app/pr/7')
+  // A link no provider on owns is kept as typed (generic chip, no watch), with or without providers.
+  assert.equal(prLinkToSave([example], ' https://gitlab.example/o/r/-/merge_requests/3 '), 'https://gitlab.example/o/r/-/merge_requests/3')
+  assert.equal(prLinkToSave([], 'HTTP://elsewhere/pr/1'), 'HTTP://elsewhere/pr/1')
+  for (const bad of ['42', 'pr 42', 'ftp://x/1', 'https://has space/1', 'javascript:alert(1)', '  ']) assert.equal(prLinkToSave([example], bad), null, bad)
 })

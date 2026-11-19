@@ -69,6 +69,18 @@ export function parsePrWith(providers: readonly PrProvider[], input: string): (P
   return null
 }
 
+/**
+ * What a pull request box saves: the canonical link of the first provider that takes `input`, else
+ * any other http(s) link as typed (trimmed; it gets the generic chip and no watch, as a link no
+ * provider owns does); null when it is neither.
+ */
+export function prLinkToSave(providers: readonly PrProvider[], input: string): string | null {
+  const parsed = parsePrWith(providers, input)
+  if (parsed) return parsed.url
+  const trimmed = input.trim()
+  return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : null
+}
+
 /** The provider that owns a stored link, if one of these does. */
 export function prOwner<P extends PrProvider>(providers: readonly P[], url: string): P | undefined {
   return providers.find((p) => safely(p, 'owns', false, () => p.owns(url)))

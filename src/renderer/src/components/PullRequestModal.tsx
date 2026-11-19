@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
 import { usePrProviders } from '../plugins/usePrProviders'
-import { parsePrWith } from '../../../shared/plugins/pullRequests.ts'
+import { prLinkToSave } from '../../../shared/plugins/pullRequests.ts'
 
 interface Props {
   repoId: string
@@ -27,8 +27,9 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
       onClose()
       return
     }
-    const parsed = parsePrWith(providers, input)
-    if (!parsed) {
+    // A provider's canonical form, or any other http(s) link as typed (generic chip, no watch).
+    const url = prLinkToSave(providers, input)
+    if (!url) {
       setError(
         providers.length === 0
           ? 'No pull request provider is on in this project (Settings → Plugins).'
@@ -36,8 +37,7 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
       )
       return
     }
-    // The canonical form is what gets saved.
-    setBranchPullRequest(repoId, branch, parsed.url)
+    setBranchPullRequest(repoId, branch, url)
     onClose()
   }
 
