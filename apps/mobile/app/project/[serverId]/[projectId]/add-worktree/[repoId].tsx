@@ -15,6 +15,7 @@ import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../..
 import { noticeAlert } from '../../../../../src/ui/alerts.ts'
 import { Button } from '../../../../../src/ui/Button.tsx'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { useGlobalTray } from '../../../../../src/ui/globalTrayContext.tsx'
 
 export default function AddWorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, repoId } = useLocalSearchParams<{ serverId: string; projectId: string; repoId: string }>()
@@ -22,6 +23,8 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
+  // An open Global tray has the keyboard: this screen, under it, keeps its size.
+  const tray = useGlobalTray()
   const project = topic.state === 'ready' ? topic.snapshot : null
   const repo = project?.repositories.find((r) => r.id === repoId)
 
@@ -153,7 +156,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   const blocked = busy !== null || !server || !repo
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight} enabled={tray === null || tray.height === 'collapsed'}>
       <Stack.Screen options={{ title: 'Add worktree' }} />
       <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
         {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}

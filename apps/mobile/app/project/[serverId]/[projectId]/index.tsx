@@ -3,8 +3,8 @@
 // pull request on a line — or the reason it wants you (missing, a decision, its pull request's
 // notice). Add worktree beside each repository's name. A Tag filter above them, as the desktop's
 // (ui/TagFilter.tsx; while filtering, a repository with no match is left out). Under them, a
-// Project section, never filtered: Global (the project's Global sessions) and, on a server with
-// automations, a row that opens the project's automations.
+// Project section, never filtered, on a server with automations: a row that opens them. The
+// project's Global sessions are in the Global tray at the bottom.
 // While it is open, the phone also answers promote_to_primary's confirmations for it. While it is
 // the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
 // On a wide window the sidebar is the list, and this is a placeholder under the screen it opened.
@@ -13,12 +13,11 @@ import { ScrollView, Pressable, Text, View, useWindowDimensions } from 'react-na
 import { router, Stack, useNavigation } from 'expo-router'
 import { CAPABILITY } from '../../../../src/shared.ts'
 import { automationsRow } from '../../../../src/logic/automations.ts'
-import { globalRow } from '../../../../src/logic/globalSessions.ts'
 import { isWide } from '../../../../src/logic/layout.ts'
 import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
 import { activePrProviders } from '../../../../src/logic/pullRequests.ts'
 import { cleanTagFilter, matchesTagFilter } from '../../../../src/logic/worktreeFilter.ts'
-import { addWorktreeRoute, automationsRoute, globalRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
+import { addWorktreeRoute, automationsRoute, worktreeRoute } from '../../../../src/logic/routes.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { useTagFilter } from '../../../../src/state/worktreeFilter.ts'
 import { PromotePrompt } from '../../../../src/ui/PromotePrompt.tsx'
@@ -45,7 +44,6 @@ export default function ProjectScreen(): React.JSX.Element {
   const hasAutomations = useRef(false)
   if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
   const automations = topic.state === 'ready' && hasAutomations.current ? automationsRow(topic.snapshot.automations) : null
-  const global = topic.state === 'ready' ? globalRow(topic.snapshot) : null
   // Shared with the tablet sidebar; ids of tags the project no longer has drop out.
   const [rawFilter, setFilter] = useTagFilter(serverId, projectId)
   const settings = topic.state === 'ready' ? topic.snapshot.settings : null
@@ -115,24 +113,11 @@ export default function ProjectScreen(): React.JSX.Element {
             </View>
           ))
         : null}
-      {global || automations ? (
+      {automations ? (
         <View>
           <View style={ui.section}>
             <Text style={ui.sectionText}>Project</Text>
           </View>
-          {global ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={global.mark ? `${global.text}, ${global.mark === 'decision' ? 'decision' : 'needs you'}` : global.text}
-              accessibilityHint="Opens the project's Global sessions"
-              style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]}
-              onPress={() => router.push(globalRoute(serverId, projectId))}
-            >
-              <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{global.text}</Text>
-              {global.mark ? <Text style={{ color: colors.attention, fontSize: 13 }}>{global.mark === 'decision' ? 'decision' : 'needs you'}</Text> : null}
-              <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
-            </Pressable>
-          ) : null}
           {automations ? (
             <Pressable
               accessibilityRole="button"

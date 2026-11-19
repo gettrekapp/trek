@@ -14,7 +14,7 @@
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
 // tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
 // and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus),
-// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label), and over-the-air updates (when the phone checks, when the restart banner shows).
+// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label), and over-the-air updates (when the phone checks, when the restart banner shows), and the Global tray (its heights, a drag's landing, the tab shown, the keyboard, which sessions it holds).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -36,7 +36,8 @@ import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, 
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
-import { globalAgentLabel, globalGroupOpen, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
+import { BAR_HEIGHT, focusPlace, inTray, snapHeight, stepHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../apps/mobile/src/logic/globalTray.ts'
+import { globalAgentLabel, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
 import {
@@ -214,8 +215,8 @@ test("the session placeholder: a cold start's not-connected topic is Connecting�
   assert.equal(sessionPlaceholder({ hasSession: false, topic: 'loading', status: 'connecting' }), 'Loading…')
   assert.match(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), /^Not running/)
   assert.equal(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the worktree, or load the worktree.')
-  // A Global session has no worktree to load: it is restarted from the Global screen.
-  assert.equal(sessionPlaceholder({ hasSession: true, global: true, topic: 'ready', status: 'connected' }), 'Not running. Restart it from the Global screen: ⋯, then Restart.')
+  // A Global session has no worktree to load: it is restarted from its tab.
+  assert.equal(sessionPlaceholder({ hasSession: true, global: true, topic: 'ready', status: 'connected' }), 'Not running. Long-press its tab, then Restart.')
 })
 
 test('generations are per server: bumping one leaves the others', () => {
@@ -2925,7 +2926,8 @@ test('tablet layout: the sidebar selection comes from the route', () => {
   // History names a repository and a branch (history.ts' branchParam encoding).
   assert.deepEqual(sidebarSelection([...base, 'history', '[repoId]'], { repoId: 'r1', branch: 'feature~002fx' }, project), { worktreeId: 'w2', sessionId: null, screen: 'history' })
   assert.deepEqual(sidebarSelection([...base, 'automations'], {}, project), { worktreeId: null, sessionId: null, screen: 'automations' })
-  assert.deepEqual(sidebarSelection([...base, 'global'], {}, project), { worktreeId: null, sessionId: null, screen: 'global' })
+  // The Global screen is gone (the Global tray replaced it): an old route selects nothing.
+  assert.deepEqual(sidebarSelection([...base, 'global'], {}, project), none)
   assert.deepEqual(sidebarSelection([...base, 'automation', '[automationId]'], { automationId: 'a' }, project), { worktreeId: null, sessionId: null, screen: 'automations' })
   assert.deepEqual(sidebarSelection([...base, 'add-worktree', '[repoId]'], { repoId: 'r1' }, project), { worktreeId: null, sessionId: null, screen: null })
   // An unknown worktree id selects nothing.
@@ -3040,24 +3042,6 @@ test('global sessions: the Global agent label', () => {
   assert.equal(globalAgentLabel({ globalLlm: { provider: 'gemini' } }, claude, agents), 'gemini')
 })
 
-test('global sessions: the sidebar group opens for the Global screen and its sessions', () => {
-  const sessions = [{ id: 'g1' }, { id: 'g-run', context: { kind: 'automation', automationId: 'a' } }]
-  assert.equal(globalGroupOpen({ screen: 'global', sessionId: null }, sessions), true)
-  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g1' }, sessions), true)
-  // A run tab belongs to Automations.
-  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 'g-run' }, sessions), false)
-  assert.equal(globalGroupOpen({ screen: 'session', sessionId: 's1' }, sessions), false)
-  assert.equal(globalGroupOpen({ screen: null, sessionId: null }, sessions), false)
-})
-
-test('routes: the Global screen', () => {
-  const r = routes.globalRoute('srv', 'p1')
-  assert.deepEqual(r, { pathname: '/project/[serverId]/[projectId]/global', params: { serverId: 'srv', projectId: 'p1' } })
-  const base = ['project', '[serverId]', '[projectId]']
-  assert.equal(routes.showsRoute([...base, 'global'], { serverId: 'srv', projectId: 'p1' }, r), true)
-  assert.equal(routes.showsRoute([...base, 'automations'], { serverId: 'srv', projectId: 'p1' }, r), false)
-})
-
 test('tag filter: the options are the workflow tags, the custom tags and Untagged', () => {
   const settings = {
     worktreeTags: [{ id: 'wip', name: 'WIP', color: '#111' }],
@@ -3151,4 +3135,103 @@ test('updates: what a check downloads, and what Later is keyed on', () => {
   assert.equal(pendingKey({ isUpdatePending: true, updateId: 'u1', createdAt: new Date(5) }), 'u1')
   assert.equal(pendingKey({ isUpdatePending: true, updateId: undefined, createdAt: new Date(5) }), 'rollback:5', 'a rollback has no id')
   assert.equal(pendingKey({ isUpdatePending: true }), 'rollback:0')
+})
+
+test('global tray: the three heights in a pane', () => {
+  // A phone: 800pt pane, 47pt top inset, 34pt home indicator.
+  assert.deepEqual(trayHeights(800, 47, 34), { collapsed: BAR_HEIGHT + 34, half: 400, full: 800 - 47 - 52 })
+  // A pane too short for half: half never drops under the bar, full never under half.
+  const tiny = trayHeights(100, 0, 0)
+  assert.equal(tiny.collapsed, BAR_HEIGHT)
+  assert.ok(tiny.half >= tiny.collapsed)
+  assert.ok(tiny.full >= tiny.half)
+})
+
+test('global tray: a drag snaps to the nearest height, a fling to the next one its way', () => {
+  const h = { collapsed: 78, half: 400, full: 701 }
+  assert.equal(snapHeight(h, 100, 0), 'collapsed')
+  assert.equal(snapHeight(h, 350, 0), 'half')
+  assert.equal(snapHeight(h, 650, 0), 'full')
+  // Flung up from just above the bar: the next height up, not the nearest.
+  assert.equal(snapHeight(h, 120, -1), 'half')
+  assert.equal(snapHeight(h, 420, -1), 'full')
+  // Flung down from near full: half; from half: collapsed.
+  assert.equal(snapHeight(h, 680, 1), 'half')
+  assert.equal(snapHeight(h, 390, 1), 'collapsed')
+  // Past the ends.
+  assert.equal(snapHeight(h, 720, -1), 'full')
+  assert.equal(snapHeight(h, 60, 1), 'collapsed')
+  // A slow release counts as no fling.
+  assert.equal(snapHeight(h, 230, -0.2), 'collapsed')
+})
+
+test('global tray: a tap on the bar opens it to half, and closes an open one', () => {
+  assert.equal(tapHeight('collapsed'), 'half')
+  assert.equal(tapHeight('half'), 'collapsed')
+  assert.equal(tapHeight('full'), 'collapsed')
+})
+
+test('global tray: the tab shown as sessions come and go', () => {
+  // The chosen one while it is listed.
+  assert.equal(trayTab(['a', 'b', 'c'], 'b', ['a', 'b', 'c']), 'b')
+  // None chosen: the first.
+  assert.equal(trayTab(['a', 'b'], null, []), 'a')
+  // The chosen one closed: the one now in its place (the next), or the last when it was last.
+  assert.equal(trayTab(['a', 'c'], 'b', ['a', 'b', 'c']), 'c')
+  assert.equal(trayTab(['a', 'b'], 'c', ['a', 'b', 'c']), 'b')
+  // A chosen id never listed (just started, the snapshot not there yet): kept.
+  assert.equal(trayTab(['a'], 'new', ['a']), 'new')
+  // No sessions: none.
+  assert.equal(trayTab([], 'a', ['a']), null)
+  assert.equal(trayTab([], null, []), null)
+})
+
+test('global tray: the keyboard hides the bar, and lifts an open tray', () => {
+  assert.deepEqual(trayLayout('collapsed', 0), { hidden: false, lift: 0 })
+  // The screen above has the keyboard: the bar steps aside.
+  assert.deepEqual(trayLayout('collapsed', 300), { hidden: true, lift: 0 })
+  // The tray's own composer: the tray rides above the keyboard.
+  assert.deepEqual(trayLayout('half', 300), { hidden: false, lift: 300 })
+  assert.deepEqual(trayLayout('full', 0), { hidden: false, lift: 0 })
+})
+
+test('global tray: it holds the Global sessions but an automation run', () => {
+  const sessions = [{ id: 'g1' }, { id: 'run', context: { kind: 'automation', automationId: 'a' } }]
+  assert.equal(inTray(sessions, 'g1'), true)
+  assert.equal(inTray(sessions, 'run'), false)
+  assert.equal(inTray(sessions, 's1'), false)
+  assert.equal(inTray(undefined, 'g1'), false)
+})
+
+test('global tray: the first snapshot, a remembered tab that closed while the project was away', () => {
+  // GlobalTray passes the remembered tab as the one listed before: gone now, its neighbour.
+  assert.equal(trayTab(['a', 'b'], 'gone', ['gone']), 'a')
+  // Still listed: kept.
+  assert.equal(trayTab(['a', 'b'], 'b', ['b']), 'b')
+})
+
+test('global tray: the heights with the keyboard up, as the tray asks for them', () => {
+  // An 800pt pane less a 300pt keyboard; the bottom inset is under the keyboard.
+  assert.deepEqual(trayHeights(800 - 300, 47, 0), { collapsed: 44, half: 250, full: 401 })
+})
+
+test('global tray: one step up or down, for the accessibility actions', () => {
+  assert.equal(stepHeight('collapsed', 1), 'half')
+  assert.equal(stepHeight('half', 1), 'full')
+  assert.equal(stepHeight('full', 1), 'full')
+  assert.equal(stepHeight('full', -1), 'half')
+  assert.equal(stepHeight('half', -1), 'collapsed')
+  assert.equal(stepHeight('collapsed', -1), 'collapsed')
+})
+
+test('global tray: where a ui.focus for a session goes', () => {
+  const project = {
+    globalSessions: [{ id: 'g1' }, { id: 'run', context: { kind: 'automation', automationId: 'a' } }],
+    repositories: [{ worktrees: [{ sessions: [{ id: 's1' }] }] }]
+  }
+  assert.equal(focusPlace(project, 'g1'), 'tray')
+  assert.equal(focusPlace(project, 's1'), 'screen')
+  assert.equal(focusPlace(project, 'run'), 'screen', "an automation's run is shown on a screen")
+  assert.equal(focusPlace(project, 'new'), 'unknown', 'not listed yet')
+  assert.equal(focusPlace(null, 'g1'), 'unknown', 'no snapshot yet')
 })

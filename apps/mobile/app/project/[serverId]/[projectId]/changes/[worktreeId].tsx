@@ -5,10 +5,9 @@
 // worktree's sessions or discards it. The rules are logic/review.ts'. Without the capability (an
 // older server): the branch against its base, read-only (6a).
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react'
-import { Keyboard, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   BRANCH_SOURCE,
   CAPABILITY,
@@ -56,6 +55,7 @@ import { ReviewContext, type ReviewActions, type ReviewUi } from '../../../../..
 import { FileDiff } from '../../../../../src/ui/FileDiff.tsx'
 import { ReviewBar } from '../../../../../src/ui/ReviewBar.tsx'
 import { colors, ui } from '../../../../../src/ui/theme.ts'
+import { useGlobalTray } from '../../../../../src/ui/globalTrayContext.tsx'
 
 interface Params {
   serverId: string
@@ -205,7 +205,8 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
-  const insets = useSafeAreaInsets()
+  // An open Global tray has the keyboard: this screen, under it, keeps its size.
+  const tray = useGlobalTray()
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -507,18 +508,6 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
       })
     })
   }, [])
-  // The home indicator's inset is under the bar only while the keyboard is away.
-  const [keyboardUp, setKeyboardUp] = useState(false)
-  useEffect(() => {
-    const shown = Keyboard.addListener('keyboardDidShow', () => setKeyboardUp(true))
-    const hidden = Keyboard.addListener('keyboardDidHide', () => setKeyboardUp(false))
-    return () => {
-      shown.remove()
-      hidden.remove()
-    }
-  }, [])
-  const inset = keyboardUp ? 0 : insets.bottom
-
   // One object for the screen's life: each callback is the latest render's.
   const latest = useRef({ openNew, openBox, save, remove })
   latest.current = { openNew, openBox, save, remove }
@@ -543,7 +532,7 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const hasDraft = draft !== undefined && draft.comments.length > 0
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight} enabled={tray === null || tray.height === 'collapsed'}>
       <ReviewContext.Provider value={reviewUi}>
         <View ref={port} collapsable={false} style={styles.port}>
           <ScrollView
@@ -625,14 +614,14 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
         </View>
         {reviewError ? (
           // It can carry a whole comment that was being written: it scrolls, so the bar stays on screen, and its text can be copied.
-          <ScrollView style={styles.errorPort} contentContainerStyle={[styles.error, hasDraft ? null : { paddingBottom: 8 + inset }]} keyboardShouldPersistTaps="handled">
+          <ScrollView style={styles.errorPort} contentContainerStyle={[styles.error, hasDraft ? null : { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">
             <Text accessibilityRole="alert" selectable style={ui.error}>
               {reviewError}
             </Text>
           </ScrollView>
         ) : null}
         {hasDraft ? (
-          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} inset={inset} onSend={(sessionId, revision) => void send(sessionId, revision)} onDiscard={(revision, count) => void discard(revision, count)} />
+          <ReviewBar draft={draft} elsewhere={onDiff.elsewhere} targets={worktree ? sendTargets(worktree) : []} noTargets={noTargetsText(worktree?.loaded === true)} onSend={(sessionId, revision) => void send(sessionId, revision)} onDiscard={(revision, count) => void discard(revision, count)} />
         ) : null}
       </ReviewContext.Provider>
     </KeyboardAvoidingView>

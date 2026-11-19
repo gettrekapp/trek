@@ -11,7 +11,7 @@ import { CommentView, useReview } from './CommentBox.tsx'
 import { STATUS_TEXT, statusColor } from './status.ts'
 import { colors, ui } from './theme.ts'
 
-export function ReviewBar({ draft, elsewhere, targets, noTargets, inset, onSend, onDiscard }: {
+export function ReviewBar({ draft, elsewhere, targets, noTargets, onSend, onDiscard }: {
   /** The draft as the snapshot has it, with at least one comment */
   draft: ReviewDraft
   /** Its comments that are not on the shown diff: another source, or a file not in it */
@@ -20,8 +20,6 @@ export function ReviewBar({ draft, elsewhere, targets, noTargets, inset, onSend,
   targets: readonly SendTarget[]
   /** What the list says when there are none (noTargetsText) */
   noTargets: string
-  /** The screen's bottom inset (the home indicator), under the bar */
-  inset: number
   onSend(sessionId: string, revision: number): void
   onDiscard(revision: number, count: number): void
 }): React.JSX.Element {
@@ -38,7 +36,7 @@ export function ReviewBar({ draft, elsewhere, targets, noTargets, inset, onSend,
   const editingElsewhere = edit !== null && elsewhere.some((c) => c.id === edit.commentId)
   const showElsewhere = elsewhere.length > 0 && !sending && (listed || editingElsewhere)
   return (
-    <View style={[styles.bar, { paddingBottom: 8 + inset }]}>
+    <View style={styles.bar}>
       {sending ? (
         <View style={styles.panel}>
           <Text style={ui.muted}>{targets.length === 0 ? noTargets : 'Send the review to'}</Text>
@@ -107,7 +105,7 @@ export function ReviewBar({ draft, elsewhere, targets, noTargets, inset, onSend,
 }
 
 const styles = StyleSheet.create({
-  bar: { backgroundColor: colors.panel, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8, paddingHorizontal: 16, gap: 8 },
+  bar: { backgroundColor: colors.panel, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 8, paddingBottom: 8, paddingHorizontal: 16, gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   panel: { gap: 6 },
   list: { maxHeight: 220, flexGrow: 0 },

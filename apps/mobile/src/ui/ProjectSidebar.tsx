@@ -1,9 +1,8 @@
 // A project's sidebar on a wide window (tablets): its repositories' worktrees as rows, the selected
 // one opened to its sessions, its Worktree and Changes, under the Tag filter the project screen
 // shares (ui/TagFilter.tsx; while filtering, a repository with no match is left out); then, never
-// filtered, the project's Global sessions (opened to its sessions while the pane shows the Global
-// screen or one of them) and its automations. What is selected comes from the screen in the detail
-// pane (logic/layout.ts' sidebarSelection). A pick starts the pane over at that screen, on the
+// filtered, its automations. Global sessions are in the Global tray under the pane. What is
+// selected comes from the screen in the detail pane (logic/layout.ts' sidebarSelection). A pick starts the pane over at that screen, on the
 // placeholder; screens opened inside the pane stack up with Back.
 import { useRef } from 'react'
 import { Pressable, ScrollView, Text, View } from 'react-native'
@@ -11,11 +10,10 @@ import { router, useGlobalSearchParams, useSegments } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CAPABILITY } from '../shared.ts'
 import { automationsRow } from '../logic/automations.ts'
-import { globalGroupOpen, globalRow, normalGlobalSessions } from '../logic/globalSessions.ts'
 import { SIDEBAR_WIDTH, sidebarSelection, type SidebarSelection } from '../logic/layout.ts'
 import { activeTicketProviders } from '../logic/tickets.ts'
 import { activePrProviders } from '../logic/pullRequests.ts'
-import { addWorktreeRoute, automationsRoute, changesRoute, globalRoute, leavesProject, projectRoute, sessionRoute, showsRoute, worktreeRoute } from '../logic/routes.ts'
+import { addWorktreeRoute, automationsRoute, changesRoute, leavesProject, projectRoute, sessionRoute, showsRoute, worktreeRoute } from '../logic/routes.ts'
 import { cleanTagFilter, matchesTagFilter } from '../logic/worktreeFilter.ts'
 import { sessionMark } from '../logic/worktreeRow.ts'
 import { useConnectionNotice, useServer, useTopic } from '../state/hooks.ts'
@@ -30,7 +28,7 @@ import { WorktreeRow } from './WorktreeRow.tsx'
 import { colors, ui } from './theme.ts'
 
 /** Every screen a sidebar pick opens. */
-type PaneRoute = ReturnType<typeof worktreeRoute | typeof sessionRoute | typeof changesRoute | typeof addWorktreeRoute | typeof globalRoute | typeof automationsRoute>
+type PaneRoute = ReturnType<typeof worktreeRoute | typeof sessionRoute | typeof changesRoute | typeof addWorktreeRoute | typeof automationsRoute>
 
 const NONE: SidebarSelection = { worktreeId: null, sessionId: null, screen: null }
 
@@ -66,8 +64,6 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
   const last = useRef<SidebarSelection>(NONE)
   if (inProject) last.current = sidebarSelection(segments, params, project)
   const selection = last.current
-  const global = project ? globalRow(project) : null
-  const globalOpen = project ? globalGroupOpen(selection, project.globalSessions) : false
 
   /**
    * Starts the detail pane over at `target`, on the project's index (the placeholder here; the list
@@ -181,49 +177,11 @@ export function ProjectSidebar({ onBack }: { onBack: () => void }): React.JSX.El
               </View>
             ))
           : null}
-        {global || automations ? (
+        {automations ? (
           <View>
             <View style={ui.section}>
               <Text style={ui.sectionText}>Project</Text>
             </View>
-            {global ? (
-              <>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={global.mark ? `${global.text}, ${global.mark === 'decision' ? 'decision' : 'needs you'}` : global.text}
-                  accessibilityHint="Opens the project's Global sessions"
-                  accessibilityState={{ selected: selection.screen === 'global' }}
-                  style={({ pressed }) => [ui.listRow, { alignItems: 'baseline' }, selection.screen === 'global' || pressed ? { backgroundColor: colors.panel } : null]}
-                  onPress={() => openInPane(globalRoute(serverId, projectId))}
-                >
-                  <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{global.text}</Text>
-                  {global.mark ? <Text style={{ color: colors.attention, fontSize: 13 }}>{global.mark === 'decision' ? 'decision' : 'needs you'}</Text> : null}
-                  <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
-                </Pressable>
-                {project && globalOpen
-                  ? normalGlobalSessions(project.globalSessions).map((s) => {
-                      const mark = sessionMark(s)
-                      const on = selection.sessionId === s.id
-                      return (
-                        <Pressable
-                          key={s.id}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${s.title}, ${s.decision ? 'decision' : STATUS_TEXT[s.status]}`}
-                          accessibilityState={{ selected: on }}
-                          style={sub(on)}
-                          onPress={() => openInPane(sessionRoute(serverId, projectId, s.id))}
-                        >
-                          <StateMark mark={mark} />
-                          <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.text, fontSize: 14, fontWeight: mark === 'attention' || mark === 'done' ? '600' : '400' }}>
-                            {s.title}
-                          </Text>
-                          <Text style={{ color: s.decision ? colors.attention : colors.muted, fontSize: 12 }}>{s.decision ? 'Decision' : STATUS_TEXT[s.status]}</Text>
-                        </Pressable>
-                      )
-                    })
-                  : null}
-              </>
-            ) : null}
             {automations ? (
               <Pressable
                 accessibilityRole="button"

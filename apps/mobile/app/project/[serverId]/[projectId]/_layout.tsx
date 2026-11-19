@@ -1,10 +1,14 @@
 // A project's screens (its worktree list, a worktree, a session, Changes, a branch's history, adding a
-// worktree, its Global sessions, automations) in their own stack. On a wide window (tablets) the stack is the detail pane
+// worktree, automations) in their own stack. On a wide window (tablets) the stack is the detail pane
 // beside the project's sidebar, and the list is a placeholder under the screen the sidebar opened.
-import { useState } from 'react'
+// Under the stack, on every width, the project's Global tray (ui/GlobalTray.tsx). While the tray is
+// open no swipe goes back (the project's or the root stack's): the tray closes from its backdrop or bar.
+import { useEffect, useState } from 'react'
 import { View, useWindowDimensions } from 'react-native'
 import { Stack, useLocalSearchParams, useNavigation, useRootNavigationState, useRoute } from 'expo-router'
 import { aboveIndex, childRoutes, isWide } from '../../../../src/logic/layout.ts'
+import { GlobalTray } from '../../../../src/ui/GlobalTray.tsx'
+import { GlobalTrayProvider, useGlobalTray } from '../../../../src/ui/globalTrayContext.tsx'
 import { PaneWidthProvider } from '../../../../src/ui/paneWidth.tsx'
 import { ProjectProvider } from '../../../../src/ui/projectContext.tsx'
 import { ProjectSidebar } from '../../../../src/ui/ProjectSidebar.tsx'
@@ -18,7 +22,7 @@ export default function ProjectLayout(): React.JSX.Element {
   const wide = isWide(useWindowDimensions().width)
   // The root stack's navigation (this layout is the root stack's screen): the sidebar's Back leaves the project.
   const navigation = useNavigation()
-  const [paneWidth, setPaneWidth] = useState<number | null>(null)
+  const [pane, setPane] = useState<{ width: number; height: number } | null>(null)
   // On a wide window the screen right above the index (the placeholder) has no Back: the sidebar
   // leads everywhere else. Narrow, Back leads to the list as ever. Read from the root state, which
   // is the one this stack renders from in the same render (a screen's navigation.getState() is
@@ -32,21 +36,49 @@ export default function ProjectLayout(): React.JSX.Element {
     <ProjectProvider value={{ serverId, projectId }}>
       <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
         {wide ? <ProjectSidebar onBack={() => navigation.goBack()} /> : null}
-        <View style={{ flex: 1 }} onLayout={(e) => setPaneWidth(Math.round(e.nativeEvent.layout.width))}>
-          <PaneWidthProvider value={paneWidth}>
-            <Stack
-              screenOptions={({ route: screen }) => ({
-                headerStyle: { backgroundColor: colors.bg },
-                headerShadowVisible: false,
-                headerBackButtonDisplayMode: 'minimal',
-                headerTintColor: colors.text,
-                contentStyle: { backgroundColor: colors.bg },
-                ...(screen.key !== undefined && noBack?.has(screen.key) ? { headerBackVisible: false, gestureEnabled: false } : null)
-              })}
-            />
+        <View
+          style={{ flex: 1 }}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout
+            const next = { width: Math.round(width), height: Math.round(height) }
+            setPane((prev) => (prev && prev.width === next.width && prev.height === next.height ? prev : next))
+          }}
+        >
+          <PaneWidthProvider value={pane?.width ?? null}>
+            <GlobalTrayProvider serverId={serverId} projectId={projectId}>
+              <ProjectStack noBack={noBack} rootNavigation={navigation} />
+              {pane ? <GlobalTray serverId={serverId} projectId={projectId} paneHeight={pane.height} /> : null}
+            </GlobalTrayProvider>
           </PaneWidthProvider>
         </View>
       </View>
     </ProjectProvider>
+  )
+}
+
+/**
+ * The project's stack, inside the tray's provider: while the tray is open neither this stack's
+ * screens nor the root stack's project screen take the edge swipe (on iOS the root's took it from
+ * under the tray's backdrop and left the whole project).
+ */
+function ProjectStack({ noBack, rootNavigation }: { noBack: Set<string> | null; rootNavigation: { setOptions(options: { gestureEnabled: boolean }): void } }): React.JSX.Element {
+  const open = (useGlobalTray()?.height ?? 'collapsed') !== 'collapsed'
+  useEffect(() => {
+    rootNavigation.setOptions({ gestureEnabled: !open })
+  }, [rootNavigation, open])
+  return (
+    <View style={{ flex: 1 }}>
+      <Stack
+        screenOptions={({ route: screen }) => ({
+          headerStyle: { backgroundColor: colors.bg },
+          headerShadowVisible: false,
+          headerBackButtonDisplayMode: 'minimal',
+          headerTintColor: colors.text,
+          contentStyle: { backgroundColor: colors.bg },
+          ...(open ? { gestureEnabled: false } : null),
+          ...(screen.key !== undefined && noBack?.has(screen.key) ? { headerBackVisible: false, gestureEnabled: false } : null)
+        })}
+      />
+    </View>
   )
 }
