@@ -29,7 +29,7 @@
 //
 // Prints IMPORT SMOKE PASS (n checks) or IMPORT SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { SMOKE_SHELL, homeEnv, smokeLocalProfile } from './smokeShell.mjs'
+import { SMOKE_SHELL, homeEnv, smokeLocalProfile, writeShellRc } from './smokeShell.mjs'
 import { closeApp } from './smokeTeardown.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -37,7 +37,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 import electronPath from 'electron'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { localProfilePath, parseLocalInfo } from '../src/shared/localServer.ts'
@@ -109,6 +109,21 @@ const profile = smokeLocalProfile(home, 'dev')
 const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
 for (const dir of [profile, remoteHome, userData, join(real, 'files'), join(real, 'real'), join(real, 'remote')]) mkdirSync(dir, { recursive: true })
+
+// Stub colima and docker first on both servers' PATH (plugins E3): the imported environments
+// setting turns the env plugin's poll on in the Local window, and it must never reach a real
+// colima or docker. They list nothing. Windows has neither environments nor sh (no stubs needed).
+const stubs = join(real, 'stubs')
+const stubCalls = join(real, 'stub-calls')
+if (process.platform !== 'win32') {
+  mkdirSync(stubs)
+  for (const tool of ['colima', 'docker']) {
+    writeFileSync(join(stubs, tool), `#!/bin/sh\necho "${tool} $*" >> '${stubCalls}'\n[ "$1" = --version ] && echo "${tool} version 0.0.0-stub"\nexit 0\n`, { mode: 0o755 })
+  }
+  // fixPath reads PATH from the login shell in the run's HOME, and the Local server inherits it.
+  writeShellRc(home, `export PATH='${stubs}':"$PATH"\n`)
+}
+const stubbedPath = process.platform === 'win32' ? {} : { PATH: `${stubs}${delimiter}${process.env.PATH}` }
 
 const gitRepo = (path) => {
   execFileSync('git', ['init', '-q', '-b', 'main', path])
@@ -346,7 +361,7 @@ const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', remoteConfig, '--port', String(port), '--data-dir', join(real, 'remote-data')], {
       cwd: join(root, 'server'),
-      env: { ...process.env, ...homeEnv(remoteHome), SHELL: '/bin/sh' },
+      env: { ...process.env, ...homeEnv(remoteHome), ...stubbedPath, SHELL: '/bin/sh' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -368,6 +383,7 @@ const startDaemon = () =>
 const env = {
   ...process.env,
   ...homeEnv(home),
+  ...stubbedPath,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
   ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
@@ -606,6 +622,7 @@ try {
   check('and one project more on Local', (await localSdk.request('project.list', {})).length, projectsBeforeSixth + 1)
   check('no console or page errors (launch 3)', pageErrors, [])
   check('nothing of this run was written under the real HOME', realHomeLeaks(), [])
+  console.log(`     the colima and docker stubs' calls: ${JSON.stringify(existsSync(stubCalls) ? readFileSync(stubCalls, 'utf8').split('\n').filter(Boolean) : [])}`)
   exitCode = failedChecks.length ? 1 : 0
 } catch (err) {
   console.error(err)

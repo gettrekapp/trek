@@ -99,6 +99,9 @@ const stackCalls = join(work, 'stack-calls')
 const upPids = join(work, 'up-pids')
 // docker: `ps -q` lists no containers (the stack service counts them); nothing else is called here.
 writeFileSync(join(stubs, 'docker'), `#!/bin/bash\necho "$*" >> '${join(work, 'docker-calls')}'\nexit 0\n`, { mode: 0o755 })
+// colima: nothing here turns the environments on, so nothing should call it; a stub all the same,
+// so no run of this smoke can reach a real one.
+writeFileSync(join(stubs, 'colima'), `#!/bin/bash\necho "$*" >> '${join(work, 'colima-calls')}'\nexit 0\n`, { mode: 0o755 })
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' })
 git('init', '-q', '-b', 'main', repo)

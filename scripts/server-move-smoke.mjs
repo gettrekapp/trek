@@ -318,8 +318,9 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 4)
   check("the window's moveWorktree feature follows the server's move", await until(() => win.evaluate(() => window.__features().moveWorktree), true), true)
-  if (SERVER_HAS_ENVS) check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
-  else console.log(`SKIP the environments poll lists feature-x's VM, running (${NO_ENVS})`)
+  // The poll is the env plugin's (plugins E3): its VM shows as the row's running badge.
+  if (SERVER_HAS_ENVS) check("the environments poll shows feature-x's VM running: its row's badge", await until(() => rows.filter({ hasText: 'feature-x' }).first().locator('.mini-chip.env.running').count(), 1, 20_000), 1)
+  else console.log(`SKIP the environments poll shows feature-x's VM running: its row's badge (${NO_ENVS})`)
 
   // ---- 3. The dialog ---------------------------------------------------------------------------------
 

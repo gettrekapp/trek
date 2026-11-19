@@ -907,11 +907,11 @@ try {
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
   })), { actions: [], tabs: [], skills: 1 })
-  // Windows: the server has no env or stacks (SERVER_HAS_ENVS), and the window follows it.
-  check("and its features say so; the server's docker, env, stacks and skills are on", await w1.evaluate(() => {
+  // Windows: the server has no stacks (and no env plugin) (SERVER_HAS_ENVS), and the window follows it.
+  check("and its features say so; the server's docker, stacks and skills are on", await w1.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
-  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, false, false])
+    return [f.docker, f.stacks, f.skills, f.reveal, f.openInEditor]
+  }), [true, SERVER_HAS_ENVS, true, false, false])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -1064,7 +1064,7 @@ try {
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
-    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite'], ['Voice summaries']],
+    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite'], ['Voice summaries']],
     ['Appearance', 'Notifications', 'Local server']
   ])
   await openSettingsTab(settings, 'Agents')

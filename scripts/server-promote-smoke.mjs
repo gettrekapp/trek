@@ -13,7 +13,8 @@
 // dev stack that has run and a running VM. A second SDK connection listens as another window.
 // Through the DOM, the SDK, git and the MCP endpoint it checks:
 //   - the welcome lists promote, and the window's feature follows it;
-//   - Promote to primary… asks first (what moves; the dev stack and the VM in one box, ticked); the
+//   - Promote to primary… asks first, in the window (plugins E3: what moves; a box each for the dev
+//     stack and the VM, ticked); the
 //     stack, then the VM, are destroyed before the promote, the worktree's folder still there and
 //     the main checkout still on main; then the main checkout is on feature-x with the work unstaged
 //     (the racily-clean file's content too), the worktree's folder and row gone, the session moved to
@@ -24,7 +25,7 @@
 //   - an agent's promote_to_primary shows the confirmation in the window (saying who asked); confirmed,
 //     the window claims it, the other window hears it claimed, and the tool returns the main checkout;
 //     claimed by the other window first, the window's open confirmation is closed and nothing
-//     changes; declined, the tool says so and nothing changes; confirmed and then the caller's MCP
+//     changes (the native one, and with a plan the window's own dialog, plugins E3); declined, the tool says so and nothing changes; confirmed and then the caller's MCP
 //     call drops, the promote still goes through and the asking session, resumed in the main
 //     checkout, has the outcome in its queue;
 //   - docker and colima ran only as the stubs; the renderer never holds the server token; no error
@@ -308,8 +309,9 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
   check("the window's promote feature follows the server's capability", await until(() => win.evaluate(() => window.__features().promote), true), true)
-  if (SERVER_HAS_ENVS) check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
-  else console.log(`SKIP the environments poll lists feature-x's VM, running (${NO_ENVS})`)
+  // The poll is the env plugin's (plugins E3): its VM shows as the row's running badge.
+  if (SERVER_HAS_ENVS) check("the environments poll shows feature-x's VM running: its row's badge", await until(() => rows.filter({ hasText: 'feature-x' }).first().locator('.mini-chip.env.running').count(), 1, 20_000), 1)
+  else console.log(`SKIP the environments poll shows feature-x's VM running: its row's badge (${NO_ENVS})`)
 
   // The other window: an SDK connection subscribed to the project that listens, recording what it hears.
   other = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'server-promote-smoke-other' })
@@ -341,15 +343,25 @@ try {
   // ---- 3. Promote to primary, with its dev stack and VM torn down first ----------------------------
 
   await (await menuItem('feature-x', worktree, 'Promote to primary…')).click()
+  // With a plan (the stack and the VM), the window's own confirm (plugins E3), a box per item; without
+  // one (Windows: neither), the native one, answered by the stub.
+  const prompt = win.locator('.teardown-prompt')
+  let promptText = ''
+  if (SERVER_HAS_ENVS) {
+    await prompt.waitFor({ timeout: 10_000 })
+    check('Promote asked first', (await prompt.locator('.teardown-message').innerText()).trim(), PROMOTE_MESSAGE)
+    promptText = await prompt.locator('.teardown-detail').innerText()
+    const boxes = await prompt.locator('.teardown-items li .teardown-item').evaluateAll((els) => els.map((e) => [e.textContent.trim(), e.querySelector('input').checked]))
+    check('it offers to tear down the dev stack and the VM, a box each (ticked here)', [boxes.some(([t, on]) => /^Tear down the dev stack “trek-/.test(t) && on), boxes.some(([t, on]) => t.includes(`Colima VM “${vmProfile}”`) && on)], [true, true])
+    await prompt.locator('button.primary').click()
+  } else {
+    check('Promote asked first', await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, 1), 1)
+    promptText = (await confirmOf(PROMOTE_MESSAGE))[0]?.detail ?? ''
+    console.log(`SKIP it offers to tear down the dev stack and the VM, a box each (ticked here) (${NO_ENVS})`)
+  }
   check('the main checkout switches to feature-x', await until(() => orNull(() => branchOf(repo)), 'feature-x'), 'feature-x')
-  const asked = await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, 1)
-  check('Promote asked first', asked, 1)
-  const first = (await confirmOf(PROMOTE_MESSAGE))[0] ?? {}
-  const promptText = first.detail ?? ''
   // Windows: no VM or dev stack (NO_ENVS); the rest of the confirmation is the same.
   check('the confirmation says the work and the session move', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText)], [true, true])
-  if (SERVER_HAS_ENVS) check('it offers to tear down the dev stack and the VM (ticked here)', [/Tear down the dev stack “trek-/.test(first.checkbox ?? ''), (first.checkbox ?? '').includes(`Colima VM “${vmProfile}”`)], [true, true])
-  else console.log(`SKIP it offers to tear down the dev stack and the VM (ticked here) (${NO_ENVS})`)
   check('it says the ignored .trek/ is deleted with the worktree', /Deleted with the worktree, never moved \(ignored by git\): \.trek\//.test(promptText), true)
   if (SERVER_HAS_ENVS) {
     check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
@@ -446,6 +458,27 @@ try {
   const resultB = await claimedElsewhere
   check('the tool hears the claimant’s decline', [resultB.result?.isError, /declined/.test(resultB.result?.content?.[0]?.text ?? '')], [true, true])
   check('and nothing changed', [branchOf(repo), existsSync(worktree), status(worktree)], ['main', true, [' M a.txt', '?? c.txt']])
+
+  // 5b'. The same with a plan (plugins E3): the dev stack has run again (.trek/stack, ignored), so the
+  // window asks in its own dialog, and the other window's claim closes that one too (by its dialogId).
+  if (SERVER_HAS_ENVS) {
+    mkdirSync(join(worktree, '.trek', 'stack'), { recursive: true })
+    const teardownLines = () => readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean).length
+    const tornBefore = teardownLines()
+    const claimedInWindow = callPromote({ worktree: 'feature-x' })
+    check("with a plan, the agent's request asks in the window", await until(() => prompt.count(), 1), 1)
+    check('naming the stack as its box', await prompt.locator('.teardown-items li .teardown-item').evaluateAll((els) => els.map((e) => /^Tear down the dev stack “trek-/.test(e.textContent.trim()))), [true])
+    const requestB2 = await until(() => lastRequest() !== requestB, true) && lastRequest()
+    check('the other window claims that one first', (await other.request('promote.claim', { projectId, requestId: requestB2 })).accepted, true)
+    check("the window's own dialog is closed", await until(() => prompt.count(), 0), 0)
+    await other.request('promote.answer', { projectId, requestId: requestB2, outcome: 'declined' })
+    const resultB2 = await claimedInWindow
+    check('the tool hears that decline too, and nothing changed', [resultB2.result?.isError, /declined/.test(resultB2.result?.content?.[0]?.text ?? ''), branchOf(repo), existsSync(worktree), teardownLines() - tornBefore], [true, true, 'main', true, 0])
+    // Back to no plan: 5c and 5d answer the native confirm.
+    rmSync(join(worktree, '.trek'), { recursive: true, force: true })
+  } else {
+    for (const name of ["with a plan, the agent's request asks in the window", 'naming the stack as its box', 'the other window claims that one first', "the window's own dialog is closed", 'the tool hears that decline too, and nothing changed']) console.log(`SKIP ${name} (${NO_ENVS})`)
+  }
 
   // 5c. Declined in the window.
   await setAnswer(0)

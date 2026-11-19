@@ -10,8 +10,8 @@
 // dialogs stubbed through -r; the server is added as an app server, and the window opens a project
 // made through the SDK (a repository with a compose file and a stack.sh, a worktree on feature-x).
 // Through the DOM it checks:
-//   - the window's features: docker, env and stacks on (and the skills, the server's since 5b); this
-//     machine's (Reveal, VS Code) off;
+//   - the window's features: docker and stacks on (and the skills, the server's since 5b); this
+//     machine's (Reveal, VS Code) off; the environments are the env plugin's (plugins E3);
 //   - the main checkout's Docker tab lists the server's containers, restarts one, and its compose
 //     menu runs `docker compose up -d` in the repository on the server, the output streamed back;
 //     a docker that fails shows in the panel, and the panel recovers;
@@ -19,9 +19,10 @@
 //   - the feature row's Env panel: the variables saved on blur, Start runs colima and compose on the
 //     server with them, the steps arrive, the server's registry names the VM;
 //   - its Stack tab starts and stops the worktree's stack.sh on the server;
-//   - Delete worktree asks with one box for the stack and the VM (the server's teardown plan); the
-//     changes are asked about when the server refuses them, before either goes; the server tears
-//     both down before it removes the worktree;
+//   - Delete worktree asks in the window (plugins E3), a box each for the stack and the VM (the
+//     server's teardown plan): a VM whose plan failed keeps Confirm off until "Go ahead without it"
+//     is ticked, and so does the running VM unticked; the changes are asked about when the server
+//     refuses them, before either goes; the server tears both down before it removes the worktree;
 //   - the renderer never holds the token; no console or page errors.
 //
 // Prints SERVER ENV SMOKE PASS (n checks) or SERVER ENV SMOKE FAIL and exits 0 or 1.
@@ -101,6 +102,8 @@ const worktree = `${repo}-feature-x`
 const featureProfile = deriveProfileName(repo, 'feature-x')
 const vmUp = join(work, 'vm-up')
 const dockerDown = join(work, 'docker-down')
+// While it exists, colima list fails: the server's teardown plan for the VM fails (`unplanned`).
+const colimaListFails = join(work, 'colima-list-fails')
 const stubs = join(work, 'stubs')
 mkdirSync(stubs)
 const stub = (name, body) => writeFileSync(join(stubs, name), `#!/bin/bash\n${NEXT_SEQ}\n${body}\n`, { mode: 0o755 })
@@ -117,7 +120,8 @@ ${record('colima')}
 case "$1" in
   start) touch '${vmUp}' ;;
   delete) rm -f '${vmUp}'; [ -d '${worktree}' ] && echo yes > '${work}/delete-saw-worktree' ;;
-  list) [ -f '${vmUp}' ] && echo '${JSON.stringify({ name: featureProfile, status: 'Running', address: '192.168.106.9' })}' ;;
+  list) if [ -f '${colimaListFails}' ]; then echo "colima list failed (stub)" >&2; exit 1; fi
+    [ -f '${vmUp}' ] && echo '${JSON.stringify({ name: featureProfile, status: 'Running', address: '192.168.106.9' })}' ;;
 esac
 exit 0`)
 
@@ -137,8 +141,9 @@ writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [{ id: 'app', name:
 
 // Main's dialogs, stubbed before its script runs: each box is recorded with its detail, its checkbox
 // and a number from the stubs' sequence, and answered with its confirm button and the box ticked.
-// The delete's confirm writes an untracked file into the worktree as it is shown: only the server's
-// fresh worktree.dirty can see it.
+// A native delete confirm writes an untracked file into the worktree as it is shown: only the
+// server's fresh worktree.dirty can see it. (Since plugins E3 a delete with a plan asks in the
+// window instead, and the smoke writes the file before it confirms there.)
 const mainStub = join(work, 'main-stub.cjs')
 const dirtyOnConfirm = join(worktree, 'scratch.txt')
 writeFileSync(
@@ -287,8 +292,8 @@ try {
   await until(() => rows.count(), 2)
   check("the window's features: the server machine's on (the skills too, 5b), this machine's off", await until(() => win.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, true, true, false, false]), [true, true, true, true, false, false])
+    return [f.docker, f.stacks, f.skills, f.reveal, f.openInEditor]
+  }), [true, true, true, false, false]), [true, true, true, false, false])
 
   // ---- 3. The main checkout: Docker on the server -----------------------------------------------------
 
@@ -336,7 +341,8 @@ try {
   await openSettingsTab(settings, 'Environments')
   await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
-  check("the poll's tool check passes on the server's machine", await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
+  // The poll is the env plugin's (plugins E3): it lists only once the tool check passed.
+  check("the poll's tool check passes on the server's machine: colima list ran", await until(() => callsOf('colima').some((c) => c.split('|')[1]?.startsWith('list')), true), true)
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
   // ---- 5. The feature row: its environment, on the server ----------------------------------------------
@@ -372,13 +378,47 @@ try {
 
   // ---- 7. Delete the worktree: the stack and the VM go first, on the server -----------------------------
 
-  await detail.locator('.detail-actions .btn-icon').click()
-  await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
+  // The confirm is the window's own since plugins E3: a box per item the server plans.
+  const prompt = win.locator('.teardown-prompt')
+  const confirmButton = prompt.locator('button.primary')
+  const openDelete = async () => {
+    await detail.locator('.detail-actions .btn-icon').click()
+    await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
+    await prompt.waitFor({ timeout: 10_000 })
+  }
+  const boxesOf = () => prompt.locator('.teardown-items li:not(.teardown-unchecked) .teardown-item').evaluateAll((els) => els.map((e) => [e.textContent.trim(), e.querySelector('input').checked]))
+
+  // 7a. The VM's plan fails (colima list does): the server names the plugin it could not ask, and
+  // Confirm waits until the user says to go ahead without it. Cancelled here.
+  writeFileSync(colimaListFails, '')
+  await openDelete()
+  const unchecked = prompt.locator('.teardown-unchecked')
+  check('with the VM unplanned, the confirm warns it may be left running', await until(async () => (await unchecked.count()) ? (await unchecked.innerText()).includes('This server could not check Colima environments, so it may be left running.') : false, true), true)
+  check('and offers only the stack as a box', (await boxesOf()).map(([t]) => t.startsWith('Tear down the dev stack “trek-')), [true])
+  check('Confirm is off until "Go ahead without it" is ticked', await confirmButton.isDisabled(), true)
+  await unchecked.locator('input[type=checkbox]').check()
+  check('and on once it is', await confirmButton.isDisabled(), false)
+  await prompt.locator('button', { hasText: /^Cancel$/ }).click()
+  check('Cancel closes the confirm', await until(() => prompt.count(), 0), 0)
+  rmSync(colimaListFails)
+  check('nothing was removed', (await project()).repositories[0].worktrees.length, 2)
+
+  // 7b. The plan with both: each ticked; the running VM unticked keeps Confirm off.
+  await openDelete()
+  check('the confirm asks to delete feature-x', (await prompt.locator('.teardown-message').innerText()).trim(), 'Delete worktree “feature-x”?')
+  const boxes = await boxesOf()
+  check('with a box each for the stack and the VM, both ticked', [boxes.length, boxes.some(([t, on]) => t.startsWith('Tear down the dev stack “trek-') && on), boxes.some(([t, on]) => t.includes(`Colima VM “${featureProfile}”`) && on)], [2, true, true])
+  const vmBox = prompt.locator('.teardown-item', { hasText: `Colima VM “${featureProfile}”` }).locator('input')
+  await vmBox.uncheck()
+  check('the running VM unticked: Confirm is off, and it says why', [await confirmButton.isDisabled(), (await prompt.innerText()).includes('It is running: stop it first, or tick this.')], [true, true])
+  await vmBox.check()
+  check('ticked again: Confirm is on', await confirmButton.isDisabled(), false)
+  // What the native confirm's stub did as it showed: a change git sees, made after the window read the status.
+  writeFileSync(dirtyOnConfirm, 'unsaved\n')
+  await confirmButton.click()
   check('the worktree is removed on the server', await until(async () => (await project()).repositories[0].worktrees.length, 1, 30_000), 1)
   const dialogs = await app.evaluate(() => globalThis.__dialogs)
-  const asked = dialogs.find((d) => d.message === 'Delete worktree “feature-x”?')
   const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
-  check('the confirm offers the stack and the VM as its box', [asked?.checkbox?.includes('Tear down the dev stack “trek-') ?? false, asked?.checkbox?.includes(`Colima VM “${featureProfile}”`) ?? false], [true, true])
   const stackAt = seqOf('stack', (c) => c.split('|')[1] === 'destroy')
   const colimaAt = seqOf('colima', (c) => c.includes('|delete '))
   check('stack.sh destroy, then colima delete, on the server', [stackAt !== null, colimaAt !== null, stackAt !== null && colimaAt !== null && stackAt < colimaAt], [true, true, true])

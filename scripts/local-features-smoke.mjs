@@ -22,8 +22,8 @@
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
 //   - a session's skill menu lists the worktree's skill and types it into the server's pty;
-//   - Delete worktree asks with one box for the stack and the VM (the server's teardown plan), and
-//     (a file written as the confirm shows) about its uncommitted changes, which the server refuses
+//   - Delete worktree asks in the window (plugins E3), a box each for the stack and the VM (the
+//     server's teardown plan), and (a file written before it is confirmed) about its uncommitted changes, which the server refuses
 //     before it runs `stack.sh destroy` and `colima delete <profile> --force`; then it removes the worktree;
 //   - the upgrade (5a): the app's environments registry and its running stack's pid and log, as a
 //     pre-5a Trek left them in userData, are the Local server's now: the VM it knew is no orphan,
@@ -419,8 +419,8 @@ try {
   await until(() => rows.count(), 2)
   check("the window's features: the machine-local ones, the server's skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.bot, f.promote, f.moveWorktree]
-  }), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true]), [true, SERVER_HAS_ENVS, SERVER_HAS_ENVS, true, true, true, false, true, true])
+    return [f.docker, f.stacks, f.skills, f.reveal, f.openInEditor, f.bot, f.promote, f.moveWorktree]
+  }), [true, SERVER_HAS_ENVS, true, true, true, false, true, true]), [true, SERVER_HAS_ENVS, true, true, true, false, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   // Docker, Env and Stack sit behind the Run button when a worktree has two or more of them.
@@ -488,12 +488,13 @@ try {
     await openSettingsTab(settings, 'Environments')
     await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
     check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
-    check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
-    check('and colima list fills the environments', await until(() => win.evaluate(() => Object.keys(window.__store.getState().environments).sort()), [featureProfile, 'twb-leftover-000000'].sort()), [featureProfile, 'twb-leftover-000000'].sort())
+    // The poll is the env plugin's (plugins E3): it lists only once the tool check passed; what it
+    // listed shows as the orphan below and the feature row's badge (section 4).
+    check('the environments poll runs: the tool check passed and colima list ran', await until(() => callsOf('colima').some((c) => c.startsWith('list')), true), true)
     // The VM the app's registry knew is the server's now: only the crash leftover is an orphan.
     check('only the VM no registry knows is an orphan in Settings', await until(() => settings.locator('.env-orphan-row').allTextContents(), ['twb-leftover-000000Delete']), ['twb-leftover-000000Delete'])
   } else {
-    for (const name of ['the environments switch is saved on the server', 'the environments poll runs: the tool check passes', 'and colima list fills the environments', 'only the VM no registry knows is an orphan in Settings']) console.log(`SKIP ${name} (${NO_ENVS})`)
+    for (const name of ['the environments switch is saved on the server', 'the environments poll runs: the tool check passed and colima list ran', 'only the VM no registry knows is an orphan in Settings']) console.log(`SKIP ${name} (${NO_ENVS})`)
   }
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
@@ -558,20 +559,33 @@ try {
 
   // ---- 6. Delete the worktree: the stack and the VM go first ----------------------------------------
 
-  // The confirm's stub writes scratch.txt into the worktree as it is shown (mainStub).
   await actions.locator('.btn-icon').click()
   await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
+  // With a plan (the stack and the VM), the window's own confirm (plugins E3): a box per item. Without
+  // one (Windows: neither), the native confirm, whose stub writes scratch.txt as it shows.
+  let promptDetail = null
+  if (SERVER_HAS_ENVS) {
+    const prompt = win.locator('.teardown-prompt')
+    await prompt.waitFor({ timeout: 10_000 })
+    promptDetail = await prompt.locator('.teardown-detail').innerText()
+    const boxes = await prompt.locator('.teardown-items li .teardown-item').evaluateAll((els) => els.map((e) => [e.textContent.trim(), e.querySelector('input').checked]))
+    check('the confirm offers the stack and the VM, a box each, both ticked', [boxes.length, boxes.some(([t, on]) => /Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(t) && on), boxes.some(([t, on]) => t.startsWith('Tear down the dev stack “trek-') && on)], [2, true, true])
+    // What the native confirm's stub did as it showed: the file comes after the window read the status.
+    writeFileSync(dirtyOnConfirm, 'unsaved\n')
+    await prompt.locator('button.primary').click()
+  } else {
+    console.log(`SKIP the confirm offers the stack and the VM, a box each, both ticked (${NO_ENVS})`)
+  }
   check('the worktree is removed on the server', await until(async () => (await project()).repositories[0].worktrees.length, 1, 30_000), 1)
   const dialogs = await app.evaluate(() => globalThis.__dialogs)
   const asked = dialogs.find((d) => d.message === 'Delete worktree “feature-x”?')
-  check('the confirm was built on a clean status (the file came after)', asked?.detail?.includes('Uncommitted changes will block the deletion.') ?? false, true)
+  check('the confirm was built on a clean status (the file came after)', (promptDetail ?? asked?.detail ?? '').includes('Uncommitted changes will block the deletion.'), true)
   const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
   if (SERVER_HAS_ENVS) {
-    check('the confirm offers the stack and the VM as its box', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.checkbox ?? ''), asked?.checkbox?.includes('Tear down the dev stack “trek-') ?? false], [true, true])
     check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
     check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
   } else {
-    for (const name of ['the confirm offers the stack and the VM as its box', 'stack.sh destroy ran in the worktree', "colima delete ran on the branch's VM"]) console.log(`SKIP ${name} (${NO_ENVS})`)
+    for (const name of ['stack.sh destroy ran in the worktree', "colima delete ran on the branch's VM"]) console.log(`SKIP ${name} (${NO_ENVS})`)
   }
   check('the worktree directory is gone', existsSync(worktree), false)
   const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
@@ -580,11 +594,11 @@ try {
     check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
     // The server refuses the unforced removal for the file that appeared (before it tears anything
     // down), the window asks, then forces with the same items. Only the order tells this apart from
-    // asking afterwards.
+    // asking afterwards. The in-window confirm (plugins E3) has no seq: it came first, as the delete waited on it.
     check(
       'a fresh dirty check asks before the stack and the VM go (seq)',
-      [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],
-      [true, true, true]
+      [discard !== undefined, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],
+      [true, true]
     )
     check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
     // Ctrl-C'd by the destroy (its process group), and dead before stack.sh destroy ran (seq).
