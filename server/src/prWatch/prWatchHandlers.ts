@@ -1,7 +1,7 @@
 // The pull request watch's v2 methods (phase 5c-1): turning a branch's watch on or off, and
 // dismissing a worktree's notice. The `prWatch` capability says some PR provider is signed in on the
 // server; turning a watch on needs the one that owns the branch's link (plugins P3).
-import type { BranchData } from '../../../src/shared/model/types'
+import type { BranchData, Repository } from '../../../src/shared/model/types'
 import * as gitService from '../../../src/host/gitService.ts'
 import { prOwner, resolvePrInput, safeParse } from '../../../src/shared/plugins/pullRequests.ts'
 import type { PrServerProvider } from '../../../src/shared/plugins/server.ts'
@@ -22,7 +22,7 @@ export const notSignedIn = (signInName: string): string =>
  * local branch of that name unless it is the PR's own (gitService.isPullRequestBranch). A fork PR's
  * head is often `main`; null makes the client fall back to pr/<n>, so `main` is never moved.
  */
-async function usableHeadBranch(provider: PrServerProvider, pr: { url: string; number: number; label: string }, repoPath: string): Promise<string | null> {
+async function usableHeadBranch(provider: PrServerProvider, pr: { url: string; number: number; label: string }, repo: Repository): Promise<string | null> {
   const name = await provider.headBranch(pr).catch(() => null)
   if (typeof name !== 'string') return null
   try {
@@ -30,10 +30,13 @@ async function usableHeadBranch(provider: PrServerProvider, pr: { url: string; n
   } catch {
     return null
   }
-  if ((await gitService.localBranchSha(repoPath, name)) === null) return name
+  // Checked out already (the main checkout's main, say): a client would link the PR to that worktree.
+  if (repo.worktrees.some((w) => !w.missing && w.branch === name)) return null
   try {
-    return (await gitService.isPullRequestBranch(repoPath, provider.fetchRef(pr.number), name)) ? name : null
+    if ((await gitService.localBranchSha(repo.path, name)) === null) return name
+    return (await gitService.isPullRequestBranch(repo.path, provider.fetchRef(pr.number), name)) ? name : null
   } catch {
+    // git couldn't say (origin unreachable, the repository unreadable): pr/<n> is safe.
     return null
   }
 }
@@ -50,7 +53,7 @@ export const prWatchHandlers: Record<string, Handler> = {
     if (!resolved.ok) throw codedError('BAD_REQUEST', resolved.problem)
     const provider = providers.find((x) => x.id === resolved.pr.providerId)!
     const { providerId, ...pr } = resolved.pr
-    return { ...pr, providerId, headBranch: await usableHeadBranch(provider, pr, repo.path) }
+    return { ...pr, providerId, headBranch: await usableHeadBranch(provider, pr, repo) }
   },
 
   /**

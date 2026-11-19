@@ -16,7 +16,7 @@ import { assertNotPromoting } from './promote/changing.ts'
 import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
 import { isInside } from '../../src/host/pathContainment.ts'
-import { prOwner } from '../../src/shared/plugins/pullRequests.ts'
+import { prOwner, safeParse } from '../../src/shared/plugins/pullRequests.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -174,6 +174,7 @@ export const worktreeHandlers: Record<string, Handler> = {
       fromPr = p.fromPr
     }
     const project = ctx.projects.require(p.projectId)
+    const repo = repoIn(project, p.repoId)
     let prRef: string | undefined
     if (fromPr !== undefined) {
       // The ref to fetch is the PR's provider's: prUrl's owner, else the project's only one.
@@ -183,6 +184,10 @@ export const worktreeHandlers: Record<string, Handler> = {
       if (!provider) {
         throw bad(prUrl !== undefined ? `no pull request provider is on for ${prUrl} in this project` : 'no single pull request provider is on in this project: pass prUrl')
       }
+      if (prUrl !== undefined) {
+        const parsed = safeParse(provider, prUrl)
+        if (parsed?.number !== fromPr) throw bad(`prUrl is ${parsed ? `pull request ${parsed.label}` : 'not a pull request link its provider reads'}, not #${fromPr}`)
+      }
       try {
         prRef = provider.fetchRef(fromPr)
         gitService.assertPullRequestRef(prRef)
@@ -190,7 +195,6 @@ export const worktreeHandlers: Record<string, Handler> = {
         throw codedError('TOOL_ERROR', `pull request provider ${provider.id} gave no usable ref for #${fromPr}: ${(err as Error).message}`)
       }
     }
-    const repo = repoIn(project, p.repoId)
     findRegistered(ctx.store.config.repos, repo.path)
     const requested = p.path === undefined ? defaultWorktreePath(repo.path, branch) : requireAbsolutePath(p.path, 'path')
     const target = ctx.store.guard.check(requested)
@@ -204,9 +208,13 @@ export const worktreeHandlers: Record<string, Handler> = {
 
     if (prRef !== undefined && fromPr !== undefined) {
       const ref = prRef
-      const existed = (await gitService.localBranchSha(repo.path, branch)) !== null
+      // A failed look (not "no such branch") is GIT_ERROR: guessing "absent" would skip the guard
+      // below and let the cleanup delete a branch this call didn't make.
+      const existed = (await viaGit(() => gitService.localBranchSha(repo.path, branch))) !== null
       // A local branch of that name that is not the PR's (a fork PR's head is often main) is never
-      // fetched into or checked out for it. pr/<n> is Trek's own name for the PR.
+      // fetched into or checked out for it. pr/<n> is Trek's own name for the PR. Known limit: it is
+      // trusted by name, so with two PR providers on, a pr/<n> left from the other provider's PR #n
+      // is fast-forwarded (or, diverged, checked out) as this one's.
       if (existed && branch !== `pr/${fromPr}` && !(await viaGit(() => gitService.isPullRequestBranch(repo.path, ref, branch)))) {
         throw bad(`a local branch named "${branch}" already exists and is not pull request #${fromPr}'s head; check the PR out as pr/${fromPr}`)
       }

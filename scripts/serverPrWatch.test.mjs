@@ -4,7 +4,8 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { devNull, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -768,9 +769,19 @@ test('branch.setPrWatch: a provider whose parse throws, or does not give the sto
   }
 })
 
+/** project() whose repository is a real (empty-history) temp git repo, for pr.resolve's local branch checks. */
+function gitProject(over) {
+  const p = project(over)
+  const dir = mkdtempSync(join(tmpdir(), 'trek-prresolve-'))
+  after(() => removeDir(dir))
+  execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' } })
+  p.repositories[0].path = dir
+  return p
+}
+
 test('pr.resolve: a link, a bare number from a linked PR, the head branch through the provider', async () => {
   const gh = fakeRunner(['{"headRefName":"feat/x"}', '{"headRefName":"feat/y"}'])
-  const c = ctxFor(project(), { providers: [createGithubPrProvider(gh.run)] })
+  const c = ctxFor(gitProject(), { providers: [createGithubPrProvider(gh.run)] })
   assert.deepEqual(await c.callAsync('pr.resolve', { repoId: 'r1', input: 'https://www.github.com/acme/app/pull/12/files' }),
     { ok: true, result: { url: 'https://github.com/acme/app/pull/12', number: 12, label: '#12', providerId: 'github', headBranch: 'feat/x' } })
   assert.deepEqual((await c.callAsync('pr.resolve', { repoId: 'r1', input: '#40' })).result.url, 'https://github.com/acme/app/pull/40')
@@ -779,7 +790,7 @@ test('pr.resolve: a link, a bare number from a linked PR, the head branch throug
 
 test('pr.resolve: no provider takes it → BAD_REQUEST naming what they take; none on → says so; a headBranch failure is null', async () => {
   const gh = fakeRunner([new Error('boom')])
-  const c = ctxFor(project({ pr: null }), { providers: [createGithubPrProvider(gh.run)] })
+  const c = ctxFor(gitProject({ pr: null }), { providers: [createGithubPrProvider(gh.run)] })
   const bad = await c.callAsync('pr.resolve', { repoId: 'r1', input: '40' })
   assert.equal(bad.error.code, 'BAD_REQUEST')
   assert.match(bad.error.message, /a GitHub pull request link/)
@@ -792,7 +803,7 @@ test('pr.resolve: no provider takes it → BAD_REQUEST naming what they take; no
 
 test('pr.resolve: a head branch git would refuse (foo.lock, a//b, a trailing /) is null', async () => {
   for (const name of ['foo.lock', 'a//b', 'feat/']) {
-    const c = ctxFor(project(), { providers: [createGithubPrProvider(fakeRunner([JSON.stringify({ headRefName: name })]).run)] })
+    const c = ctxFor(gitProject(), { providers: [createGithubPrProvider(fakeRunner([JSON.stringify({ headRefName: name })]).run)] })
     assert.equal((await c.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null, name)
   }
 })
@@ -800,4 +811,12 @@ test('pr.resolve: a head branch git would refuse (foo.lock, a//b, a trailing /) 
 test('welcomeCapabilities lists prResolve whenever a PR provider is registered', () => {
   assert.equal(welcomeCapabilities(false, false, false, [], 'darwin', false, false, false, true).includes('prResolve'), true)
   assert.equal(welcomeCapabilities(false, false, false, [], 'darwin', false, false, false, false).includes('prResolve'), false)
+})
+
+test('pr.resolve: a head branch already checked out in a worktree, or in a repository git cannot read, is null', async () => {
+  const checkedOut = ctxFor(gitProject(), { providers: [createGithubPrProvider(fakeRunner(['{"headRefName":"feature"}']).run)] })
+  assert.equal((await checkedOut.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null, 'w1 has feature checked out')
+  // project()'s /repo is no repository: git can't say whether a local branch has the name.
+  const unreadable = ctxFor(project(), { providers: [createGithubPrProvider(fakeRunner(['{"headRefName":"feat/x"}']).run)] })
+  assert.equal((await unreadable.callAsync('pr.resolve', { repoId: 'r1', input: URL })).result.headBranch, null)
 })

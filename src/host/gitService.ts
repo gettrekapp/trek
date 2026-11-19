@@ -56,9 +56,10 @@ export function platformGitConfig(platform: NodeJS.Platform = process.platform):
   return platform === 'win32' ? ['-c', 'core.longpaths=true'] : []
 }
 
-export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
+export async function git(repoPath: string, args: string[], options: { timeout?: number; env?: NodeJS.ProcessEnv } = {}): Promise<string> {
   const { stdout } = await execFileAsync(commandPath('git'), [...platformGitConfig(), '-C', repoPath, ...args], hidden({
     timeout: options.timeout ?? 60_000,
+    ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
   }))
   return stdout
@@ -767,20 +768,35 @@ export function assertPullRequestRef(ref: string): void {
   if (typeof ref !== 'string' || !/^refs\/[\w./-]+$/.test(ref) || ref.includes('..')) throw new Error('not a pull request ref')
 }
 
-/** The sha of local branch `branch`; null when there is none (or the repository can't be read). */
+/**
+ * Whether a failed `git rev-parse --verify --quiet` said only that the ref is not there: exit 1 and
+ * nothing on stderr. A timeout, a missing git, a repository git can't read (128) or a broken ref
+ * (a warning) is not that.
+ */
+export function refMissing(err: unknown): boolean {
+  const e = err as { code?: unknown; stderr?: unknown }
+  return e?.code === 1 && String(e.stderr ?? '').trim() === ''
+}
+
+/** The sha of local branch `branch`; null only when git says there is no such branch. Rejects on any other failure. */
 export async function localBranchSha(repoPath: string, branch: string): Promise<string | null> {
   assertSafeBranch(branch)
-  return git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]).then(
-    (out) => out.trim() || null,
-    () => null
-  )
+  try {
+    return (await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])).trim() || null
+  } catch (err) {
+    if (refMissing(err)) return null
+    throw err
+  }
 }
+
+/** For a git call that reaches origin from a request: short, and never waiting on a credential prompt. */
+const REMOTE_QUERY = { timeout: 10_000, env: { GIT_TERMINAL_PROMPT: '0' } }
 
 /** origin's shas for `ref` and its `refs/heads/<branch>` (either missing when origin has no such ref). */
 async function originShas(repoPath: string, ref: string, branch: string): Promise<{ pr?: string; branch?: string }> {
   const branchRef = `refs/heads/${branch}`
   const shas = new Map(
-    (await git(repoPath, ['ls-remote', 'origin', '--', ref, branchRef]))
+    (await git(repoPath, ['ls-remote', 'origin', '--', ref, branchRef], REMOTE_QUERY))
       .trim()
       .split('\n')
       .filter(Boolean)

@@ -1,6 +1,7 @@
 // scripts/serverWorktrees.test.mjs — worktree.* against real git in a temp dir.
 // Keep a user's global git config and hooks out of the real git these tests run.
-process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+import { devNull } from 'node:os'
+process.env.GIT_CONFIG_GLOBAL = devNull
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 import test from 'node:test'
@@ -18,11 +19,13 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
+import { refMissing } from '../src/host/gitService.ts'
 import { removeDir } from './testPlatform.mjs'
 import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
   ...process.env,
+  GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t'
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -217,7 +220,12 @@ test("worktree.create with fromPr and prUrl fetches the provider's ref; with fro
   assert.match(ambiguous.error.message, /pass prUrl/)
   const unowned = await s.call('worktree.create', { ...base, branch: 'odd-12', prUrl: 'https://elsewhere.example/12' })
   assert.equal(unowned.error?.code, 'BAD_REQUEST')
-  assert.equal(git(s.a, 'branch', '--list', 'which-12', 'odd-12').trim(), '')
+  const otherPr = await s.call('worktree.create', { ...base, branch: 'mismatch-12', prUrl: 'https://github.com/acme/app/pull/13' })
+  assert.equal(otherPr.error?.code, 'BAD_REQUEST', 'prUrl is another PR than fromPr')
+  assert.match(otherPr.error.message, /#13/)
+  const noRepo = await s.call('worktree.create', { ...base, repoId: 'nope', branch: 'x-12' })
+  assert.equal(noRepo.error?.code, 'NOT_FOUND', 'the repository is checked before the providers')
+  assert.equal(git(s.a, 'branch', '--list', 'which-12', 'odd-12', 'mismatch-12').trim(), '')
 
   const only = await setup(t, { prProviders: [exampleProvider] })
   const o = withOrigin(only).pr('refs/example/12')
@@ -691,4 +699,12 @@ test('worktree commands refuse a worktree that is itself a registered repo', asy
   const changes = await s.call('worktree.changes', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(changes.ok, false)
   assert.equal(changes.error.code, 'BAD_REQUEST', JSON.stringify(changes))
+})
+
+test('refMissing: only git saying plainly that the ref is not there (exit 1, nothing on stderr) counts as missing', () => {
+  assert.equal(refMissing(Object.assign(new Error('x'), { code: 1, stderr: '' })), true)
+  assert.equal(refMissing(Object.assign(new Error('x'), { code: 1, stderr: 'warning: ignoring broken ref\n' })), false)
+  assert.equal(refMissing(Object.assign(new Error('x'), { code: 128, stderr: 'fatal: not a git repository' })), false)
+  assert.equal(refMissing(Object.assign(new Error('timed out'), { code: null, killed: true, signal: 'SIGTERM', stderr: '' })), false)
+  assert.equal(refMissing(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })), false)
 })
