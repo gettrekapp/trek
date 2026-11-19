@@ -353,7 +353,7 @@ try {
   check('it says the ignored .trek/ is deleted with the worktree', /Deleted with the worktree, never moved \(ignored by git\): \.trek\//.test(promptText), true)
   if (SERVER_HAS_ENVS) {
     check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
-    check("the VM is gone from the server's registry", Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), [])
+    check("the VM is gone from the server's registry", Object.keys(JSON.parse(readFileSync(join(data, 'plugins', 'env', 'environments.json'), 'utf8'))), [])
   } else {
     console.log(`SKIP the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main (${NO_ENVS})`)
     console.log(`SKIP the VM is gone from the server's registry (${NO_ENVS})`)

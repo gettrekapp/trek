@@ -385,7 +385,7 @@ try {
   if (SERVER_HAS_ENVS) {
     check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
     check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
-    check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
+    check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'plugins', 'env', 'environments.json'), 'utf8'))), [])
   } else {
     for (const name of ["the dev stack was destroyed on A after B had it, while A's folder was still there", "the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", "and is gone from A's registry"]) console.log(`SKIP ${name} (${NO_ENVS})`)
   }

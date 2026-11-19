@@ -356,8 +356,8 @@ try {
   check('Start reaches every step (env.log from the server)', await until(() => envPanel.locator('.env-steps .move-step.done').count(), 3, 30_000), 3)
   check('colima started the branch\'s VM on the server', callsOf('colima').filter((c) => c.includes('|start ')).map((c) => c.split('|')[1]), [`start ${featureProfile} --cpu 2 --memory 4 --disk 20 --network-address`])
   check('and compose ran in the worktree with the variables', callsOf('docker').filter((c) => c.includes(' compose -f ') && c.includes(' up -d')), [`${worktree}|--context colima-${featureProfile} compose -f docker-compose.yml up -d|FOO=bar`])
-  const registry = JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))
-  check("the server's registry names the VM, in its data dir", [Object.keys(registry), registry[featureProfile]?.worktreePath], [[featureProfile], worktree])
+  const registry = JSON.parse(readFileSync(join(data, 'plugins', 'env', 'environments.json'), 'utf8'))
+  check("the server's registry names the VM, in the env plugin's data dir", [Object.keys(registry), registry[featureProfile]?.worktreePath], [[featureProfile], worktree])
   check('the row gets a running env badge', await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), 1)
 
   // ---- 6. Its stack, on the server ---------------------------------------------------------------------

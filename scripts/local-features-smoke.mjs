@@ -376,8 +376,10 @@ try {
   // The upgrade: the server took the app's files over before it served anything; the app's stay.
   // Compared key-sorted: the take-over writes each entry's own fields in its own order.
   const sortedKeys = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedKeys(v[k])])) : v)
-  const seeded = existsSync(join(localData, 'environments.json')) ? JSON.parse(readFileSync(join(localData, 'environments.json'), 'utf8')) : null
-  check("the Local server took over the app's environments registry", sortedKeys(seeded), sortedKeys(legacyRegistry))
+  // The env plugin's registry (plugins E2), taken over at its setup; a Windows server has no env plugin, so none.
+  const seededFile = join(localData, 'plugins', 'env', 'environments.json')
+  const seeded = existsSync(seededFile) ? JSON.parse(readFileSync(seededFile, 'utf8')) : null
+  check("the Local server took over the app's environments registry", sortedKeys(seeded), SERVER_HAS_ENVS ? sortedKeys(legacyRegistry) : null)
   check("and its running stack's pid", existsSync(join(localData, 'stacks', 'app-feature-x.pid')) ? readFileSync(join(localData, 'stacks', 'app-feature-x.pid'), 'utf8') : null, String(legacyUp.pid))
   // Its log is the app's own file (a hard link), so the `up` still running keeps logging where the server reads.
   const inode = (p) => (existsSync(p) ? statSync(p).ino : null)
