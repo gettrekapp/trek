@@ -28,7 +28,7 @@ import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/c
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
-import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
@@ -1119,6 +1119,13 @@ test('tickets: a server older than plugins has Azure DevOps built in, and Linear
   assert.deepEqual(tkIds({}), ['azure-devops'])
   // The project's plugins setting is not read there.
   assert.deepEqual(tkIds({ capabilities: ['linear'] }, { plugins: { linear: { enabled: false }, 'azure-devops': { enabled: false } } }), ['linear', 'azure-devops'])
+})
+
+test('pluginOn (plugins E1): not available on the server\'s platform is off; a legacy capability in a list counts', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyCapability: ['env'] }
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }], capabilities: [] }, {}), false)
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: [] }, {}), true)
+  assert.equal(pluginOn(env, { capabilities: ['env'] }, {}), true)
 })
 
 test("tickets: a ticket's label and link from the project's settings; the raw id with no provider", () => {

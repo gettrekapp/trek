@@ -1,5 +1,5 @@
 // Which plugins a project window shows (plugin system phase 1). Pure: imported by tests.
-import { pluginEnabled, type PluginManifest, type PluginPresence, type ProjectPluginSettings } from '../../../shared/plugins/manifest.ts'
+import { legacyCapabilitiesOf, pluginEnabled, type PluginManifest, type PluginPresence, type ProjectPluginSettings } from '../../../shared/plugins/manifest.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
 
 /** What the window's server said in its welcome. */
@@ -32,12 +32,14 @@ const listsAllItHas = (welcome: PluginWelcome): boolean => welcome.capabilities?
 export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | undefined, settings: ProjectPluginSettings | undefined): PluginStatus {
   if (!welcome) return 'unknown'
   if (!welcome.plugins) {
-    const capability = !!manifest.legacyCapability && welcome.capabilities?.includes(manifest.legacyCapability) === true
+    const capability = legacyCapabilitiesOf(manifest).some((c) => welcome.capabilities?.includes(c) === true)
     return capability || manifest.legacyBuiltIn === true ? 'legacy' : 'missing'
   }
   // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
   const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
   if (!listed) return manifest.legacyBuiltIn === true && !listsAllItHas(welcome) ? 'legacy' : 'missing'
+  // Registered there, but not for its platform (plugins E1): as good as missing.
+  if (listed.available === false) return 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
   return pluginEnabled(settings, { id: manifest.id, defaultEnabled: listed.defaultEnabled }) ? 'on' : 'off'
 }
@@ -55,7 +57,7 @@ export function changedFor(manifest: PluginManifest, event: string, payload: unk
   const p = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
   if (event === 'plugins.changed') return p.id === manifest.id
   // A server with plugins sends both; heed only its plugins.changed.
-  return event === 'integrations.changed' && !serverHasPlugins && !!manifest.legacyCapability && p[manifest.legacyCapability] === true
+  return event === 'integrations.changed' && !serverHasPlugins && legacyCapabilitiesOf(manifest).some((c) => p[c] === true)
 }
 
 /** An event payload for another project (it names a different `projectId`) is not this window's. */

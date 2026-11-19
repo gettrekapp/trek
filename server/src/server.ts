@@ -38,7 +38,7 @@ import { createEventSink, type Machine } from './integrations/machineHandlers.ts
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
-import type { PluginPresence } from '../../src/shared/plugins/manifest.ts'
+import { legacyCapabilitiesOf, type PluginPresence } from '../../src/shared/plugins/manifest.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
 import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
 import { installedIdReserved } from './plugins/reserved.ts'
@@ -333,7 +333,8 @@ export function startServer(
   // plugins hears its legacy capability's integrations.changed instead.
   plugins?.onChanged((manifest) => {
     for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'plugins.changed', payload: { id: manifest.id } })
-    if (manifest.legacyCapability) integrationsChanged({ [manifest.legacyCapability]: true })
+    const legacy = legacyCapabilitiesOf(manifest)
+    if (legacy.length > 0) integrationsChanged(Object.fromEntries(legacy.map((c) => [c, true])) as IntegrationsChangedEvent)
   })
   // An installed plugin added, replaced or removed, here or by `trek-server plugin` on this machine:
   // the list (a welcome is sent once), then each one's plugins.changed.

@@ -12,10 +12,10 @@ export interface PluginManifest {
   /** Whether a project with no `plugins[id]` setting uses it */
   defaultEnabled: boolean
   /**
-   * A welcome capability listed while the plugin is registered, for clients that predate plugins
-   * (0.2.x): they gate the plugin's UI on it (`voice`).
+   * Welcome capabilities listed while the plugin is registered, for clients that predate plugins
+   * (0.2.x): they gate the plugin's UI on them (`voice`). One, or several (plugins E1).
    */
-  legacyCapability?: string
+  legacyCapability?: string | readonly string[]
   /** The `secrets.json` names its server half may read and write (`host.secret`) */
   secrets?: readonly string[]
   /**
@@ -24,6 +24,15 @@ export interface PluginManifest {
    * server half (`checkProjectSetting`). A name can't be a core setting's or another plugin's.
    */
   projectSettings?: Readonly<Record<string, 'string'>>
+  /** Per-repository settings (plugins E1): kept in `Repository.pluginSettings[id]`, written with `repo.setPluginSettings` */
+  repoSettings?: Readonly<Record<string, PluginFieldKind>>
+  /** Per-branch settings (plugins E1): kept in `BranchData.pluginSettings[id]`, written with `branch.setPluginSettings`; they move with the branch */
+  branchSettings?: Readonly<Record<string, PluginFieldKind>>
+  /**
+   * The server platforms (`process.platform` values) it runs on (plugins E1); absent: every one.
+   * Elsewhere the server neither sets it up nor lists it as on: the welcome lists it `available: false`.
+   */
+  platforms?: readonly string[]
   /**
    * A server older than plugins had this built in, with no capability saying so (Azure DevOps
    * tickets): a client counts it `legacy` (on) there.
@@ -41,12 +50,89 @@ export type PluginPrefValue = string | number | boolean
 /** A plugin id: lowercase, starts with a letter, at most 32 characters. */
 export const PLUGIN_ID_RE = /^[a-z][a-z0-9-]{0,31}$/
 
+/** A per-repository or per-branch setting's kind (plugins E1): `text` is a multi-line string. */
+export type PluginFieldKind = 'string' | 'number' | 'boolean' | 'text'
+export const PLUGIN_FIELD_KINDS: readonly PluginFieldKind[] = ['string', 'number', 'boolean', 'text']
+export type PluginFieldValue = string | number | boolean
+/** One plugin's values for a repository or a branch (`Repository.pluginSettings[id]`). */
+export type PluginSettingValues = Record<string, PluginFieldValue>
+/** The longest `string` value (one line), and the longest `text` value (a branch's .env, say). */
+export const MAX_PLUGIN_STRING = 2000
+export const MAX_PLUGIN_TEXT = 100_000
+const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+
+/** A manifest's legacy capabilities, as a list. */
+export function legacyCapabilitiesOf(manifest: Pick<PluginManifest, 'legacyCapability'>): string[] {
+  const c = manifest.legacyCapability
+  return c === undefined ? [] : typeof c === 'string' ? [c] : [...c]
+}
+
+/** A `repoSettings` or `branchSettings` declaration's problem, or null. */
+export function pluginFieldsProblem(fields: unknown): string | null {
+  if (fields === undefined) return null
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return 'must be an object of field names to kinds'
+  for (const [key, kind] of Object.entries(fields)) {
+    if (!FIELD_NAME_RE.test(key)) return `${JSON.stringify(key)} is not a field name`
+    if (!(PLUGIN_FIELD_KINDS as readonly unknown[]).includes(kind)) return `${key} has the kind ${JSON.stringify(kind)}, not one of ${PLUGIN_FIELD_KINDS.join(', ')}`
+  }
+  return null
+}
+
+function valueProblem(kind: PluginFieldKind, value: unknown): string | null {
+  switch (kind) {
+    case 'boolean':
+      return typeof value === 'boolean' ? null : 'must be a boolean'
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value) ? null : 'must be a finite number'
+    case 'string':
+      return typeof value === 'string' && value.length <= MAX_PLUGIN_STRING && !/[\r\n]/.test(value) ? null : `must be one line of at most ${MAX_PLUGIN_STRING} characters`
+    case 'text':
+      return typeof value === 'string' && value.length <= MAX_PLUGIN_TEXT ? null : `must be text of at most ${MAX_PLUGIN_TEXT} characters`
+  }
+}
+
+/** Values for declared fields: their problem (an undeclared field, a value of another kind), or null. */
+export function pluginValuesProblem(fields: Readonly<Record<string, PluginFieldKind>>, values: Record<string, unknown>): string | null {
+  for (const [key, value] of Object.entries(values)) {
+    if (!Object.hasOwn(fields, key)) return `${key} is not one of its settings (${Object.keys(fields).join(', ') || 'none'})`
+    const problem = valueProblem(fields[key], value)
+    if (problem) return `${key} ${problem}`
+  }
+  return null
+}
+
+/**
+ * Stored `pluginSettings` from elsewhere (`project.import`, `move.receive`), by shape only: plugin
+ * ids to objects of bounded primitive values. Not checked against manifests: a plugin this server
+ * lacks keeps its values, as a project setting of a plugin that didn't load does.
+ */
+export function pluginSettingsShapeProblem(value: unknown): string | null {
+  if (value === undefined) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'must be an object of plugin ids to values'
+  const entries = Object.entries(value)
+  if (entries.length > 64) return 'names more than 64 plugins'
+  for (const [id, values] of entries) {
+    if (!PLUGIN_ID_RE.test(id)) return `${JSON.stringify(id)} is not a plugin id`
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return `${id} must be an object`
+    const fields = Object.entries(values)
+    if (fields.length > 100) return `${id} has more than 100 values`
+    for (const [key, v] of fields) {
+      if (!FIELD_NAME_RE.test(key)) return `${id}: ${JSON.stringify(key)} is not a field name`
+      const ok = typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= MAX_PLUGIN_TEXT)
+      if (!ok) return `${id}.${key} must be a string, a finite number or a boolean`
+    }
+  }
+  return null
+}
+
 /** A registered plugin, as the server's welcome lists it (`plugins`). */
 export interface PluginPresence {
   id: string
   version: string
   /** The server's default for a project with no setting for it: a client goes by this, not its own manifest's */
   defaultEnabled: boolean
+  /** Registered but not set up on this server's platform (its manifest's `platforms`, plugins E1); absent: available */
+  available?: false
   /** An installed plugin's (theme plugins): what a client that was not built with it needs to list and load it */
   type?: 'theme'
   name?: string
@@ -74,6 +160,7 @@ export function parsePluginPresence(raw: unknown): PluginPresence[] | undefined 
     const e = entry as Record<string, unknown>
     if (typeof e.id !== 'string' || !PLUGIN_ID_RE.test(e.id) || typeof e.version !== 'string' || typeof e.defaultEnabled !== 'boolean') continue
     const presence: PluginPresence = { id: e.id, version: e.version, defaultEnabled: e.defaultEnabled }
+    if (e.available === false) presence.available = false
     if (e.type === 'theme') presence.type = 'theme'
     if (typeof e.name === 'string') presence.name = e.name
     if (typeof e.description === 'string') presence.description = e.description
@@ -111,7 +198,7 @@ export interface PluginPackage {
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const MAX_VERSION_CHARS = 64
 /** What only a built-in plugin may declare. */
-const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn'] as const
+const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms'] as const
 /** Matches PLUGIN_ID_RE, and is a key of every plain object: `byId[id]` would find Object's own. */
 const UNUSABLE_IDS: readonly string[] = ['constructor']
 /** Control characters, and the format ones: bidi overrides, zero-width characters. */

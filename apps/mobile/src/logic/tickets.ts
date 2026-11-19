@@ -7,6 +7,7 @@ import {
   AZURE_DEVOPS_MANIFEST,
   CAPABILITY,
   azureDevOpsTickets,
+  legacyCapabilitiesOf,
   LINEAR_MANIFEST,
   linearTickets,
   pluginEnabled,
@@ -43,11 +44,12 @@ const TRACKERS: ReadonlyArray<{ manifest: PluginManifest; provider: TicketProvid
  */
 export function pluginOn(manifest: PluginManifest, server: TicketServer, settings: ProjectSettings): boolean {
   if (!server.plugins) {
-    const capability = !!manifest.legacyCapability && server.capabilities?.includes(manifest.legacyCapability) === true
+    const capability = legacyCapabilitiesOf(manifest).some((c) => server.capabilities?.includes(c) === true)
     return capability || manifest.legacyBuiltIn === true
   }
   const listed = server.plugins.find((p) => p.id === manifest.id)
   if (!listed) return manifest.legacyBuiltIn === true && server.capabilities?.includes(CAPABILITY.prResolve) !== true
+  if (listed.available === false) return false
   return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })
 }
 

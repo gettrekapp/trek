@@ -29,6 +29,13 @@ test('pluginStatus: unknown before the welcome; on/off by the setting and defaul
   assert.deepEqual(['on', 'off', 'legacy', 'missing', 'unknown'].map(pluginActive), [true, false, true, false, false])
 })
 
+test('pluginStatus (plugins E1): one the server lists as not available on its platform is missing; a legacy capability in a list counts', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyCapability: ['env'] }
+  assert.equal(pluginStatus(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }], capabilities: [] }, undefined), 'missing')
+  assert.equal(pluginStatus(env, { capabilities: ['env'] }, undefined), 'legacy')
+  assert.equal(changedFor(env, 'integrations.changed', { env: true }, false), true)
+})
+
 test('withPluginEnabled keeps the other plugins', () => {
   assert.deepEqual(withPluginEnabled(undefined, 'voice', false), { voice: { enabled: false } })
   assert.deepEqual(withPluginEnabled({ other: { enabled: true }, voice: { enabled: false } }, 'voice', true), { other: { enabled: true }, voice: { enabled: true } })

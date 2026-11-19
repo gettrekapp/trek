@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
-import { PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
+import { legacyCapabilitiesOf, PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
@@ -242,7 +242,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
 
   return {
     presence: () => [...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
-    legacyCapabilities: () => [...entries.values()].flatMap((e) => (e.manifest.legacyCapability ? [e.manifest.legacyCapability] : [])),
+    legacyCapabilities: () => [...entries.values()].flatMap((e) => legacyCapabilitiesOf(e.manifest)),
     handler: (method) => {
       const dot = method.indexOf('.')
       if (dot <= 0) return undefined
