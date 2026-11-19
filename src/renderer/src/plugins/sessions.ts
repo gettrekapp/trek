@@ -52,11 +52,18 @@ export interface SessionsSource {
   onChanged(listener: () => void): () => void
 }
 
+const sameInput = (a: SessionInput, b: SessionInput): boolean =>
+  (Object.keys(b) as (keyof SessionInput)[]).every((k) => a[k] === b[k]) && Object.keys(a).length === Object.keys(b).length
+
 /** One per window: `read` gives the store's state now, `subscribe` hears every store change. */
 export function sessionsSource(read: () => SessionInput, subscribe: (listener: () => void) => () => void): SessionsSource {
   let cached: { key: string; list: PluginSession[]; selected: string | null } | null = null
+  let lastInput: SessionInput | null = null
   const current = (): { key: string; list: PluginSession[]; selected: string | null } => {
     const input = read()
+    // The store replaces what it changes, never mutating in place: the same fields are the same view.
+    if (cached && lastInput && sameInput(lastInput, input)) return cached
+    lastInput = input
     const list = pluginSessions(input)
     const selected = selectedTerminal(input)
     const key = JSON.stringify([list, selected])

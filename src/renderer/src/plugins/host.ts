@@ -1,6 +1,6 @@
 // A plugin's host in a project window (plugin system phase 1): its `<id>.*` requests and events
-// on the window's backend, its per-app preferences in the app settings, and the window's session
-// labels. One per (backend, plugin): a window that moves to another server or project gets new ones.
+// on the window's backend, its per-app preferences in the app settings, the window's session
+// labels, and its read-only session view (campsite). One per (backend, plugin): a window that moves to another server or project gets new ones.
 import type { ClientPluginHost, PluginSession } from '../../../shared/plugins/client.ts'
 import type { PluginManifest, PluginPrefValue } from '../../../shared/plugins/manifest.ts'
 import type { AppSettings, AppSettingsPatch } from '../../../shared/appSettings.ts'

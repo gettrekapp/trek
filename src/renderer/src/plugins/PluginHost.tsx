@@ -7,6 +7,7 @@ import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
 import { allBranchTickets, allWorktrees, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { revealTerminal, terminalLabel } from '../terminals'
+import type { ProjectFile, WorktreeInstance } from '../../../shared/types'
 import { createClientHost, type HostDeps } from './host'
 import { pluginActive, pluginStatus, type PluginStatus } from './presence'
 import { sessionsSource, type SessionsSource } from './sessions.ts'
@@ -34,13 +35,19 @@ function generationOf(backend: WindowBackend): number {
 }
 
 let sessionView: SessionsSource | null = null
+/** allWorktrees(project), kept while the project object is the same (a new array would defeat the view's memo) */
+let worktreesOf: { project: ProjectFile | null; list: WorktreeInstance[] } = { project: null, list: [] }
+const projectWorktrees = (project: ProjectFile | null): WorktreeInstance[] => {
+  if (worktreesOf.project !== project) worktreesOf = { project, list: project ? allWorktrees(project) : [] }
+  return worktreesOf.list
+}
 /** The window's session view, made on first use */
 function windowSessions(): SessionsSource {
   if (!sessionView) {
     sessionView = sessionsSource(() => {
       const s = useAppStore.getState()
       return {
-        worktrees: s.project ? allWorktrees(s.project) : [],
+        worktrees: projectWorktrees(s.project),
         globalId: GLOBAL_WORKTREE_ID,
         terminals: s.terminals,
         terminalOrder: s.terminalOrder,
@@ -73,6 +80,7 @@ const hostDeps = (): HostDeps => ({
   onSessionsChanged: (listener) => windowSessions().onChanged(listener),
   selectedTerminalId: () => windowSessions().selected(),
   focusSession: (terminalId) => {
+    // Real sessions only: revealTerminal special-cases the bot's decision id and clears quiet state before its own check.
     if (Object.hasOwn(useAppStore.getState().terminals, terminalId)) revealTerminal(terminalId)
   }
 })
@@ -179,9 +187,11 @@ export function PluginRuntimes(): React.JSX.Element {
 }
 
 type MultiSlot = Exclude<PluginSlotName, 'settings' | 'sessionIndicator'>
+/** `props` is required where the slot's props have required keys (terminalOverlay's terminalId) */
+type SlotArgs<N extends MultiSlot> = { name: N } & ({} extends PluginSlotProps<N> ? { props?: PluginSlotProps<N> } : { props: PluginSlotProps<N> })
 
 /** The active plugins' components for one slot, in built-in order. */
-export function PluginSlot<N extends MultiSlot>({ name, props }: { name: N; props?: PluginSlotProps<N> }): React.JSX.Element {
+export function PluginSlot<N extends MultiSlot>({ name, props }: SlotArgs<N>): React.JSX.Element {
   const entries = usePluginEntries()
   return (
     <>

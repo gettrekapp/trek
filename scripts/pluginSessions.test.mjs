@@ -35,6 +35,10 @@ test('pluginSessions: worktrees in order, each in tab order, then Global; unknow
   assert.deepEqual([list[3].worktreeId, list[3].worktreeName, list[3].branch], [null, null, null])
 })
 
+test('pluginSessions: no worktrees, Global sessions still listed', () => {
+  assert.deepEqual(pluginSessions(input({ worktrees: [] })).map((s) => s.terminalId), ['c'])
+})
+
 test('pluginSessions: a session listed under another worktree than its own is left out', () => {
   const list = pluginSessions(input({ terminalOrder: { w1: ['b', 'a'], w2: [], [G]: [] } }))
   assert.deepEqual(list.map((s) => s.terminalId), ['b'])
@@ -58,6 +62,7 @@ test('sessionsSource: the same array until a change; listeners hear only real ch
   state = { ...input() }
   subs.forEach((cb) => cb())
   assert.equal(heard, 0, 'an equal state is no change')
+  assert.equal(source.sessions(), first, 'still the same reference after an equal state')
   state = input({ terminals: { ...input().terminals, a: { ...input().terminals.a, status: 'done' } } })
   subs.forEach((cb) => cb())
   assert.equal(heard, 1)
@@ -68,4 +73,25 @@ test('sessionsSource: the same array until a change; listeners hear only real ch
   assert.equal(source.selected(), 'c')
   off()
   assert.equal(subs.size, 0)
+})
+
+test('sessionsSource: an identity-equal state is not derived again', () => {
+  // Counts reads of the sessions' metadata: only pluginSessions reads it, the memo's check does not.
+  let reads = 0
+  const base = input()
+  const terminals = new Proxy(base.terminals, { get: (t, k) => (reads++, t[k]) })
+  let state = { ...base, terminals }
+  const subs = new Set()
+  const source = sessionsSource(() => state, (cb) => (subs.add(cb), () => subs.delete(cb)))
+  const first = source.sessions()
+  const derived = reads
+  assert.ok(derived > 0)
+  let heard = 0
+  source.onChanged(() => heard++)
+  state = { ...state }
+  subs.forEach((cb) => cb())
+  assert.equal(source.sessions(), first)
+  assert.equal(source.selected(), 'a')
+  assert.equal(reads, derived, 'no metadata read: nothing derived again')
+  assert.equal(heard, 0)
 })
