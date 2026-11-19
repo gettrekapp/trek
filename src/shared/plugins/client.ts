@@ -9,6 +9,7 @@
 // its own.
 import { createContext, useContext, type FC } from 'react'
 import type { PluginManifest, PluginPrefValue } from './manifest.ts'
+import type { PrProvider } from './pullRequests.ts'
 import type { TicketInfo, TicketProvider } from './tickets.ts'
 
 export type { PluginPrefValue }
@@ -57,6 +58,8 @@ export interface ClientPlugin {
   manifest: PluginManifest
   /** A ticket tracker (phase 2): the window's ticket chips and link dialog go through it where the plugin is on */
   ticketProvider?: TicketProvider
+  /** A pull request host (plugins P3): the window's PR chips and dialogs go through it where the plugin is on */
+  prProvider?: PrProvider
   /** Mounted once per project window while the server has the plugin and it is on for the project */
   Runtime?: FC
   slots?: {
