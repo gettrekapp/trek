@@ -19,7 +19,7 @@ export const MOVE_STEPS = [
   { key: 'push', label: 'Push the branch to origin' },
   { key: 'histories', label: 'Copy the session histories' },
   { key: 'receive', label: 'Create the worktree on the target' },
-  { key: 'teardown', label: 'Tear down its VM and dev stack on the source' },
+  { key: 'teardown', label: 'Tear down on the source' },
   { key: 'finish', label: 'Remove the source worktree' }
 ] as const
 
