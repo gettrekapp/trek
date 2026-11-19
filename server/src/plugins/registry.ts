@@ -17,6 +17,7 @@ import {
   type PluginPresence,
   type PluginSettingValues
 } from '../../../src/shared/plugins/manifest.ts'
+import { agentProblem, type AgentProvider } from '../../../src/shared/plugins/agents.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost, WorktreeLifecycle } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
@@ -101,6 +102,39 @@ export interface PluginLifecycle {
   lifecycle: WorktreeLifecycle
 }
 
+/** An agent a set-up plugin offers (plugins A1), with what core needs of its plugin. */
+export interface PluginAgent {
+  pluginId: string
+  /** Its plugin's `projectSettings` keys: what AgentConfig.project holds */
+  projectKeys: readonly string[]
+  agent: AgentProvider
+}
+
+/** Why a plugin's agents can't be taken (plugins A1), or null. */
+function agentsRefusal(manifest: PluginManifest, agents: unknown, owners: ReadonlyMap<string, string>, suffixes: ReadonlyMap<string, string>): string | null {
+  if (agents === undefined) return null
+  // An installed plugin is a theme with no server half; its manifest's marks say it was installable.
+  if (manifest.type !== undefined || manifest.contract !== undefined) return 'an installable plugin cannot offer agents'
+  if (!Array.isArray(agents)) return 'its agentProviders must be a list'
+  const ids = new Set<string>()
+  const files = new Set<string>()
+  for (const value of agents as unknown[]) {
+    const problem = agentProblem(value)
+    if (problem) {
+      const id = (value as { id?: unknown } | null)?.id
+      return `its agent ${typeof id === 'string' ? JSON.stringify(id) : '(no id)'} ${problem}`
+    }
+    const agent = value as AgentProvider
+    if (owners.has(agent.id) || ids.has(agent.id)) return `its agent ${agent.id} has the id of another agent`
+    ids.add(agent.id)
+    if (agent.mcpFile) {
+      if (suffixes.has(agent.mcpFile.suffix) || files.has(agent.mcpFile.suffix)) return `its agent ${agent.id}'s MCP file ${agent.mcpFile.suffix} is another agent's`
+      files.add(agent.mcpFile.suffix)
+    }
+  }
+  return null
+}
+
 export interface PluginRegistry {
   /** The welcome's `plugins` */
   presence(): PluginPresence[]
@@ -123,6 +157,8 @@ export interface PluginRegistry {
   prProviders(projectId: string): PrServerProvider[]
   /** Every registered plugin's PR provider, on in a project or not: the watch checks their sign-ins */
   allPrProviders(): PrServerProvider[]
+  /** Every set-up plugin's agents (plugins A1), in registration order; the agent registry sorts them */
+  agentProviders(): PluginAgent[]
   /**
    * Every set-up plugin's worktree lifecycle, in registration order (plugins E1), on in the project
    * or not (plugins E3): a plugin switched off for a project still tears down what it made there,
@@ -190,6 +226,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const toolOwners = new Map<string, string>()
   /** A plugin project setting's key → the plugin that owns it */
   const settingOwners = new Map<string, string>()
+  /** An agent's id → the plugin that offers it (plugins A1) */
+  const agentOwners = new Map<string, string>()
+  /** An MCP file suffix → the agent that writes it (plugins A1) */
+  const mcpSuffixes = new Map<string, string>()
   /** Each plugin's abort for its running programs (host.run, host.spawn unless detached or outlive): fired by dispose */
   const aborts = new Map<string, AbortController>()
   /** Each open connection's sender, by its caller id (server.ts): what host.emitTo reaches */
@@ -430,8 +470,18 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       instance.dispose?.()
       continue
     }
+    const agentRefusal = agentsRefusal(manifest, instance.agentProviders, agentOwners, mcpSuffixes)
+    if (agentRefusal) {
+      refuse(agentRefusal)
+      instance.dispose?.()
+      continue
+    }
     for (const tool of instance.mcpTools ?? []) toolOwners.set(tool.definition.name, manifest.id)
     for (const key of keys) settingOwners.set(key, manifest.id)
+    for (const agent of instance.agentProviders ?? []) {
+      agentOwners.set(agent.id, manifest.id)
+      if (agent.mcpFile) mcpSuffixes.set(agent.mcpFile.suffix, agent.id)
+    }
     entries.set(manifest.id, { manifest, instance })
   }
 
@@ -517,6 +567,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     prProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     lifecycles: () => [...entries.values()].flatMap((e) => (e.instance.worktreeLifecycle ? [{ id: e.manifest.id, lifecycle: e.instance.worktreeLifecycle }] : [])),
     allPrProviders: () => [...entries.values()].flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
+    agentProviders: () =>
+      [...entries.values()].flatMap((e) =>
+        (e.instance.agentProviders ?? []).map((agent) => ({ pluginId: e.manifest.id, projectKeys: Object.keys(e.manifest.projectSettings ?? {}), agent }))
+      ),
     settingRules,
     settingFields: (pluginId, scope) => entries.get(pluginId)?.manifest[scope === 'repo' ? 'repoSettings' : 'branchSettings'],
     onChanged: (listener) => {

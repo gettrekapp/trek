@@ -1278,3 +1278,69 @@ test("pluginPathChecks' repo and worktree (plugins E2): core's own checks and co
   refreshes = false
   await code(() => checks.worktree('p1', 'w4', true), 'GIT_ERROR')
 })
+
+/** A well-formed agent (plugins A1); `more` overrides any field. */
+const agent = (id, more = {}) => ({
+  id,
+  label: id,
+  glyph: 'XX',
+  defaultCommand: id,
+  capabilities: { presetSessionId: true, resume: true, mcp: false, appendSystemPrompt: false, effort: false, addDirs: false, sessionMigration: false },
+  models: [],
+  efforts: [],
+  approvalModes: [],
+  statusMarkers: [],
+  command: () => id,
+  buildLaunch: () => ({ command: id, head: id, args: [] }),
+  ...more
+})
+const agentPlugin = (id, agents, more = {}) => ({ manifest: manifest(id, more), setup: () => ({ handlers: {}, agentProviders: agents }) })
+
+test("agentProviders (plugins A1): each set-up plugin's agents, with its plugin and its project settings' keys, in registration order", (t) => {
+  const { registry, warnings } = setup(t, [
+    agentPlugin('one', [agent('alpha'), agent('beta')], { projectSettings: { oneCommand: 'string' } }),
+    agentPlugin('two', [agent('gamma')]),
+    echoPlugin().plugin
+  ])
+  assert.deepEqual(
+    registry.agentProviders().map((a) => [a.pluginId, a.agent.id, a.projectKeys]),
+    [['one', 'alpha', ['oneCommand']], ['one', 'beta', ['oneCommand']], ['two', 'gamma', []]]
+  )
+  assert.deepEqual(warnings, [])
+})
+
+test("agentProviders (plugins A1): a plugin with a malformed agent, a taken id or another agent's MCP file is not loaded", (t) => {
+  const file = (suffix) => ({ mcpFile: { suffix, content: () => '{}' } })
+  const { registry, warnings } = setup(t, [
+    agentPlugin('one', [agent('alpha', file('.json'))]),
+    agentPlugin('dupe', [agent('alpha')]),
+    agentPlugin('twice', [agent('delta'), agent('delta')]),
+    agentPlugin('badid', [agent('Bad Id')]),
+    agentPlugin('nocaps', [agent('epsilon', { capabilities: { resume: true } })]),
+    agentPlugin('nolaunch', [agent('theta', { buildLaunch: undefined })]),
+    agentPlugin('samefile', [agent('zeta', file('.json'))]),
+    agentPlugin('badfile', [agent('eta', file('../x.json'))]),
+    agentPlugin('notalist', 'alpha')
+  ])
+  assert.deepEqual(registry.agentProviders().map((a) => a.agent.id), ['alpha'])
+  assert.deepEqual(registry.presence().map((p) => p.id), ['one'])
+  const expected = [
+    ['dupe', /its agent alpha has the id of another agent/],
+    ['twice', /its agent delta has the id of another agent/],
+    ['badid', /has no usable id/],
+    ['nocaps', /must say each capability/],
+    ['nolaunch', /has no command or buildLaunch/],
+    ['samefile', /MCP file \.json is another agent's/],
+    ['badfile', /suffix is not like \.json/],
+    ['notalist', /agentProviders must be a list/]
+  ]
+  for (const [id, why] of expected) {
+    assert.ok(warnings.some((w) => w.includes(`] ${id} not loaded: `) && why.test(w)), `${id}: ${warnings.join(' | ')}`)
+  }
+})
+
+test('agentProviders (plugins A1): an installable plugin (a theme manifest) offering agents is not loaded', (t) => {
+  const { registry, warnings } = setup(t, [agentPlugin('skin', [agent('alpha')], { type: 'theme', contract: 1 })])
+  assert.deepEqual(registry.agentProviders(), [])
+  assert.match(warnings.join('\n'), /skin not loaded: an installable plugin cannot offer agents/)
+})

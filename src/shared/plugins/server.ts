@@ -1,6 +1,7 @@
 // The server half of a Trek plugin (plugin system phase 1): what trek-server hands it (the host)
 // and what it gives back (its instance). A plugin's server code imports only this module, the
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
+import type { AgentProvider } from './agents.ts'
 import type { PluginManifest, PluginSettingValues } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
 import type { ParsedPr, PromptHint, PrProvider, PrView } from './pullRequests.ts'
@@ -292,6 +293,11 @@ export interface PluginInstance {
    * (plugins E3), so keep `plan` and `beforeRepoRemove` cheap where the plugin has made nothing.
    */
   worktreeLifecycle?: WorktreeLifecycle
+  /**
+   * The coding agents it offers (plugins A1): a built-in plugin's only, each id unique across the
+   * server's plugins. Core launches them in session ptys and asks them what is agent-specific.
+   */
+  agentProviders?: AgentProvider[]
   /** A value for one of the manifest's `projectSettings` keys (already the declared kind): its problem, or null */
   checkProjectSetting?(key: string, value: string): string | null
   dispose?(): void
