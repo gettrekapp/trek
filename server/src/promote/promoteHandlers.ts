@@ -53,6 +53,7 @@ import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
 import { promoteChanging as changing } from './changing.ts'
 import type { PromoteBinding } from './requests.ts'
+import { teardownNote } from '../../../src/shared/teardown.ts'
 import { assertNotTearingDown, holdWorktree, optionalTeardown, runTeardown, withTornDown } from '../teardown/teardown.ts'
 import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
 
@@ -812,7 +813,8 @@ export const promoteHandlers: Record<string, Handler> = {
       recordHistory(ctx, requireString(p.projectId, 'projectId'), checked.repo.id, checked.branch, [{ kind: 'promoted' }], binding?.attribution ?? ctx.attribution)
       return result
     } catch (err) {
-      binding?.settle({ outcome: 'failed', error: (err as Error).message.slice(0, 2000) })
+      // A failure after the teardown: the agent hears what stays torn down, as the windows say it.
+      binding?.settle({ outcome: 'failed', error: `${(err as Error).message}${teardownNote(err)}`.slice(0, 2000) })
       throw err
     }
   },

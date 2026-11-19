@@ -671,6 +671,25 @@ test('worktree.promote {teardown}: a failure after the teardown (the main checko
   assert.equal(branchOf(s.app), 'main')
 })
 
+test('worktree.promote {requestId, teardown}: a failure after the teardown settles the request with what stays torn down', async (t) => {
+  const s = await setup(t)
+  const { plugins } = probe(s.path, { during: () => writeFileSync(join(s.app, 'README'), 'one\nchanged in main\n') })
+  const window = { send() {}, event: (event, payload) => (events.push([event, payload]), true) }
+  const events = []
+  s.hub.subscribe(`project:${s.projectId}`, window)
+  s.promoteRequests.listen(s.projectId, window)
+  const asWindow = (method, params) => dispatchV2(method, params, { ...s.ctx, subscriber: window, plugins })
+  const asked = s.promoteRequests.ask(s.projectId, { worktreeId: s.worktreeId, branch: 'feat' })
+  const { requestId } = events.find(([e]) => e === 'promote.request')[1]
+  const claim = await asWindow('promote.claim', { projectId: s.projectId, requestId })
+  const r = await asWindow('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, requestId, claimToken: claim.result.claimToken, teardown: ['probe:vm'] })
+  assert.equal(r.error?.code, 'CONFLICT', JSON.stringify(r))
+  const settled = await asked
+  assert.equal(settled.outcome, 'failed')
+  assert.ok(settled.error.startsWith(r.error.message), settled.error)
+  assert.ok(settled.error.endsWith(' The teardown had already run and is not undone: Stop the VM.'), settled.error)
+})
+
 test('worktree.promote (plugins E1): a worktree being torn down is CONFLICT, with no teardown and on a dry run; its block lasts through the teardown', async (t) => {
   const s = await setup(t)
   let release
