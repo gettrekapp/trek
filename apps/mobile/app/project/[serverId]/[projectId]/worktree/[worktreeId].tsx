@@ -14,6 +14,7 @@ import {
   TEARDOWN_REQUEST_TIMEOUT_MS,
   defaultTeardown,
   teardownNote,
+  withTeardownBypass,
   teardownSentence,
   type AgentInfo,
   type Project,
@@ -224,8 +225,8 @@ export default function WorktreeScreen(): React.JSX.Element {
       } else if (!mounted.current) return
       else if (outcome.kind === 'blocked') sayBlocker(outcome.why)
       else if (outcome.kind === 'failed') {
-        // A failed teardown's text names what was already done; a failure after it gets the note.
-        const text = errorMessage(outcome.error) + teardownNote(outcome.error)
+        // A failed teardown's text names what was already done, and how to delete without it; a failure after it gets the note.
+        const text = withTeardownBypass(errorMessage(outcome.error), outcome.error, 'remove', 'phone') + teardownNote(outcome.error)
         setError(outcome.reloadFailed ? `${text}\n${RELOAD_FAILED}` : text)
       }
       else if (outcome.reloadFailed) setError(RELOAD_FAILED)

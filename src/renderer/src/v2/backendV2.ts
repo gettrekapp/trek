@@ -32,7 +32,7 @@ import { hasNormalTabs } from '../globalTabs.ts'
 import { selectionOf, selectionReporter, type SelectionState } from './uiSelection.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
-import { TEARDOWN_REQUEST_TIMEOUT_MS, promoteTeardownFailure, teardownFailed, teardownNote, tornDownBefore, type TeardownItem } from '../../../shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, promoteTeardownFailure, teardownFailed, teardownNote, tornDownBefore, withTeardownBypass, type TeardownItem } from '../../../shared/teardown.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
@@ -335,11 +335,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     const reload = async (): Promise<void> => {
       if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
     }
-    // A failed teardown's text names what was already done ("(already done: …)"); a failure after
-    // the teardown gets the note.
+    // A failed teardown's text names what was already done ("(already done: …)"), and how to go
+    // ahead without it; a failure after the teardown gets the note.
     const fail = async (err: unknown): Promise<void> => {
       await reload()
-      await deps.showError(REMOVE_FAILED, errorText(err) + teardownNote(err))
+      await deps.showError(REMOVE_FAILED, withTeardownBypass(errorText(err), err, 'remove', 'desktop') + teardownNote(err))
     }
     // The ids for the forced retry: the same ones, unless the refusal came after they ran.
     let retryIds: readonly string[] = teardown
@@ -637,9 +637,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             return { outcome: 'promoted', worktreeId: result.worktreeId }
           } catch (err) {
             if (teardownFailed(err)) {
-              // Its text names what was already done.
+              // Its text names what was already done; the dialog says how to go ahead without it.
               const error = promoteTeardownFailure(errorText(err))
-              await deps.showError(PROMOTE_FAILED, error)
+              await deps.showError(PROMOTE_FAILED, withTeardownBypass(error, err, 'promote', 'desktop'))
               return { outcome: 'failed', error }
             }
             return failed(err, teardownNote(err))

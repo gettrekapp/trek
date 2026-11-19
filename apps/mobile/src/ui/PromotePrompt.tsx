@@ -13,6 +13,7 @@ import {
   promoteTeardownFailure,
   teardownFailed,
   teardownNote,
+  withTeardownBypass,
   teardownSentence,
   type Project,
   type PromoteRequestEvent,
@@ -194,7 +195,7 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     } catch (err) {
       // The desktop's wording: a failed teardown's text names what was already done; a failure after it gets the note.
       const text = errorMessage(err)
-      const failure = teardownFailed(err) ? promoteTeardownFailure(text) : `Could not promote: ${text}${teardownNote(err)}`
+      const failure = teardownFailed(err) ? withTeardownBypass(promoteTeardownFailure(text), err, 'promote', 'phone') : `Could not promote: ${text}${teardownNote(err)}`
       setPrompt({ kind: 'result', request, failed: true, text: failure })
     } finally {
       running.current = false

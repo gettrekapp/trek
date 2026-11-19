@@ -25,7 +25,7 @@ import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
 import type { UiSelections } from '../ui/selections.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
-import type { TeardownItem } from '../../../src/shared/teardown.ts'
+import { defaultTeardown, teardownFailed, withTeardownBypass, type TeardownItem } from '../../../src/shared/teardown.ts'
 import { assertNotLoaded } from '../worktreeHandlers.ts'
 import type { ToolDefinition } from './protocol.ts'
 import type { PluginRegistry } from '../plugins/registry.ts'
@@ -1007,7 +1007,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (args.teardown !== false && !worktree.isMain) {
           assertNotLoaded(ctx, worktree.path)
           const plan = (await v2('worktree.teardownPlan', { worktreeId: worktree.id, op: 'remove' })) as { items: TeardownItem[] }
-          teardown = plan.items.filter((item) => item.checked).map((item) => item.id)
+          teardown = defaultTeardown(plan.items)
         }
         let tornDown: string[] = []
         try {
@@ -1017,6 +1017,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           if ((err as { details?: { reason?: string } }).details?.reason === 'dirty') {
             throw codedError('GIT_ERROR', `${worktree.path} has uncommitted or untracked changes; pass force: true to discard them`, { reason: 'dirty' })
           }
+          if (err instanceof Error && teardownFailed(err)) err.message = withTeardownBypass(err.message, err, 'remove', 'mcp')
           throw err
         }
         // What the server tore down (an item gone meanwhile is not listed).

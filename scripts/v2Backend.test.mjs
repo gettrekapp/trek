@@ -756,7 +756,7 @@ test('remove on a server with worktreeTeardown: a failure after the teardown say
   const own = new CodedError('TOOL_ERROR', "Couldn't stop it: no (already done: X)", { reason: 'teardown', tornDown: ['X'] })
   const failed = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS }, 'worktree.remove': own } })
   await failed.backend.worktrees.remove(feat, undefined)
-  assert.deepEqual(failed.ui.at(-1), ['error', 'Could not delete worktree', own.message])
+  assert.deepEqual(failed.ui.at(-1), ['error', 'Could not delete worktree', `${own.message}. Untick it in the confirm to go ahead without it.`], 'and how to go ahead without it')
   // git refused files that appeared while the items ran: the forced retry sends none of them again.
   const appeared = new CodedError('GIT_ERROR', "fatal: '/r-feat' contains modified or untracked files, use --force", { reason: 'dirty', tornDown: [ITEMS[0].label] })
   let n = 0
@@ -1068,7 +1068,7 @@ test('worktrees.promote on a server with worktreeTeardown: a failure after the t
   const outcome = await broke.backend.worktrees.promote(FEAT, undefined)
   const error = `The teardown before the promote failed: ${own.message}. Nothing was promoted.`
   assert.deepEqual(outcome, { outcome: 'failed', error })
-  assert.equal(broke.ui.find((u) => u[0] === 'error')[2], error)
+  assert.equal(broke.ui.find((u) => u[0] === 'error')[2], `${error} Untick it in the confirm to go ahead without it.`, 'the dialog says how to go ahead without it')
 })
 
 test('worktrees.promote: declined sends nothing more; a refused plan is shown and nothing is torn down', async () => {

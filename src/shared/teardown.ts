@@ -78,3 +78,18 @@ export function teardownNote(err: unknown): string {
 export function promoteTeardownFailure(text: string): string {
   return `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
 }
+
+/** Where a failed teardown is reported: the phone has no checkbox (its question sends the defaults), so it points at the desktop's; MCP has `teardown: false`. */
+export type TeardownBypassClient = 'desktop' | 'phone' | 'mcp'
+
+/**
+ * `text`, a failed remove's or promote's error, with how to go ahead without the teardown when the
+ * teardown itself failed (teardownFailed(err)); as it is otherwise.
+ */
+export function withTeardownBypass(text: string, err: unknown, op: 'remove' | 'promote', client: TeardownBypassClient): string {
+  if (!teardownFailed(err)) return text
+  if (client === 'mcp') return `${text}; pass teardown: false to ${op} it without tearing down`
+  const sentence = /[.!?]$/.test(text) ? text : `${text}.`
+  if (client === 'desktop') return `${sentence} Untick it in the confirm to go ahead without it.`
+  return `${sentence} To ${op === 'remove' ? 'delete' : 'promote'} it without that step, untick it in the desktop's confirm.`
+}

@@ -32,7 +32,7 @@ import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '.
 import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../apps/mobile/src/state/teardown.ts'
-import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, teardownSentence } from '../src/shared/teardown.ts'
+import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, teardownSentence, withTeardownBypass } from '../src/shared/teardown.ts'
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
@@ -1163,6 +1163,18 @@ test('teardown (plugins E1): a failed teardown before a promote, with a full sto
   assert.equal(promoteTeardownFailure('stack.sh exited with code 1'), 'The teardown before the promote failed: stack.sh exited with code 1. Nothing was promoted.')
   assert.equal(promoteTeardownFailure('stack.sh failed.'), 'The teardown before the promote failed: stack.sh failed. Nothing was promoted.')
   assert.equal(promoteTeardownFailure('Is it running?'), 'The teardown before the promote failed: Is it running? Nothing was promoted.')
+})
+
+test('teardown (plugins E1): a failed teardown says how to go ahead without it, by where it is reported', () => {
+  const own = Object.assign(new Error("Couldn't tear down the dev stack: no"), { code: 'TOOL_ERROR', details: { reason: 'teardown', tornDown: [] } })
+  const text = "Couldn't tear down the dev stack: no"
+  assert.equal(withTeardownBypass(text, own, 'remove', 'phone'), "Couldn't tear down the dev stack: no. To delete it without that step, untick it in the desktop's confirm.")
+  assert.equal(withTeardownBypass('Nothing was promoted.', own, 'promote', 'phone'), "Nothing was promoted. To promote it without that step, untick it in the desktop's confirm.")
+  assert.equal(withTeardownBypass(text, own, 'remove', 'desktop'), "Couldn't tear down the dev stack: no. Untick it in the confirm to go ahead without it.")
+  assert.equal(withTeardownBypass(text, own, 'remove', 'mcp'), "Couldn't tear down the dev stack: no; pass teardown: false to remove it without tearing down")
+  const after = Object.assign(new Error('git failed'), { code: 'GIT_ERROR', details: { tornDown: ['Tear down the dev stack'] } })
+  for (const client of ['phone', 'desktop', 'mcp']) assert.equal(withTeardownBypass('git failed', after, 'remove', client), 'git failed', 'not for a failure after the teardown')
+  assert.equal(withTeardownBypass('plain', new Error('plain'), 'promote', 'desktop'), 'plain')
 })
 
 test("teardown (plugins E1): the phone's question names what stays running, as it is not sent", () => {

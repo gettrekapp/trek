@@ -1316,7 +1316,7 @@ test('remove_worktree (plugins E1): a loaded worktree is refused before its plan
   await assert.rejects(s.call('remove_worktree', { worktree: 'feat/a' }), (err) => {
     assert.equal(err.details?.reason, 'teardown')
     assert.match(err.message, /Couldn't drop the cache: it is stuck/)
-    assert.match(err.message, /\(already done: Stop the VM\)/)
+    assert.match(err.message, /\(already done: Stop the VM\); pass teardown: false to remove it without tearing down$/)
     return true
   })
   assert.ok(existsSync(created.path))

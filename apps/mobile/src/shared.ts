@@ -22,7 +22,7 @@ export type { HistoryActor, HistoryAddedEvent, HistoryEvent, HistoryPage, Histor
 export { actorLabel, describeEvent, describeParts, historyDay, mergeHistory } from '../../../src/shared/historyText.ts'
 export type { HistoryPart } from '../../../src/shared/historyText.ts'
 export type { PromoteRequestEvent, PromoteSettledEvent } from '../../../src/shared/promote.ts'
-export { TEARDOWN_REQUEST_TIMEOUT_MS, WORKTREE_OPS, defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, teardownSentence, tornDownBefore } from '../../../src/shared/teardown.ts'
+export { TEARDOWN_REQUEST_TIMEOUT_MS, WORKTREE_OPS, defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, teardownSentence, tornDownBefore, withTeardownBypass } from '../../../src/shared/teardown.ts'
 export type { TeardownItem, WorktreeOp } from '../../../src/shared/teardown.ts'
 export type { UiFocusEvent, UiReportParams } from '../../../src/shared/ui.ts'
 export { ALL_PUSH_KINDS_ON, PUSH_GROUPS } from '../../../src/shared/push.ts'
