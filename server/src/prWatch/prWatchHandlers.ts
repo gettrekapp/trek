@@ -1,7 +1,8 @@
 // The pull request watch's v2 methods (phase 5c-1): turning a branch's watch on or off, and
-// dismissing a worktree's notice. The `prWatch` capability says gh is signed in on the server.
+// dismissing a worktree's notice. The `prWatch` capability says some PR provider is signed in on the
+// server; turning a watch on needs the one that owns the branch's link (plugins P3).
 import type { BranchData } from '../../../src/shared/model/types'
-import { watchableUrl } from '../../../src/shared/prWatch.ts'
+import { prOwner } from '../../../src/shared/plugins/pullRequests.ts'
 import { recordHistory } from '../history/record.ts'
 import { codedError } from '../errors.ts'
 import { repoIn } from '../projects/model.ts'
@@ -10,24 +11,28 @@ import type { V2Context } from '../v2.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
-export const NOT_SIGNED_IN = 'gh is not installed or not signed in on the Trek server’s machine (run `gh auth login` there as the server’s user)'
+/** A provider's sign-in is missing; how to sign in is the plugin's to say (its README) */
+export const notSignedIn = (signInName: string): string =>
+  `${signInName} is not installed or not signed in on the Trek server’s machine (sign it in there as the server’s user)`
 
 export const prWatchHandlers: Record<string, Handler> = {
   /**
-   * On: the branch's linked PR must be a github.com pull URL, and gh signed in. Already on, it
-   * stays as it is (its `seen` kept). Off works whatever gh says.
+   * On: the branch's linked PR must be owned by a PR provider on for the project, and that
+   * provider signed in. Already on, it stays as it is (its `seen` kept). Off works whatever the
+   * provider says.
    */
   'branch.setPrWatch': (p, ctx) => {
     const branch = requireBranch(p.branch)
     const watch = requireBoolean(p.watch, 'watch')
-    if (watch && !ctx.prWatch?.available()) throw codedError('TOOL_ERROR', NOT_SIGNED_IN)
     const { repoId, changed } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
       const changed = watch !== (data.prWatch !== undefined)
       if (watch) {
         if (!data.pr) throw codedError('BAD_REQUEST', `${branch} has no linked pull request`)
-        if (!watchableUrl(data.pr)) throw codedError('BAD_REQUEST', `${data.pr} is not a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<number>)`)
+        const owner = prOwner(ctx.plugins?.prProviders(d.id) ?? [], data.pr)
+        if (!owner) throw codedError('BAD_REQUEST', `no pull request provider is on for ${data.pr} in this project (Settings → Plugins)`)
+        if (!ctx.prWatch?.availableFor(owner.id)) throw codedError('TOOL_ERROR', notSignedIn(owner.signInName))
         data.prWatch ??= {}
       } else delete data.prWatch
       if (Object.keys(data).length === 0) delete repo.branchData[branch]

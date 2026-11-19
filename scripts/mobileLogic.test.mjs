@@ -1875,7 +1875,8 @@ test('pr watch: the switch is offered for a linked pull request when gh is signe
 test("pr watch: the server's refusals of a watch, as the section's error line shows them", () => {
   const data = {}
   const project = { id: 'p1', repositories: [{ id: 'r1', branchData: { feat: data }, worktrees: [] }] }
-  const ctx = (signedIn) => ({ prWatch: { available: () => signedIn, pollSoon() {}, forget() {} }, projects: { apply: (_id, fn) => fn(project) } })
+  const github = createGithubPrProvider(async () => '')
+  const ctx = (signedIn) => ({ prWatch: { available: () => signedIn, availableFor: () => signedIn, pollSoon() {}, forget() {} }, plugins: { prProviders: () => [github] }, projects: { apply: (_id, fn) => fn(project) } })
   const call = (signedIn, watch) => {
     try {
       prWatchHandlers['branch.setPrWatch']({ projectId: 'p1', repoId: 'r1', branch: 'feat', watch }, ctx(signedIn))
@@ -1885,16 +1886,17 @@ test("pr watch: the server's refusals of a watch, as the section's error line sh
       return new ClientError(wire.code, wire.message, wire.details)
     }
   }
-  const signedOut = call(false, true)
-  assert.equal(signedOut.code, 'TOOL_ERROR')
-  assert.match(signedOut.message, /^gh is not installed or not signed in on the Trek server/)
   const noPr = call(true, true)
   assert.equal(noPr.code, 'BAD_REQUEST')
   assert.equal(noPr.message, 'feat has no linked pull request')
+  data.pr = 'https://github.com/o/r/pull/9'
+  const signedOut = call(false, true)
+  assert.equal(signedOut.code, 'TOOL_ERROR')
+  assert.match(signedOut.message, /^gh is not installed or not signed in on the Trek server/)
   data.pr = 'https://dev.azure.com/o/p/_git/r/pullrequest/9'
-  const notGitHub = call(true, true)
-  assert.equal(notGitHub.code, 'BAD_REQUEST')
-  assert.match(notGitHub.message, /is not a GitHub pull request URL/)
+  const notOwned = call(true, true)
+  assert.equal(notOwned.code, 'BAD_REQUEST')
+  assert.match(notOwned.message, /no pull request provider is on for/)
 })
 
 test('pr watch: a notice on a card is one line; its age is on the phone\'s clock', () => {
@@ -1948,6 +1950,7 @@ import { automationHandlers } from '../server/src/automations/automationHandlers
 import { MAX_AUTOMATION_NAME as SERVER_MAX_AUTOMATION_NAME, MAX_AUTOMATION_PROMPT } from '../server/src/automations/model.ts'
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { historyHandlers } from '../server/src/history/historyHandlers.ts'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 import { HISTORY_KINDS } from '../src/shared/model/history.ts'
 import { FOREGROUND_CHECK_INTERVAL_MS, bannerVisible, pendingKey, shouldCheck, shouldFetch } from '../apps/mobile/src/logic/updates.ts'
 

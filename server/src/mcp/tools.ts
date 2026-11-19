@@ -37,8 +37,8 @@ import { actorLabel, describeEvent } from '../../../src/shared/historyText.ts'
 import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
-import { watchableUrl } from '../../../src/shared/prWatch.ts'
-import { NOT_SIGNED_IN } from '../prWatch/prWatchHandlers.ts'
+import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
+import { prOwner } from '../../../src/shared/plugins/pullRequests.ts'
 import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
 import { checkSource } from '../review/draft.ts'
@@ -1168,18 +1168,20 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { branch } = branchOf(project, args.worktree)
         const data = branchData(repo, branch)
         if (!data.pr) throw bad(`${branch} has no linked pull request (set_worktree_pull_request links one)`)
-        const pr = watchableUrl(data.pr)
-        if (!pr) throw bad(`${data.pr} is not a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<number>)`)
+        const providers = deps.plugins?.prProviders(project.id) ?? []
+        const provider = prOwner(providers, data.pr)
+        const parsed = provider?.parse(data.pr)
+        if (!provider || !parsed) throw bad(`no pull request provider is on for ${data.pr} in this project (Settings → Plugins)`)
         const watcher = deps.prWatch
-        if (!watcher?.available()) throw codedError('TOOL_ERROR', NOT_SIGNED_IN)
-        const view = await watcher.read(pr).catch((err: unknown) => {
-          throw codedError('TOOL_ERROR', `Could not read ${pr.url}: ${messageOf(err)}`)
+        if (!watcher?.availableFor(provider.id)) throw codedError('TOOL_ERROR', notSignedIn(provider.signInName))
+        const view = await watcher.read(provider, parsed).catch((err: unknown) => {
+          throw codedError('TOOL_ERROR', `Could not read ${parsed.url}: ${messageOf(err)}`)
         })
         const notice = worktree.prNotice
         return {
           branch,
-          pullRequest: pr.url,
-          number: pr.number,
+          pullRequest: parsed.url,
+          number: parsed.number,
           state: view.state.toLowerCase(),
           mergeable: view.mergeable.toLowerCase(),
           checks: view.checks,

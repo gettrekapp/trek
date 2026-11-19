@@ -12,9 +12,9 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { resetRuntime } from '../server/src/projects/model.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 import { FAILS_BEFORE_NOTICE, PrWatcher, pollMsFromEnv, watchTargets } from '../server/src/prWatch/watcher.ts'
-import { ghBinary, ghCommand, ghRunner } from '../server/src/prWatch/gh.ts'
-import { posixOnly, removeDir } from './testPlatform.mjs'
-import { prQueryArgs } from '../src/shared/prWatch.ts'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
+import { prQueryArgs } from '../plugins/github/server/query.ts'
+import { removeDir } from './testPlatform.mjs'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { MAX_QUEUE_LENGTH } from '../server/src/sessions/limits.ts'
@@ -54,7 +54,17 @@ let historyCount = 0
 const historyRoot = () => (historyDirectory ??= mkdtempSync(join(tmpdir(), 'trek-prwatch-history-')))
 after(() => { if (historyDirectory) removeDir(historyDirectory) })
 
-function setup(initial = project(), ghAnswers = []) {
+/**
+ * A github provider over a gh the test can swap: `fake.gh` is what it calls (the provider keeps the
+ * runner it was made with, so a test changes `fake.gh` rather than the watcher's deps).
+ */
+function githubOver(gh) {
+  const fake = { gh }
+  return { fake, github: createGithubPrProvider((args, signal) => fake.gh(args, signal)) }
+}
+const only = (provider) => ({ forProject: () => [provider], all: () => [provider] })
+
+function setup(initial = project(), ghAnswers = [], { providers } = {}) {
   const hub = new TopicHub()
   const saved = []
   const projects = new ProjectState({ hub, store: { save: (p) => saved.push(structuredClone(p)), remove() {} }, onSummariesChange() {} }, [initial])
@@ -82,8 +92,9 @@ function setup(initial = project(), ghAnswers = []) {
   let clock = 1000
   const jobs = []
   const history = new HistoryStore(join(historyRoot(), `h${++historyCount}`))
-  const watcher = new PrWatcher({ projects, sessions, history, gh, now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
-  return { history, hub, projects, saved, queued, calls, watcher, jobs, answers, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
+  const { fake, github } = githubOver(gh)
+  const watcher = new PrWatcher({ projects, sessions, history, providers: providers ?? only(github), now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
+  return { history, hub, projects, saved, queued, calls, watcher, jobs, answers, fake, github, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
 /** gh's answer to PR_QUERY (`gh api graphql`), from the flat fields the tests vary. */
@@ -109,71 +120,25 @@ const view = (over = {}) => {
   }
 }
 const failing = { statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE' }] }
-const target = { projectId: 'p1', repoId: 'r1', branch: 'feature', url: URL, number: 12, owner: 'acme', repo: 'app' }
+const target = { projectId: 'p1', repoId: 'r1', branch: 'feature', url: URL, number: 12, label: '#12', providerId: 'github' }
 const watching = { prWatch: { seen: { checks: 'aaa pending', conflict: false } } }
-
-test('ghBinary: gh on the PATH only when TREK_SERVER_GH is unset; an absolute path is taken; anything else fails closed', async () => {
-  assert.equal(ghBinary(undefined), 'gh')
-  assert.equal(ghBinary('/tmp/stub/gh'), '/tmp/stub/gh')
-  for (const v of ['', 'gh', './gh', 'stub/gh']) assert.equal(ghBinary(v), null, String(v))
-  // The fail-closed runner never runs anything: gh reads as not installed.
-  await assert.rejects(ghRunner(null)(['auth', 'status']), /gh is not installed on the server/)
-})
-
-test('ghCommand: a Windows Node-script stub runs through this binary with ELECTRON_RUN_AS_NODE=1, anything else as it is', () => {
-  // The Local server runs as Trek.exe with ELECTRON_RUN_AS_NODE, and removes it from its own env
-  // (for its sessions): without it again, Trek.exe would start the Trek app, not run the script.
-  const env = { PATH: 'C:\\bin', TREK_X: 'kept' }
-  const win = ghCommand('C:\\stubs\\gh.mjs', ['auth', 'status'], 'win32', env)
-  assert.deepEqual(win, {
-    viaNode: true,
-    args: ['C:\\stubs\\gh.mjs', 'auth', 'status'],
-    env: { PATH: 'C:\\bin', TREK_X: 'kept', GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1', ELECTRON_RUN_AS_NODE: '1' }
-  })
-  assert.equal(ghCommand('C:\\stubs\\gh.js', [], 'win32', env).env.ELECTRON_RUN_AS_NODE, '1')
-  // The real gh (or any other program), and every stub off Windows: run as it is, without the variable.
-  for (const [binary, platform] of [['gh', 'win32'], ['C:\\Program Files\\GitHub CLI\\gh.exe', 'win32'], ['/tmp/stub/gh.mjs', 'darwin'], ['/usr/bin/gh', 'linux']]) {
-    const c = ghCommand(binary, ['api'], platform, env)
-    assert.deepEqual([c.viaNode, c.args, 'ELECTRON_RUN_AS_NODE' in c.env, c.env.GH_PAGER], [false, ['api'], false, 'cat'], `${binary} on ${platform}`)
-  }
-  assert.equal('ELECTRON_RUN_AS_NODE' in env, false, 'the env given is not changed')
-})
-
-test('ghRunner on Windows: a stub given as a Node script runs with this Node (Windows has no sh stubs)', async (t) => {
-  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
-  t.after(() => removeDir(dir))
-  const stub = join(dir, 'gh.mjs')
-  writeFileSync(stub, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
-  assert.equal(await ghRunner(stub, 'win32')(['api', 'graphql', '-f', 'query=x y']), JSON.stringify(['api', 'graphql', '-f', 'query=x y']))
-})
-
-test('ghRunner elsewhere: TREK_SERVER_GH runs as it is, whatever its extension', { skip: posixOnly('an executable with a shebang') }, async (t) => {
-  const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
-  t.after(() => removeDir(dir))
-  const stub = join(dir, 'gh.js')
-  writeFileSync(stub, '#!/bin/sh\necho direct\n')
-  chmodSync(stub, 0o755)
-  assert.equal((await ghRunner(stub, 'darwin')(['auth', 'status'])).trim(), 'direct')
-})
 
 test('pollMsFromEnv takes whole milliseconds, at least 1000', () => {
   assert.equal(pollMsFromEnv('1500'), 1500)
   for (const v of [undefined, '', '999', '1.5e3', 'abc', '-2000']) assert.equal(pollMsFromEnv(v), undefined, String(v))
 })
 
-test('watchTargets: watched branches checked out in a worktree, with a github.com pull URL', () => {
-  assert.deepEqual(watchTargets([project()]), [target])
-  assert.deepEqual(watchTargets([project({ prWatch: null })]), [])
-  assert.deepEqual(watchTargets([project({ pr: 'https://example.com/x' })]), [])
+test('watchTargets: watched branches checked out in a worktree, with a link a provider on for the project owns', () => {
+  const { github } = githubOver(async () => '')
+  const on = () => [github]
+  assert.deepEqual(watchTargets([project()], on), [target])
+  assert.deepEqual(watchTargets([project({ prWatch: null })], on), [])
+  assert.deepEqual(watchTargets([project({ pr: 'https://example.com/x' })], on), [])
+  assert.deepEqual(watchTargets([project({ pr: 'https://example.com/x/pull/1' })], on), [], 'a pull link no provider owns')
+  assert.deepEqual(watchTargets([project()], () => []), [], 'no provider on for the project')
   const gone = project()
   gone.repositories[0].worktrees[1].missing = true
-  assert.deepEqual(watchTargets([gone]), [])
+  assert.deepEqual(watchTargets([gone], on), [])
 })
 
 test('the first poll is the baseline: saved, nothing queued, no notice', async () => {
@@ -181,7 +146,7 @@ test('the first poll is the baseline: saved, nothing queued, no notice', async (
   await s.watcher.ready
   assert.equal(s.watcher.available(), true)
   await s.watcher.poll(target)
-  assert.deepEqual(s.calls.at(-1), prQueryArgs(target))
+  assert.deepEqual(s.calls.at(-1), prQueryArgs({ owner: 'acme', repo: 'app', number: 12 }))
   assert.equal(s.calls.at(-1)[0], 'api')
   assert.deepEqual(s.data().prWatch, { seen: { checks: 'aaa failing', conflict: false } })
   assert.equal(s.saved.length, 1, 'the baseline is saved, so a restart compares with it')
@@ -236,7 +201,7 @@ test('merged: reported, then the watch turns itself off (the PR link stays)', as
   assert.deepEqual(s.data(), { pr: URL })
   assert.match(s.queued[0].text, /It was merged\./)
   assert.equal(s.worktree().prNotice.text, 'Merged — prompt queued for Claude')
-  assert.deepEqual(watchTargets(s.projects.all()), [])
+  assert.deepEqual(watchTargets(s.projects.all(), () => [s.github]), [])
 })
 
 test('a gh failure leaves the watch as it was, is logged once while it lasts, and does not re-check the sign-in', async (t) => {
@@ -312,8 +277,8 @@ test('a failure that looks like sign-in re-checks it; the checks running at once
   const gate = new Promise((r) => (release = r))
   const changes = []
   s.watcher.deps.onAvailability = (a) => changes.push(a)
-  const gh = s.watcher.deps.gh
-  s.watcher.deps.gh = async (args, signal) => {
+  const gh = s.fake.gh
+  s.fake.gh = async (args, signal) => {
     if (args[0] !== 'auth') return gh(args, signal)
     s.calls.push(args)
     await gate
@@ -338,15 +303,16 @@ test('the sign-in is re-checked on its own timer, signed in or not, so a sign-ou
   const calls = []
   const changes = []
   const jobs = []
+  const { github } = githubOver(async (args) => {
+    calls.push(args[0])
+    if (args[0] === 'auth' && !signedIn) throw new Error('not logged in')
+    return JSON.stringify(view())
+  })
   const watcher = new PrWatcher({
     projects,
     sessions: { enqueue() {}, refreshAttention() {} },
     onAvailability: (a) => changes.push(a),
-    gh: async (args) => {
-      calls.push(args[0])
-      if (args[0] === 'auth' && !signedIn) throw new Error('not logged in')
-      return JSON.stringify(view())
-    },
+    providers: only(github),
     pollMs: 1000,
     recheckMs: 600_000,
     schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} })
@@ -368,7 +334,7 @@ test('a watch turned off (or a different PR linked) while gh answered is left al
   await s.watcher.ready
   let release
   const slow = new Promise((r) => (release = r))
-  s.watcher.deps.gh = async () => {
+  s.fake.gh = async () => {
     await slow
     return JSON.stringify(view(failing))
   }
@@ -386,15 +352,16 @@ test('gh not signed in: not available, and rounds poll nothing until a sign-in c
   let signedIn = false
   const calls = []
   const changes = []
+  const { fake, github } = githubOver(async (args) => {
+    calls.push(args[0])
+    if (args[0] === 'auth' && !signedIn) throw new Error('not logged in')
+    return JSON.stringify(view())
+  })
   const watcher = new PrWatcher({
     projects,
     sessions: { enqueue() {}, refreshAttention() {} },
     onAvailability: (a) => changes.push(a),
-    gh: async (args) => {
-      calls.push(args[0])
-      if (args[0] === 'auth' && !signedIn) throw new Error('not logged in')
-      return JSON.stringify(view())
-    },
+    providers: only(github),
     schedule: () => ({ cancel() {} })
   })
   await watcher.ready
@@ -409,7 +376,7 @@ test('gh not signed in: not available, and rounds poll nothing until a sign-in c
   assert.deepEqual(changes, [true], 'told once, when it changed (not at the first, signed-out answer)')
   // A failed poll that looks like sign-in re-checks: signed out again is told too.
   signedIn = false
-  watcher.deps.gh = async (args) => {
+  fake.gh = async (args) => {
     calls.push(args[0])
     throw new Error('HTTP 401: Bad credentials')
   }
@@ -423,7 +390,7 @@ test('a poll asked for while one runs is skipped; a PR re-linked meanwhile gets 
   let release
   const gate = new Promise((r) => (release = r))
   const asked = []
-  s.watcher.deps.gh = async (args) => {
+  s.fake.gh = async (args) => {
     asked.push(args.at(-1))
     await gate
     return JSON.stringify(view({ number: Number(args.at(-1).slice('number='.length)) }))
@@ -480,7 +447,7 @@ test('the worktree gone while gh answered: nothing reported, and what it saw doe
   await s.watcher.ready
   let release
   const gate = new Promise((r) => (release = r))
-  s.watcher.deps.gh = async () => {
+  s.fake.gh = async () => {
     await gate
     return JSON.stringify(view(failing))
   }
@@ -499,7 +466,7 @@ test('stop() during a poll kills gh, and nothing is applied, logged or re-checke
   const s = setup(project(watching))
   await s.watcher.ready
   let aborted = false
-  s.watcher.deps.gh = (args, signal) =>
+  s.fake.gh = (args, signal) =>
     new Promise((_, reject) => {
       s.calls.push(args)
       signal.addEventListener('abort', () => {
@@ -567,6 +534,7 @@ function ctxFor(initial, { available = true } = {}) {
   const forgot = []
   const prWatch = {
     available: () => available,
+    availableFor: () => available,
     pollSoon: (...a) => polled.push(a),
     forget: (...a) => forgot.push(a),
     dismiss: (projectId, worktreeId) => {
@@ -574,11 +542,13 @@ function ctxFor(initial, { available = true } = {}) {
       projects.apply(projectId, (d) => delete d.repositories[0].worktrees[1].prNotice, { persist: false })
     }
   }
-  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, sessions: { refreshAttention() {} } })
+  const githubPrsServer = createGithubPrProvider(async () => '')
+  const plugins = { prProviders: () => [githubPrsServer] }
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, plugins, sessions: { refreshAttention() {} } })
   return { call, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
-test('branch.setPrWatch: on needs gh and a github.com PR; on twice keeps what it saw; off always works', () => {
+test('branch.setPrWatch: on needs a provider that owns the link, signed in; on twice keeps what it saw; off always works', () => {
   const c = ctxFor(project({ prWatch: null }))
   assert.deepEqual(c.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }), { ok: true, result: null })
   assert.deepEqual(c.data(), { pr: URL, prWatch: {} })
@@ -594,7 +564,9 @@ test('branch.setPrWatch: on needs gh and a github.com PR; on twice keeps what it
   const noPr = ctxFor(project({ prWatch: null, pr: null }))
   assert.equal(noPr.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error.code, 'BAD_REQUEST')
   const odd = ctxFor(project({ prWatch: null, pr: 'https://example.com/pr/1' }))
-  assert.match(odd.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error.message, /not a GitHub pull request URL/)
+  const oddError = odd.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error
+  assert.equal(oddError.code, 'BAD_REQUEST')
+  assert.match(oddError.message, /no pull request provider is on for/)
   const signedOut = ctxFor(project(), { available: false })
   assert.equal(signedOut.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error.code, 'TOOL_ERROR')
   assert.deepEqual(signedOut.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: false }), { ok: true, result: null })
@@ -642,12 +614,12 @@ test('history: a closed PR records prWatch.off closed; a watch for another PR ur
   assert.deepEqual(other.history.list('p1', 'r1', 'feature').events, [])
 })
 
-const PR = { url: 'https://github.com/o/r/pull/12', number: 12, owner: 'o', repo: 'r' }
+const PR = { url: 'https://github.com/o/r/pull/12', number: 12, label: '#12' }
 
 test('read: the pull request now, with the watch\'s query; nothing a watch remembers changes', async () => {
   const s = setup(project(), [view({ mergeable: 'CONFLICTING', reviews: [{ author: { login: 'rev' }, submittedAt: '2026-01-02T03:04:05Z' }] })])
   const before = structuredClone(s.data())
-  const got = await s.watcher.read(PR)
+  const got = await s.watcher.read(s.github, PR)
   assert.deepEqual([got.number, got.state, got.mergeable, got.checks, got.commentTimes], [12, 'OPEN', 'CONFLICTING', 'none', ['2026-01-02T03:04:05Z']])
   const call = s.calls.filter((a) => a[0] === 'api').at(-1)
   assert.ok(call.includes('owner=o') && call.includes('name=r') && call.includes('number=12'))
@@ -658,20 +630,99 @@ test('read: the pull request now, with the watch\'s query; nothing a watch remem
 
 test('read: callers for the same pull request while one runs share one gh call', async () => {
   const s = setup(project(), [view()])
-  const [a, b] = await Promise.all([s.watcher.read(PR), s.watcher.read(PR)])
+  const [a, b] = await Promise.all([s.watcher.read(s.github, PR), s.watcher.read(s.github, PR)])
   assert.equal(a, b)
   assert.equal(s.polls(), 1)
   // Once it settled, the next read asks gh again.
   s.answers.push(view({ state: 'MERGED' }))
-  assert.equal((await s.watcher.read(PR)).state, 'MERGED')
+  assert.equal((await s.watcher.read(s.github, PR)).state, 'MERGED')
   assert.equal(s.polls(), 2)
 })
 
 test('read: a gh failure rejects with its first line and raises no notice', async () => {
   const s = setup(project(), [new Error('HTTP 502: bad gateway\nmore detail')])
-  await assert.rejects(s.watcher.read(PR), (e) => e.message === 'HTTP 502: bad gateway')
+  await assert.rejects(s.watcher.read(s.github, PR), (e) => e.message === 'HTTP 502: bad gateway')
   assert.equal(s.worktree().prNotice, undefined)
   // The failed read is not kept: the next one asks again.
   s.answers.push(view())
-  assert.equal((await s.watcher.read(PR)).state, 'OPEN')
+  assert.equal((await s.watcher.read(s.github, PR)).state, 'OPEN')
+})
+
+test('a second provider: its links are polled through it, its hint goes into the prompt, its sign-in is its own', async () => {
+  const EX = 'https://code.example/app/pr/5'
+  const reads = []
+  const example = {
+    id: 'example', hint: 'an Example link', signInName: 'example-cli',
+    parse: (i) => (i === EX ? { url: EX, number: 5, label: '!5' } : null),
+    owns: (u) => u === EX,
+    available: async () => true,
+    read: async (pr) => { reads.push(pr.url); return { number: 5, state: 'OPEN', mergeable: 'MERGEABLE', headSha: 'h1', checks: reads.length === 1 ? 'pending' : 'failing', failed: reads.length === 1 ? [] : ['build'], commentTimes: [] } },
+    headBranch: async () => null,
+    fetchRef: (n) => `refs/example/${n}`,
+    promptHint: { checks: 'Run `ex checks {url}`', comments: 'Run `ex comments {url}`' }
+  }
+  const s = setup(project({ pr: EX }), [], { providers: only(example) })
+  await s.watcher.checkSignIn()
+  await s.watcher.round()
+  await s.watcher.round()
+  assert.deepEqual(reads, [EX, EX])
+  assert.match(s.queued[0].text, /^Pull request !5 \(https:\/\/code\.example\/app\/pr\/5\) changed:\n- Checks failed: build\. Run `ex checks https:\/\/code\.example\/app\/pr\/5`, fix the cause, and push\.$/)
+  assert.equal(s.worktree().prNotice.title, 'PR !5')
+})
+
+/** A made-up provider owning `url`, signed in or not, recording what it reads. */
+function fakeProvider(id, url, signedIn, reads) {
+  return {
+    id, hint: `a ${id} link`, signInName: `${id}-cli`,
+    parse: (i) => (i === url ? { url, number: 1, label: '#1' } : null),
+    owns: (u) => u === url,
+    available: async () => signedIn,
+    read: async (pr) => { reads.push(pr.url); return { number: 1, state: 'OPEN', mergeable: 'MERGEABLE', headSha: 'h', checks: 'none', failed: [], commentTimes: [] } },
+    headBranch: async () => null,
+    fetchRef: (n) => `refs/${id}/${n}`,
+    promptHint: { checks: 'c {url}', comments: 'm {url}' }
+  }
+}
+
+test("a provider that is not signed in: its branches are not polled; another provider's are", async () => {
+  const A = 'https://a.example/pr/1'
+  const B = 'https://b.example/pr/1'
+  const reads = []
+  const a = fakeProvider('a', A, true, reads)
+  const b = fakeProvider('b', B, false, reads)
+  const p = project({ pr: A })
+  const repo = p.repositories[0]
+  repo.branchData.other = { pr: B, prWatch: {} }
+  repo.worktrees.push({ id: 'w2', name: 'other', path: '/repo-other', branch: 'other', isMain: false, loaded: true, sessions: [] })
+  const s = setup(p, [], { providers: { forProject: () => [a, b], all: () => [a, b] } })
+  await s.watcher.checkSignIn()
+  await s.watcher.round()
+  assert.deepEqual(reads, [A])
+  assert.equal(s.watcher.available(), true)
+  assert.equal(s.watcher.availableFor('a'), true)
+  assert.equal(s.watcher.availableFor('b'), false)
+})
+
+test('a link no provider owns (its plugin off) is not polled', async () => {
+  const { github } = githubOver(async () => '')
+  const s = setup(project(watching), [], { providers: { forProject: () => [], all: () => [github] } })
+  await s.watcher.checkSignIn()
+  await s.watcher.round()
+  assert.equal(s.polls(), 0)
+})
+
+test('stop() during a poll: an aborted read (ABORT_ERR) is not a failed poll and is not logged', async (t) => {
+  const warned = []
+  t.mock.method(console, 'warn', (m) => warned.push(m))
+  const s = setup(project(watching))
+  await s.watcher.ready
+  s.fake.gh = (args, signal) =>
+    new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('gh was stopped'), { code: 'ABORT_ERR' })))
+    })
+  const polling = s.watcher.poll(target)
+  s.watcher.stop()
+  await polling
+  assert.deepEqual(warned, [])
+  assert.equal(s.worktree().prNotice, undefined)
 })

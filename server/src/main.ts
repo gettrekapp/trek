@@ -25,7 +25,6 @@ import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
 import { createIntegrations } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
-import { ghFromEnv } from './prWatch/gh'
 import { loadWebBundle, type WebBundle } from './web/bundle'
 import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
@@ -351,7 +350,6 @@ const server = startServer(
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({}),
     prWatch: {
-      gh: ghFromEnv(process.env.TREK_SERVER_GH),
       // The smokes' knob: the time between polls, and between sign-in checks.
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)

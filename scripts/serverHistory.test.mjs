@@ -21,6 +21,7 @@ import { BRANCH_SET_METHODS, dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { BY_TREK, branchChanges, recordHistory, tagValue } from '../server/src/history/record.ts'
 import { removeDir } from './testPlatform.mjs'
+import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const settings = {
   worktreeTags: [{ id: 'ip', name: 'In Progress', color: '#5dabef' }, { id: 'rv', name: 'Review', color: '#ffaa00' }],
@@ -128,8 +129,10 @@ async function setup(t) {
   t.after(() => { poller.stop(); store.close() })
   const history = new HistoryStore(join(dir, 'history'))
   const sessions = { forgetProject() {}, forgetRepo() {}, forgetGlobal() {}, refreshAttention() {}, blockPath: () => () => {} }
-  const prWatch = { available: () => true, pollSoon() {}, forget() {} }
-  const ctx = { store, hub, subscriber: { send() {} }, projects, poller, sessions, terminal: { send() {}, bufferedAmount: () => 0 }, history, prWatch }
+  const prWatch = { available: () => true, availableFor: () => true, pollSoon() {}, forget() {} }
+  // The github plugin's PR provider (its gh never called here): a watch needs a provider that owns the link.
+  const plugins = { prProviders: () => [createGithubPrProvider(async () => '')] }
+  const ctx = { store, hub, subscriber: { send() {} }, projects, poller, sessions, terminal: { send() {}, bufferedAmount: () => 0 }, history, prWatch, plugins }
   const call = async (method, params, extra = {}) => {
     const outcome = await dispatchV2(method, params, { ...ctx, ...extra })
     if (!outcome.ok) throw Object.assign(new Error(outcome.error.message), { code: outcome.error.code })

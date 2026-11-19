@@ -43,7 +43,6 @@ import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts
 import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
 import { installedIdReserved } from './plugins/reserved.ts'
 import { mcpContext } from './plugins/mcp.ts'
-import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher.ts'
 import { AutomationScheduler } from './automations/scheduler.ts'
 import { HistoryStore } from './history/store.ts'
@@ -103,8 +102,8 @@ export interface ServerOptions {
   machine?: Machine
   /** Linear with the server's own key (its secrets file), and the skills on its disk (integrations.ts) */
   integrations?: Integrations
-  /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
-  prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
+  /** The pull request watch (5c-1): how often it polls through the plugins' PR providers; without it (or without `plugins`) no PR is watched */
+  prWatch?: { pollMs?: number; recheckMs?: number }
   /** Automations' scheduler tweaks, for the smokes: a shorter tick, a controllable clock */
   automations?: { tickMs?: number; now?: () => number }
   /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
@@ -223,13 +222,14 @@ export function startServer(
     onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p })
   })
 
-  // Set once the connections exist (below): gh's first answer comes after this function returns.
+  // Set once the connections exist (below): the first sign-in answer comes after this function returns.
   let prWatchChanged = (_available: boolean): void => {}
-  const prWatch = options.prWatch
+  // No registry means no PR providers: nothing to watch through.
+  const prWatch = options.prWatch && plugins
     ? new PrWatcher({
         projects,
         sessions,
-        gh: options.prWatch.gh,
+        providers: { forProject: (id) => plugins.prProviders(id), all: () => plugins.allPrProviders() },
         history,
         pollMs: options.prWatch.pollMs,
         recheckMs: options.prWatch.recheckMs,

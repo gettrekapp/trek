@@ -236,7 +236,7 @@ test('get_review_comments: five sources are checked, a sixth is null; another pr
 test('watch_pull_request: on (polled at once), off, and its refusals', async (t) => {
   const polled = []
   let available = true
-  const prWatch = { available: () => available, pollSoon: (...a) => polled.push(a), forget() {}, dismiss() {} }
+  const prWatch = { available: () => available, availableFor: () => available, pollSoon: (...a) => polled.push(a), forget() {}, dismiss() {} }
   const s = await toolSetup(t, { prWatch })
   const codeOf = (p) => p.then(() => 'ok', (e) => e.code)
   assert.match(await s.call('watch_pull_request', { worktree: 'main' }).catch((e) => e.message), /no linked pull request/)
@@ -1065,8 +1065,8 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
   let answer = { number: 9, state: 'OPEN', mergeable: 'CONFLICTING', headSha: 'abc', checks: 'failing', failed: ['build', 'lint'], commentTimes: ['2026-01-01T00:00:00Z', '2026-01-02T03:04:05Z'] }
   const reads = []
   const prWatch = {
-    available: () => available, pollSoon() {}, forget() {}, dismiss() {},
-    read: async (pr) => {
+    available: () => available, availableFor: () => available, pollSoon() {}, forget() {}, dismiss() {},
+    read: async (_provider, pr) => {
       reads.push(pr)
       if (answer instanceof Error) throw answer
       return answer
@@ -1081,7 +1081,7 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
     branch: 'main', pullRequest: url, number: 9, state: 'open', mergeable: 'conflicting', checks: 'failing', failedChecks: ['build', 'lint'],
     headSha: 'abc', comments: 2, lastCommentAt: '2026-01-02T03:04:05Z', watching: false
   })
-  assert.deepEqual(reads, [{ url, number: 9, owner: 'o', repo: 'r' }])
+  assert.deepEqual(reads, [{ url, number: 9, label: '#9' }])
 
   // Watched, with a notice showing, and no comments from others.
   await s.call('watch_pull_request', { worktree: 'main' })
@@ -1101,12 +1101,12 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
   assert.equal(signedOut[0], 'TOOL_ERROR')
   assert.match(signedOut[1], /gh is not installed or not signed in/)
 
-  // A link that is not a GitHub pull request (as an older client's branch.setPr could store).
+  // A link no provider on for the project owns (as an older client's branch.setPr could store).
   s.projects.apply(s.projectId, (d) => { d.repositories[0].branchData.main = { pr: 'https://example.com/x' } })
   available = true
-  const notGitHub = await refusal(s.call('get_pull_request', { worktree: 'main' }))
-  assert.equal(notGitHub[0], 'BAD_REQUEST')
-  assert.match(notGitHub[1], /is not a GitHub pull request URL/)
+  const notOwned = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(notOwned[0], 'BAD_REQUEST')
+  assert.match(notOwned[1], /no pull request provider is on for/)
 
   // A server with no watcher at all.
   const bare = await toolSetup(t)
