@@ -28,15 +28,11 @@ export function defaultTeardown(items: readonly TeardownItem[]): string[] {
 }
 
 /**
- * A plan as one native checkbox (the desktop's message box has one): one item as it is; several as
- * one box naming each, ticked when any is checked by default, sending all or none. Null for none.
+ * The running items left unticked (plugins E3): a client keeps the operation from going ahead while
+ * there are any, as each would be left running with its worktree gone (the move dialog's rule).
  */
-export function teardownCheckbox(items: readonly TeardownItem[]): { label: string; checked: boolean; ids(ticked: boolean): string[] } | null {
-  if (items.length === 0) return null
-  const all = items.map((i) => i.id)
-  const ids = (ticked: boolean): string[] => (ticked ? all : [])
-  if (items.length === 1) return { label: items[0].label, checked: items[0].checked, ids }
-  return { label: `Also: ${items.map((i) => i.label).join('; ')}`, checked: items.some((i) => i.checked), ids }
+export function teardownBlocking(items: readonly TeardownItem[], ticked: ReadonlySet<string>): string[] {
+  return items.filter((i) => i.running === true && !ticked.has(i.id)).map((i) => i.id)
 }
 
 /**

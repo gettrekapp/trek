@@ -5153,6 +5153,35 @@ input.plugin-switch:checked {
   color: var(--attention);
 }
 
+/* The teardown confirm (plugins E3): a checkbox per item the server plans */
+.teardown-detail {
+  white-space: pre-wrap;
+}
+
+.teardown-items {
+  margin: 12px 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.teardown-item {
+  cursor: pointer;
+}
+
+.teardown-items .warn {
+  color: var(--attention);
+}
+
+.teardown-unchecked .teardown-item {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+}
+
 .move-paths {
   margin: 4px 0 2px;
   padding-left: 16px;

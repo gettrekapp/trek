@@ -89,11 +89,17 @@ export interface WorktreeTeardown {
    */
   isDirty(info: GitWorktreeInfo, backend: WindowBackend): Promise<boolean>
   /**
-   * The confirm on a server that tears down itself (`worktreeTeardown`, plugins E1): the plan's
-   * items as the dialog's checkbox (teardownCheckbox). The ids to send: the ticked ones; none when
-   * unticked or not confirmed. `stillWanted` false right before the dialog: not shown, not confirmed.
+   * The confirm on a server that tears down itself (`worktreeTeardown`, plugins E1): the plan's items
+   * as a checkbox each (plugins E3), and the participants it could not ask (`unplanned`, plugins E3;
+   * none from an older server). The ids to send: the ticked ones; none when not confirmed.
+   * `stillWanted` false right before the dialog: not shown, not confirmed.
    */
-  confirmPlan(prompt: ConfirmPrompt, items: readonly TeardownItem[], stillWanted?: () => boolean): Promise<{ confirmed: boolean; teardown: string[] }>
+  confirmPlan(
+    prompt: ConfirmPrompt,
+    items: readonly TeardownItem[],
+    stillWanted?: () => boolean,
+    unplanned?: readonly string[]
+  ): Promise<{ confirmed: boolean; teardown: string[] }>
 }
 
 /** Added to a failed removal's error once its stack or VM is already gone. */
@@ -317,13 +323,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     const loaded = deps.state().loadedWorktrees[legacyId] === true
     const name = info.branch ?? info.path
     let items: readonly TeardownItem[]
+    let unplanned: readonly string[]
     try {
-      items = (await request('worktree.teardownPlan', { projectId, worktreeId, op: 'remove' })).items
+      ;({ items, unplanned = [] } = await request('worktree.teardownPlan', { projectId, worktreeId, op: 'remove' }))
     } catch (err) {
       await deps.showError(REMOVE_FAILED, errorText(err))
       return
     }
-    const { confirmed, teardown } = await deps.teardown.confirmPlan(removePrompt(info, loaded, dirty), items)
+    const { confirmed, teardown } = await deps.teardown.confirmPlan(removePrompt(info, loaded, dirty), items, undefined, unplanned)
     if (!confirmed) return
     const send = (force: boolean, ids: readonly string[]): Promise<unknown> =>
       request(
@@ -604,9 +611,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         let plan: PromotePlan
         // A server that tears down itself (plugins E1): its plan, read with the dry run.
         let items: readonly TeardownItem[] | undefined
+        // The participants it could not ask (plugins E3; none from an older server).
+        let unplanned: readonly string[] = []
         try {
           plan = (await request('worktree.promote', { projectId, worktreeId, dryRun: true })) as PromotePlan
-          if (can(CAPABILITY.worktreeTeardown)) items = (await request('worktree.teardownPlan', { projectId, worktreeId, op: 'promote' })).items
+          if (can(CAPABILITY.worktreeTeardown)) ({ items, unplanned = [] } = await request('worktree.teardownPlan', { projectId, worktreeId, op: 'promote' }))
         } catch (err) {
           if (!asked) return failed(err)
           // The server refuses it: the first window to see that answers for all, without a dialog.
@@ -618,7 +627,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if (items) {
           // The server tears down in the promote itself; its binding of the request stops the claim's timer.
           const stillWanted = asked ? (): boolean => asked.stillAsked() : undefined
-          const { confirmed, teardown } = await deps.teardown.confirmPlan(promotePrompt(plan, { asked }), items, stillWanted)
+          const { confirmed, teardown } = await deps.teardown.confirmPlan(promotePrompt(plan, { asked }), items, stillWanted, unplanned)
           if (!confirmed) {
             if (asked?.stillAsked()) await asked.answer({ outcome: 'declined' })
             return { outcome: 'declined' }

@@ -9,7 +9,7 @@ import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../../../sha
 import { errorCode, errorText } from './errors.ts'
 import type { AppServerLink } from '../../../shared/types'
 import { MOVE_RECEIVE_TIMEOUT_MS } from '../../../shared/move.ts'
-import { TEARDOWN_REQUEST_TIMEOUT_MS, type TeardownItem } from '../../../shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, teardownBlocking, type TeardownItem } from '../../../shared/teardown.ts'
 
 export type Requester = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
 
@@ -318,7 +318,7 @@ export function moveTeardownCheck(
   ticked: ReadonlySet<string>,
   seen: { stack: boolean; vm: boolean }
 ): { blocks: boolean; blocking: string[]; unplanned: string[] } {
-  const blocking = items.filter((item) => item.running === true && !ticked.has(item.id)).map((item) => item.id)
+  const blocking = teardownBlocking(items, ticked)
   const planned = new Set(items.map((item) => item.id))
   const unplanned = [seen.stack && !planned.has('stack:destroy') ? 'its dev stack' : null, seen.vm && !planned.has('env:destroy') ? 'its VM' : null].filter(
     (what): what is string => what !== null

@@ -16,6 +16,7 @@ import { v2SetterOverrides } from './setterOverrides'
 import { applyV2Project, clearV2Projection, setV2ProjectionOptions, setV2ProjectOverlay, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
+import { cancelTeardown, requestTeardown } from './teardownPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { requestSessionSelect } from '../attentionSelect'
 import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
@@ -123,7 +124,9 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     showError,
     confirm: (prompt) => (left ? Promise.resolve(false) : window.api.confirm(prompt)),
     confirmWithCheckbox: (options) =>
-      left ? Promise.resolve({ confirmed: false, checked: false }) : window.api.confirmWithCheckbox(options)
+      left ? Promise.resolve({ confirmed: false, checked: false }) : window.api.confirmWithCheckbox(options),
+    // A box per item, in the window (plugins E3): V2Workspace's TeardownPrompt, on the desktop and the web alike.
+    confirmTeardown: (prompt, items, unplanned) => (left ? Promise.resolve({ confirmed: false, teardown: [] }) : requestTeardown(prompt, items, unplanned))
   })
 
   const backend = createV2Backend({
@@ -149,7 +152,11 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     report,
     reportEdit,
     left: () => left,
-    closeDialog: (dialogId) => void window.api.cancelDialog(dialogId).catch(() => {}),
+    // A native confirm, or the window's own teardown confirm (plugins E3).
+    closeDialog: (dialogId) => {
+      cancelTeardown(dialogId)
+      void window.api.cancelDialog(dialogId).catch(() => {})
+    },
     onConnected: (listener) => {
       const connection = left ? undefined : registered()?.connection
       if (!connection) return () => {}
@@ -352,6 +359,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       offAgents()
       if (agentsRetry !== null) clearTimeout(agentsRetry)
       cancelRepoPath()
+      cancelTeardown()
       cancelAll()
       disposeV2Terminals()
       clearV2Projection()

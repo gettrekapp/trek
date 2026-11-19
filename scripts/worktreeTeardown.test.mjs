@@ -8,7 +8,7 @@ import { createWorktreeTeardown, DIRTY_CHECK_TIMED_OUT } from '../src/renderer/s
 const info = { path: '/r-feat', repoId: 'r1', isMain: false, branch: 'feat', dirty: true }
 const coded = (code, message) => Object.assign(new Error(message), { code })
 
-function setup({ envWarning, checkbox = { confirmed: true, checked: true } } = {}) {
+function setup({ envWarning, checkbox = { confirmed: true, checked: true }, items = (all) => ({ confirmed: true, teardown: all.map((i) => i.id) }) } = {}) {
   const ui = []
   const teardown = createWorktreeTeardown({
     environment: (i) => (i.branch === 'feat' ? { profile: 'twb-feat-abc123' } : undefined),
@@ -24,6 +24,10 @@ function setup({ envWarning, checkbox = { confirmed: true, checked: true } } = {
     confirmWithCheckbox: async (options) => {
       ui.push(['confirm+box', options.checkboxLabel])
       return checkbox
+    },
+    confirmTeardown: async (prompt, all, unplanned) => {
+      ui.push(['confirm+items', prompt.title, all.map((i) => i.id), ...(unplanned.length > 0 ? [unplanned] : [])])
+      return items(all)
     }
   })
   return { teardown, ui }
@@ -116,30 +120,28 @@ test('confirm: an agent request that ended while the stack status was read shows
   assert.deepEqual(ui, [])
 })
 
-test('confirmPlan (plugins E1): no items is the plain confirm; one item is the box as it is; several are one box naming each; the ids follow the box', async () => {
+test("confirmPlan (plugins E1, E3): no items is the plain confirm; with items the window's own confirm, a box per item, sends what it answers", async () => {
   const stack = { id: 'stack:destroy', label: 'Tear down the dev stack “trek-r-feat” (drops its databases)', checked: true }
   const vm = { id: 'env:destroy', label: "Stop and delete this worktree's Colima VM “twb-x”", checked: false }
   const plain = setup()
   assert.deepEqual(await plain.teardown.confirmPlan({ title: 'Delete Worktree' }, []), { confirmed: true, teardown: [] })
   assert.deepEqual(plain.ui, [['confirm', 'Delete Worktree']])
-  const single = setup()
-  assert.deepEqual(await single.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack]), { confirmed: true, teardown: ['stack:destroy'] })
-  assert.deepEqual(single.ui, [['confirm+box', stack.label]])
-  const several = setup()
-  assert.deepEqual(await several.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack, vm]), { confirmed: true, teardown: ['stack:destroy', 'env:destroy'] })
-  assert.deepEqual(several.ui, [['confirm+box', `Also: ${stack.label}; ${vm.label}`]])
-  const unticked = setup({ checkbox: { confirmed: true, checked: false } })
-  assert.deepEqual(await unticked.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack, vm]), { confirmed: true, teardown: [] })
-  const declined = setup({ checkbox: { confirmed: false, checked: true } })
+  const several = setup({ items: () => ({ confirmed: true, teardown: ['env:destroy'] }) })
+  assert.deepEqual(await several.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack, vm]), { confirmed: true, teardown: ['env:destroy'] })
+  assert.deepEqual(several.ui, [['confirm+items', 'Delete Worktree', ['stack:destroy', 'env:destroy']]])
+  const declined = setup({ items: () => ({ confirmed: false, teardown: [] }) })
   assert.deepEqual(await declined.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack]), { confirmed: false, teardown: [] })
   const ended = setup()
   assert.deepEqual(await ended.teardown.confirmPlan({ title: 'Promote to Primary' }, [stack], () => false), { confirmed: false, teardown: [] })
   assert.deepEqual(ended.ui, [])
 })
 
-test('teardownCheckbox: ticked by default when any item is', async () => {
-  const { teardownCheckbox } = await import('../src/shared/teardown.ts')
-  assert.equal(teardownCheckbox([]), null)
-  assert.equal(teardownCheckbox([{ id: 'a:x', label: 'X', checked: false }, { id: 'b:y', label: 'Y', checked: true }]).checked, true)
-  assert.equal(teardownCheckbox([{ id: 'a:x', label: 'X', checked: false }]).checked, false)
+test('confirmPlan (plugins E3): the participants the server could not ask go to the window\'s confirm, even with no items', async () => {
+  const stack = { id: 'stack:destroy', label: 'Tear down the dev stack “trek-r-feat” (drops its databases)', checked: true }
+  const withItems = setup()
+  await withItems.teardown.confirmPlan({ title: 'Delete Worktree' }, [stack], undefined, ['env'])
+  assert.deepEqual(withItems.ui, [['confirm+items', 'Delete Worktree', ['stack:destroy'], ['env']]])
+  const none = setup()
+  assert.deepEqual(await none.teardown.confirmPlan({ title: 'Delete Worktree' }, [], undefined, ['env']), { confirmed: true, teardown: [] })
+  assert.deepEqual(none.ui, [['confirm+items', 'Delete Worktree', [], ['env']]])
 })

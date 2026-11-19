@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createV2Backend, tornDownNote, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
 import { PROMPT_NOT_CONFIRMED, withPromptText } from '../src/renderer/src/v2/errors.ts'
-import { TEARDOWN_REQUEST_TIMEOUT_MS, teardownCheckbox } from '../src/shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
 
 const PRIMARY = '__primary__:r1'
 const ids = () => ({
@@ -159,14 +159,13 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
         if (machine.dirty instanceof Error) throw machine.dirty
         return machine.dirty === true
       },
-      // The plan's confirm (plugins E1), one box as the real one (all or none): `machine.ticked` is
-      // the box's answer, its default otherwise.
-      confirmPlan: async (prompt, items, stillWanted) => {
-        ui.push(['confirm+plan', prompt.title, prompt.detail, items.map((i) => i.id)])
+      // The plan's confirm (plugins E1, E3: a box per item): `machine.ticked` false unticks every
+      // box; otherwise the defaults are sent. The participants the server could not ask (E3) are noted.
+      confirmPlan: async (prompt, items, stillWanted, unplanned = []) => {
+        ui.push(['confirm+plan', prompt.title, prompt.detail, items.map((i) => i.id), ...(unplanned.length > 0 ? [unplanned] : [])])
         if (stillWanted && !stillWanted()) return { confirmed: false, teardown: [] }
         const confirmed = answers.shift() ?? false
-        const box = teardownCheckbox(items)
-        return { confirmed, teardown: confirmed && box ? box.ids(machine.ticked ?? box.checked) : [] }
+        return { confirmed, teardown: confirmed && machine.ticked !== false ? defaultTeardown(items) : [] }
       }
     },
     left
@@ -1035,6 +1034,19 @@ test('worktrees.promote: the plan, the confirm, the stack and VM, then worktree.
   assert.match(confirm[2], /“feat” will be checked out in the main checkout at \/r \(now on main\)/)
   assert.match(confirm[2], /Colima VM “trek-feat”/)
   assert.ok(timeouts.some(([m]) => m === 'worktree.promote'))
+})
+
+test("remove and promote on a server with worktreeTeardown (plugins E3): the plan's unplanned participants go to the confirm; a server before E3 sends none", async () => {
+  const removing = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS.slice(0, 1), unplanned: ['env'] } } })
+  await removing.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(removing.ui.find((u) => u[0] === 'confirm+plan').slice(3), [['stack:destroy'], ['env']])
+  const old = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS } } })
+  await old.backend.worktrees.remove(feat, undefined)
+  assert.equal(old.ui.find((u) => u[0] === 'confirm+plan').length, 4, 'no unplanned')
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: [] }), 'worktree.teardownPlan': { items: [], unplanned: ['env'] } }
+  const promoting = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks', 'env', 'worktreeTeardown'] })
+  assert.deepEqual(await promoting.backend.worktrees.promote(FEAT, undefined), { outcome: 'promoted', worktreeId: 'wm' })
+  assert.deepEqual(promoting.ui.find((u) => u[0] === 'confirm+plan').slice(3), [[], ['env']])
 })
 
 test('worktrees.promote on a server with worktreeTeardown: the plan, then one worktree.promote with the chosen ids; the window tears nothing down', async () => {

@@ -15,6 +15,9 @@ import { AllNotesPanel } from '../components/AllNotesPanel'
 import { AutomationsPanel } from '../components/AutomationsPanel'
 import { PluginSlot } from '../plugins/PluginHost'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
+import { defaultTeardown, teardownBlocking } from '../../../shared/teardown'
+import { usePluginEntries } from '../plugins/PluginHost'
+import { answerTeardown, cancelTeardown, teardownHeld, uncheckedName, useTeardownQuestion, type TeardownQuestion } from './teardownPrompt'
 
 /**
  * A server project's workspace: the Sidebar, WorktreeDetail and Global panel
@@ -89,6 +92,7 @@ export function V2Workspace(): React.JSX.Element {
         </div>
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
         <RepoPathPrompt />
+        <TeardownPrompt />
       </div>
       <PluginSlot name="bottomBar" />
       {globalMode !== 'hidden' && <GlobalClaude readOnly={globalMode === 'readOnly'} />}
@@ -136,6 +140,84 @@ function RepoPathPrompt(): React.JSX.Element | null {
         </div>
         <div className="modal-footer">
           <button onClick={() => answer(null)}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** A delete's or promote's teardown confirm (plugins E3): a checkbox per item the server plans. */
+function TeardownPrompt(): React.JSX.Element | null {
+  const question = useTeardownQuestion()
+  // Gone with the workspace (Pick another project, Server removed): the question ends cancelled.
+  useEffect(() => () => cancelTeardown(), [])
+  if (!question) return null
+  return <TeardownDialog key={question.id} question={question} />
+}
+
+function TeardownDialog({ question }: { question: TeardownQuestion }): React.JSX.Element {
+  const { prompt, items, unplanned } = question
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set(defaultTeardown(items)))
+  // Past the participants the server could not ask, on purpose (their plan failed).
+  const [withoutUnplanned, setWithoutUnplanned] = useState(false)
+  const pluginEntries = usePluginEntries()
+  const nameOf = (id: string): string => pluginEntries.find((e) => e.plugin.manifest.id === id)?.plugin.manifest.name ?? id
+  const unchecked = unplanned.map((id) => uncheckedName(id, nameOf))
+  const blocking = teardownBlocking(items, ticked)
+  const held = teardownHeld(question, ticked, withoutUnplanned)
+  const tick = (id: string, on: boolean): void =>
+    setTicked((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  const cancel = (): void => answerTeardown(false, ticked)
+  // Escape cancels wherever the focus is (Confirm may start disabled, so nothing in the dialog has it).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') answerTeardown(false, new Set())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  return (
+    <div className="modal-backdrop" onMouseDown={cancel}>
+      <div
+        className="modal teardown-prompt"
+        role="dialog"
+        aria-modal="true"
+        aria-label={prompt.title}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <h2>{prompt.title}</h2>
+        <p className="teardown-message">{prompt.message}</p>
+        {prompt.detail && <p className="muted teardown-detail">{prompt.detail}</p>}
+        <ul className="teardown-items">
+          {items.map((item) => (
+            <li key={item.id} className={blocking.includes(item.id) ? 'warn' : undefined}>
+              <label className="teardown-item">
+                <input type="checkbox" checked={ticked.has(item.id)} onChange={(e) => tick(item.id, e.target.checked)} /> {item.label}
+              </label>
+              {blocking.includes(item.id) && ' It is running: stop it first, or tick this.'}
+            </li>
+          ))}
+          {unchecked.length > 0 && (
+            <li className="warn teardown-unchecked">
+              This server could not check what {unchecked.join(' and ')} would tear down, so {unchecked.length > 1 ? 'they' : 'it'} may be left running.
+              Cancel and try again, or go ahead without {unchecked.length > 1 ? 'them' : 'it'}.
+              <label className="teardown-item">
+                <input type="checkbox" checked={withoutUnplanned} onChange={(e) => setWithoutUnplanned(e.target.checked)} /> Go ahead without{' '}
+                {unchecked.length > 1 ? 'them' : 'it'}
+              </label>
+            </li>
+          )}
+        </ul>
+        <div className="modal-footer">
+          <button onClick={cancel}>Cancel</button>
+          <button className="primary" autoFocus disabled={held} onClick={() => answerTeardown(true, ticked, withoutUnplanned)}>
+            {prompt.confirmLabel}
+          </button>
         </div>
       </div>
     </div>

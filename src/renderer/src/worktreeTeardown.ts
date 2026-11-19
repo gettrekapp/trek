@@ -6,7 +6,7 @@
 // the next one's. The store and the dialogs come in as deps (installV2.ts), so this file runs
 // under node --test. On a server with `worktreeTeardown` (plugins E1) only `confirmPlan` is used:
 // the server tears down.
-import { teardownCheckbox } from '../../shared/teardown.ts'
+import type { TeardownItem } from '../../shared/teardown.ts'
 import type { GitWorktreeInfo } from '../../shared/types'
 import type { WindowBackend } from './backend'
 import type { ConfirmPrompt, WorktreeTeardown } from './v2/backendV2'
@@ -19,6 +19,11 @@ export interface WorktreeTeardownDeps {
   showError(title: string, message: string): Promise<void>
   confirm(prompt: ConfirmPrompt): Promise<boolean>
   confirmWithCheckbox(options: ConfirmPrompt & { checkboxLabel: string; checkboxChecked: boolean }): Promise<{ confirmed: boolean; checked: boolean }>
+  /**
+   * The plan's items as a checkbox each, in the window (plugins E3, teardownPrompt.ts), with the
+   * participants the server could not ask: the ticked ids once confirmed
+   */
+  confirmTeardown(prompt: ConfirmPrompt, items: readonly TeardownItem[], unplanned: readonly string[]): Promise<{ confirmed: boolean; teardown: string[] }>
 }
 
 /** The delete stops here: a timeout says nothing about the worktree's changes, so "clean" is no safe guess. */
@@ -29,13 +34,12 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
   return {
     environment: (info) => deps.environment(info),
 
-    // The server's plan as the dialog's one checkbox (teardownCheckbox): the ids when ticked.
-    confirmPlan: async (prompt, items, stillWanted) => {
+    // The server's plan, a checkbox per item in the window (teardownPrompt.ts), with the participants
+    // it could not ask (plugins E3); no items and none of those: the plain confirm.
+    confirmPlan: async (prompt, items, stillWanted, unplanned = []) => {
       if (stillWanted && !stillWanted()) return { confirmed: false, teardown: [] }
-      const box = teardownCheckbox(items)
-      if (!box) return { confirmed: await deps.confirm(prompt), teardown: [] }
-      const result = await deps.confirmWithCheckbox({ ...prompt, checkboxLabel: box.label, checkboxChecked: box.checked })
-      return { confirmed: result.confirmed, teardown: result.confirmed ? box.ids(result.checked) : [] }
+      if (items.length === 0 && unplanned.length === 0) return { confirmed: await deps.confirm(prompt), teardown: [] }
+      return deps.confirmTeardown(prompt, items, unplanned)
     },
 
     // When the worktree's dev stack has run, the dialog offers to destroy it too; stackName is set when that was ticked.
