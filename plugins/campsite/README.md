@@ -2,8 +2,8 @@
 
 A pixel-art hiker for each agent session: on its tab (in place of the status dot), in its
 terminal's corner, and at a campsite strip along the bottom of the project window. Hikers who need
-you (a bell, or a pending `request_decision`) wave by the fire; working ones do camp chores; done
-ones sit with a cocoa; idle ones doze. Click a hiker at camp to show its session.
+you wave by the fire, under a "!" (a bell) or a "?" (a pending `request_decision`); working ones do
+camp chores; finished ones cheer; ones marked complete sit with a cocoa; idle ones sleep in their bag. Click a hiker at camp to show its session.
 
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
 - `server/`: nothing to serve; registered so the server lists it (per-project on/off)
