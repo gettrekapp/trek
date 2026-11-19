@@ -2,7 +2,7 @@
 // shared code. A provider plugin's client half gives this object as `prProvider`; its server half
 // gives a PrServerProvider (server.ts), which extends it. Core's watch (server/src/prWatch/) and the
 // clients' chips and dialogs go through the providers on for the project; no host is named here.
-export type { PrView, ChecksState } from '../prWatch.ts'
+export type { PrView, ChecksState, PromptHint } from '../prWatch.ts'
 export { checkName } from '../prWatch.ts'
 
 /** A pull request link as its provider reads it. */

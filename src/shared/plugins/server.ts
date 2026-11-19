@@ -3,7 +3,7 @@
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
 import type { PluginManifest } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
-import type { ParsedPr, PrProvider, PrView } from './pullRequests.ts'
+import type { ParsedPr, PromptHint, PrProvider, PrView } from './pullRequests.ts'
 
 export { readBodyCapped, MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES } from '../../host/httpBody.ts'
 export { writeFileAtomic } from '../../host/atomicWrite.ts'
@@ -67,7 +67,7 @@ export interface PrServerProvider extends PrProvider {
   /** The ref `git fetch origin` takes for PR `n`'s head ('refs/pull/12/head') */
   fetchRef(n: number): string
   /** How an agent reads a PR's checks and comments itself, for the watch's prompt; `{url}` is replaced with the PR's link */
-  promptHint: { checks: string; comments: string }
+  promptHint: PromptHint
 }
 
 export interface ServerPluginHost {
