@@ -5,7 +5,7 @@ import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { devNull, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -774,7 +774,7 @@ function gitProject(over) {
   const p = project(over)
   const dir = mkdtempSync(join(tmpdir(), 'trek-prresolve-'))
   after(() => removeDir(dir))
-  execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' } })
+  execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } })
   p.repositories[0].path = dir
   return p
 }
@@ -816,7 +816,7 @@ test('welcomeCapabilities lists prResolve whenever a PR provider is registered',
 test("pr.resolve: a checked-out branch that is the PR's own comes back by name (the client links that worktree); an unreadable repository gives null", async () => {
   const p = gitProject()
   const dir = p.repositories[0].path
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
   const git = (...args) => execFileSync('git', ['-C', dir, ...args], { env, encoding: 'utf8' })
   const origin = mkdtempSync(join(tmpdir(), 'trek-prresolve-origin-'))
   after(() => removeDir(origin))

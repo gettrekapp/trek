@@ -32,6 +32,7 @@ export const NOT_IN_DEMO: Record<string, string> = {
   'stack.status': 'the demo has no stacks capability',
   'env.list': 'the demo has no env capability',
   'worktree.promote': 'the demo has no promote capability',
+  'worktree.demote': 'the demo has no promote capability',
   'promote.listen': 'the demo has no promote capability',
   'promote.claim': 'the demo has no promote capability',
   'promote.answer': 'the demo has no promote capability'

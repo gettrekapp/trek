@@ -1,7 +1,6 @@
 // scripts/serverWorktrees.test.mjs — worktree.* against real git in a temp dir.
 // Keep a user's global git config and hooks out of the real git these tests run.
-import { devNull } from 'node:os'
-process.env.GIT_CONFIG_GLOBAL = devNull
+process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 import test from 'node:test'
@@ -25,7 +24,7 @@ import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t'
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
