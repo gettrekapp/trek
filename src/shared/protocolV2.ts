@@ -221,7 +221,12 @@ export const CAPABILITY = {
   local: 'local',
   /** `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine */
   docker: 'docker',
-  /** `env.*` run the per-worktree Colima environments on the server's machine, and `env.log` streams their output */
+  /**
+   * The Colima plugin's legacy capability (plugins E2; a core `env.*` before it): listed while the
+   * plugin is registered and available, so never on a Windows server. `env.*` run the per-worktree
+   * Colima environments on the server's machine, and `env.log` streams their output
+   * (plugins/colima/shared).
+   */
   env: 'env',
   /** `stack.*` run the worktrees' docker/stack/stack.sh dev stacks on the server's machine */
   stacks: 'stacks',

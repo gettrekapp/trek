@@ -14,6 +14,11 @@ as not available and has no `env.*` methods.
   mirrors them under their old names, `Repository.environments` and `BranchData.env`.
 - **Data:** the VM registry in `<dataDir>/plugins/env/environments.json` (0600). It is copied once
   from `<dataDir>/environments.json`, or a Local server takes it over from the app's data dir with
-  `--import-env-from`.
+  `--import-env-from` (and then writes the same registry at `<dataDir>/environments.json` too, the
+  old take-over marker, so a server rolled back never takes the app's over again).
+- **Rollback:** the registry is copied, not moved, so nothing on disk is lost either way. After
+  the copy the two files go their own ways: a server rolled back to before E2 reads
+  `<dataDir>/environments.json` again, so a VM made since on E2 shows there as an orphan, and a VM
+  made while rolled back shows as an orphan once the server is on E2 again.
 - **Code:** `shared/` (profile names, .env parsing, types), `server/` (colima and docker through
   the host's programs). The window's Env panel, chips and Settings tab move here in plugins E3.
