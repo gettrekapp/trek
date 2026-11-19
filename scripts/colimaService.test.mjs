@@ -81,6 +81,29 @@ test("the tools: colima in the plugin's data directory, compose in the worktree 
   ])
 })
 
+test('the tools: only colima start and compose up outlive a server restart; stop, delete, down and logs stay killable', { skip }, async (t) => {
+  const d = dirs(t)
+  const asked = []
+  const host = fakeHost()
+  const recording = { run: host.run, spawn: (command, args, options) => (asked.push(`${command} ${args.join(' ')}|${options.outlive === true}`), host.spawn(command, args, options)) }
+  const tools = createTools(recording, d.pluginDir)
+  const none = () => {}
+  await tools.startVm('twb-x-000000', { cpu: 2, memory: 4, disk: 20, networkAddress: false, rosetta: false }, none)
+  await tools.stopVm('twb-x-000000', none)
+  await tools.deleteVm('twb-x-000000', none)
+  await tools.composeUp('twb-x-000000', d.worktree, 'docker-compose.yml', none)
+  await tools.composeDownVolumes('twb-x-000000', d.worktree, 'docker-compose.yml', none)
+  await tools.composeLogs('twb-x-000000', d.worktree, 'docker-compose.yml', 'web', 5)
+  assert.deepEqual(asked, [
+    'colima start twb-x-000000 --cpu 2 --memory 4 --disk 20|true',
+    'colima stop twb-x-000000|false',
+    'colima delete twb-x-000000 --force|false',
+    'docker --context colima-twb-x-000000 compose -f docker-compose.yml up -d|true',
+    'docker --context colima-twb-x-000000 compose -f docker-compose.yml down -v|false',
+    'docker --context colima-twb-x-000000 compose -f docker-compose.yml logs --no-color --tail 5 web|false'
+  ])
+})
+
 test('the tools without colima or docker: check says so, a streamed run ends with -1 and says why, a read rejects with ENOENT', { skip }, async (t) => {
   const d = dirs(t)
   const empty = mkdtempSync(join(tmpdir(), 'trek-colima-nopath-'))

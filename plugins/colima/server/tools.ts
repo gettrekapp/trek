@@ -33,6 +33,8 @@ export interface StreamOptions {
    * not start (an OS error code such as EACCES) is an `error:` line as any other.
    */
   refused?: (message: string) => void
+  /** host.spawn's `outlive`: a server Stop, Restart or Update doesn't cut it off (colima start, compose up) */
+  outlive?: boolean
 }
 
 /** For tests: shorter limits than the real ones */
@@ -119,7 +121,7 @@ export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colim
     onData(`$ ${command} ${args.join(' ')}\n`)
     let program: SpawnedProgram
     try {
-      program = await host.spawn(command, args, { cwd, ...withVars(envVars), ...(options.signal ? { signal: options.signal } : {}), onOutput: (_stream, chunk) => onData(chunk) })
+      program = await host.spawn(command, args, { cwd, ...withVars(envVars), ...(options.signal ? { signal: options.signal } : {}), ...(options.outlive ? { outlive: true } : {}), onOutput: (_stream, chunk) => onData(chunk) })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (options.refused && isCwdRefusal(err)) options.refused(message)
@@ -177,14 +179,17 @@ export function createTools(host: Pick<ServerPluginHost, 'run' | 'spawn'>, colim
           ...(opts.rosetta ? ['--vm-type', 'vz', '--vz-rosetta'] : [])
         ],
         onData,
-        colimaDir
+        colimaDir,
+        undefined,
+        // A VM half started by a cut-off `colima start` is worse than one the restart let finish.
+        { outlive: true }
       ),
 
     stopVm: (profile, onData) => stream('colima', ['stop', profile], onData, colimaDir),
 
     deleteVm: (profile, onData) => stream('colima', ['delete', profile, '--force'], onData, colimaDir),
 
-    composeUp: (profile, worktreePath, composeFile, onData, envVars) => stream('docker', composeArgs(profile, composeFile, ['up', '-d']), onData, worktreePath, envVars),
+    composeUp: (profile, worktreePath, composeFile, onData, envVars) => stream('docker', composeArgs(profile, composeFile, ['up', '-d']), onData, worktreePath, envVars, { outlive: true }),
 
     composeDownVolumes: (profile, worktreePath, composeFile, onData, envVars, options) =>
       stream('docker', composeArgs(profile, composeFile, ['down', '-v']), onData, worktreePath, envVars, options),

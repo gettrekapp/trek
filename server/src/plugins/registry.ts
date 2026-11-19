@@ -132,7 +132,7 @@ export interface PluginRegistry {
   settingFields(pluginId: string, scope: 'repo' | 'branch'): Readonly<Record<string, PluginFieldKind>> | undefined
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
   onChanged(listener: (manifest: PluginManifest) => void): void
-  /** Stops every plugin; resolves once their programs (host.run's, and host.spawn's but detached ones, each with its whole group) are gone or SIGKILLed, at most PLUGIN_STOP_MS later */
+  /** Stops every plugin; resolves once their programs (host.run's, and host.spawn's but detached and outlive ones, each with its whole group) are gone or SIGKILLed, at most PLUGIN_STOP_MS later */
   dispose(): Promise<void>
 }
 
@@ -180,11 +180,11 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const toolOwners = new Map<string, string>()
   /** A plugin project setting's key → the plugin that owns it */
   const settingOwners = new Map<string, string>()
-  /** Each plugin's abort for its running programs (host.run, host.spawn unless detached): fired by dispose */
+  /** Each plugin's abort for its running programs (host.run, host.spawn unless detached or outlive): fired by dispose */
   const aborts = new Map<string, AbortController>()
   /** Each open connection's sender, by its caller id (server.ts): what host.emitTo reaches */
   const callers = new Map<string, (event: string, payload: unknown) => void>()
-  /** Each running program's `stopped` (host.run, host.spawn unless detached): dispose waits for them */
+  /** Each running program's `stopped` (host.run, host.spawn unless detached or outlive): dispose waits for them */
   const live = new Set<Promise<void>>()
   const track = (stopped: Promise<void>): void => {
     live.add(stopped)
@@ -264,8 +264,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       spawn: async (command, args, opts) => {
         const cwd = programCwd(opts?.cwd)
         const detached = opts.detached === true
-        // A detached child outlives the plugin: the dispose's abort is not its signal.
-        const signal = detached ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
+        // A detached or outlive child outlives the plugin: the dispose's abort is not its signal,
+        // and the dispose doesn't wait for it.
+        const outlives = detached || opts.outlive === true
+        const signal = outlives ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
         const { pid, done, stopped, kill } = await spawnCommand(command, args, {
           cwd,
           env: opts.env,
@@ -274,7 +276,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           onOutput: opts.onOutput,
           warn: (message) => warn(`[plugin ${manifest.id}] ${message}`)
         })
-        if (!detached) track(stopped)
+        if (!outlives) track(stopped)
         // stopped is the host's own: the plugin gets what SpawnedProgram names.
         return { pid, done, kill }
       },

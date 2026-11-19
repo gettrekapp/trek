@@ -576,6 +576,51 @@ test("host.spawn (plugins E1): only in a project's repository or worktree, or th
   assert.ok(detachedGone, 'kill() ends a detached child')
 })
 
+test('host.spawn outlive (plugins E2): dispose neither signals the child nor waits for it; its output streams; kill() still ends it', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-spawn-outlive-')))
+  t.after(() => removeDir(root))
+  const repoPath = join(root, 'app')
+  mkdirSync(repoPath)
+  const repo = { id: 'r1', name: 'app', path: repoPath, branchData: {}, worktrees: [{ id: 'w1', path: repoPath, isMain: true, sessions: [] }] }
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } } })
+  let text = ''
+  // Ignores SIGTERM: a signalled child would still be there, so the pid check alone can't tell; it
+  // writes "got SIGTERM" if the dispose signals it.
+  const script = 'process.on("SIGTERM", () => process.stdout.write("got SIGTERM\\n")); process.stdout.write("up\\n"); setInterval(() => process.stdout.write("tick\\n"), 100)'
+  const child = await host.spawn(process.execPath, ['-e', script], { cwd: repoPath, outlive: true, onOutput: (_s, chunk) => { text += chunk } })
+  let ended = false
+  void child.done.then(() => { ended = true })
+  t.after(() => {
+    if (ended) return
+    try {
+      process.kill(child.pid, 0)
+      process.kill(child.pid, 'SIGKILL')
+    } catch {}
+  })
+  for (const until = Date.now() + 5000; !text.includes('up') && Date.now() < until; ) await new Promise((r) => setTimeout(r, 20))
+  assert.ok(text.includes('up'), 'its output streams')
+  const started = Date.now()
+  await registry.dispose()
+  assert.ok(Date.now() - started < 1000, `dispose did not wait for it (${Date.now() - started} ms)`)
+  await new Promise((r) => setTimeout(r, 400))
+  assert.ok(!text.includes('got SIGTERM'), 'dispose sent it no signal')
+  assert.doesNotThrow(() => process.kill(child.pid, 0), 'it outlives the dispose')
+  const before = text.length
+  await new Promise((r) => setTimeout(r, 300))
+  assert.ok(text.length > before, 'its output keeps streaming after the dispose')
+  if (process.platform !== 'win32') {
+    // Its own process group (a Ctrl-C at the server's terminal goes to the server's group only).
+    const { execFileSync } = await import('node:child_process')
+    const pgid = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(child.pid)], { encoding: 'utf8' }).trim())
+    assert.equal(pgid, child.pid, 'it leads its own process group')
+  }
+  child.kill()
+  const end = await child.done
+  assert.ok(end.code !== 0 || end.signal !== null, "the plugin's kill() still ends it")
+})
+
 test("emitTo (plugins E1): a plugin's event to the connection that sent the request (ctx.caller); an unknown or closed caller is a no-op; only its own events", async (t) => {
   let host
   const teller = {

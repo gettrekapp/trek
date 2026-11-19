@@ -87,6 +87,14 @@ export interface SpawnOptions {
    * later. Default false: killed by the plugin's dispose.
    */
   detached?: boolean
+  /**
+   * Only for a built-in plugin (plugins E2: the Colima plugin's `colima start` and `docker compose
+   * up -d`, which a server Stop, Restart or Update must not cut off). The plugin's dispose neither
+   * signals it nor waits for it; its output still streams (onOutput) while the server runs. On POSIX
+   * it leads its own process group, as every spawned program does, so a Ctrl-C at the server's
+   * terminal doesn't reach it. `signal` and kill() still end it. Default false.
+   */
+  outlive?: boolean
 }
 
 export interface SpawnedProgram {

@@ -4,7 +4,8 @@
 // (TREK_SERVER_GH=/…/gh.mjs) runs with this process's binary and ELECTRON_RUN_AS_NODE=1, as the
 // gh runner did (server/src/prWatch/gh.ts before P3): Windows can't run a sh stub, and execFile
 // can't start a batch file without a shell. And host.spawn (plugins E1): a long-running program
-// with its output streamed, ended with its process group by the plugin's dispose unless detached.
+// with its output streamed, ended with its process group by the plugin's dispose unless detached
+// or outlive.
 import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { statSync } from 'node:fs'
 import { isAbsolute, win32 } from 'node:path'
