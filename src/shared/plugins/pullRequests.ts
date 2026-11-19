@@ -48,7 +48,7 @@ function safely<T>(provider: PrProvider, method: string, fallback: T, call: () =
 }
 
 const valid = (pr: ParsedPr | null | undefined): pr is ParsedPr =>
-  !!pr && typeof pr.url === 'string' && pr.url !== '' && Number.isInteger(pr.number) && pr.number > 0 && typeof pr.label === 'string'
+  !!pr && typeof pr.url === 'string' && pr.url !== '' && Number.isSafeInteger(pr.number) && pr.number > 0 && typeof pr.label === 'string' && pr.label !== ''
 
 /** The first provider (in order) that parses `input` into a link it owns; null when none does. */
 export function parsePrWith(providers: readonly PrProvider[], input: string): (ParsedPr & { providerId: string }) | null {
@@ -95,7 +95,7 @@ export function resolvePrInput(providers: readonly PrProvider[], input: string, 
   const num = input.trim().match(/^#?(\d+)$/)
   if (num) {
     const n = Number(num[1])
-    for (const provider of providers) {
+    for (const provider of Number.isSafeInteger(n) && n > 0 ? providers : []) {
       const pr = safely(provider, 'fromNumber', null, () => provider.fromNumber?.(n, linkedUrls) ?? null)
       if (valid(pr) && safely(provider, 'owns', false, () => provider.owns(pr.url))) return { ok: true, pr: { ...pr, providerId: provider.id } }
     }

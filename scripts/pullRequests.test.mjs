@@ -43,3 +43,29 @@ test('resolvePrInput: a link, a bare number through fromNumber, and the provider
   assert.deepEqual(resolvePrInput([example], '9', []), { ok: false, problem: 'Enter an Example pull request link, or a number once another pull request is linked in this repository.' })
   assert.deepEqual(resolvePrInput([], 'https://code.example/app/pr/7', []), { ok: false, problem: 'No pull request provider is on in this project (Settings → Plugins).' })
 })
+
+test('a parsed PR needs a non-empty label and a safe-integer number', () => {
+  const noLabel = { ...example, id: 'nolabel', parse: (input) => ({ ...example.parse(input), label: '' }) }
+  assert.equal(parsePrWith([noLabel], 'https://code.example/app/pr/7'), null)
+  // A link with a number past 2^53 parses to an unsafe integer: not a match.
+  assert.equal(parsePrWith([example], 'https://code.example/app/pr/99999999999999999999'), null)
+  // The bare-number path: an unsafe number never reaches fromNumber.
+  let asked = false
+  const counting = { ...example, fromNumber: (n, linked) => ((asked = true), example.fromNumber(n, linked)) }
+  assert.equal(resolvePrInput([counting], '99999999999999999999', ['https://code.example/app/pr/7']).ok, false)
+  assert.equal(asked, false)
+})
+
+test('resolvePrInput: a fromNumber that throws counts as no match; the next provider is asked', () => {
+  const throwing = { ...example, id: 'throwing', fromNumber: () => { throw new Error('boom') } }
+  assert.deepEqual(resolvePrInput([throwing, example], '9', ['https://code.example/app/pr/7']), { ok: true, pr: { url: 'https://code.example/app/pr/9', number: 9, label: '!9', providerId: 'example' } })
+  assert.equal(resolvePrInput([throwing], '9', ['https://code.example/app/pr/7']).ok, false)
+})
+
+test('parsePrWith and resolvePrInput: when two providers both take the input, the first wins', () => {
+  const twin = { ...example, id: 'twin' }
+  assert.equal(parsePrWith([twin, example], 'https://code.example/app/pr/7')?.providerId, 'twin')
+  assert.equal(parsePrWith([example, twin], 'https://code.example/app/pr/7')?.providerId, 'example')
+  const resolved = resolvePrInput([twin, example], '9', ['https://code.example/app/pr/7'])
+  assert.equal(resolved.ok && resolved.pr.providerId, 'twin')
+})
