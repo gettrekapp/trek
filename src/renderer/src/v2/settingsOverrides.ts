@@ -20,7 +20,7 @@
 // custom tag from every branch in the same change (project.updateSettings).
 //
 // Pure: installV2.ts supplies the requests and the writer.
-import type { Project, Repository } from '../../../shared/model/types'
+import type { BranchData, Project, Repository } from '../../../shared/model/types'
 import type { EnvironmentSettings } from '../../../shared/types'
 import type { AppState, SettingsSetter } from '../store'
 import { sameSetting, type Rebased, type SettingsField, type SettingsWriter } from './settingsWriter.ts'
@@ -174,7 +174,14 @@ export function pluginRepoField(repoId: string, pluginId: string, label: string,
         if (r.id !== repoId) return r
         const { pluginSettings: _old, ...rest } = r
         const pluginSettings = withPluginValues(r.pluginSettings, pluginId, value)
-        return pluginSettings ? { ...rest, pluginSettings } : rest
+        const next: Repository = pluginSettings ? { ...rest, pluginSettings } : rest
+        // The env plugin's old field, as the server mirrors it (legacyEnv.ts's mirrorRepo).
+        if (pluginId === LEGACY_ENV_PLUGIN) {
+          const environments = legacyFromRepoValues((value as PluginSettingValues | null) ?? undefined)
+          if (environments) next.environments = environments
+          else delete next.environments
+        }
+        return next
       })
     }),
     send: (value, expected) => requests.setRepoPluginSettings(repoId, pluginId, (value as PluginSettingValues | null) ?? {}, expected as PluginSettingValues | null),
@@ -199,7 +206,13 @@ export function pluginBranchField(repoId: string, branch: string, pluginId: stri
         const before = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : {}
         const { pluginSettings: _old, ...data } = before
         const pluginSettings = withPluginValues(before.pluginSettings, pluginId, value)
-        const next = pluginSettings ? { ...data, pluginSettings } : data
+        const next: BranchData = pluginSettings ? { ...data, pluginSettings } : data
+        // The env plugin's old field, as the server mirrors it (legacyEnv.ts's mirrorBranch).
+        if (pluginId === LEGACY_ENV_PLUGIN) {
+          const text = (value as PluginSettingValues | null)?.[LEGACY_ENV_BRANCH_FIELD]
+          if (typeof text === 'string' && text !== '') next.env = text
+          else delete next.env
+        }
         const branchData = { ...r.branchData }
         if (Object.keys(next).length === 0) delete branchData[branch]
         else branchData[branch] = next
@@ -245,7 +258,7 @@ export function rebaseSet(latest: unknown, wanted: unknown, base: unknown): Reba
 /**
  * An object's change from `base` to `wanted` (the keys it set or removed)
  * applied to `latest`. A clash when `latest` also changed one of those keys,
- * to something else.
+ * to something else. Clearing a whole entry (wanted null) keeps a key another client added.
  */
 export function rebaseObject(latest: unknown, wanted: unknown, base: unknown): Rebased {
   const obj = (v: unknown): Record<string, unknown> =>
@@ -340,12 +353,23 @@ export function v2SettingsOverrides(
       else writer.write(pluginRepoField(repoId, pluginId, label ?? pluginId, requests), Object.keys(values).length > 0 ? { ...values } : null)
     },
     setPluginBranchSettings: (pluginId, repoId, branch, values, label) => {
-      if (pluginId === LEGACY_ENV_PLUGIN && (!listsPlugin(pluginId) || envOnlyInOldField(overlaid(), repoId, branch))) {
+      const shown = overlaid()
+      if (!shown?.repositories.some((r) => r.id === repoId)) return
+      const pluginField = (): SettingsField => pluginBranchField(repoId, branch, pluginId, `${label ?? pluginId} of ${branch}`, requests)
+      const envText = (): void => {
         const text = values[LEGACY_ENV_BRANCH_FIELD]
         writer.write(branchEnvField(repoId, branch, requests), typeof text === 'string' && text !== '' ? text : null)
+      }
+      if (pluginId === LEGACY_ENV_PLUGIN && !listsPlugin(pluginId)) return envText()
+      if (pluginId === LEGACY_ENV_PLUGIN && envOnlyInOldField(shown, repoId, branch)) {
+        // The text goes through the old field only when the values name it; any other keys go
+        // through the plugin's method (the env plugin has none today: the server refuses them).
+        // With both, the text alone: a plugin write without the text would clear it there.
+        if (Object.hasOwn(values, LEGACY_ENV_BRANCH_FIELD)) return envText()
+        if (Object.keys(values).length > 0) writer.write(pluginField(), { ...values })
         return
       }
-      writer.write(pluginBranchField(repoId, branch, pluginId, `${label ?? pluginId} of ${branch}`, requests), Object.keys(values).length > 0 ? { ...values } : null)
+      writer.write(pluginField(), Object.keys(values).length > 0 ? { ...values } : null)
     }
   }
 }

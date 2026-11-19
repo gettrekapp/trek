@@ -4,7 +4,7 @@
 // runs is in projector.ts and terminalSync.ts, which the tests cover.
 import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { syncV2Terminals } from '../terminals'
-import { projectV2, reconcileView, shareSlice, V2_GLOBAL_WORKTREE_ID, type V2IdMap } from './projector.ts'
+import { projectV2, reconcileView, shareSlice, V2_GLOBAL_WORKTREE_ID, type ProjectionOptions, type V2IdMap } from './projector.ts'
 import type { PtyStream } from '../../../shared/client/index.ts'
 import type { Project } from '../../../shared/model/types'
 
@@ -20,13 +20,20 @@ export function setV2ProjectOverlay(next: ((project: Project) => Project) | null
   overlay = next
 }
 
+/** What the projection needs to know of the window's server, read at each projection (plugins E3); null outside a server window. */
+let projectionOptions: (() => ProjectionOptions) | null = null
+
+export function setV2ProjectionOptions(next: (() => ProjectionOptions) | null): void {
+  projectionOptions = next
+}
+
 /** The id map of the projection now in the store, for a v2 backend to address the server. */
 export function v2Ids(): V2IdMap | null {
   return currentIds
 }
 
 export function applyV2Project(project: Project, ptys: PtyStream): void {
-  const { slice: fresh, ids } = projectV2(overlay ? overlay(project) : project)
+  const { slice: fresh, ids } = projectV2(overlay ? overlay(project) : project, projectionOptions?.() ?? {})
   // Entries first: the store update renders TerminalPanes, which attach to them.
   syncV2Terminals(project, ptys)
   const state = useAppStore.getState()

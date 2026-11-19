@@ -234,6 +234,24 @@ test("a branch's .env the plugin's copy lacks (over its 100 000 characters, kept
   assert.deepEqual(one.branchPluginSettings.main, { env: { later: 1, env: big }, other: { on: true } })
 })
 
+test("on a server before plugins E2 (envLegacy) the env plugin's values are the old fields the server goes by: a stale copy (a rollback, a move, an import) is not shown", () => {
+  const p = fixture()
+  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2 }, other: { on: true } }
+  p.repositories[0].environments = { enabled: false, cpu: 8 }
+  // feat keeps its .env (A=1) in the old field; main has only a stale copy.
+  p.repositories[0].branchData.feat.pluginSettings = { env: { env: 'STALE=2', later: true }, other: { x: 1 } }
+  p.repositories[0].branchData.main = { pluginSettings: { env: { env: 'STALE=1' } } }
+  p.repositories[1].pluginSettings = { env: { enabled: true } }
+  const [one, two] = projectV2(p, { envLegacy: true }).slice.project.repositories
+  assert.deepEqual(one.pluginSettings, { env: { enabled: false, cpu: 8 }, other: { on: true } })
+  assert.deepEqual(one.branchPluginSettings, { feat: { env: { env: 'A=1' }, other: { x: 1 } } })
+  assert.equal('pluginSettings' in two, false, 'no old field: no entry')
+  // From E2 on, the plugin's own copy counts.
+  const [e2] = projectV2(p).slice.project.repositories
+  assert.deepEqual(e2.pluginSettings.env, { enabled: true, cpu: 2 })
+  assert.deepEqual(e2.branchPluginSettings.main, { env: { env: 'STALE=1' } })
+})
+
 test("a watched PR (5c-1): the branch's watch, and its worktree's notice by the worktree's path", () => {
   const p = fixture()
   const repo = p.repositories[0]

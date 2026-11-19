@@ -13,7 +13,7 @@ import { envRepoKey } from '../../../shared/environments'
 import { windowEventSubscriber } from './windowEvents'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { v2SetterOverrides } from './setterOverrides'
-import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from './applyProjection'
+import { applyV2Project, clearV2Projection, setV2ProjectionOptions, setV2ProjectOverlay, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
@@ -26,7 +26,8 @@ import { ClientError } from '../../../shared/client/index.ts'
 import { isLocalEntryId } from '../../../shared/appServerRules'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
 import { INSTALL_PATCH, LEAVE_PATCH } from './windowState'
-import type { WindowBackend } from '../backend'
+import { subscribeBackend, type WindowBackend } from '../backend'
+import { LEGACY_ENV_PLUGIN } from '../../../shared/legacyEnvFields.ts'
 import type { AppState } from '../store'
 import type { Project } from '../../../shared/model/types'
 
@@ -224,14 +225,16 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     })
     return keep && !left ? 'keep' : 'reload'
   }
+  // Projects the mirror again (a pending edit, or what the server lists, changed).
+  const reproject = (): void => {
+    const server = left ? undefined : registered()
+    const state = server?.mirror.get(topic)
+    if (server && state) applyV2Project(state.snapshot, server.ptys)
+  }
   const settingsWriter = createSettingsWriter({
     project: mirrorProject,
-    // Projects the mirror again, so the pending edits show (or go) at once.
-    changed: () => {
-      const server = left ? undefined : registered()
-      const state = server?.mirror.get(topic)
-      if (server && state) applyV2Project(state.snapshot, server.ptys)
-    },
+    // So the pending edits show (or go) at once.
+    changed: reproject,
     askConflict,
     reload: () => {
       if (!left) useAppStore.setState((s) => ({ settingsReload: s.settingsReload + 1 }))
@@ -239,6 +242,18 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     reportEdit
   })
   setV2ProjectOverlay(settingsWriter.overlay)
+  // Before plugins E2 the env plugin's settings are shown from the old fields the server goes by,
+  // as the setters write them there (listsPlugin). A new welcome (a reconnect, maybe to another
+  // version) or a changed plugin list announces itself through backendChanged: projected again
+  // when the answer changed.
+  let envLegacy = !listsPlugin(LEGACY_ENV_PLUGIN)
+  setV2ProjectionOptions(() => ({ envLegacy: !listsPlugin(LEGACY_ENV_PLUGIN) }))
+  const offEnvLegacy = subscribeBackend(() => {
+    const now = !listsPlugin(LEGACY_ENV_PLUGIN)
+    if (now === envLegacy) return
+    envLegacy = now
+    reproject()
+  })
 
   // server.agents, for the New session menu and the Global bar: slow the first time (a login
   // shell per program on the server), so asked when the link comes up rather than when a menu
@@ -332,6 +347,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       left = true
       settingsWriter.clear()
       setV2ProjectOverlay(null)
+      setV2ProjectionOptions(null)
+      offEnvLegacy()
       offAgents()
       if (agentsRetry !== null) clearTimeout(agentsRetry)
       cancelRepoPath()

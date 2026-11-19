@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { rebaseObject, rebaseSet, v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
 import { createSettingsWriter } from '../src/renderer/src/v2/settingsWriter.ts'
+import { projectV2 } from '../src/renderer/src/v2/projector.ts'
 
 const project = () => ({
   id: 'p',
@@ -260,6 +261,11 @@ function pendingSetup({ listsPlugin } = {}) {
         if (Object.keys(values).length > 0) next[pluginId] = values
         else delete next[pluginId]
         repo.pluginSettings = next
+        // The server's mirror (legacyEnv.ts).
+        if (pluginId === 'env') {
+          if (Object.keys(values).length > 0) repo.environments = { enabled: values.enabled === true, ...values }
+          else delete repo.environments
+        }
       }),
     setBranchPluginSettings: (repoId, branch, pluginId, values, expected) =>
       open('setBranchPluginSettings', [repoId, branch, pluginId, values, expected], () => {
@@ -268,7 +274,13 @@ function pendingSetup({ listsPlugin } = {}) {
         const next = { ...(data.pluginSettings ?? {}) }
         if (Object.keys(values).length > 0) next[pluginId] = values
         else delete next[pluginId]
-        repo.branchData[branch] = { ...data, pluginSettings: next }
+        const after = { ...data, pluginSettings: next }
+        // The server's mirror (legacyEnv.ts).
+        if (pluginId === 'env') {
+          if (typeof values.env === 'string' && values.env !== '') after.env = values.env
+          else delete after.env
+        }
+        repo.branchData[branch] = after
       })
   }
   const choices = []
@@ -399,7 +411,8 @@ test("a plugin's branch settings (plugins E3): branch.setPluginSettings with exp
   const { o, sends, writer, mirror } = pendingSetup()
   o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
   assert.deepEqual(sends[0].args, ['r1', 'feat', 'env', { env: 'A=1' }, null])
-  assert.deepEqual(writer.overlay(mirror).repositories[0].branchData.feat, { pluginSettings: { env: { env: 'A=1' } } })
+  // Its old field too, as the server mirrors it.
+  assert.deepEqual(writer.overlay(mirror).repositories[0].branchData.feat, { pluginSettings: { env: { env: 'A=1' } }, env: 'A=1' })
   o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
   assert.equal('feat' in writer.overlay(mirror).repositories[0].branchData, false)
   sends[0].ok()
@@ -459,15 +472,15 @@ test('on a server without the env plugin, a set meets a CONFLICT on the old fiel
 test("expected is exactly the plugin's entry as the window read it (plugins E3): keys the window does not know included; null, never {}, when there is none", () => {
   const { o, calls, mirror } = setup()
   mirror.repositories[1].pluginSettings = { env: { enabled: true, cpu: 4, future: 'x' }, other: { on: true } }
-  mirror.repositories[0].branchData = { feat: { note: 'n', pluginSettings: { env: { env: 'A=1', later: [1] } } }, bare: { note: 'b' } }
+  mirror.repositories[0].branchData = { feat: { note: 'n', pluginSettings: { env: { env: 'A=1', later: true } } }, bare: { note: 'b' } }
   o.setPluginRepoSettings('env', 'r2', { enabled: true, cpu: 2, future: 'x' }, 'Colima environments')
-  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'B=2', later: [1] }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'B=2', later: true }, 'Colima environments')
   o.setPluginBranchSettings('env', 'r1', 'bare', { env: 'C=3' }, 'Colima environments')
   o.setPluginBranchSettings('env', 'r1', 'nobranch', { env: 'D=4' }, 'Colima environments')
   o.setPluginRepoSettings('third', 'r1', { on: true })
   assert.deepEqual(calls, [
     ['setRepoPluginSettings', 'r2', 'env', { enabled: true, cpu: 2, future: 'x' }, { enabled: true, cpu: 4, future: 'x' }],
-    ['setBranchPluginSettings', 'r1', 'feat', 'env', { env: 'B=2', later: [1] }, { env: 'A=1', later: [1] }],
+    ['setBranchPluginSettings', 'r1', 'feat', 'env', { env: 'B=2', later: true }, { env: 'A=1', later: true }],
     ['setBranchPluginSettings', 'r1', 'bare', 'env', { env: 'C=3' }, null],
     ['setBranchPluginSettings', 'r1', 'nobranch', 'env', { env: 'D=4' }, null],
     ['setRepoPluginSettings', 'r1', 'third', { on: true }, null]
@@ -478,12 +491,16 @@ test("a branch's .env the plugin's copy lacks (over its limit, kept only in the 
   const { o, sends, writer, mirror } = pendingSetup()
   const big = 'A=' + 'x'.repeat(100_001)
   mirror.repositories[0].branchData = { feat: { env: big, note: 'n' } }
+  // Values without an `env` key leave the text alone: {} sends nothing.
+  o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
+  assert.equal(sends.length, 0)
+  assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, big)
   o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments')
   assert.equal(sends[0].name, 'setBranchEnv')
   assert.deepEqual(sends[0].args, ['r1', 'feat', 'A=1', big])
   assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, 'A=1')
-  // Cleared, the old text goes the same way: never a plugin write that would drop it unseen.
-  o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
+  // Cleared (an empty .env), the old text goes the same way: never a plugin write that would drop it unseen.
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: '' }, 'Colima environments')
   sends[0].ok()
   await tick()
   assert.equal(sends[1].name, 'setBranchEnv')
@@ -495,4 +512,49 @@ test("a branch's .env the plugin's copy lacks (over its limit, kept only in the 
   o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'F=6' }, 'Colima environments')
   assert.equal(sends[2].name, 'setBranchPluginSettings')
   assert.deepEqual(sends[2].args, ['r1', 'feat', 'env', { env: 'F=6' }, { env: 'E=5' }])
+})
+
+test('over the limit, keys other than env go through branch.setPluginSettings, the text untouched (plugins E3)', () => {
+  const { o, calls, mirror } = setup()
+  const big = 'A=' + 'x'.repeat(100_001)
+  mirror.repositories[0].branchData = { feat: { env: big } }
+  o.setPluginBranchSettings('env', 'r1', 'feat', { later: true }, 'Colima environments')
+  assert.deepEqual(calls, [['setBranchPluginSettings', 'r1', 'feat', 'env', { later: true }, null]])
+})
+
+test("a plugin's branch settings for an unknown repository send nothing (plugins E3)", () => {
+  const { o, calls } = setup()
+  o.setPluginBranchSettings('env', 'nope', 'feat', { env: 'A=1' }, 'Colima environments')
+  o.setPluginBranchSettings('other', 'nope', 'feat', { on: true })
+  const legacy = setup({ listsPlugin: () => false })
+  legacy.o.setPluginBranchSettings('env', 'nope', 'feat', { env: 'A=1' })
+  assert.deepEqual([...calls, ...legacy.calls], [])
+})
+
+test("a pending env change shows its old fields as the server will mirror them (plugins E3): a cleared .env shows nothing, and the next set is the plugin's", async () => {
+  const { o, sends, writer, mirror } = pendingSetup()
+  mirror.repositories[0].branchData = { feat: { env: 'A=1', pluginSettings: { env: { env: 'A=1' } } } }
+  o.setPluginBranchSettings('env', 'r1', 'feat', {}, 'Colima environments')
+  assert.deepEqual(sends[0].args, ['r1', 'feat', 'env', {}, { env: 'A=1' }])
+  const shown = writer.overlay(mirror)
+  assert.equal('feat' in shown.repositories[0].branchData, false)
+  assert.equal(projectV2(shown).slice.project.repositories[0].branchPluginSettings?.feat, undefined)
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: 'B=2' }, 'Colima environments')
+  sends[0].ok()
+  await tick()
+  assert.equal(sends[1].name, 'setBranchPluginSettings')
+  assert.deepEqual(sends[1].args, ['r1', 'feat', 'env', { env: 'B=2' }, null])
+  assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, 'B=2')
+})
+
+test('a pending env change of a repository shows its old environments as the server mirrors them (plugins E3)', () => {
+  const { o, writer, mirror } = setup()
+  o.setPluginRepoSettings('env', 'r2', { cpu: 2 }, 'Colima environments')
+  assert.deepEqual(writer.overlay(mirror).repositories[1].environments, { enabled: false, cpu: 2 })
+  o.setPluginRepoSettings('env', 'r2', {}, 'Colima environments')
+  assert.equal('environments' in writer.overlay(mirror).repositories[1], false)
+  // Another plugin's settings leave the old field alone.
+  mirror.repositories[1].environments = { enabled: true, cpu: 4 }
+  o.setPluginRepoSettings('other', 'r2', { on: false })
+  assert.equal('environments' in writer.overlay(mirror).repositories[1], false, 'the pending env clear still shows')
 })

@@ -205,28 +205,46 @@ function branchMaps(repo: V2Repository): BranchMaps {
 type PluginMap = Record<string, PluginSettingValues>
 const ownsEnv = (map: PluginMap | undefined): boolean => !!map && Object.hasOwn(map, LEGACY_ENV_PLUGIN)
 
+/** What the projection needs to know of the window's server (plugins E3). */
+export interface ProjectionOptions {
+  /**
+   * The server doesn't list the env plugin (before plugins E2): it keeps and goes by the env
+   * plugin's settings under their old names only, so those are its values. A `pluginSettings.env`
+   * there is stale (left by a rollback, a move or an import) and is not shown.
+   */
+  envLegacy?: boolean
+}
+
 /**
  * The repository's plugin settings and its branches' (plugins E1), for the plugins' client halves
  * (plugins E3), each entry as the server keeps it (keys this window doesn't know included; no
- * entry is made up as {}): a write sends the entry it read as `expected`. A server before plugins
- * E2 keeps the env plugin's only under their old names (`environments`, `branchData[branch].env`):
- * its values are made from those there. From E2 on the server keeps both in step, so the plugin's
- * own entry is what counts, but for a branch's .env over the plugin's limit, which the server keeps
- * only in the old field (legacyEnv.ts's migrateBranchEnv): it is shown from there, so it is never
- * shown empty (settingsOverrides.ts writes it back through the old field).
+ * entry is made up as {}): a write sends the entry it read as `expected`.
+ * - Before plugins E2 (`envLegacy`) the env plugin's values are made from the old fields
+ *   (`environments`, `branchData[branch].env`) alone, and are absent without them.
+ * - From E2 on the server keeps both in step, so the plugin's own entry is what counts. A repository
+ *   with only the old field takes its values from there; so does a branch's .env over the plugin's
+ *   limit, which the server keeps only in the old field (legacyEnv.ts's migrateBranchEnv), so it is
+ *   never shown empty (settingsOverrides.ts writes it back through the old field).
  */
-function pluginMaps(repo: V2Repository): Pick<Repository, 'pluginSettings' | 'branchPluginSettings'> {
+function pluginMaps(repo: V2Repository, envLegacy: boolean): Pick<Repository, 'pluginSettings' | 'branchPluginSettings'> {
   const own: PluginMap = { ...(repo.pluginSettings ?? {}) }
-  if (!ownsEnv(repo.pluginSettings) && repo.environments) {
+  if (envLegacy || !ownsEnv(repo.pluginSettings)) {
     const values = repoValuesFromLegacy(repo.environments)
     if (Object.keys(values).length > 0) own[LEGACY_ENV_PLUGIN] = values
+    else delete own[LEGACY_ENV_PLUGIN]
   }
   const branches: Record<string, PluginMap> = {}
   for (const [branch, data] of Object.entries(repo.branchData)) {
     const map: PluginMap = { ...(data.pluginSettings ?? {}) }
-    const entry = ownsEnv(data.pluginSettings) ? data.pluginSettings![LEGACY_ENV_PLUGIN] : undefined
-    const unmirrored = !entry || !Object.hasOwn(entry, LEGACY_ENV_BRANCH_FIELD)
-    if (unmirrored && typeof data.env === 'string' && data.env !== '') map[LEGACY_ENV_PLUGIN] = { ...entry, [LEGACY_ENV_BRANCH_FIELD]: data.env }
+    const text = typeof data.env === 'string' && data.env !== '' ? data.env : undefined
+    if (envLegacy) {
+      if (text !== undefined) map[LEGACY_ENV_PLUGIN] = { [LEGACY_ENV_BRANCH_FIELD]: text }
+      else delete map[LEGACY_ENV_PLUGIN]
+    } else {
+      const entry = ownsEnv(data.pluginSettings) ? data.pluginSettings![LEGACY_ENV_PLUGIN] : undefined
+      const unmirrored = !entry || !Object.hasOwn(entry, LEGACY_ENV_BRANCH_FIELD)
+      if (unmirrored && text !== undefined) map[LEGACY_ENV_PLUGIN] = { ...entry, [LEGACY_ENV_BRANCH_FIELD]: text }
+    }
     if (Object.keys(map).length > 0) branches[branch] = map
   }
   return {
@@ -235,7 +253,7 @@ function pluginMaps(repo: V2Repository): Pick<Repository, 'pluginSettings' | 'br
   }
 }
 
-export function projectV2(project: Project): V2Projection {
+export function projectV2(project: Project, options: ProjectionOptions = {}): V2Projection {
   const ids: V2IdMap = { worktrees: {}, worktreeByPath: {}, sessions: {}, legacyByWorktree: {} }
   const hostWorktrees: Record<string, GitWorktreeInfo[]> = {}
   const terminals: Record<string, TerminalMeta> = {}
@@ -300,7 +318,7 @@ export function projectV2(project: Project): V2Projection {
       ...branchMaps(repo),
       ...(repo.linkedDirs ? { linkedDirs: [...repo.linkedDirs] } : {}),
       ...(repo.environments ? { environments: repo.environments } : {}),
-      ...pluginMaps(repo)
+      ...pluginMaps(repo, options.envLegacy === true)
     }
   })
 
