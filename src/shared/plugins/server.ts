@@ -20,12 +20,17 @@ export interface KeySlot {
 /** A `setKey { ifAbsent }` that found a key already stored. */
 export const PRESENT_ERROR = 'This server already has a key; it was kept'
 
-/** The wire error codes a plugin may throw; anything else reaches the client as TOOL_ERROR. */
-export type PluginErrorCode = 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'TOOL_ERROR' | 'NOT_SIGNED_IN'
+/** The wire error codes a plugin may throw; anything else reaches the client as TOOL_ERROR. PATH_DENIED and GIT_ERROR (plugins E2): the host's checked lookups throw them. */
+export type PluginErrorCode = 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'TOOL_ERROR' | 'NOT_SIGNED_IN' | 'PATH_DENIED' | 'GIT_ERROR'
 
-/** An error that reaches the client with `code` (as the server's own codedError). */
-export function pluginError(code: PluginErrorCode, message: string): Error {
-  return Object.assign(new Error(message), { code })
+/** What an error tells a client beside its code (plugins E2): `reason`, as core's own TOOL_ERRORs do (`missing`, `registry`). */
+export interface PluginErrorDetails {
+  reason?: string
+}
+
+/** An error that reaches the client with `code` (as the server's own codedError), and `details` when given. */
+export function pluginError(code: PluginErrorCode, message: string, details?: PluginErrorDetails): Error {
+  return Object.assign(new Error(message), { code }, details ? { details } : {})
 }
 
 const bad = (message: string): Error => pluginError('BAD_REQUEST', message)
@@ -56,12 +61,19 @@ export interface RunOptions {
   signal?: AbortSignal
   /** Added to the program's env (the server's env plus these); PATH (in any case) is dropped, so it doesn't change how the program is found */
   env?: Record<string, string>
+  /**
+   * Where it runs (plugins E2), under `spawn`'s rule for `cwd` (a project's repository or present
+   * worktree inside the server's allowed paths, or the plugin's data directory). Absent: the
+   * server's own directory, as before.
+   */
+  cwd?: string
 }
 
 export interface SpawnOptions {
   /**
-   * A repository's main checkout or one of its present worktrees, in one of the server's projects,
-   * or the plugin's data directory (dataFile's); anything else is refused
+   * A repository's main checkout or one of its present worktrees, in one of the server's projects
+   * and inside the server's allowed paths (PATH_DENIED otherwise, plugins E2), or the plugin's data
+   * directory (dataFile's); anything else is refused
    */
   cwd: string
   /** Added to the server's env; PATH (in any case) is dropped, as for `run` */

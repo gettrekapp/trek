@@ -242,3 +242,11 @@ test("spawnCommand: kill() ends the child's whole process group", { skip: posixO
   await child.done
   assert.ok(await gone(grandchild), 'the grandchild ended with its parent')
 })
+
+test('runCommand (plugins E2): in the cwd it is given', async (t) => {
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-run-cwd-')))
+  t.after(() => removeDir(dir))
+  assert.equal(await runCommand(node, ['-e', 'process.stdout.write(process.cwd())'], { cwd: dir }), dir)
+  // A missing cwd is said so, not taken for a program that is not installed.
+  await assert.rejects(runCommand(node, ['-e', ''], { cwd: join(dir, 'gone') }), (e) => e.code !== 'ENOENT' && /does not exist/.test(e.message))
+})

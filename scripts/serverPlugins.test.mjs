@@ -4,7 +4,7 @@
 // files, and the welcome's plugins and legacy capabilities.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
@@ -16,7 +16,7 @@ import { MCP_INSTRUCTIONS, MCP_TOOLS } from '../server/src/mcp/tools.ts'
 import { pluginError } from '../src/shared/plugins/server.ts'
 import { applySettingsPatch, isSettingsKey, PLUGIN_OWNED_SETTINGS, validateSettings } from '../server/src/projects/settings.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
-import { removeDir } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
@@ -54,7 +54,7 @@ function fakeHub(subscribers = {}) {
 
 const manifest = (id, more = {}) => ({ id, version: '1.0.0', name: id, description: '', defaultEnabled: true, ...more })
 
-function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', { echo: { enabled: false } }) }, hub = fakeHub(), platform } = {}) {
+function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', { echo: { enabled: false } }) }, hub = fakeHub(), platform, paths } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-plugins-'))
   t.after(() => removeDir(dir))
   const warnings = []
@@ -68,7 +68,8 @@ function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', {
     coreToolNames: MCP_TOOLS.map((tool) => tool.name),
     env: { TREK_SERVER_ECHO_URL: 'http://127.0.0.1:9/x', TREK_SERVER_BAD_URL: 'https://example.com' },
     warn: (m) => warnings.push(m),
-    ...(platform ? { platform } : {})
+    ...(platform ? { platform } : {}),
+    ...(paths ? { paths } : {})
   })
   return { dir, registry, warnings, hub }
 }
@@ -851,4 +852,71 @@ test("lifecycles (plugins E1): the worktree lifecycles of plugins on in the proj
     ['teardown', 'conn-1', 'w2', 'move', ['vm']],
     ['repo', { id: 'r1', path: '/r/app', name: 'app' }]
   ])
+})
+
+test("host.run (plugins E2) takes a cwd under spawn's rule; a repository or worktree outside the allowed paths is PATH_DENIED for run and spawn", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-run-cwd-')))
+  t.after(() => removeDir(root))
+  const repoPath = join(root, 'app')
+  const wtPath = join(root, 'app-feat')
+  for (const dir of [repoPath, wtPath]) mkdirSync(dir)
+  const repo = {
+    id: 'r1', name: 'app', path: repoPath, branchData: {},
+    worktrees: [{ id: 'w1', path: repoPath, isMain: true, sessions: [] }, { id: 'w2', path: wtPath, branch: 'feat', isMain: false, sessions: [] }]
+  }
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } }, paths: { allowed: (path) => path !== wtPath } })
+  const cwdOf = (cwd) => host.run(process.execPath, ['-e', 'process.stdout.write(process.cwd())'], { cwd })
+  assert.equal(await cwdOf(repoPath), repoPath)
+  const dataDir = dirname(host.dataFile('x.json'))
+  // The child's process.cwd() is a real path; setup's temp dir is not one on macOS (/var → /private/var).
+  assert.equal(await cwdOf(dataDir), realpathSync(dataDir), "the plugin's data directory is not the allowlist's to refuse")
+  assert.equal(await host.run(process.execPath, ['-e', 'process.stdout.write("ok")']), 'ok', 'no cwd: as before')
+  await assert.rejects(cwdOf(wtPath), (e) => e.code === 'PATH_DENIED' && /outside the server's allowed paths/.test(e.message))
+  await assert.rejects(host.spawn(process.execPath, ['-e', ''], { cwd: wtPath }), (e) => e.code === 'PATH_DENIED')
+  await assert.rejects(cwdOf(root), /not a repository, a worktree/)
+  await registry.dispose()
+})
+
+test('pluginError (plugins E2) carries details; PATH_DENIED and GIT_ERROR reach the client as they are', async (t) => {
+  const thrower = {
+    manifest: manifest('thrower'),
+    setup: () => ({
+      handlers: {
+        missing: () => {
+          throw pluginError('TOOL_ERROR', 'colima is not installed', { reason: 'missing' })
+        },
+        denied: () => {
+          throw pluginError('PATH_DENIED', '/x is outside')
+        },
+        git: () => {
+          throw pluginError('GIT_ERROR', 'git broke')
+        }
+      }
+    })
+  }
+  const { registry } = setup(t, [thrower])
+  const call = (method) => dispatchV2(method, {}, { plugins: registry })
+  assert.deepEqual((await call('thrower.missing')).error, { code: 'TOOL_ERROR', message: 'colima is not installed', details: { reason: 'missing' } })
+  assert.deepEqual((await call('thrower.denied')).error, { code: 'PATH_DENIED', message: '/x is outside' })
+  assert.deepEqual((await call('thrower.git')).error, { code: 'GIT_ERROR', message: 'git broke' })
+})
+
+test('dispose (plugins E2) waits for a child that ignores SIGTERM until the SIGKILL ends it', { skip: posixOnly('POSIX process groups') }, async (t) => {
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner])
+  const dir = dirname(host.dataFile('x.json'))
+  let ready
+  const up = new Promise((resolve) => (ready = resolve))
+  const stubborn = await host.spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); process.stdout.write("up"); setInterval(() => {}, 1000)'], { cwd: dir, onOutput: () => ready() })
+  await up
+  const began = Date.now()
+  await registry.dispose()
+  // Timed before awaiting done: the SIGKILL lands 3 s on whether or not dispose waited for it.
+  const waited = Date.now() - began
+  assert.equal((await stubborn.done).signal, 'SIGKILL')
+  assert.ok(waited >= 2900, `it waited for the SIGKILL (${waited} ms)`)
+  assert.equal(await registry.dispose(), undefined, 'a second dispose has nothing to wait for')
 })

@@ -18,6 +18,7 @@ import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
+import { PLUGIN_STOP_MS } from './plugins/registry'
 import { tailscaleAddress, testPhoneAddress } from './tailscale'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
@@ -623,7 +624,8 @@ function shutdown(reason: string, into?: RelaunchInto): void {
   const flushed = delay(SHUTDOWN_FLUSH_MS)
   // A control socket still being taken is closed when it settles (startUpdates); bounded like the rest.
   const controlClosed = Promise.race([updateControlSettled, delay(SHUTDOWN_CLEAR_MS)])
-  void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)]), controlClosed]).then(() => {
+  // A plugin's program still stopping holds the exit until its SIGKILL (registry.ts, PLUGIN_STOP_MS).
+  void Promise.all([flushed, Promise.race([cleared, delay(Math.max(SHUTDOWN_CLEAR_MS, PLUGIN_STOP_MS))]), controlClosed]).then(() => {
     server.sessions.terminals.forceKillAll()
     if (relaunchInto) {
       try {

@@ -41,6 +41,7 @@ import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
 import { legacyCapabilitiesOf, type PluginPresence } from '../../src/shared/plugins/manifest.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
+import { pluginPathChecks } from './plugins/coreChecks.ts'
 import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
 import { installedIdReserved } from './plugins/reserved.ts'
 import { mcpContext } from './plugins/mcp.ts'
@@ -204,7 +205,8 @@ export function startServer(
         hub,
         projects,
         isCoreMethod,
-        coreToolNames: MCP_TOOLS.map((t) => t.name)
+        coreToolNames: MCP_TOOLS.map((t) => t.name),
+        paths: pluginPathChecks({ projects, store, poller })
       })
     : undefined
   // The installed plugins (theme plugins phase 1): stored and handed to clients, never run here.
@@ -835,7 +837,7 @@ export function startServer(
     promoteRequests.stop()
     pusher?.stop()
     sessions.stopAll()
-    plugins?.dispose()
+    const pluginsStopped = plugins?.dispose()
     installedPlugins?.dispose()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
@@ -853,7 +855,7 @@ export function startServer(
     phoneListener?.stop()
     wss.close()
     httpServer.close()
-    return cleared
+    return Promise.all([cleared, pluginsStopped]).then(() => undefined)
   }
 
   return trek

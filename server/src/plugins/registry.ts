@@ -25,7 +25,7 @@ import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { createSecretFile } from '../secrets.ts'
 import { findSession } from '../sessions/locate.ts'
-import { commandFromEnv, runCommand, spawnCommand } from './run.ts'
+import { commandFromEnv, runCommand, spawnCommand, SPAWN_KILL_GRACE_MS } from './run.ts'
 import { realOrResolved } from '../repos.ts'
 import { pluginRepo, pluginWorktree } from './worktrees.ts'
 import type { TopicHub } from '../topicHub'
@@ -52,8 +52,17 @@ function fileIn(dir: string, name: string): string {
   return path
 }
 
-/** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. */
-const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR', 'NOT_SIGNED_IN'])
+/** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. PATH_DENIED and GIT_ERROR: the host's checked lookups (plugins E2). */
+const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR', 'NOT_SIGNED_IN', 'PATH_DENIED', 'GIT_ERROR'])
+
+/** How long dispose waits for the plugins' children (plugins E2): past the SIGKILL that follows their SIGTERM. */
+export const PLUGIN_STOP_MS = SPAWN_KILL_GRACE_MS + 500
+
+/** Core's checks before a plugin runs a program somewhere (plugins E2; coreChecks.ts). */
+export interface PluginPathChecks {
+  /** Whether the server's path allowlist covers the path */
+  allowed(path: string): boolean
+}
 
 export interface PluginRegistryOptions {
   plugins: readonly ServerPlugin[]
@@ -71,6 +80,8 @@ export interface PluginRegistryOptions {
   warn?: (message: string) => void
   /** For tests: the platform the `platforms` manifests are matched against (default: process.platform) */
   platform?: NodeJS.Platform
+  /** Core's path checks (plugins E2): without them a program's cwd is checked against the projects only */
+  paths?: PluginPathChecks
 }
 
 /** A plugin's worktree lifecycle, with the id its items are namespaced by (plugins E1). */
@@ -111,7 +122,8 @@ export interface PluginRegistry {
   settingFields(pluginId: string, scope: 'repo' | 'branch'): Readonly<Record<string, PluginFieldKind>> | undefined
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
   onChanged(listener: (manifest: PluginManifest) => void): void
-  dispose(): void
+  /** Stops every plugin; resolves once their programs (not detached ones) have exited, at most PLUGIN_STOP_MS later */
+  dispose(): Promise<void>
 }
 
 interface Entry {
@@ -148,6 +160,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const aborts = new Map<string, AbortController>()
   /** Each open connection's sender, by its caller id (server.ts): what host.emitTo reaches */
   const callers = new Map<string, (event: string, payload: unknown) => void>()
+  /** Each running non-detached program's `done` (host.spawn): dispose waits for them */
+  const live = new Set<Promise<unknown>>()
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -166,23 +180,27 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const allowedSecrets = new Set(manifest.secrets ?? [])
     const abort = new AbortController()
     aborts.set(manifest.id, abort)
-    /** A spawn's cwd (plugins E1): exactly a project's repository or present worktree, or this plugin's data directory. */
-    const spawnCwd = (cwd: unknown): string => {
+    /**
+     * A program's cwd (plugins E1, E2: host.spawn, and host.run when it has one): exactly a project's
+     * repository or present worktree, inside the server's allowed paths, or this plugin's data directory.
+     */
+    const programCwd = (cwd: unknown): string => {
       if (typeof cwd !== 'string' || cwd === '') throw new Error("spawn needs a cwd: a repository, a worktree or the plugin's data directory")
       const key = realOrResolved(cwd)
       if (key === realOrResolved(dir)) {
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         return dir
       }
-      const present = (path: string): string => {
+      const usable = (path: string): string => {
         if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) throw new Error(`${cwd} does not exist`)
+        if (options.paths && !options.paths.allowed(path)) throw codedError('PATH_DENIED', `${path} is outside the server's allowed paths`)
         return path
       }
       for (const project of options.projects.all()) {
         for (const repo of project.repositories) {
-          if (realOrResolved(repo.path) === key) return present(repo.path)
+          if (realOrResolved(repo.path) === key) return usable(repo.path)
           const worktree = repo.worktrees.find((w) => w.missing !== true && realOrResolved(w.path) === key)
-          if (worktree) return present(worktree.path)
+          if (worktree) return usable(worktree.path)
         }
       }
       throw new Error(`${cwd} is not a repository, a worktree or this plugin's data directory`)
@@ -201,19 +219,21 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       legacyDataFile: (name) => fileIn(options.dataDir, name),
       testEndpoint: (envName) => testEndpoint(envName, env[envName], warn),
       // Only the known options: a plugin can't reach runCommand's or spawnCommand's test-only ones (platform).
-      run: (command, args, opts = {}) =>
+      // async: a refused cwd is a rejection, as for spawn.
+      run: async (command, args, opts = {}) =>
         runCommand(command, args, {
           timeoutMs: opts.timeoutMs,
           maxBytes: opts.maxBytes,
           env: opts.env,
+          ...(opts.cwd !== undefined ? { cwd: programCwd(opts.cwd) } : {}),
           signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
         }),
       spawn: async (command, args, opts) => {
-        const cwd = spawnCwd(opts?.cwd)
+        const cwd = programCwd(opts?.cwd)
         const detached = opts.detached === true
         // A detached child outlives the plugin: the dispose's abort is not its signal.
         const signal = detached ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
-        return spawnCommand(command, args, {
+        const program = await spawnCommand(command, args, {
           cwd,
           env: opts.env,
           signal,
@@ -221,6 +241,11 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           onOutput: opts.onOutput,
           warn: (message) => warn(`[plugin ${manifest.id}] ${message}`)
         })
+        if (!detached) {
+          live.add(program.done)
+          void program.done.then(() => live.delete(program.done))
+        }
+        return program
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
@@ -443,6 +468,18 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           warn(`[plugin ${e.manifest.id}] dispose failed: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
+      // The aborts sent each running program SIGTERM; SIGKILL follows SPAWN_KILL_GRACE_MS later
+      // (run.ts) on an unref'd timer, so the server waits that long before it exits, or a program
+      // ignoring SIGTERM would outlive it (plugins E2).
+      const children = [...live]
+      if (children.length === 0) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, PLUGIN_STOP_MS)
+        void Promise.all(children).then(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
     }
   }
 }

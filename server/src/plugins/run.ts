@@ -22,6 +22,8 @@ export interface RunCommandOptions {
   signal?: AbortSignal
   /** Added to this process's env; PATH (in any case) is dropped, so it can't change which program runs */
   env?: Record<string, string>
+  /** Its working directory, already checked by the caller (the registry's cwd rule); a missing one is refused (not as ENOENT); absent: this process's */
+  cwd?: string
   /** For tests */
   platform?: NodeJS.Platform
 }
@@ -62,6 +64,8 @@ export function runCommand(command: string, args: readonly string[], options: Ru
   if (problem) return Promise.reject(problem)
   const viaNode = throughNode(command, platform)
   if (options.signal?.aborted) return Promise.reject(stopped(command))
+  // As spawnCommand: a missing cwd is said so, not taken for a missing program (execFile's ENOENT).
+  if (options.cwd !== undefined && statSync(options.cwd, { throwIfNoEntry: false })?.isDirectory() !== true) return Promise.reject(new Error(`${options.cwd} does not exist`))
   const timeoutMs = clamp(options.timeoutMs, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS)
   const env = childEnv(options.env, viaNode)
   return new Promise((resolve, reject) => {
@@ -74,7 +78,8 @@ export function runCommand(command: string, args: readonly string[], options: Ru
           timeout: timeoutMs,
           maxBuffer: clamp(options.maxBytes, RUN_DEFAULT_MAX_BYTES, RUN_MAX_BYTES),
           signal: options.signal,
-          env
+          env,
+          cwd: options.cwd
         }),
         (err, stdout, stderr) => {
           if (err) {
