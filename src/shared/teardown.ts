@@ -12,6 +12,11 @@ export interface TeardownItem {
   label: string
   /** The confirm's default */
   checked: boolean
+  /**
+   * The thing this item tears down is running now; a client keeps a move or other op that would
+   * leave it running from going ahead unticked. Absent: not running (or not known to be).
+   */
+  running?: boolean
 }
 
 /** How long a client waits for a remove, promote or move.finish that tears down first: a stack's destroy and a VM's delete can take minutes. */

@@ -1,7 +1,7 @@
 // scripts/moveFlow.test.mjs — the app's worktree move (phase 5d) over fake source and target servers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { moveTargets, moveWorktree } from '../src/renderer/src/v2/moveFlow.ts'
+import { moveTargets, moveTeardownCheck, moveWorktree } from '../src/renderer/src/v2/moveFlow.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { MOVE_FETCH_TIMEOUT_MS } from '../src/shared/move.ts'
 import { TEARDOWN_REQUEST_TIMEOUT_MS } from '../src/shared/teardown.ts'
@@ -311,6 +311,7 @@ test('worktreeTeardown: a source changed after the copy, a busy one, or a failed
     new ClientError('CONFLICT', 'a teardown is still finishing for this worktree'),
     new ClientError('CONFLICT', 'this worktree is busy: removing it; try again once it is done'),
     new ClientError('IN_USE', 'loaded again after it was copied'),
+    new ClientError('BAD_REQUEST', 'unknown teardown item ghost:x'),
     new ClientError('TOOL_ERROR', "Couldn't stop the VM: stuck", { reason: 'teardown' }),
     new ClientError('TOOL_ERROR', "Couldn't stop the VM: stuck (already done: Tear down the dev stack)", { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
   ]) {
@@ -326,7 +327,9 @@ test('worktreeTeardown: a source changed after the copy, a busy one, or a failed
   }
   const source = src({ 'move.finish': new ClientError('GIT_ERROR', 'locked') })
   const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
-  const result = await run(source, target, { teardownIds: ['env:destroy'] }).outcome
+  const locked = run(source, target, { teardownIds: ['env:destroy'] })
+  const result = await locked.outcome
+  assert.deepEqual(locked.steps.find(([s, st]) => s === 'teardown' && st !== 'active'), ['teardown', 'skipped', 'nothing was torn down'])
   assert.equal(result.kind, 'both')
   assert.ok(!target.methods().includes('move.unreceive'))
   assert.match(result.error, /source's copy was not removed/)
@@ -349,12 +352,38 @@ test('worktreeTeardown: a failure after the teardown (details.tornDown) keeps bo
 })
 
 test('worktreeTeardown: a lost finish answer keeps both and says the teardown may or may not have run', async () => {
-  const source = src({ 'move.finish': new ClientError('TIMEOUT', 'gone') })
-  const { outcome, steps } = run(source, tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } }), { teardownIds: ['env:destroy'] })
-  const result = await outcome
-  assert.equal(result.kind, 'both')
-  assert.match(result.error, /may or may not have been removed/)
-  assert.deepEqual(steps.find(([s, st]) => s === 'teardown' && st !== 'active').slice(0, 2), ['teardown', 'failed'])
+  for (const code of ['TIMEOUT', 'NOT_CONNECTED']) {
+    const source = src({ 'move.finish': new ClientError(code, 'gone') })
+    const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
+    const { outcome, steps } = run(source, target, { teardownIds: ['env:destroy'] })
+    const result = await outcome
+    assert.equal(result.kind, 'both', code)
+    assert.ok(!target.methods().includes('move.unreceive'), code)
+    assert.match(result.error, /may or may not have been removed/)
+    assert.deepEqual(steps.find(([s, st]) => s === 'teardown' && st !== 'active'), ['teardown', 'failed', 'the answer was lost, so it may or may not have run'], code)
+  }
+})
+
+test('worktreeTeardown with some items ticked: only those are sent, and the step is no "unticked" skip', async () => {
+  const source = src()
+  const { outcome, steps } = run(source, tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } }), { teardownIds: ['stack:destroy'] })
+  assert.equal((await outcome).kind, 'moved')
+  assert.deepEqual(source.calls.at(-1)[1].teardown, ['stack:destroy'])
+  assert.deepEqual(steps.filter(([s]) => s === 'teardown').map(([, st]) => st), ['active', 'done'])
+})
+
+test('moveTeardownCheck: only an unticked item that is running blocks; a running stack or VM the plan left out blocks too', () => {
+  const stack = { id: 'stack:destroy', label: 'Tear down the dev stack', checked: true, running: true }
+  const vm = { id: 'env:destroy', label: 'Delete the VM', checked: true }
+  const none = { stack: false, vm: false }
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id, vm.id]), none), { blocks: false, blocking: [], unplanned: [] })
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id]), none), { blocks: false, blocking: [], unplanned: [] }, 'the stopped VM unticked stays behind')
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([vm.id]), none), { blocks: true, blocking: [stack.id], unplanned: [] }, 'the running stack unticked')
+  assert.deepEqual(moveTeardownCheck([], new Set(), none), { blocks: false, blocking: [], unplanned: [] })
+  // The plan left a participant out (its plan failed) though this window sees it running.
+  assert.deepEqual(moveTeardownCheck([vm], new Set([vm.id]), { stack: true, vm: false }), { blocks: true, blocking: [], unplanned: ['its dev stack'] })
+  assert.deepEqual(moveTeardownCheck([stack], new Set([stack.id]), { stack: true, vm: true }), { blocks: true, blocking: [], unplanned: ['its VM'] })
+  assert.deepEqual(moveTeardownCheck([stack, vm], new Set([stack.id, vm.id]), { stack: true, vm: true }), { blocks: false, blocking: [], unplanned: [] })
 })
 
 test('worktreeTeardown with nothing chosen: the finish sends no teardown; unticked says so', async () => {

@@ -9,7 +9,7 @@ import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../../../sha
 import { errorCode, errorText } from './errors.ts'
 import type { AppServerLink } from '../../../shared/types'
 import { MOVE_RECEIVE_TIMEOUT_MS } from '../../../shared/move.ts'
-import { TEARDOWN_REQUEST_TIMEOUT_MS } from '../../../shared/teardown.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, type TeardownItem } from '../../../shared/teardown.ts'
 
 export type Requester = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
 
@@ -248,10 +248,10 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
         tornDown = true
         tornDownNote = ` The teardown had already run and is not undone: ${done.join('; ')}.`
         progress('teardown', 'done')
-      } else if (code === 'CONFLICT' || code === 'IN_USE' || errorDetails(err).reason === 'teardown') {
-        // The server checks the source unchanged (and not busy) before it tears anything down, and
-        // stops at a failed item with the worktree kept: either way the target's copy goes. A
-        // failed item's text names what was already done.
+      } else if (code === 'CONFLICT' || code === 'IN_USE' || code === 'BAD_REQUEST' || errorDetails(err).reason === 'teardown') {
+        // The server refuses a bad request before any hold, checks the source unchanged (and not
+        // busy) before it tears anything down, and stops at a failed item with the worktree kept:
+        // each way the target's copy goes. A failed item's text names what was already done.
         progress('teardown', 'failed', errorText(err))
         return undoTarget(err, 'teardown')
       } else progress('teardown', 'skipped', 'nothing was torn down')
@@ -300,6 +300,25 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
       notes
     }
   }
+}
+
+/**
+ * Whether a move's teardown choice (a source with `worktreeTeardown`) keeps Move off: an unticked
+ * item that is `running` would be left running with its folder gone (`blocking`, its ids). A stack
+ * or VM this window sees running (`seen`) that the plan has no item for (its participant's plan
+ * failed and was left out) can't be torn down either (`unplanned`, as the summary names it).
+ */
+export function moveTeardownCheck(
+  items: readonly TeardownItem[],
+  ticked: ReadonlySet<string>,
+  seen: { stack: boolean; vm: boolean }
+): { blocks: boolean; blocking: string[]; unplanned: string[] } {
+  const blocking = items.filter((item) => item.running === true && !ticked.has(item.id)).map((item) => item.id)
+  const planned = new Set(items.map((item) => item.id))
+  const unplanned = [seen.stack && !planned.has('stack:destroy') ? 'its dev stack' : null, seen.vm && !planned.has('env:destroy') ? 'its VM' : null].filter(
+    (what): what is string => what !== null
+  )
+  return { blocks: blocking.length > 0 || unplanned.length > 0, blocking, unplanned }
 }
 
 /**

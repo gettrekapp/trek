@@ -30,7 +30,10 @@ export function stackParticipant(ctx: Pick<V2Context, 'store'>, machine: Machine
     plan: async ({ worktree }) => {
       if (worktree.missing === true || !allowed(ctx, worktree.path)) return []
       const status = await machine.stacks.status(worktree.path)
-      return status.available && status.created && status.slug ? [{ id: 'destroy', label: stackLabel(status.slug), checked: true }] : []
+      if (!(status.available && status.created && status.slug)) return []
+      // Running as the clients read it: containers up, or a `stack.sh up` still starting them.
+      const running = status.containers > 0 || status.upRunning
+      return [{ id: 'destroy', label: stackLabel(status.slug), checked: true, ...(running ? { running: true } : {}) }]
     },
     teardown: async ({ worktree }) => {
       const code = await machine.stacks.destroy(worktree.path)
@@ -59,7 +62,8 @@ export function envParticipant(ctx: Pick<V2Context, 'store' | 'events'>, machine
     plan: async ({ repo, worktree }) => {
       const profile = profileOf(repo, worktree)
       if (!profile) return []
-      return (await vmsOf(machine, repo)).some((e) => e.profile === profile) ? [{ id: 'destroy', label: vmLabel(profile), checked: true }] : []
+      const vm = (await vmsOf(machine, repo)).find((e) => e.profile === profile)
+      return vm ? [{ id: 'destroy', label: vmLabel(profile), checked: true, ...(vm.vmState === 'running' ? { running: true } : {}) }] : []
     },
     teardown: async ({ repo, worktree }) => {
       const profile = profileOf(repo, worktree)

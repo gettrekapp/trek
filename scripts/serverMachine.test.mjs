@@ -582,6 +582,10 @@ test('worktree.teardownPlan (plugins E1): the dev stack once it has run and the 
     { id: 'env:destroy', label: `Stop and delete this worktree's Colima VM “${profile}”`, checked: true }
   ]
   for (const op of ['remove', 'promote', 'move']) assert.deepEqual(await plan(op), items, op)
+  // Running (plugins E1): the VM colima lists as running, the stack once a stack.sh up is going.
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Running' })}\n`)
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  assert.deepEqual((await plan('move')).map((i) => [i.id, i.running]), [['stack:destroy', undefined], ['env:destroy', true]])
   refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op: 'delete' }), 'BAD_REQUEST')
   const main = s.repo().worktrees.find((w) => w.isMain)
   refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: main.id, op: 'remove' }), 'BAD_REQUEST')

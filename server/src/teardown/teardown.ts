@@ -110,13 +110,14 @@ function checkedItems(participant: Participant, raw: unknown, warn: (message: st
     const i = item as Partial<TeardownItem> | null
     const ok =
       !!i && typeof i.id === 'string' && ITEM_ID_RE.test(i.id) && !seen.has(i.id) &&
-      typeof i.label === 'string' && i.label.trim() !== '' && i.label.length <= MAX_LABEL && typeof i.checked === 'boolean'
+      typeof i.label === 'string' && i.label.trim() !== '' && i.label.length <= MAX_LABEL && typeof i.checked === 'boolean' &&
+      (i.running === undefined || typeof i.running === 'boolean')
     if (!ok) {
       warn(`[teardown] ${participant.id}: a plan item was left out: ${String(JSON.stringify(item)).slice(0, 200)}`)
       continue
     }
     seen.add(i.id!)
-    out.push({ id: `${participant.id}:${i.id}`, label: i.label!.trim(), checked: i.checked! })
+    out.push({ id: `${participant.id}:${i.id}`, label: i.label!.trim(), checked: i.checked!, ...(i.running === true ? { running: true } : {}) })
   }
   return out
 }

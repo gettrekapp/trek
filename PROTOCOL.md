@@ -933,7 +933,7 @@ Before a worktree is removed, promoted or moved off the server, what runs for it
 
 | Method | Params | Result |
 |---|---|---|
-| `worktree.teardownPlan` | `{projectId, worktreeId, op}` (`op`: `remove`, `promote` or `move`) | `{items: [{id, label, checked}]}`: what each participant would tear down, in the order it would run. `id` is `<participant>:<item>`, `label` what the confirm shows, `checked` its default. A participant whose plan fails or takes over 10 s is left out. `BAD_REQUEST` for the main checkout or another `op`; `NOT_FOUND` for an unknown worktree |
+| `worktree.teardownPlan` | `{projectId, worktreeId, op}` (`op`: `remove`, `promote` or `move`) | `{items: [{id, label, checked, running?}]}`: what each participant would tear down, in the order it would run. `id` is `<participant>:<item>`, `label` what the confirm shows, `checked` its default, `running` true when what it tears down is running now (a client keeps a move that would leave it running from going ahead unticked). A participant whose plan fails or takes over 10 s is left out. `BAD_REQUEST` for the main checkout or another `op`; `NOT_FOUND` for an unknown worktree |
 
 `worktree.remove`, `worktree.promote` and `move.finish` take `teardown: string[]`, ids from the plan. The server runs them after the operation's own checks and before it, each participant once with its own ids, in participant order.
 - An id whose participant is not there is `BAD_REQUEST`, and nothing runs. An id of a plugin switched off in the project since the plan is skipped.

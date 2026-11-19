@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
-import { inactiveParticipants, participantsFor } from '../server/src/teardown/participants.ts'
+import { envParticipant, inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
 import { defaultTeardown } from '../src/shared/teardown.ts'
 
 const target = {
@@ -312,4 +312,33 @@ test('withTornDown: a failure after the teardown keeps its code, message and rea
   assert.deepEqual(toWireError('worktree.promote', withTornDown('odd', ['A'])), { code: 'INTERNAL', message: 'odd', details: { tornDown: ['A'] } })
   // An unexpected error's own reason stays on the server.
   assert.deepEqual(toWireError('worktree.promote', Object.assign(new Error('x'), { details: { reason: 'r' } })), { code: 'INTERNAL', message: 'x' })
+})
+
+test('planTeardown: an item may say it is running (a boolean); anything else there leaves it out', async () => {
+  const warnings = []
+  const items = await planTeardown(
+    [participant('vms', [{ id: 'up', label: 'Stop the VM', checked: true, running: true }, { id: 'down', label: 'Delete the stopped VM', checked: false, running: false }, { id: 'odd', label: 'x', checked: true, running: 'yes' }], [])],
+    target,
+    'move',
+    { warn: (m) => warnings.push(m) }
+  )
+  assert.deepEqual(items, [
+    { id: 'vms:up', label: 'Stop the VM', checked: true, running: true },
+    { id: 'vms:down', label: 'Delete the stopped VM', checked: false }
+  ])
+  assert.equal(warnings.length, 1)
+})
+
+test('the core participants say whether their stack or VM is running (plugins E1)', async () => {
+  const ctx = { store: { guard: { check: () => {} } } }
+  const stackOf = (status) => stackParticipant(ctx, { stacks: { status: async () => status } })
+  const stack = { available: true, created: true, slug: 'app-feat', stopping: false, hasAdmin: false }
+  assert.deepEqual((await stackOf({ ...stack, containers: 0, upRunning: false }).plan(target, 'move')).map((i) => i.running), [undefined])
+  assert.deepEqual((await stackOf({ ...stack, containers: 2, upRunning: false }).plan(target, 'move')).map((i) => i.running), [true])
+  assert.deepEqual((await stackOf({ ...stack, containers: 0, upRunning: true }).plan(target, 'move')).map((i) => i.running), [true])
+  const { deriveProfileName, envRepoKey } = await import('../src/shared/environments.ts')
+  const profile = deriveProfileName(envRepoKey(target.repo), 'feat')
+  const envOf = (vmState) => envParticipant(ctx, { env: { list: async () => [{ profile, vmState, worktreePath: target.worktree.path }] } })
+  assert.deepEqual((await envOf('running').plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', true]])
+  for (const state of ['stopped', 'missing']) assert.deepEqual((await envOf(state).plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', undefined]], state)
 })

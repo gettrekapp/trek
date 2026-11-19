@@ -12,7 +12,7 @@ import { destroyEnvironmentIfAny } from '../environmentActions'
 import { envRepoKey } from '../../../shared/environments'
 import { errorText } from '../v2/errors'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
-import { MOVE_STEPS, moveWorktree, setRunningMove, type MoveOutcome, type MoveStepKey, type MoveStepStatus, type Requester } from '../v2/moveFlow'
+import { MOVE_STEPS, moveTeardownCheck, moveWorktree, setRunningMove, type MoveOutcome, type MoveStepKey, type MoveStepStatus, type Requester } from '../v2/moveFlow'
 import { CAPABILITY } from '../../../shared/protocolV2'
 import { defaultTeardown, type TeardownItem } from '../../../shared/teardown'
 import type { MoveCandidate, MovePlan } from '../../../shared/move'
@@ -155,7 +155,9 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const stackUnknown = stackRead.kind !== 'ok'
   const stackName = stack?.available && stack.created ? stack.slug : undefined
   const machine = [env ? `its VM “${env.profile}”` : null, stackName ? `its dev stack “trek-${stackName}”` : null].filter(Boolean).join(' and ')
-  const machineRunning = env?.vmState === 'running' || (!!stackName && !!stack && (stack.containers > 0 || stack.upRunning))
+  const stackRunning = !!stackName && !!stack && (stack.containers > 0 || stack.upRunning)
+  const vmRunning = env?.vmState === 'running'
+  const machineRunning = vmRunning || stackRunning
   const [tearDown, setTearDown] = useState(true)
   const teardown = async (): Promise<string[]> => {
     const warnings: string[] = []
@@ -199,7 +201,8 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   }, [source, serverTeardown, from.projectId, from.worktreeId, teardownTry])
   const planItems = serverTeardown && teardownRead.kind === 'ok' ? teardownRead.items : []
   const teardownUnknown = serverTeardown && teardownRead.kind !== 'ok'
-  const untickedItem = planItems.some((item) => !ticked.has(item.id))
+  // Only an unticked item that is running keeps Move off, or a running stack or VM the plan left out.
+  const teardownCheck = moveTeardownCheck(planItems, ticked, { stack: stackRunning, vm: vmRunning })
   const tick = (id: string, on: boolean): void =>
     setTicked((prev) => {
       const next = new Set(prev)
@@ -207,7 +210,8 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
       else next.delete(id)
       return next
     })
-  const machineBlocks = serverTeardown ? machineRunning && untickedItem : !!machine && !tearDown && machineRunning
+  const machineBlocks = serverTeardown ? teardownRead.kind === 'ok' && teardownCheck.blocks : !!machine && !tearDown && machineRunning
+  const unplanned = teardownCheck.unplanned.join(' and ')
 
   // Only while choosing: once the move starts, nothing here is read again.
   useEffect(() => {
@@ -453,7 +457,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                 </li>
               )}
               {serverTeardown && teardownRead.kind === 'error' && (
-                <li className="warn move-stack-error">
+                <li className="warn move-teardown-error">
                   Could not read what would be torn down ({teardownRead.message}), so Move waits until it can.{' '}
                   <button className="btn move-retry" onClick={() => setTeardownTry((n) => n + 1)}>
                     Retry
@@ -461,14 +465,30 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                 </li>
               )}
               {planItems.map((item) => (
-                <li key={item.id} className={machineBlocks && !ticked.has(item.id) ? 'warn' : undefined}>
+                <li key={item.id} className={teardownCheck.blocking.includes(item.id) ? 'warn' : undefined}>
                   <label className="move-teardown">
                     <input type="checkbox" checked={ticked.has(item.id)} onChange={(e) => tick(item.id, e.target.checked)} /> {item.label}, on this
                     server once the worktree is in place there
                   </label>
-                  {machineBlocks && !ticked.has(item.id) ? ' It is running: stop it first, or tick this, to move.' : ''}
+                  {ticked.has(item.id) ? '' : item.running ? ' It is running: stop it first, or tick this, to move.' : ' Left as it is (stopped), it stays behind.'}
                 </li>
               ))}
+              {serverTeardown && teardownRead.kind === 'ok' && unplanned && (
+                <li className="warn move-teardown-missing">
+                  {unplanned.charAt(0).toUpperCase() + unplanned.slice(1)} {teardownCheck.unplanned.length > 1 ? 'are' : 'is'} running, but this server's
+                  teardown plan has nothing for {teardownCheck.unplanned.length > 1 ? 'them' : 'it'} (its check may have failed), so Move waits until it
+                  can tear {teardownCheck.unplanned.length > 1 ? 'them' : 'it'} down.{' '}
+                  <button
+                    className="btn move-retry"
+                    onClick={() => {
+                      setTeardownTry((n) => n + 1)
+                      setStackTry((n) => n + 1)
+                    }}
+                  >
+                    Retry
+                  </button>
+                </li>
+              )}
               {!serverTeardown && machine && (
                 <li className={machineBlocks ? 'warn' : undefined}>
                   <label className="move-teardown">
