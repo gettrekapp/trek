@@ -29,7 +29,7 @@ import {
 /** The plugin whose settings the old fields mirror. */
 export const LEGACY_ENV_PLUGIN = 'env'
 
-/** Its repoSettings, kind for kind, in the old object's key order. */
+/** Its repoSettings, kind for kind (scripts/legacyEnvSettings.test.mjs checks them against its manifest), in the old object's key order. */
 export const LEGACY_ENV_REPO_FIELDS = {
   enabled: 'boolean',
   cpu: 'number',

@@ -7,7 +7,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { legacyFromRepoValues, migrateBranchEnv, migrateProjectEnv, repoValuesFromLegacy, setBranchEnv, setRepoEnv } from '../server/src/projects/legacyEnv.ts'
+import { LEGACY_ENV_BRANCH_FIELD, LEGACY_ENV_PLUGIN, LEGACY_ENV_REPO_FIELDS, legacyFromRepoValues, migrateBranchEnv, migrateProjectEnv, repoValuesFromLegacy, setBranchEnv, setRepoEnv } from '../server/src/projects/legacyEnv.ts'
+import { COLIMA_MANIFEST } from '../plugins/colima/manifest.ts'
+import { isUsablePluginId, pluginFieldsProblem } from '../src/shared/plugins/manifest.ts'
 import { ProjectStore, STORE_SCHEMA } from '../server/src/projects/store.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -254,4 +256,15 @@ test("repo.update reads a corrupt (non-object) env plugin entry as none", async 
   const out = await dispatchV2('repo.update', { projectId, repoId: repo().id, environments: { enabled: true } }, { projects, hub, plugins: envFields })
   assert.equal(out.ok, true, JSON.stringify(out))
   assert.deepEqual([repo().pluginSettings, repo().environments], [{ env: { enabled: true } }, { enabled: true }])
+})
+
+test("the old fields are the Colima plugin's settings, kind for kind (the mirror must not drift from the manifest)", () => {
+  assert.equal(COLIMA_MANIFEST.id, LEGACY_ENV_PLUGIN)
+  assert.deepEqual(COLIMA_MANIFEST.repoSettings, LEGACY_ENV_REPO_FIELDS)
+  assert.deepEqual(COLIMA_MANIFEST.branchSettings, { [LEGACY_ENV_BRANCH_FIELD]: 'text' })
+  assert.deepEqual([COLIMA_MANIFEST.platforms, COLIMA_MANIFEST.legacyCapability, COLIMA_MANIFEST.legacyBuiltIn, COLIMA_MANIFEST.defaultEnabled], [['darwin', 'linux'], ['env'], true, true])
+  // And the registry would take the manifest (its id and field declarations; it registers in Task 8).
+  assert.ok(isUsablePluginId(COLIMA_MANIFEST.id))
+  assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.repoSettings), null)
+  assert.equal(pluginFieldsProblem(COLIMA_MANIFEST.branchSettings), null)
 })

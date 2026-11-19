@@ -1,7 +1,8 @@
 // scripts/pluginBoundaries.test.mjs — the plugin boundary (plugin system phase 1). A plugin's code
 // (plugins/<id>/) imports only the plugin contract (src/shared/plugins/), its own folder and npm
 // packages: not the rest of src/shared (the protocol's or the model's internals), never server/src, src/main, src/renderer, src/host, src/web or another
-// plugin. Core imports a plugin only through plugins/builtin.*.ts. That is what lets a plugin
+// plugin. Core imports a plugin only through plugins/builtin.*.ts (until E3, also src/shared/environments.ts:
+// CORE_IMPORT_EXCEPTIONS below). That is what lets a plugin
 // become a package later with only the loader changing.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -52,17 +53,38 @@ test("a plugin's code imports only the contract and its own folder", () => {
   assert.deepEqual(problems, [])
 })
 
-test('core imports a plugin only through plugins/builtin.*.ts', () => {
+/**
+ * Core files allowed to import a plugin's file other than plugins/builtin.*.ts, each until the
+ * phase that moves their importers into the plugin. Never add one for new code.
+ */
+const CORE_IMPORT_EXCEPTIONS = [
+  // Plugins E2 → E3: the renderer's Colima UI (and the smokes) still import the env helpers through here.
+  { from: 'src/shared/environments.ts', to: 'plugins/colima/shared/environments.ts' }
+]
+
+test('core imports a plugin only through plugins/builtin.*.ts (and the listed exceptions)', () => {
   const problems = []
+  const used = new Set()
   for (const dir of ['src', 'server/src']) {
     for (const file of walk(join(root, dir))) {
       const from = relative(root, file).split(sep).join('/')
       for (const target of relativeImports(file)) {
-        if (target.startsWith('plugins/') && !BUILTIN.test(target)) problems.push(`${from} imports ${target}`)
+        if (!target.startsWith('plugins/') || BUILTIN.test(target)) continue
+        const allowed = CORE_IMPORT_EXCEPTIONS.find((e) => e.from === from && e.to === target)
+        if (allowed) used.add(allowed)
+        else problems.push(`${from} imports ${target}`)
       }
     }
   }
   assert.deepEqual(problems, [])
+  assert.deepEqual(CORE_IMPORT_EXCEPTIONS.filter((e) => !used.has(e)), [], 'a stale exception: drop it')
+})
+
+test('an exception stays a bare re-export: no code of its own, so nothing new grows on the plugin\'s file', () => {
+  for (const { from, to } of CORE_IMPORT_EXCEPTIONS) {
+    const code = readFileSync(join(root, from), 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'))
+    assert.deepEqual(code, [`export * from '${relative(dirname(join(root, from)), join(root, to)).split(sep).join('/')}'`], from)
+  }
 })
 
 test('the plugin contract (src/shared/plugins) imports no core code beyond src/shared and its two host helpers', () => {

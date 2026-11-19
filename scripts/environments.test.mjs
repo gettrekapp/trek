@@ -38,3 +38,12 @@ test("envListProblem: the server's unreadable registry (TOOL_ERROR, reason regis
   assert.equal(envListProblem(coded('INTERNAL', unreadable, { reason: 'registry' })), null)
   assert.equal(envListProblem(undefined), null)
 })
+
+test('repoKeyFor (plugins E2): an absolute stored profileKey, else the repository path; envRepoKey is it over the old field', async () => {
+  const { repoKeyFor, envRepoKey: fromPlugin } = await import('../plugins/colima/shared/environments.ts')
+  assert.equal(repoKeyFor('/r/app', '/old/app'), '/old/app')
+  assert.equal(repoKeyFor('/r/app', 'C:\\old\\app'), 'C:\\old\\app')
+  for (const key of [undefined, '', 'relative/app', 3]) assert.equal(repoKeyFor('/r/app', key), '/r/app')
+  assert.equal(fromPlugin({ path: '/r/app', environments: { profileKey: '/old/app' } }), '/old/app')
+  assert.equal(envRepoKey, fromPlugin, 'src/shared/environments.ts re-exports the plugin\'s')
+})
