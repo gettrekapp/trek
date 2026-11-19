@@ -17,7 +17,7 @@ export function SessionIndicator({ terminalId, status, onToggleComplete }: Props
   if (!entry) return badge
   const Slot = entry.plugin.slots!.sessionIndicator!
   return (
-    <PluginScope entry={entry} fallback={badge}>
+    <PluginScope key={entry.key} entry={entry} fallback={badge}>
       <Slot terminalId={terminalId} onToggleComplete={onToggleComplete} />
     </PluginScope>
   )

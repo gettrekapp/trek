@@ -19,10 +19,10 @@ test('firstActiveSlot: the first active one, or undefined', () => {
   assert.equal(firstActiveSlot([], 'sessionIndicator'), undefined)
 })
 
-test('overlayDimmed: while scrolled back, or within 3 s of a key', () => {
+test('overlayDimmed: while scrolled back, or while typing (held 3 s after a key)', () => {
   assert.equal(DIM_AFTER_KEY_MS, 3000)
-  assert.equal(overlayDimmed({ lastKeyAt: null, now: 10_000, scrolledUp: false }), false)
-  assert.equal(overlayDimmed({ lastKeyAt: null, now: 10_000, scrolledUp: true }), true)
-  assert.equal(overlayDimmed({ lastKeyAt: 8_000, now: 10_000, scrolledUp: false }), true)
-  assert.equal(overlayDimmed({ lastKeyAt: 7_000, now: 10_000, scrolledUp: false }), false)
+  assert.equal(overlayDimmed({ typing: false, scrolledUp: false }), false)
+  assert.equal(overlayDimmed({ typing: false, scrolledUp: true }), true)
+  assert.equal(overlayDimmed({ typing: true, scrolledUp: false }), true)
+  assert.equal(overlayDimmed({ typing: true, scrolledUp: true }), true)
 })
