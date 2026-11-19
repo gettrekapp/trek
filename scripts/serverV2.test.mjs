@@ -250,16 +250,16 @@ test('project.updateSettings republishes attention, a refused one does not', asy
 test('project.updateSettings merges, null removes, expected is per key', async (t) => {
   const { a, call } = setup(t)
   const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
-  await call('project.updateSettings', { projectId, settings: { claudeCommand: 'c', audioAlerts: true } })
-  await call('project.updateSettings', { projectId, settings: { audioAlerts: null }, expected: { claudeCommand: 'c' } })
-  const conflict = await call('project.updateSettings', { projectId, settings: { claudeCommand: 'x' }, expected: { claudeCommand: 'old' } })
+  await call('project.updateSettings', { projectId, settings: { titleBarColor: 'c', audioAlerts: true } })
+  await call('project.updateSettings', { projectId, settings: { audioAlerts: null }, expected: { titleBarColor: 'c' } })
+  const conflict = await call('project.updateSettings', { projectId, settings: { titleBarColor: 'x' }, expected: { titleBarColor: 'old' } })
   assert.equal(conflict.error.code, 'CONFLICT')
   const snap = (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
-  assert.deepEqual(snap.settings, { claudeCommand: 'c' })
+  assert.deepEqual(snap.settings, { titleBarColor: 'c' })
   assert.equal((await call('project.updateSettings', { projectId, settings: { nope: 1 } })).error.code, 'BAD_REQUEST')
-  const inherited = await call('project.updateSettings', { projectId, settings: { claudeCommand: 'y' }, expected: { toString: null } })
+  const inherited = await call('project.updateSettings', { projectId, settings: { titleBarColor: 'y' }, expected: { toString: null } })
   assert.equal(inherited.error.code, 'BAD_REQUEST')
-  assert.equal((await snapshotOf(call, projectId)).settings.claudeCommand, 'c')
+  assert.equal((await snapshotOf(call, projectId)).settings.titleBarColor, 'c')
 })
 
 test('project.updateSettings expected guards the settings a settings screen edits: absent is null, values compare deeply', async (t) => {
@@ -271,7 +271,7 @@ test('project.updateSettings expected guards the settings a settings screen edit
   // Keys never set match null.
   const first = await update(
     { sessionTypes: review, terminalButtons: buttons, worktreeTags: [{ id: 't', name: 'Todo', color: '#fff' }], llmDefault: { provider: 'gemini' }, bot: { enabled: false }, audioAlerts: true },
-    { sessionTypes: null, terminalButtons: null, worktreeTags: null, llmDefault: null, bot: null, audioAlerts: null, customTags: null, globalLlm: null, claudeCommand: null }
+    { sessionTypes: null, terminalButtons: null, worktreeTags: null, llmDefault: null, bot: null, audioAlerts: null, customTags: null, globalLlm: null, titleBarColor: null }
   )
   assert.equal(first.ok, true, JSON.stringify(first))
   // A structurally equal copy of each current value passes.

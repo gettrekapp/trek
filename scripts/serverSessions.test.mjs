@@ -856,7 +856,7 @@ test('a settings change that leaves audioAlerts alone sends no attention patch',
   fireQuiet(s)
   const sent = []
   s.hub.subscribe('attention', { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) })
-  assert.equal((await call('project.updateSettings', { projectId: s.projectId, settings: { claudeCommand: 'other-claude' } })).ok, true)
+  assert.equal((await call('project.updateSettings', { projectId: s.projectId, settings: { titleBarColor: '#123456' } })).ok, true)
   assert.deepEqual(sent, [])
 })
 

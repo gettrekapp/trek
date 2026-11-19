@@ -14,7 +14,7 @@ const code = (fn) => {
 }
 
 test('validateSettings accepts known keys with the right kind of value', () => {
-  const s = { claudeCommand: 'claude', audioAlerts: true, worktreeOrder: ['r /a'], bot: { enabled: false } }
+  const s = { titleBarColor: 'claude', audioAlerts: true, worktreeOrder: ['r /a'], bot: { enabled: false } }
   assert.deepEqual(validateSettings(s, 'settings'), s)
 })
 
@@ -28,8 +28,8 @@ test('validateSettings rejects unknown keys and wrong kinds', () => {
 })
 
 test('applySettingsPatch merges shallowly and null removes', () => {
-  const next = applySettingsPatch({ claudeCommand: 'a', audioAlerts: true }, { claudeCommand: 'b', audioAlerts: null })
-  assert.deepEqual(next, { claudeCommand: 'b' })
+  const next = applySettingsPatch({ titleBarColor: 'a', audioAlerts: true }, { titleBarColor: 'b', audioAlerts: null })
+  assert.deepEqual(next, { titleBarColor: 'b' })
 })
 
 test('applySettingsPatch validates the patch values', () => {
@@ -44,9 +44,9 @@ test('a nested __proto__ key is rejected, in objects and in arrays', () => {
 })
 
 test('applySettingsPatch does not mutate current', () => {
-  const current = { claudeCommand: 'a', audioAlerts: true }
-  applySettingsPatch(current, { claudeCommand: 'b', audioAlerts: null })
-  assert.deepEqual(current, { claudeCommand: 'a', audioAlerts: true })
+  const current = { titleBarColor: 'a', audioAlerts: true }
+  applySettingsPatch(current, { titleBarColor: 'b', audioAlerts: null })
+  assert.deepEqual(current, { titleBarColor: 'a', audioAlerts: true })
 })
 
 test('a null delete of an unknown key is BAD_REQUEST', () => {

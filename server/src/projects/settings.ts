@@ -21,16 +21,14 @@ const KIND_TEXT: Record<Kind, string> = {
 
 /**
  * ProjectSettings keys a built-in plugin owns (plugin system phase 2): declared in its manifest's
- * `projectSettings` and checked by it, not in the table below.
+ * `projectSettings` and checked by it, not in the table below. The claude plugin's three (plugins
+ * A1) keep the names core gave them, so files and the wire are unchanged.
  */
-export const PLUGIN_OWNED_SETTINGS = ['azureDevOpsBaseUrl', 'linearWorkspace'] as const
+export const PLUGIN_OWNED_SETTINGS = ['azureDevOpsBaseUrl', 'linearWorkspace', 'claudeCommand', 'claudeArgs', 'claudePermissionMode'] as const
 type PluginOwnedSetting = (typeof PLUGIN_OWNED_SETTINGS)[number]
 
 /** Every core ProjectSettings key; the Record type makes the compiler flag a missing one. */
 const SETTINGS_KINDS: Record<Exclude<keyof ProjectSettings, PluginOwnedSetting>, Kind> = {
-  claudeCommand: 'string',
-  claudeArgs: 'string',
-  claudePermissionMode: 'string',
   dockerFavorites: 'stringArray',
   worktreeTags: 'array',
   customTags: 'array',
