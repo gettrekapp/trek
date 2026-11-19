@@ -14,6 +14,7 @@ import { errorText } from '../v2/errors'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { MOVE_STEPS, moveWorktree, setRunningMove, type MoveOutcome, type MoveStepKey, type MoveStepStatus, type Requester } from '../v2/moveFlow'
 import { CAPABILITY } from '../../../shared/protocolV2'
+import { defaultTeardown, type TeardownItem } from '../../../shared/teardown'
 import type { MoveCandidate, MovePlan } from '../../../shared/move'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { moveTargets } from '../v2/moveFlow'
@@ -49,6 +50,9 @@ interface Frozen {
 
 /** The worktree's dev stack: unknown while it is read, or when the read failed */
 type StackRead = { kind: 'loading' } | { kind: 'ok'; status: StackStatus | null } | { kind: 'error'; message: string }
+
+/** The source's teardown plan (plugins E1): unknown while it is read, or when the read failed */
+type TeardownRead = { kind: 'loading' } | { kind: 'ok'; items: TeardownItem[] } | { kind: 'error'; message: string }
 
 const requester = (server: RegisteredServer): Requester => (method, params, options) => server.connection.request(method, params, options)
 
@@ -153,7 +157,6 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const machine = [env ? `its VM “${env.profile}”` : null, stackName ? `its dev stack “trek-${stackName}”` : null].filter(Boolean).join(' and ')
   const machineRunning = env?.vmState === 'running' || (!!stackName && !!stack && (stack.containers > 0 || stack.upRunning))
   const [tearDown, setTearDown] = useState(true)
-  const machineBlocks = !!machine && !tearDown && machineRunning
   const teardown = async (): Promise<string[]> => {
     const warnings: string[] = []
     const backend = getBackend()
@@ -171,6 +174,40 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
     }
     return warnings
   }
+
+  // A source that tears down itself (`worktreeTeardown`, plugins E1): its plan's items, a box each,
+  // the ticked ids sent with move.finish. Without it, the old path above (`teardown`) stays.
+  const serverTeardown = source?.connection.welcome?.capabilities.includes(CAPABILITY.worktreeTeardown) === true
+  const [teardownRead, setTeardownRead] = useState<TeardownRead>({ kind: 'loading' })
+  const [teardownTry, setTeardownTry] = useState(0)
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    if (!source || !serverTeardown) return
+    let live = true
+    setTeardownRead({ kind: 'loading' })
+    source.connection.request('worktree.teardownPlan', { projectId: from.projectId, worktreeId: from.worktreeId, op: 'move' }).then(
+      ({ items }) => {
+        if (!live) return
+        setTeardownRead({ kind: 'ok', items })
+        setTicked(new Set(defaultTeardown(items)))
+      },
+      (err: unknown) => live && setTeardownRead({ kind: 'error', message: errorText(err) })
+    )
+    return () => {
+      live = false
+    }
+  }, [source, serverTeardown, from.projectId, from.worktreeId, teardownTry])
+  const planItems = serverTeardown && teardownRead.kind === 'ok' ? teardownRead.items : []
+  const teardownUnknown = serverTeardown && teardownRead.kind !== 'ok'
+  const untickedItem = planItems.some((item) => !ticked.has(item.id))
+  const tick = (id: string, on: boolean): void =>
+    setTicked((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  const machineBlocks = serverTeardown ? machineRunning && untickedItem : !!machine && !tearDown && machineRunning
 
   // Only while choosing: once the move starts, nothing here is read again.
   useEffect(() => {
@@ -255,7 +292,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const targetName = frozen?.targetName ?? servers.find((s) => s.id === entryId)?.name ?? 'the server'
 
   const start = async (): Promise<void> => {
-    if (phase !== 'choose' || !source || !chosen || !plan || stackUnknown || machineBlocks || (plan.nestedRepos ?? []).length > 0) return
+    if (phase !== 'choose' || !source || !chosen || !plan || stackUnknown || teardownUnknown || machineBlocks || (plan.nestedRepos ?? []).length > 0) return
     const server = registeredServerEntry(entryId)
     if (!server) return
     setFrozen({ entryId, targetName, projectId: chosen.projectId, projectName: chosen.projectName })
@@ -271,7 +308,16 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
             to: { projectId: chosen.projectId, repoId: chosen.repoId },
             loaded: plan.loaded,
             targetCapabilities: server.connection.welcome?.capabilities ?? [],
-            ...(machine && tearDown ? { teardown } : machine ? { teardownUnticked: true } : {}),
+            ...(serverTeardown
+              ? {
+                  teardownIds: planItems.filter((item) => ticked.has(item.id)).map((item) => item.id),
+                  ...(planItems.length > 0 && ticked.size === 0 ? { teardownUnticked: true } : {})
+                }
+              : machine && tearDown
+                ? { teardown }
+                : machine
+                  ? { teardownUnticked: true }
+                  : {}),
             progress: (step, status, detail) => setSteps((prev) => ({ ...prev, [step]: { status, detail } })),
             cancelled: () => cancelled.current
           })
@@ -406,7 +452,24 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                   </button>
                 </li>
               )}
-              {machine && (
+              {serverTeardown && teardownRead.kind === 'error' && (
+                <li className="warn move-stack-error">
+                  Could not read what would be torn down ({teardownRead.message}), so Move waits until it can.{' '}
+                  <button className="btn move-retry" onClick={() => setTeardownTry((n) => n + 1)}>
+                    Retry
+                  </button>
+                </li>
+              )}
+              {planItems.map((item) => (
+                <li key={item.id} className={machineBlocks && !ticked.has(item.id) ? 'warn' : undefined}>
+                  <label className="move-teardown">
+                    <input type="checkbox" checked={ticked.has(item.id)} onChange={(e) => tick(item.id, e.target.checked)} /> {item.label}, on this
+                    server once the worktree is in place there
+                  </label>
+                  {machineBlocks && !ticked.has(item.id) ? ' It is running: stop it first, or tick this, to move.' : ''}
+                </li>
+              ))}
+              {!serverTeardown && machine && (
                 <li className={machineBlocks ? 'warn' : undefined}>
                   <label className="move-teardown">
                     <input type="checkbox" checked={tearDown} onChange={(e) => setTearDown(e.target.checked)} /> Tear down {machine} on this
@@ -478,7 +541,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
           {choosing && (
             <>
               <button onClick={onClose}>Cancel</button>
-              <button className="btn btn-accent" disabled={!chosen || machineBlocks || stackUnknown || nested.length > 0} onClick={() => void start()}>
+              <button className="btn btn-accent" disabled={!chosen || machineBlocks || stackUnknown || teardownUnknown || nested.length > 0} onClick={() => void start()}>
                 Move worktree
               </button>
             </>

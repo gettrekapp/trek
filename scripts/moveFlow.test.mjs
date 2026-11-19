@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { moveTargets, moveWorktree } from '../src/renderer/src/v2/moveFlow.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { MOVE_FETCH_TIMEOUT_MS } from '../src/shared/move.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS } from '../src/shared/teardown.ts'
 
 const SID = '11111111-2222-4333-8444-555555555555'
 const EXPORT = { branch: 'feat', head: 'a'.repeat(40), patch: 'diff', sessions: [{ title: 'c', agentSessionId: SID, historyBytes: 10, historySha256: 'e'.repeat(64) }], notCarried: ['Codex 1: only Claude sessions move'], branchData: { note: 'n' }, fingerprint: 'f'.repeat(64) }
@@ -290,4 +291,78 @@ test('history and the server name travel: move.receive gets them, only the real 
   assert.equal(finishes[0].verifyOnly, true)
   assert.ok(!('toServer' in finishes[0]))
   assert.equal(finishes[1].toServer, 'desk')
+})
+
+test('a source that tears down itself (worktreeTeardown): one move.finish with the chosen ids, after the target has it', async () => {
+  const source = src()
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [], serverName: 'B' } })
+  const { outcome, steps } = run(source, target, { teardownIds: ['stack:destroy', 'env:destroy'] })
+  const result = await outcome
+  assert.equal(result.kind, 'moved')
+  assert.equal(source.calls.filter(([m]) => m === 'move.finish').length, 1, 'no verifyOnly first: the server checks before it tears down')
+  assert.deepEqual(source.calls.at(-1), ['move.finish', { projectId: 'pa', worktreeId: 'wa', fingerprint: EXPORT.fingerprint, teardown: ['stack:destroy', 'env:destroy'], toServer: 'B' }])
+  assert.deepEqual(steps.filter(([s]) => s === 'teardown' || s === 'finish').map(([s, st]) => [s, st]), [['teardown', 'active'], ['teardown', 'done'], ['finish', 'done']])
+  assert.deepEqual(source.options.find(([m]) => m === 'move.finish')[1], { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS }, 'a destroy or a VM delete can take minutes')
+})
+
+test('worktreeTeardown: a source changed after the copy, a busy one, or a failed item, undoes the target copy; a failed removal after it keeps both', async () => {
+  for (const err of [
+    new ClientError('CONFLICT', 'changed after it was copied'),
+    new ClientError('CONFLICT', 'a teardown is still finishing for this worktree'),
+    new ClientError('CONFLICT', 'this worktree is busy: removing it; try again once it is done'),
+    new ClientError('IN_USE', 'loaded again after it was copied'),
+    new ClientError('TOOL_ERROR', "Couldn't stop the VM: stuck", { reason: 'teardown' }),
+    new ClientError('TOOL_ERROR', "Couldn't stop the VM: stuck (already done: Tear down the dev stack)", { reason: 'teardown', tornDown: ['Tear down the dev stack'] })
+  ]) {
+    const source = src({ 'move.finish': err })
+    const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
+    const { outcome, steps } = run(source, target, { teardownIds: ['env:destroy'] })
+    const result = await outcome
+    assert.deepEqual([result.kind, result.step, result.undone], ['failed', 'teardown', true], err.message)
+    assert.equal(result.error, err.message)
+    assert.equal(target.methods().at(-1), 'move.unreceive')
+    assert.equal(source.methods().at(-1), 'worktree.load')
+    assert.deepEqual(steps.find(([s, st]) => s === 'teardown' && st === 'failed'), ['teardown', 'failed', err.message])
+  }
+  const source = src({ 'move.finish': new ClientError('GIT_ERROR', 'locked') })
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
+  const result = await run(source, target, { teardownIds: ['env:destroy'] }).outcome
+  assert.equal(result.kind, 'both')
+  assert.ok(!target.methods().includes('move.unreceive'))
+  assert.match(result.error, /source's copy was not removed/)
+})
+
+test('worktreeTeardown: a failure after the teardown (details.tornDown) keeps both and names what was torn down', async () => {
+  for (const err of [
+    new ClientError('GIT_ERROR', 'locked', { tornDown: ['Delete the VM “trek-app”', 'Tear down the dev stack “trek-app-feat”'] }),
+    new ClientError('CONFLICT', 'changed meanwhile', { tornDown: ['Delete the VM “trek-app”', 'Tear down the dev stack “trek-app-feat”'] })
+  ]) {
+    const source = src({ 'move.finish': err })
+    const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
+    const { outcome, steps } = run(source, target, { teardownIds: ['env:destroy', 'stack:destroy'] })
+    const result = await outcome
+    assert.equal(result.kind, 'both', err.message)
+    assert.ok(!target.methods().includes('move.unreceive'), 'the source lost its VM: both copies are kept')
+    assert.match(result.error, /already run and is not undone: Delete the VM “trek-app”; Tear down the dev stack “trek-app-feat”/)
+    assert.deepEqual(steps.find(([s, st]) => s === 'teardown' && st !== 'active').slice(0, 2), ['teardown', 'done'])
+  }
+})
+
+test('worktreeTeardown: a lost finish answer keeps both and says the teardown may or may not have run', async () => {
+  const source = src({ 'move.finish': new ClientError('TIMEOUT', 'gone') })
+  const { outcome, steps } = run(source, tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } }), { teardownIds: ['env:destroy'] })
+  const result = await outcome
+  assert.equal(result.kind, 'both')
+  assert.match(result.error, /may or may not have been removed/)
+  assert.deepEqual(steps.find(([s, st]) => s === 'teardown' && st !== 'active').slice(0, 2), ['teardown', 'failed'])
+})
+
+test('worktreeTeardown with nothing chosen: the finish sends no teardown; unticked says so', async () => {
+  const source = src()
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', undoToken: 'u1', dropped: [] } })
+  const { outcome, steps } = run(source, target, { teardownIds: [], teardownUnticked: true })
+  assert.equal((await outcome).kind, 'moved')
+  assert.equal(source.calls.at(-1)[1].teardown, undefined)
+  assert.equal(source.calls.filter(([m]) => m === 'move.finish').length, 1)
+  assert.deepEqual(steps.find(([s]) => s === 'teardown'), ['teardown', 'skipped', 'left in place (unticked)'])
 })

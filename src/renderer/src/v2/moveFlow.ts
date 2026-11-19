@@ -2,12 +2,14 @@
 // connections. Every step is a `move.*` (or `worktree.*`) request; the target builds the worktree
 // in one `move.receive`, which undoes itself on failure, and the source removes its copy last, in
 // `move.finish`, only if it is unchanged since `move.export`; when it is not, `move.unreceive`
-// undoes the target's copy whole. Pure: the requests come in as deps,
-// so `node --test` covers it.
+// undoes the target's copy whole. On a source with `worktreeTeardown` (plugins E1) the teardown
+// goes with `move.finish`, run by the server. Pure: the requests come in as deps, so `node --test`
+// covers it.
 import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../../../shared/protocolV2'
 import { errorCode, errorText } from './errors.ts'
 import type { AppServerLink } from '../../../shared/types'
 import { MOVE_RECEIVE_TIMEOUT_MS } from '../../../shared/move.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS } from '../../../shared/teardown.ts'
 
 export type Requester = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
 
@@ -49,6 +51,25 @@ export interface MoveFlowDeps {
   teardown?: () => Promise<string[]>
   /** No teardown because the user unticked it (the step then says so, rather than "nothing to tear down") */
   teardownUnticked?: boolean
+  /**
+   * A source that tears down itself (`worktreeTeardown`, plugins E1): the plan's chosen ids, sent with
+   * the one move.finish, which checks the source unchanged, runs them, then removes it. With these,
+   * `teardown` is not used.
+   */
+  teardownIds?: readonly string[]
+}
+
+/** The error's `details` from a source that tears down itself (plugins E1) */
+function errorDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
+  const details = (err as { details?: unknown } | null)?.details
+  return details && typeof details === 'object' ? details : {}
+}
+
+/** What a failure after the server's teardown found already torn down (`details.tornDown`); none for the teardown's own failure, whose text names them. */
+function tornDownBefore(err: unknown): string[] {
+  const { reason, tornDown } = errorDetails(err)
+  if (reason === 'teardown' || !Array.isArray(tornDown)) return []
+  return tornDown.filter((label): label is string => typeof label === 'string')
 }
 
 /**
@@ -186,7 +207,11 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   // The point of commitment: the target has it. With a teardown, the source is checked unchanged
   // first (move.finish verifyOnly), so a VM or stack is only destroyed for a move that will finish.
   let tornDown = false
-  if (deps.teardown) {
+  const serverIds = deps.teardownIds ?? []
+  /** Added to a 'both' error: what the server had torn down before its removal failed */
+  let tornDownNote = ''
+  if (serverIds.length > 0) progress('teardown', 'active')
+  else if (deps.teardown) {
     progress('teardown', 'active')
     try {
       await source('move.finish', { ...from, fingerprint: exported.fingerprint, verifyOnly: true }, { timeoutMs: STEP_MS })
@@ -200,13 +225,37 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     progress('teardown', warnings.length > 0 ? 'failed' : 'done', warnings.length > 0 ? warnings.join(' ') : undefined)
   } else progress('teardown', 'skipped', deps.teardownUnticked ? 'left in place (unticked)' : 'nothing to tear down')
 
-  progress('finish', 'active')
+  if (serverIds.length === 0) progress('finish', 'active')
   try {
-    await source('move.finish', { ...from, fingerprint: exported.fingerprint, ...(received.serverName ? { toServer: received.serverName } : {}) }, { timeoutMs: STEP_MS })
+    await source(
+      'move.finish',
+      { ...from, fingerprint: exported.fingerprint, ...(serverIds.length > 0 ? { teardown: [...serverIds] } : {}), ...(received.serverName ? { toServer: received.serverName } : {}) },
+      { timeoutMs: serverIds.length > 0 ? TEARDOWN_REQUEST_TIMEOUT_MS : STEP_MS }
+    )
+    if (serverIds.length > 0) progress('teardown', 'done')
     progress('finish', 'done')
     return { kind: 'moved', worktreeId: received.worktreeId, notes }
   } catch (err) {
     const code = errorCode(err)
+    if (serverIds.length > 0) {
+      const done = tornDownBefore(err)
+      if (code === 'NOT_CONNECTED' || code === 'TIMEOUT') {
+        // The answer was lost: the teardown and the removal may or may not have run.
+        tornDown = true
+        progress('teardown', 'failed', 'the answer was lost, so it may or may not have run')
+      } else if (done.length > 0) {
+        // Past the teardown: the removal failed after the chosen items ran.
+        tornDown = true
+        tornDownNote = ` The teardown had already run and is not undone: ${done.join('; ')}.`
+        progress('teardown', 'done')
+      } else if (code === 'CONFLICT' || code === 'IN_USE' || errorDetails(err).reason === 'teardown') {
+        // The server checks the source unchanged (and not busy) before it tears anything down, and
+        // stops at a failed item with the worktree kept: either way the target's copy goes. A
+        // failed item's text names what was already done.
+        progress('teardown', 'failed', errorText(err))
+        return undoTarget(err, 'teardown')
+      } else progress('teardown', 'skipped', 'nothing was torn down')
+    }
     progress('finish', 'failed', errorText(err))
     // Changed or loaded after the copy: the target's copy is stale and goes, unless the source's VM
     // and stack are already gone (then both are kept, for the user to compare).
@@ -224,9 +273,9 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     }
     const sessions = !unloaded ? '' : restored ? ' Its sessions were started again here.' : " Its sessions were stopped for the move and could not be started again: load it again."
     if (code === 'CONFLICT' || code === 'IN_USE') {
-      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, after its VM and dev stack were torn down: both servers have the worktree now. Compare them and delete one.${sessions}`, notes }
+      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, after ${serverIds.length > 0 ? 'the teardown had run' : 'its VM and dev stack were torn down'}: both servers have the worktree now. Compare them and delete one.${tornDownNote}${sessions}`, notes }
     }
-    return { kind: 'both', worktreeId: received.worktreeId, error: `The target has the worktree, but the source's copy was not removed (${errorText(err)}). Delete it there once you have checked the target.${sessions}`, notes }
+    return { kind: 'both', worktreeId: received.worktreeId, error: `The target has the worktree, but the source's copy was not removed (${errorText(err)}). Delete it there once you have checked the target.${tornDownNote}${sessions}`, notes }
   }
 
   /**

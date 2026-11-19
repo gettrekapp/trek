@@ -10,8 +10,9 @@
 // dialogs stubbed, both servers saved; A's project window moves the worktree. It checks:
 //   - both welcomes list move; the window offers Move to another server… (B is saved);
 //   - the dialog offers to tear down the worktree's running VM (a registry entry and stub colima)
-//     and dev stack (ticked); unticked, Move is refused; the stack, then the VM (env.destroy: colima
-//     delete), are destroyed on A only after B has the worktree, A's folder still there;
+//     and dev stack, a box each from A's teardown plan, ticked; the stack unticked, Move is
+//     refused; A's move.finish destroys the stack, then deletes the VM (colima delete), only after
+//     B has the worktree, A's folder still there;
 //   - it warns that the ignored folder (.trek/) is deleted with the source;
 //   - the dialog lists B's project (same origin), the new path, the session that moves and the
 //     queued prompt that doesn't; a branch already checked out on B is a blocked place;
@@ -356,19 +357,21 @@ try {
     lines.some((l) => l.includes('running sessions are stopped first'))
   ], [true, true, true])
   // Windows: no VM or dev stack to tear down (NO_ENVS), so no teardown box.
-  const teardownBox = modal.locator('.move-teardown input')
+  const teardownBoxes = modal.locator('.move-teardown input')
   if (SERVER_HAS_ENVS) {
-    await teardownBox.waitFor({ timeout: 10_000 })
-    const teardownLabel = await modal.locator('.move-teardown').textContent()
-    check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
-  } else console.log(`SKIP the dialog offers to tear down its running VM and dev stack, ticked (${NO_ENVS})`)
+    await teardownBoxes.first().waitFor({ timeout: 10_000 })
+    await until(() => teardownBoxes.count(), 2)
+    const labels = (await modal.locator('.move-teardown').allTextContents()).join(' ')
+    check('the dialog offers to tear down its running VM and dev stack, a box each, ticked', [await teardownBoxes.count(), await teardownBoxes.evaluateAll((els) => els.every((e) => e.checked)), labels.includes(`VM “${vmProfile}”`), labels.includes('dev stack “trek-')], [2, true, true, true])
+  } else console.log(`SKIP the dialog offers to tear down its running VM and dev stack, a box each, ticked (${NO_ENVS})`)
   check('it warns the ignored .trek/ is deleted with the source', [await modal.locator('.move-ignored').count(), (await modal.locator('.move-ignored .move-paths').textContent()).includes('.trek/')], [1, true])
   await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
   await modal.locator('.move-path').waitFor({ timeout: 10_000 })
   if (SERVER_HAS_ENVS) {
-    await teardownBox.uncheck()
+    const stackBox = modal.locator('.move-teardown', { hasText: 'dev stack' }).locator('input')
+    await stackBox.uncheck()
     check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
-    await teardownBox.check()
+    await stackBox.check()
   } else console.log(`SKIP unticked while the stack runs, the move is refused (${NO_ENVS})`)
   check('B\'s project is offered, with the new path', await until(() => modal.locator('.move-path').textContent().catch(() => null), `New worktree: ${targetPath}`), `New worktree: ${targetPath}`)
   check('the place is On B — app', (await modal.locator('.move-row select').nth(1).locator('option:checked').textContent()).trim(), 'On B — app')
