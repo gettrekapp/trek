@@ -5,14 +5,17 @@
 // named. Only the differences the plan decided are mapped away: colima's working directory (the
 // server's own before, the plugin's data directory now), the registry's path, and the log line for a
 // colima that is not installed (the host's words). Nothing here runs a real docker or colima: the
-// stubs of scripts/machineHarness.mjs. Delete this file with core's env.* (Task 8).
+// stubs of scripts/machineHarness.mjs. The teardown participant `env` is compared too: core's interim
+// envParticipant against the plugin's lifecycle as the server wraps it (pluginParticipant). Delete
+// this file with core's env.* (Task 8).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dispatchV2 } from '../server/src/v2.ts'
-import { holdWorktree } from '../server/src/teardown/teardown.ts'
+import { holdWorktree, pluginParticipant } from '../server/src/teardown/teardown.ts'
+import { envParticipant } from '../server/src/teardown/participants.ts'
 import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { deriveProfileName } from '../plugins/colima/shared/environments.ts'
 import { removeDir } from './testPlatform.mjs'
@@ -50,7 +53,15 @@ async function side(t, which, options) {
         .replaceAll('error: colima is not installed on the server', 'error: spawn colima ENOENT')
     )
   }
-  return { s, call, registryFile, profile, name, alias }
+  /** The teardown participant `env`: core's interim one, or the plugin's lifecycle as the server wraps it */
+  const participant = () =>
+    which === 'core'
+      ? envParticipant(s.ctx, s.ctx.machine)
+      : pluginParticipant(
+          s.ctx.plugins.lifecycles(s.projectId).find((l) => l.id === 'env'),
+          s.ctx.caller
+        )
+  return { s, call, registryFile, profile, name, alias, participant }
 }
 
 /** Runs `scenario` on both sides and compares their transcripts. */
@@ -199,3 +210,61 @@ parity('compose up failing, and two ups at once', async ({ s, ask }) => {
 parity("a worktree outside Colima's home", async ({ s, ask }) => {
   await ask('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true } })
 }, { home: (dir) => join(dir, 'rep') })
+
+/** A participant call's outcome: its answer, or its rejection's message. */
+const settle = (promise) => promise.then((value) => ({ value }), (err) => ({ rejected: err instanceof Error ? err.message : String(err) }))
+
+/**
+ * The lifecycle on the feature worktree: the plan, the repository check, the teardown, then the
+ * plan and the repository check again. `vmLines`: what colima lists; `up`: start the VM first;
+ * `flags`: the colima stub's opt-ins (delete-fails, delete-fails-unlisted); `folderGone`: the
+ * worktree's folder removed under it (its VM orphaned).
+ */
+function lifecycleParity(title, { up = true, vmLines = null, flags = [], folderGone = false }) {
+  parity(`the lifecycle: ${title}`, async ({ s, ask, record, profile, participant }) => {
+    if (up) await ask('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })
+    if (vmLines) vms(vmLines(profile))
+    for (const flag of flags) writeFileSync(join(stubDir, flag), '')
+    if (folderGone) rmSync(s.feature, { recursive: true, force: true })
+    try {
+      const target = () => ({ project: s.projects.require(s.projectId), repo: s.repo(), worktree: s.worktreeAt(s.feature) })
+      const env = participant()
+      resetCalls()
+      for (const op of ['remove', 'promote', 'move']) record(`plan ${op}`, await settle(env.plan(target(), op)))
+      record('beforeRepoRemove', await settle(env.beforeRepoRemove(target().project, target().repo)))
+      record('teardown', await settle(env.teardown(target(), 'remove', ['destroy'])))
+      record('plan after', await settle(env.plan(target(), 'remove')))
+      record('beforeRepoRemove after', await settle(env.beforeRepoRemove(target().project, target().repo)))
+      // A detached worktree has no VM to plan.
+      record('plan detached', await settle(env.plan({ ...target(), worktree: { ...target().worktree, branch: null } }, 'remove')))
+    } finally {
+      noVms()
+      for (const flag of flags) rmSync(join(stubDir, flag), { force: true })
+    }
+  })
+}
+
+lifecycleParity('a running VM', { vmLines: (profile) => [{ name: profile, status: 'Running' }] })
+lifecycleParity('a stopped VM', { vmLines: (profile) => [{ name: profile, status: 'Stopped' }] })
+lifecycleParity('no VM (no record): no colima runs for the plan or the repository check', { up: false, vmLines: () => [{ name: 'twb-leftover-000000', status: 'Running' }] })
+lifecycleParity("a record without a VM: planned, and colima's failed delete still lets it go", { flags: ['delete-fails-unlisted'] })
+lifecycleParity('a VM colima still lists after a failed delete: the teardown fails', { vmLines: (profile) => [{ name: profile, status: 'Running' }], flags: ['delete-fails'] })
+lifecycleParity("a running VM whose worktree folder is gone, and a leftover no record names", {
+  vmLines: (profile) => [{ name: profile, status: 'Running' }, { name: 'twb-leftover-000000', status: 'Running' }],
+  folderGone: true
+})
+
+parity('the lifecycle on a machine without colima: no VMs, no failure', async ({ s, ask, record, participant }) => {
+  await ask('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })
+  const env = participant()
+  const target = { project: s.projects.require(s.projectId), repo: s.repo(), worktree: s.worktreeAt(s.feature) }
+  const empty = mkdtempSync(join(tmpdir(), 'trek-colima-parity-nopath-'))
+  process.env.PATH = empty
+  try {
+    record('plan', await settle(env.plan(target, 'remove')))
+    record('beforeRepoRemove', await settle(env.beforeRepoRemove(target.project, target.repo)))
+  } finally {
+    process.env.PATH = `${stubDir}:${originalPath}`
+    removeDir(empty)
+  }
+})

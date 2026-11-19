@@ -86,7 +86,7 @@ function lifecycleWith({ known = [], repos = [], vms = [], destroy = async () =>
       return destroy()
     }
   }
-  return { lifecycle: colimaLifecycle(host, env), asked }
+  return { lifecycle: colimaLifecycle(host, env), asked, env }
 }
 const ctx = { projectId: 'p1', caller: 'c1' }
 const feat = { id: 'w2', repoId: 'r1', repoPath: '/r/app', path: '/r/app-feat', branch: 'feat', present: true }
@@ -125,4 +125,42 @@ test("the lifecycle's repository check asks the registry first: no VM of the rep
   assert.equal(await running.lifecycle.beforeRepoRemove(ctx, repo), 'It has a running environment. Stop it in the Env tab first.')
   const leftover = lifecycleWith({ repos: ['/r/app'], vms: [{ profile: 'twb-y-000000', vmState: 'running', worktreePath: '' }] })
   assert.equal(await leftover.lifecycle.beforeRepoRemove(ctx, repo), null)
+})
+
+test("the lifecycle takes only a colima that isn't installed as no VMs; any other failure to list is the plan's and the repository check's own", async () => {
+  const failing = (err) => {
+    const made = lifecycleWith({ known: [featProfile], repos: ['/r/app'] })
+    // The stand-in's list, failing as the host or the file system would.
+    return colimaLifecycle({ repoSettings: () => ({}), emitTo: () => {} }, { ...made.env, list: async () => Promise.reject(err) })
+  }
+  const notInstalled = Object.assign(new Error('colima is not installed on the server'), { code: 'ENOENT' })
+  const fileGone = Object.assign(new Error("ENOENT: no such file or directory, open '/x'"), { code: 'ENOENT', syscall: 'open', path: '/x' })
+  const none = failing(notInstalled)
+  assert.deepEqual(await none.plan(ctx, feat, 'remove'), [])
+  assert.equal(await none.beforeRepoRemove(ctx, { id: 'r1', path: '/r/app', name: 'app' }), null)
+  const broken = failing(fileGone)
+  await assert.rejects(broken.plan(ctx, feat, 'remove'), /no such file/)
+  await assert.rejects(broken.beforeRepoRemove(ctx, { id: 'r1', path: '/r/app', name: 'app' }), /no such file/)
+})
+
+test('env.up refuses where the plugin is off for the project (a teardown skips it there, so no VM it could never clean up); the other methods still answer', { skip }, async (t) => {
+  const s = await setup(t)
+  const worktreeId = s.worktreeAt(s.feature).id
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })).result.code, 0)
+  const profile = deriveProfileName(s.a, 'feature-x')
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.plugins = { ...d.settings.plugins, env: { enabled: false } }
+  })
+  resetCalls()
+  const res = await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
+  refused(res, 'BAD_REQUEST')
+  assert.equal(res.error.message, 'Colima environments are turned off for this project')
+  assert.deepEqual(calls(), [], 'nothing ran')
+  // The VM made before can still be seen, stopped and destroyed.
+  assert.deepEqual((await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => e.profile), [profile])
+  assert.equal((await s.call('env.ps', { projectId: s.projectId, worktreeId })).ok, true)
+  assert.equal((await s.call('env.stop', { profile })).result, 0)
+  assert.equal((await s.call('env.destroy', { profile })).result, 0)
+  // An unknown worktree is still NOT_FOUND first.
+  refused(await s.call('env.up', { projectId: s.projectId, worktreeId: 'nope', settings: { enabled: true } }), 'NOT_FOUND')
 })

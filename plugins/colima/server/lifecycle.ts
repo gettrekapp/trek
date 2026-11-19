@@ -12,12 +12,16 @@ export const REPO_REMOVE_REASON = 'It has a running environment. Stop it in the 
 
 type LifecycleEnv = Pick<EnvironmentService, 'known' | 'knownRepo' | 'list' | 'destroy'>
 
-/** The repository's VMs; none on a machine without colima (the host's ENOENT). */
+/**
+ * The repository's VMs; none on a machine without colima: the host's not-installed ENOENT, which
+ * has no syscall (core's missingTool, the handlers' viaTool). A file's ENOENT is a failure.
+ */
 async function vmsOf(env: LifecycleEnv, repoKey: string): Promise<EnvironmentInfo[]> {
   try {
     return await env.list(repoKey)
   } catch (err) {
-    if ((err as { code?: unknown } | null)?.code === 'ENOENT') return []
+    const e = err as { code?: unknown; syscall?: unknown } | null
+    if (e?.code === 'ENOENT' && e.syscall === undefined) return []
     throw err
   }
 }

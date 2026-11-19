@@ -11,6 +11,7 @@ import { optionalComposeFile, optionalEnvVars, optionalInt, requireEnvSettings, 
 import type { EnvironmentService } from './service.ts'
 
 const MAX_MESSAGE = 4000
+export const OFF_MESSAGE = 'Colima environments are turned off for this project'
 const bad = (message: string): Error => pluginError('BAD_REQUEST', message)
 
 /** The repository's VM key: the profileKey an import kept (its repo setting), else its path. */
@@ -75,8 +76,12 @@ export function colimaHandlers(host: ServerPluginHost, env: EnvironmentService):
 
     // The branch git has checked out now (re-read), the repository's VM key from the server's own
     // data (never the client's profileKey), the settings and variables checked.
+    // Not where the plugin is off for the project: a teardown skips an off plugin, so a VM made
+    // there could never be cleaned up with its worktree. The other methods still answer, so a VM
+    // made before it was turned off can be seen, stopped and destroyed.
     up: async (p, ctx) => {
       const worktree = await host.checkedWorktree(p.projectId, p.worktreeId, { refresh: true })
+      if (!host.isEnabled(p.projectId as string)) throw bad(OFF_MESSAGE)
       const settings = requireEnvSettings(p.settings, worktree.path)
       const envVars = optionalEnvVars(p.envVars)
       const repoKey = repoKeyOf(host, p.projectId as string, { id: worktree.repoId, path: worktree.repoPath })
