@@ -741,3 +741,52 @@ test('refused before setup (plugins E1): repo or branch settings of an unknown k
   assert.match(warnings.join('\n'), /badkind not loaded: its repoSettings cpu has the kind "integer"/)
   assert.match(warnings.join('\n'), /badname not loaded: its branchSettings "not ok" is not a field name/)
 })
+
+test('repo.setPluginSettings and branch.setPluginSettings (plugins E1): checked against the manifest, kept in the project, read back by the host; {} clears', async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  const repoId = projects.require(projectId).repositories[0].id
+  let host
+  const envy = { manifest: manifest('envy', { repoSettings: { enabled: 'boolean', cpu: 'number' }, branchSettings: { env: 'text' } }), setup: (h) => ((host = h), { handlers: {} }) }
+  // Not for this server's OS: listed available: false, never set up, so no settingFields and no writes.
+  const elsewhere = { manifest: manifest('elsewhere', { platforms: [process.platform === 'win32' ? 'darwin' : 'win32'], repoSettings: { on: 'boolean' } }), setup: () => ({ handlers: {} }) }
+  const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-settings-'))
+  t.after(() => removeDir(dir))
+  const registry = createPluginRegistry({ plugins: [envy, elsewhere], secretsFile: join(dir, 'secrets.json'), dataDir: join(dir, 'data'), hub, projects, isCoreMethod, coreToolNames: [], warn: () => {} })
+  const call = (method, params) => dispatchV2(method, { projectId, repoId, ...params }, { projects, hub, plugins: registry })
+  assert.deepEqual(await call('repo.setPluginSettings', { pluginId: 'envy', values: { enabled: true, cpu: 4 } }), { ok: true, result: null })
+  assert.deepEqual(await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'A=1\n' } }), { ok: true, result: null })
+  const repo = () => projects.require(projectId).repositories[0]
+  assert.deepEqual(repo().pluginSettings, { envy: { enabled: true, cpu: 4 } })
+  assert.deepEqual(repo().branchData.feat, { pluginSettings: { envy: { env: 'A=1\n' } } })
+  assert.deepEqual(host.repoSettings(projectId, repoId), { enabled: true, cpu: 4 })
+  assert.deepEqual(host.branchSettings(projectId, repoId, 'feat'), { env: 'A=1\n' })
+  for (const [method, params, pattern] of [
+    ['repo.setPluginSettings', { pluginId: 'envy', values: { memory: 4 } }, /values\.memory is not one of its settings/],
+    ['repo.setPluginSettings', { pluginId: 'envy', values: { cpu: 'four' } }, /values\.cpu must be a finite number/],
+    ['repo.setPluginSettings', { pluginId: 'nobody', values: {} }, /no plugin "nobody"/],
+    ['repo.setPluginSettings', { pluginId: 'elsewhere', values: { on: true } }, /no plugin "elsewhere"/],
+    ['repo.setPluginSettings', { pluginId: 'toString', values: {} }, /no plugin "toString"/],
+    ['branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { enabled: true } }, /values\.enabled is not one of its settings/],
+    ['branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'A' }, repoId: 'nope' }, /./],
+    ['repo.setPluginSettings', { pluginId: 'envy', values: 'x' }, /values must be an object/],
+    ['repo.setPluginSettings', { pluginId: 'envy', values: [true] }, /values must be an object/],
+    ['repo.setPluginSettings', { pluginId: 'envy', values: null }, /values must be an object/]
+  ]) {
+    const res = await call(method, params)
+    if (params.repoId === 'nope') {
+      assert.equal(res.ok, false, 'an unknown repository is refused')
+      continue
+    }
+    assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(params))
+    assert.match(res.error.message, pattern)
+  }
+  assert.deepEqual(repo().pluginSettings, { envy: { enabled: true, cpu: 4 } }, 'a refused write changes nothing')
+  await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: {} })
+  await call('repo.setPluginSettings', { pluginId: 'envy', values: {} })
+  assert.equal(repo().pluginSettings, undefined)
+  assert.equal(repo().branchData.feat, undefined, 'an emptied branch entry goes')
+})

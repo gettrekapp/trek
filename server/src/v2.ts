@@ -15,6 +15,7 @@ import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
+import { pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
@@ -178,6 +179,33 @@ function setBranchField<K extends keyof BranchData>(
   return null
 }
 
+/**
+ * `repo.setPluginSettings` / `branch.setPluginSettings` (plugins E1): the plugin and its values,
+ * checked against its manifest. Only a plugin set up on this server has `settingFields`: one
+ * registered for another platform (listed `available: false`) is refused here, though
+ * `project.import` and `move.receive` keep its values by shape (pluginSettingsShapeProblem), so
+ * nothing is lost when the project moves to a server where it runs.
+ */
+function pluginSettingsOf(ctx: V2Context, p: any, scope: 'repo' | 'branch'): { pluginId: string; values: PluginSettingValues } {
+  const pluginId = requireString(p.pluginId, 'pluginId')
+  const fields = ctx.plugins?.settingFields(pluginId, scope)
+  if (!fields) throw codedError('BAD_REQUEST', `no plugin ${JSON.stringify(pluginId)} on this server has ${scope} settings`)
+  // A plain object (not an array, not null): pluginValuesProblem reads its own entries.
+  const values = requireRecord(p.values, 'values')
+  assertNoProtoKeys(values, 'values')
+  const problem = pluginValuesProblem(fields, values)
+  if (problem) throw codedError('BAD_REQUEST', `values.${problem}`)
+  return { pluginId, values: values as PluginSettingValues }
+}
+
+/** A pluginSettings map with one plugin's entry set (or, with no values, removed); undefined when that leaves it empty. */
+function withPluginValues(map: Record<string, PluginSettingValues> | undefined, pluginId: string, values: PluginSettingValues): Record<string, PluginSettingValues> | undefined {
+  const next = { ...(map ?? {}) }
+  if (Object.keys(values).length === 0) delete next[pluginId]
+  else next[pluginId] = { ...values }
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
 
@@ -334,6 +362,18 @@ const handlers: Record<string, Handler> = {
     return null
   },
 
+  // A plugin's per-repository settings (plugins E1): `values` replaces the plugin's own; {} clears them.
+  'repo.setPluginSettings': (p, ctx) => {
+    const { pluginId, values } = pluginSettingsOf(ctx, p, 'repo')
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      const next = withPluginValues(repo.pluginSettings, pluginId, values)
+      if (next) repo.pluginSettings = next
+      else delete repo.pluginSettings
+    })
+    return null
+  },
+
   'repo.listBranches': async (p, ctx) => {
     const repo = repoIn(ctx.projects.require(p.projectId), p.repoId)
     try {
@@ -379,6 +419,22 @@ const handlers: Record<string, Handler> = {
     return null
   },
   'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),
+  // A plugin's per-branch settings (plugins E1), kept with the branch's data: they outlive the worktree and move with it.
+  // No history is recorded, as for setEnv.
+  'branch.setPluginSettings': (p, ctx) => {
+    const { pluginId, values } = pluginSettingsOf(ctx, p, 'branch')
+    const branch = requireBranch(p.branch)
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      const next = withPluginValues(data.pluginSettings, pluginId, values)
+      if (next) data.pluginSettings = next
+      else delete data.pluginSettings
+      if (Object.keys(data).length === 0) delete repo.branchData[branch]
+      else repo.branchData[branch] = data
+    })
+    return null
+  },
 
   'sub.subscribe': (p, ctx) => {
     if (!parseTopic(p.topic)) throw codedError('BAD_REQUEST', `Unknown topic: ${String(p.topic)}`)

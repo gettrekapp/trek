@@ -15,7 +15,7 @@ import type { AutomationInput, ProjectSettings, ProjectSummary, Project } from '
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
-import type { PluginPresence } from './plugins/manifest.ts'
+import type { PluginPresence, PluginSettingValues } from './plugins/manifest.ts'
 import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type { UiFocusEvent, UiReportParams } from './ui.ts'
@@ -387,6 +387,8 @@ export interface MethodParamsV2 {
       environments?: EnvironmentSettings | null
     }
   }
+  /** A plugin's per-repository settings (plugins E1): `values` (its manifest's `repoSettings`) replaces the plugin's; `{}` clears them */
+  'repo.setPluginSettings': RepoRef & { pluginId: string; values: PluginSettingValues }
   'repo.listBranches': RepoRef
   // Worktrees
   /**
@@ -497,6 +499,8 @@ export interface MethodParamsV2 {
   /** Clears the worktree's pull request notice */
   'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
+  /** A plugin's per-branch settings (plugins E1): `values` (its manifest's `branchSettings`) replaces the plugin's; `{}` clears them */
+  'branch.setPluginSettings': BranchRef & { pluginId: string; values: PluginSettingValues }
   // The Changes tab's review (5c-2): the draft is the worktree's `review` in the project topic
   /** A new line comment; `lineText` is the line as shown, without the diff's +, - or space */
   'review.add': WorktreeRef & {
@@ -663,6 +667,7 @@ export interface MethodResultsV2 {
   'repo.add': { repoId: string }
   'repo.remove': null
   'repo.update': null
+  'repo.setPluginSettings': null
   'repo.listBranches': string[]
   /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
   'worktree.create': { worktreeId: string; linkWarnings?: string[] }
@@ -715,6 +720,7 @@ export interface MethodResultsV2 {
   'mcpTools.list': McpToolCatalog
   'prWatch.dismiss': null
   'branch.setEnv': null
+  'branch.setPluginSettings': null
   'review.add': { commentId: string }
   'review.edit': null
   'review.remove': null

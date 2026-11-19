@@ -1049,6 +1049,21 @@ the setting (a 0.2.x client, which sent these unchecked, sees that as a failed s
 `project.import` checks them by kind only, and takes a built-in plugin's keys even where that
 plugin didn't load, so an older project still imports.
 
+**Repository and branch settings** (plugins E1). A plugin can declare settings per repository
+(`repoSettings`) and per branch (`branchSettings`), each a field name and a kind (`string`: one
+line of at most 2000 characters; `text`: at most 100 000; `number`: finite; `boolean`). They are
+kept in the project, so every client sees them in its snapshot: `Repository.pluginSettings[<id>]`
+and `BranchData.pluginSettings[<id>]`. A branch's move with the branch, and both come with
+`project.import` (checked by shape only there and in `move.receive`). No history is recorded for
+them. Only a plugin set up on this server takes writes: one registered for another platform
+(listed `available: false`) is refused, but its values still come with an import or a move, so
+nothing is lost when the project reaches a server where it runs.
+
+| Method | Params | Result |
+|---|---|---|
+| `repo.setPluginSettings` | `{projectId, repoId, pluginId, values}` | `null`: `values` replaces the plugin's settings for the repository; `{}` clears them. `BAD_REQUEST` when no plugin of that id set up on the server declares repository settings, when `values` is not an object, or for a field it doesn't declare or a value of another kind |
+| `branch.setPluginSettings` | `{projectId, repoId, branch, pluginId, values}` | `null`: the same for the branch (its `branchSettings`); an emptied branch entry is removed |
+
 **Ticket trackers** (phase 2). A branch's ticket (`branchData.ticket`) is an id the project's
 trackers read: each is a plugin's ticket provider (its ids and URLs, the chip's label, the link
 from the project's settings). `set_worktree_ticket` parses through the trackers on in the project

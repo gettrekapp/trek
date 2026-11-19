@@ -262,9 +262,9 @@ const SETTER_VALUES = {
   'branch.setPr': { pr: 'https://github.com/o/r/pull/1' },
   'branch.setPrWatch': { watch: true }
 }
-const RECORDS_NOTHING = ['branch.setEnv']
+const RECORDS_NOTHING = ['branch.setEnv', 'branch.setPluginSettings']
 
-test('every branch.set* method records its change (setEnv excepted)', async (t) => {
+test('every branch.set* method records its change (setEnv and setPluginSettings excepted)', async (t) => {
   assert.ok(BRANCH_SET_METHODS.includes('branch.setPrWatch') && BRANCH_SET_METHODS.length >= 7)
   for (const method of BRANCH_SET_METHODS) {
     if (RECORDS_NOTHING.includes(method)) continue

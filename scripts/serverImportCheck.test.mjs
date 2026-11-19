@@ -256,3 +256,20 @@ test("a session's context is dropped: the automations it names are not imported"
   assert.equal('context' in out.globalSessions[0], false)
   assert.equal('context' in out.repositories[0].worktrees[1].sessions[0], false)
 })
+
+test("plugin settings (plugins E1): a repository's and a branch's are kept when well formed, refused otherwise", (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const p = project()
+  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2 } }
+  p.repositories[0].branchData.main.pluginSettings = { env: { env: 'A=1\n' } }
+  const out = checkImport(p, ctx)
+  assert.deepEqual(out.repositories[0].pluginSettings, { env: { enabled: true, cpu: 2 } })
+  assert.deepEqual(out.repositories[0].branchData.main.pluginSettings, { env: { env: 'A=1\n' } })
+  const badRepo = project()
+  badRepo.repositories[0].pluginSettings = { env: { nested: { x: 1 } } }
+  assert.throws(() => checkImport(badRepo, ctx), /repositories\[0\]\.pluginSettings env\.nested must be/)
+  const badBranch = project()
+  badBranch.repositories[0].branchData.main.pluginSettings = { 'Bad Id': {} }
+  assert.throws(() => checkImport(badBranch, ctx), /branchData\["main"\]\.pluginSettings "Bad Id" is not a plugin id/)
+})

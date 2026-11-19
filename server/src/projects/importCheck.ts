@@ -4,6 +4,7 @@
 // paths realpath'd, runtime state reset.
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocolV2'
+import { pluginSettingsShapeProblem } from '../../../src/shared/plugins/manifest.ts'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
 import { checkQueue, checkTitle } from '../sessions/limits.ts'
@@ -83,6 +84,9 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
   if (!isRecord(raw.branchData)) throw bad(`${where}.branchData must be an object`)
   for (const [branch, data] of Object.entries(raw.branchData)) {
     if (!isRecord(data)) throw bad(`${where}.branchData["${branch}"] must be an object`)
+    // Plugin settings by shape only, as a plugin this server lacks keeps its values (plugins E1).
+    const branchShape = pluginSettingsShapeProblem(data.pluginSettings)
+    if (branchShape) throw bad(`${where}.branchData["${branch}"].pluginSettings ${branchShape}`)
     if (data.prWatch !== undefined) {
       if (!isRecord(data.prWatch)) throw bad(`${where}.branchData["${branch}"].prWatch must be an object`)
       // What another server's watch saw is not this server's to trust: the first poll here is a fresh baseline.
@@ -93,6 +97,8 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
     throw bad(`${where}.linkedDirs must be an array of strings`)
   }
   if (raw.environments !== undefined && !isRecord(raw.environments)) throw bad(`${where}.environments must be an object`)
+  const shape = pluginSettingsShapeProblem(raw.pluginSettings)
+  if (shape) throw bad(`${where}.pluginSettings ${shape}`)
   if (!Array.isArray(raw.worktrees)) throw bad(`${where}.worktrees must be an array`)
   const worktrees = raw.worktrees.map((w, i) => checkWorktree(w, `${where}.worktrees[${i}]`, ctx, seen, registered))
   const mains = worktrees.filter((w) => w.isMain).length

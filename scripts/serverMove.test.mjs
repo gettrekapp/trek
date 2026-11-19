@@ -886,3 +886,19 @@ test('history: without server names, moved.in and moved.out name no server', asy
   assert.deepEqual([into.kind, 'from' in into], ['moved.in', false])
   assert.deepEqual([out.kind, 'to' in out], ['moved.out', false])
 })
+
+test("a branch's plugin settings move with it (plugins E1), over the target's own; a bad one is refused", async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => {
+    d.repositories[0].branchData.feat.pluginSettings = { env: { env: 'PORT=2\n' }, other: { on: true } }
+  })
+  s.B.projects.apply(s.B.projectId, (d) => {
+    d.repositories[0].branchData.feat = { pluginSettings: { other: { on: false }, kept: { n: 1 } } }
+  })
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.deepEqual(s.B.project().repositories[0].branchData.feat.pluginSettings, { other: { on: true }, kept: { n: 1 }, env: { env: 'PORT=2\n' } })
+  const bad = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'other', head: 'a'.repeat(40), branchData: { pluginSettings: { 'Bad Id': {} } } })
+  assert.equal(bad.error?.code, 'BAD_REQUEST')
+  assert.match(bad.error.message, /branchData\.pluginSettings "Bad Id" is not a plugin id/)
+})

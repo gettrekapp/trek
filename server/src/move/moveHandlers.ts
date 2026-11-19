@@ -35,6 +35,7 @@ import {
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { MAX_HISTORY_PER_BRANCH, sanitizeHistoryEvent, type HistoryEvent } from '../../../src/shared/model/history.ts'
+import { pluginSettingsShapeProblem, type PluginSettingValues } from '../../../src/shared/plugins/manifest.ts'
 import { codedError } from '../errors.ts'
 import { recordHistory } from '../history/record.ts'
 import { notSignedIn } from '../prWatch/prWatchHandlers.ts'
@@ -217,6 +218,7 @@ function exportBranchData(project: Project, data: BranchData | undefined): MoveB
   if (data.pr) out.pr = data.pr
   if (data.prWatch) out.prWatch = true
   if (data.env) out.env = data.env
+  if (data.pluginSettings) out.pluginSettings = structuredClone(data.pluginSettings)
   const tag = data.tag ? project.settings.worktreeTags?.find((t) => t.id === data.tag)?.name : undefined
   if (tag) out.tag = tag
   const custom = (data.customTags ?? [])
@@ -309,6 +311,12 @@ function checkBranchData(value: unknown): MoveBranchData {
   }
   if (value.prWatch !== undefined && typeof value.prWatch !== 'boolean') throw bad('branchData.prWatch must be a boolean')
   if (value.prWatch === true) out.prWatch = true
+  // By shape only (plugins E1): a plugin this server lacks, or one for another platform, keeps its values.
+  if (value.pluginSettings !== undefined) {
+    const problem = pluginSettingsShapeProblem(value.pluginSettings)
+    if (problem) throw bad(`branchData.pluginSettings ${problem}`)
+    if (Object.keys(value.pluginSettings as object).length > 0) out.pluginSettings = structuredClone(value.pluginSettings) as Record<string, PluginSettingValues>
+  }
   return out
 }
 
@@ -318,6 +326,8 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
   if (incoming.note) data.note = incoming.note
   if (incoming.ticket) data.ticket = incoming.ticket
   if (incoming.env) data.env = incoming.env
+  // Each incoming plugin's values replace that plugin's here; the target's other plugins' stay.
+  if (incoming.pluginSettings) data.pluginSettings = { ...(data.pluginSettings ?? {}), ...incoming.pluginSettings }
   if (incoming.pr) {
     if (data.pr !== incoming.pr) delete data.prWatch
     data.pr = incoming.pr

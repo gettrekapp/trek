@@ -3,6 +3,7 @@
 // app's move flow and `node --test`.
 import type { HistoryEvent } from './model/history.ts'
 import type { LlmSelection } from './providers/types.ts'
+import type { PluginSettingValues } from './plugins/manifest.ts'
 
 /**
  * The uncommitted work travels as one binary patch (`git diff-index --cached -p --binary HEAD`,
@@ -113,6 +114,8 @@ export interface MoveBranchData {
   prWatch?: boolean
   /** The branch's Docker environment `.env` text (5d); a target without `env` doesn't take it */
   env?: string
+  /** Each plugin's per-branch settings (plugins E1); a target older than E1 drops them */
+  pluginSettings?: Record<string, PluginSettingValues>
 }
 
 /** `move.export`'s answer: everything the target needs, read from an unloaded worktree. */
