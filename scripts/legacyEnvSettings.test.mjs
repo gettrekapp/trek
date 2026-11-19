@@ -4,10 +4,10 @@
 // present as written by an older Trek.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { legacyFromRepoValues, migrateProjectEnv, repoValuesFromLegacy, setBranchEnv, setRepoEnv } from '../server/src/projects/legacyEnv.ts'
+import { legacyFromRepoValues, migrateBranchEnv, migrateProjectEnv, repoValuesFromLegacy, setBranchEnv, setRepoEnv } from '../server/src/projects/legacyEnv.ts'
 import { ProjectStore, STORE_SCHEMA } from '../server/src/projects/store.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -45,7 +45,7 @@ test("setRepoEnv and setBranchEnv write the plugin's values and the mirror toget
   assert.deepEqual(bare, {})
 })
 
-test("migrateProjectEnv: an old field present wins (an older Trek wrote it); absent, the plugin's value stands and is mirrored", () => {
+test("migrateProjectEnv: an old field present wins (an older Trek wrote it); absent, an older Trek cleared it, so the plugin's copy goes", () => {
   const project = {
     id: 'p', name: 'P', settings: {}, globalSessions: [],
     repositories: [
@@ -62,7 +62,7 @@ test("migrateProjectEnv: an old field present wins (an older Trek wrote it); abs
   const [old, fresh, both] = migrateProjectEnv(project).repositories
   assert.deepEqual([old.pluginSettings, old.environments], [{ env: { enabled: true, profileKey: '/old/a' } }, { enabled: true, profileKey: '/old/a' }])
   assert.deepEqual(old.branchData, { b: { env: 'A=1', pluginSettings: { env: { env: 'A=1' } } }, c: { note: 'x' } })
-  assert.deepEqual([fresh.environments, fresh.branchData.b.env], [{ enabled: true, cpu: 2 }, 'B=2'])
+  assert.deepEqual([fresh.pluginSettings, fresh.environments, fresh.branchData], [undefined, undefined, {}], 'cleared; the emptied branch entry goes')
   assert.deepEqual([both.pluginSettings.env, both.environments, both.branchData.b.pluginSettings.env.env, both.branchData.b.env], [{ enabled: false }, { enabled: false }, 'OLD=1', 'OLD=1'])
   assert.deepEqual([both.branchData.huge.env.length, both.branchData.huge.pluginSettings], [100_001, undefined], 'past the text limit: kept as it was, not mirrored')
 })
@@ -149,4 +149,109 @@ test("migrateProjectEnv keeps the plugin's values the old field cannot hold, lea
   assert.equal(problems.length, 2)
   assert.match(problems[1][0], /branchData\["big"\]/)
   assert.match(problems[1][1], /1 MB/)
+})
+
+/** A store in a temp dir with one project file. */
+function storeWith(t, project) {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-legacy-env-'))
+  t.after(() => removeDir(dir))
+  writeFileSync(join(dir, `${project.id}.json`), JSON.stringify({ schema: STORE_SCHEMA, project }))
+  return { dir, store: new ProjectStore(dir) }
+}
+const mainWorktree = [{ id: 'w1', name: 'app', path: '/r/app', isMain: true, loaded: false, sessions: [] }]
+
+test("a rolled-back server cleared the .env and environments: on load the plugin's copies stay cleared, plugin-only keys kept", (t) => {
+  const project = {
+    id: 'p1', name: 'P', settings: {}, globalSessions: [],
+    repositories: [repoWith({
+      pluginSettings: { env: { enabled: true, cpu: 2, later: 'x' }, other: { on: true } },
+      branchData: { feat: { pluginSettings: { env: { env: 'SECRET=1' } } }, kept: { note: 'n', pluginSettings: { env: { env: 'SECRET=2' } } } },
+      worktrees: mainWorktree
+    })]
+  }
+  const [loaded] = storeWith(t, project).store.loadAll()
+  const repo = loaded.repositories[0]
+  assert.deepEqual([repo.pluginSettings, repo.environments], [{ env: { later: 'x' }, other: { on: true } }, undefined])
+  assert.deepEqual(repo.branchData, { kept: { note: 'n' } })
+})
+
+test("envFieldsRetired (E3's switch): a plugin copy without the old field stands and is mirrored", (t) => {
+  const project = {
+    id: 'p1', name: 'P', settings: {}, globalSessions: [], envFieldsRetired: true,
+    repositories: [repoWith({ pluginSettings: { env: { enabled: true, cpu: 2 } }, branchData: { feat: { pluginSettings: { env: { env: 'A=1' } } } }, worktrees: mainWorktree })]
+  }
+  const [loaded] = storeWith(t, project).store.loadAll()
+  const repo = loaded.repositories[0]
+  assert.deepEqual([repo.pluginSettings, repo.environments], [{ env: { enabled: true, cpu: 2 } }, { enabled: true, cpu: 2 }])
+  assert.deepEqual(repo.branchData.feat, { pluginSettings: { env: { env: 'A=1' } }, env: 'A=1' })
+})
+
+test("an old .env past the plugin's limit with a plugin copy: the copy goes, the .env is kept", () => {
+  const data = { env: 'x'.repeat(100_001), pluginSettings: { env: { env: 'OLD=1' }, other: { a: 1 } } }
+  assert.equal(migrateBranchEnv(data), null)
+  assert.deepEqual([data.env.length, data.pluginSettings], [100_001, { other: { a: 1 } }])
+})
+
+test("a load problem is logged as project <id>: <problem>", (t) => {
+  const kept = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, 'x'.repeat(100_000)]))
+  const project = {
+    id: 'p1', name: 'P', settings: {}, globalSessions: [],
+    repositories: [repoWith({ branchData: { big: { env: 'y'.repeat(60_000), pluginSettings: { kept } } }, worktrees: mainWorktree })]
+  }
+  const { store } = storeWith(t, project)
+  const warned = []
+  t.mock.method(console, 'warn', (m) => warned.push(String(m)))
+  store.loadAll()
+  assert.ok(warned.some((m) => /project p1: repositories\[0\]\.branchData\["big"\]\.pluginSettings holds more than 1 MB/.test(m)), warned.join('\n'))
+})
+
+test("a save and a load write both copies to disk and read them back in step", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-legacy-env-'))
+  t.after(() => removeDir(dir))
+  const store = new ProjectStore(dir)
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  const repoId = projects.require(projectId).repositories[0].id
+  const call = (method, params) => dispatchV2(method, { projectId, repoId, ...params }, { projects, hub, plugins: envFields })
+  assert.equal((await call('repo.update', { environments: { enabled: true, cpu: 3 } })).ok, true)
+  assert.equal((await call('branch.setEnv', { branch: 'feat', env: 'FOO=bar' })).ok, true)
+  store.flush()
+  const onDisk = JSON.parse(readFileSync(join(dir, `${projectId}.json`), 'utf8')).project.repositories[0]
+  assert.deepEqual([onDisk.environments, onDisk.pluginSettings, onDisk.branchData.feat], [
+    { enabled: true, cpu: 3 }, { env: { enabled: true, cpu: 3 } }, { env: 'FOO=bar', pluginSettings: { env: { env: 'FOO=bar' } } }
+  ])
+  const [loaded] = new ProjectStore(dir).loadAll()
+  assert.deepEqual([loaded.repositories[0].environments, loaded.repositories[0].pluginSettings, loaded.repositories[0].branchData.feat], [
+    onDisk.environments, onDisk.pluginSettings, onDisk.branchData.feat
+  ])
+})
+
+test("repo.update {environments} keeps a stored plugin-only key, and environments: null does too", async () => {
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  projects.apply(projectId, (d) => {
+    d.repositories[0].pluginSettings = { env: { enabled: false, cpu: 2, later: 'x' } }
+    d.repositories[0].environments = { enabled: false, cpu: 2 }
+  })
+  const repo = () => projects.require(projectId).repositories[0]
+  const call = (method, params) => dispatchV2(method, { projectId, repoId: repo().id, ...params }, { projects, hub, plugins: envFields })
+  assert.equal((await call('repo.update', { environments: { enabled: true } })).ok, true)
+  assert.deepEqual([repo().pluginSettings, repo().environments], [{ env: { later: 'x', enabled: true } }, { enabled: true }])
+  assert.equal((await call('repo.update', { environments: null })).ok, true)
+  assert.deepEqual([repo().pluginSettings, repo().environments], [{ env: { later: 'x' } }, undefined])
+})
+
+test("repo.update reads a corrupt (non-object) env plugin entry as none", async () => {
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  projects.apply(projectId, (d) => {
+    d.repositories[0].pluginSettings = { env: 'corrupt' }
+  })
+  const repo = () => projects.require(projectId).repositories[0]
+  const out = await dispatchV2('repo.update', { projectId, repoId: repo().id, environments: { enabled: true } }, { projects, hub, plugins: envFields })
+  assert.equal(out.ok, true, JSON.stringify(out))
+  assert.deepEqual([repo().pluginSettings, repo().environments], [{ env: { enabled: true } }, { enabled: true }])
 })

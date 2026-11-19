@@ -16,7 +16,7 @@ import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
 import { MAX_PLUGIN_TEXT, pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
-import { LEGACY_ENV_PLUGIN, mirrorBranch, mirrorRepo, repoValuesWithLegacy, setBranchEnv, setRepoEnv } from './projects/legacyEnv.ts'
+import { envRepoValues, LEGACY_ENV_PLUGIN, mirrorBranch, mirrorRepo, repoValuesWithLegacy, setBranchEnv, setRepoEnv } from './projects/legacyEnv.ts'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
@@ -374,10 +374,10 @@ const handlers: Record<string, Handler> = {
       if (linkedDirs === null) delete repo.linkedDirs
       else if (linkedDirs !== undefined) repo.linkedDirs = linkedDirs
       // The env plugin's settings under their old name (plugins E2): both are written (legacyEnv.ts),
-      // the plugin's fields only, each of the right kind; a value the old field cannot hold is kept.
+      // the plugin's fields only, each of the right kind. A value the old field cannot hold (a
+      // plugin-only key) is kept, by `environments: null` too, which clears only the old field's.
       if (environments !== undefined) {
-        const current = Object.hasOwn(repo.pluginSettings ?? {}, LEGACY_ENV_PLUGIN) ? repo.pluginSettings![LEGACY_ENV_PLUGIN] : undefined
-        const problem = setRepoEnv(repo, repoValuesWithLegacy(current, environments ?? {}))
+        const problem = setRepoEnv(repo, repoValuesWithLegacy(envRepoValues(repo.pluginSettings), environments ?? {}))
         if (problem) throw codedError('BAD_REQUEST', `pluginSettings ${problem}`)
       }
     })

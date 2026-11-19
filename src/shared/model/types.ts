@@ -265,6 +265,12 @@ export interface Project {
   globalSessions: Session[]
   /** Scheduled prompts (absent = none) */
   automations?: Automation[]
+  /**
+   * E3's switch (plugins; set nowhere yet): the old `environments`/`env` fields are retired, so an
+   * env plugin copy without its old field is not read as one an older Trek cleared
+   * (server/src/projects/legacyEnv.ts).
+   */
+  envFieldsRetired?: boolean
 }
 
 export interface HealthWarning {

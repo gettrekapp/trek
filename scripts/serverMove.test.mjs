@@ -936,6 +936,37 @@ test("an older source's .env alone (plugins E2) lands in the env plugin's settin
   assert.deepEqual([feat.env, feat.pluginSettings], ['FROM=old-source\n', { env: { env: 'FROM=old-source\n' }, kept: { n: 1 } }])
 })
 
+test("an E1 source's env plugin copy without its .env (an older Trek cleared it, plugins E2) replaces the target's .env with none; other plugins' stay", async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => {
+    delete d.repositories[0].branchData.feat.env
+    d.repositories[0].branchData.feat.pluginSettings = { env: { env: 'STALE=1\n' }, other: { on: true } }
+  })
+  s.B.projects.apply(s.B.projectId, (d) => {
+    d.repositories[0].branchData.feat = { note: 'mine', env: 'MINE=1\n', pluginSettings: { env: { env: 'MINE=1\n' }, kept: { n: 1 } } }
+  })
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const feat = s.B.project().repositories[0].branchData.feat
+  assert.deepEqual([feat.env, feat.pluginSettings], [undefined, { kept: { n: 1 }, other: { on: true } }])
+})
+
+test("on a target with envFieldsRetired (E3's switch), an incoming env plugin copy without its .env replaces the target's and is mirrored", async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => {
+    delete d.repositories[0].branchData.feat.env
+    d.repositories[0].branchData.feat.pluginSettings = { env: { env: 'NEW=1\n' } }
+  })
+  s.B.projects.apply(s.B.projectId, (d) => {
+    d.envFieldsRetired = true
+    d.repositories[0].branchData.feat = { env: 'MINE=1\n', pluginSettings: { env: { env: 'MINE=1\n' } } }
+  })
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const feat = s.B.project().repositories[0].branchData.feat
+  assert.deepEqual([feat.env, feat.pluginSettings], ['NEW=1\n', { env: { env: 'NEW=1\n' } }])
+})
+
 test("a move whose plugin settings, with the target's own, would pass 1 MB is refused, and the target keeps what it had", async (t) => {
   const s = await setup(t)
   const kept = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, 'x'.repeat(100_000)]))

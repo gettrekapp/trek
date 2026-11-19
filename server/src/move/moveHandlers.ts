@@ -333,7 +333,7 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
   if (incoming.note) data.note = incoming.note
   if (incoming.ticket) data.ticket = incoming.ticket
   // The env plugin's .env (plugins E2): the source's old field wins (an older server sends only it);
-  // with only the plugin's value, the target's own mirror goes and is made again below.
+  // with only the plugin's value, the target's own mirror goes and migrateBranchEnv below decides.
   if (incoming.env) data.env = incoming.env
   else if (incoming.pluginSettings && Object.hasOwn(incoming.pluginSettings, LEGACY_ENV_PLUGIN)) delete data.env
   // Each incoming plugin's values replace that plugin's here; the target's other plugins' stay.
@@ -367,8 +367,9 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
     if (problem === null) data.prWatch ??= {}
     else dropped.push(`The pull request is not watched here: ${problem}`)
   }
-  // The two copies of the .env in step, still a map a later move or import takes.
-  const envProblem = migrateBranchEnv(data)
+  // The two copies of the .env in step, still a map a later move or import takes. An incoming
+  // plugin copy without its old field is one an older Trek cleared, unless the target retired them.
+  const envProblem = migrateBranchEnv(data, project.envFieldsRetired === true)
   if (envProblem) throw bad(`branchData.pluginSettings, with this branch's here, ${envProblem}`)
   return data
 }

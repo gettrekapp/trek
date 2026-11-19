@@ -38,7 +38,7 @@ function decode(raw: unknown, file: string): Project {
   try {
     // An older Trek's environments and .env become the env plugin's settings (plugins E2); a part
     // that would break the plugin settings' caps is left as it was, not the project refused.
-    return resetRuntime(migrateProjectEnv(p as unknown as Project))
+    return resetRuntime(migrateProjectEnv(p as unknown as Project, (where, problem) => console.warn(`[projects] project ${p.id}: ${where} ${problem}`)))
   } catch (err) {
     throw new Error(`project has the wrong shape: ${(err as Error).message}`)
   }

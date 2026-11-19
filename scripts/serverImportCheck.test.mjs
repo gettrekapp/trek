@@ -261,11 +261,12 @@ test("plugin settings (plugins E1): a repository's and a branch's are kept when 
   const { registry, guard, project } = setup(t)
   const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
   const p = project()
-  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2 } }
-  p.repositories[0].branchData.main.pluginSettings = { env: { env: 'A=1\n' } }
+  // Not the env plugin: its copy without the old fields is one an older Trek cleared (plugins E2).
+  p.repositories[0].pluginSettings = { other: { enabled: true, cpu: 2 } }
+  p.repositories[0].branchData.main.pluginSettings = { other: { env: 'A=1\n' } }
   const out = checkImport(p, ctx)
-  assert.deepEqual(out.repositories[0].pluginSettings, { env: { enabled: true, cpu: 2 } })
-  assert.deepEqual(out.repositories[0].branchData.main.pluginSettings, { env: { env: 'A=1\n' } })
+  assert.deepEqual(out.repositories[0].pluginSettings, { other: { enabled: true, cpu: 2 } })
+  assert.deepEqual(out.repositories[0].branchData.main.pluginSettings, { other: { env: 'A=1\n' } })
   const badRepo = project()
   badRepo.repositories[0].pluginSettings = { env: { nested: { x: 1 } } }
   assert.throws(() => checkImport(badRepo, ctx), /repositories\[0\]\.pluginSettings env\.nested must be/)
@@ -293,4 +294,14 @@ test("an import whose old .env, with the branch's plugin settings, would pass 1 
   const p = project()
   p.repositories[0].branchData.main = { env: 'y'.repeat(60_000), pluginSettings: { kept: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, 'x'.repeat(100_000)])) } }
   assert.throws(() => checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' }), /branchData\["main"\]\.pluginSettings.*1 MB/)
+})
+
+test("an import whose env plugin copy has no old field (an older Trek cleared it, plugins E2) imports it cleared; plugin-only keys stay", (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2, later: 'x' } }
+  p.repositories[0].branchData.main.pluginSettings = { env: { env: 'SECRET=1\n' } }
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })
+  assert.deepEqual([out.repositories[0].pluginSettings, out.repositories[0].environments], [{ env: { later: 'x' } }, undefined])
+  assert.deepEqual(out.repositories[0].branchData.main, { note: 'n' })
 })
