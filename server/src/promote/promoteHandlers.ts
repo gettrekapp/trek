@@ -759,8 +759,10 @@ export const promoteHandlers: Record<string, Handler> = {
   'worktree.promote': async (p, ctx): Promise<PromotePlan | PromoteResult> => {
     const dryRun = optionalDryRun(p.dryRun)
     const requestId = optionalRequestId(p.requestId)
-    if (dryRun) return (await checkPromote(ctx, p)).plan
     const teardown = optionalTeardown(p.teardown)
+    // As move.finish's verifyOnly: a dry run tears nothing down, so ids with it are a client's mistake.
+    if (dryRun && teardown.length > 0) throw bad('teardown is not taken with dryRun, which changes nothing')
+    if (dryRun) return (await checkPromote(ctx, p)).plan
     let binding: PromoteBinding | undefined
     if (requestId !== undefined) {
       const projectId = requireString(p.projectId, 'projectId')

@@ -630,11 +630,14 @@ function probe(path, { fail = false, during } = {}) {
   return { log, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] } }
 }
 
-test('worktree.promote {teardown} (plugins E1): the chosen items run after the checks and before the switch; dryRun runs none', async (t) => {
+test('worktree.promote {teardown} (plugins E1): the chosen items run after the checks and before the switch; dryRun with teardown is refused', async (t) => {
   const s = await setup(t)
   const { log, plugins } = probe(s.path)
   const call = (method, params) => dispatchV2(method, params, { ...s.ctx, plugins })
-  assert.equal((await call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true, teardown: ['probe:vm'] })).ok, true)
+  // As move.finish's verifyOnly: a dry run changes nothing, so ids with it are BAD_REQUEST.
+  const dry = await call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true, teardown: ['probe:vm'] })
+  assert.deepEqual([dry.error?.code, dry.error?.message], ['BAD_REQUEST', 'teardown is not taken with dryRun, which changes nothing'])
+  assert.equal((await call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true, teardown: [] })).ok, true, 'none is fine')
   assert.deepEqual(log, [])
   const plan = await call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: s.worktreeId, op: 'promote' })
   assert.deepEqual(plan.result.items, [{ id: 'probe:vm', label: 'Stop the VM', checked: true }])

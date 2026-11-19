@@ -459,7 +459,7 @@ export interface MethodParamsV2 {
     dryRun?: boolean
     requestId?: string
     claimToken?: string
-    /** Ids from `worktree.teardownPlan {op: 'promote'}`, run before the promote (`worktreeTeardown`); never on a dry run */
+    /** Ids from `worktree.teardownPlan {op: 'promote'}`, run before the promote (`worktreeTeardown`); BAD_REQUEST with `dryRun` */
     teardown?: string[]
   }
   /**
