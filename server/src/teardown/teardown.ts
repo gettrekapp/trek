@@ -153,8 +153,11 @@ function inSentence(label: string): string {
   return /^\p{Lu}\p{Ll}/u.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label
 }
 
-/** The worktrees (by real path) a teardown is running for: one at a time each. */
-const running = new Set<string>()
+/**
+ * The worktrees (by real path) a teardown is running for: one at a time each. `finishing`: the
+ * request gave up on a participant that hit the cap, which is still running; the entry goes once it settles.
+ */
+const running = new Map<string, 'running' | 'finishing'>()
 
 /**
  * Runs the chosen items before the operation: each participant once, with its own ids, in
@@ -163,7 +166,8 @@ const running = new Set<string>()
  * or hangs stops it (TOOL_ERROR) before anything is torn down; an item its answer no longer lists
  * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
  * teardown that throws or takes over `teardownTimeoutMs` stops it: TOOL_ERROR, `details.tornDown`
- * the labels already done. One teardown at a time per worktree: a second is CONFLICT.
+ * the labels already done. One teardown at a time per worktree: a second is CONFLICT, also while a
+ * participant that hit the cap is still finishing.
  */
 export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<void> {
   requireDistinct(participants)
@@ -180,8 +184,11 @@ export async function runTeardown(participants: readonly Participant[], target: 
     if (!known.has(id.slice(0, id.indexOf(':')))) warn(`[teardown] ${id} is no longer planned for ${target.worktree.path} (its plugin is off); skipped`)
   }
   const key = realOrResolved(target.worktree.path)
-  if (running.has(key)) throw codedError('CONFLICT', 'a teardown is already running for this worktree')
-  running.add(key)
+  const busy = running.get(key)
+  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : 'a teardown is already running for this worktree')
+  running.set(key, 'running')
+  // Cleared in `finally`, unless a participant hit the cap: then once that participant's work settles.
+  let release = true
   try {
     const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
     const plans = await planEach(involved, target, op, options)
@@ -198,16 +205,28 @@ export async function runTeardown(participants: readonly Participant[], target: 
       const now = mine.filter((id) => planned.has(id))
       if (now.length === 0) continue
       const labels = now.map((id) => planned.get(id)!.label)
+      const work = Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1))))
+      let settled = false
+      const settle = (): void => {
+        settled = true
+      }
+      work.then(settle, settle)
       try {
-        await withTimeout(Promise.resolve().then(() => p.teardown(target, op, now.map((id) => id.slice(p.id.length + 1)))), teardownTimeoutMs)
+        await withTimeout(work, teardownTimeoutMs)
       } catch (err) {
+        if (!settled) {
+          release = false
+          running.set(key, 'finishing')
+          const clear = (): void => void running.delete(key)
+          work.then(clear, clear)
+        }
         const done = tornDown.length > 0 ? ` (already done: ${tornDown.join('; ')})` : ''
         throw codedError('TOOL_ERROR', `Couldn't ${inSentence(labels.join('; '))}: ${messageOf(err)}${done}`, { reason: 'teardown', tornDown: [...tornDown] })
       }
       tornDown.push(...labels)
     }
   } finally {
-    running.delete(key)
+    if (release) running.delete(key)
   }
 }
 

@@ -171,7 +171,8 @@ test('runTeardown: a later failure says what was already torn down', async () =>
 test('runTeardown: a teardown that hangs past the cap fails, naming it', async () => {
   const hung = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => new Promise(() => {}) }
   await assert.rejects(
-    runTeardown([hung], target, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }),
+    // Its own worktree: one that never settles stays busy for good.
+    runTeardown([hung], { ...target, worktree: { ...target.worktree, id: 'w9', path: '/r/app-hung' } }, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }),
     (e) => e.code === 'TOOL_ERROR' && e.details?.reason === 'teardown' && e.message === "Couldn't stop the VM: no answer in 0.05 s"
   )
 })
@@ -205,4 +206,24 @@ test('repoRemoveVeto: an answer that is not a reason, and a check that hangs, re
   assert.equal(await repoRemoveVeto([p('a', async () => undefined)], target.project, target.repo), 'a could not check it: not a reason')
   assert.equal(await repoRemoveVeto([p('a', async () => '')], target.project, target.repo), null)
   assert.match(await repoRemoveVeto([p('a', () => new Promise(() => {}))], target.project, target.repo, { timeoutMs: 50 }), /^a could not check it: no answer in 0.05 s$/)
+})
+
+test('runTeardown: after a teardown hits the cap, the worktree stays busy until it really ends', async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const calls = []
+  const late = {
+    id: 'env',
+    plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      calls.push(Date.now())
+      if (calls.length === 1) await wait(150)
+    }
+  }
+  const t0 = Date.now()
+  await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy'], { teardownTimeoutMs: 50 }), /no answer in 0.05 s/)
+  await wait(100 - (Date.now() - t0))
+  await assert.rejects(runTeardown([late], target, 'remove', ['env:destroy']), (e) => e.code === 'CONFLICT' && e.message === 'a teardown is still finishing for this worktree')
+  await wait(200 - (Date.now() - t0))
+  await runTeardown([late], target, 'remove', ['env:destroy'])
+  assert.equal(calls.length, 2)
 })
