@@ -1128,6 +1128,14 @@ test('pluginOn (plugins E1): not available on the server\'s platform is off; a l
   assert.equal(pluginOn(env, { capabilities: ['env'] }, {}), true)
 })
 
+test('pluginOn (plugins E1): a built-in a released server lacks needs its legacy capability there; one with none is unchanged', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyBuiltIn: true, legacyCapability: ['env'] }
+  const github = { id: 'github', version: '1.0.0', name: 'GitHub', description: '', defaultEnabled: true, legacyBuiltIn: true }
+  assert.equal(pluginOn(env, { plugins: [], capabilities: [] }, {}), false)
+  assert.equal(pluginOn(env, { plugins: [], capabilities: ['env'] }, {}), true)
+  assert.equal(pluginOn(github, { plugins: [], capabilities: [] }, {}), true)
+})
+
 test("tickets: a ticket's label and link from the project's settings; the raw id with no provider", () => {
   const providers = activeTicketProviders(tkServer(), {})
   assert.deepEqual(ticketView(providers, { linearWorkspace: 'acme' }, 'TOW-12'), { label: 'TOW-12', url: 'https://linear.app/acme/issue/TOW-12' })

@@ -48,7 +48,12 @@ export function pluginOn(manifest: PluginManifest, server: TicketServer, setting
     return capability || manifest.legacyBuiltIn === true
   }
   const listed = server.plugins.find((p) => p.id === manifest.id)
-  if (!listed) return manifest.legacyBuiltIn === true && server.capabilities?.includes(CAPABILITY.prResolve) !== true
+  if (!listed) {
+    // A built-in with legacy capabilities (Colima's `env`) was core only on a server that lists one of them.
+    const caps = legacyCapabilitiesOf(manifest)
+    const legacyHere = caps.length === 0 || caps.some((c) => server.capabilities?.includes(c) === true)
+    return manifest.legacyBuiltIn === true && server.capabilities?.includes(CAPABILITY.prResolve) !== true && legacyHere
+  }
   if (listed.available === false) return false
   return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })
 }

@@ -36,6 +36,14 @@ test('pluginStatus (plugins E1): one the server lists as not available on its pl
   assert.equal(changedFor(env, 'integrations.changed', { env: true }, false), true)
 })
 
+test('pluginStatus (plugins E1): a built-in a released server lacks needs its legacy capability there; one with none is unchanged', () => {
+  const env = { id: 'env', version: '1.0.0', name: 'Colima', description: '', defaultEnabled: true, legacyBuiltIn: true, legacyCapability: ['env'] }
+  const github = { id: 'github', version: '1.0.0', name: 'GitHub', description: '', defaultEnabled: true, legacyBuiltIn: true }
+  assert.equal(pluginStatus(env, { plugins: [], capabilities: [] }, undefined), 'missing')
+  assert.equal(pluginStatus(env, { plugins: [], capabilities: ['env'] }, undefined), 'legacy')
+  assert.equal(pluginStatus(github, { plugins: [], capabilities: [] }, undefined), 'legacy')
+})
+
 test('withPluginEnabled keeps the other plugins', () => {
   assert.deepEqual(withPluginEnabled(undefined, 'voice', false), { voice: { enabled: false } })
   assert.deepEqual(withPluginEnabled({ other: { enabled: true }, voice: { enabled: false } }, 'voice', true), { other: { enabled: true }, voice: { enabled: true } })

@@ -59,7 +59,17 @@ export type PluginSettingValues = Record<string, PluginFieldValue>
 /** The longest `string` value (one line), and the longest `text` value (a branch's .env, say). */
 export const MAX_PLUGIN_STRING = 2000
 export const MAX_PLUGIN_TEXT = 100_000
+/** The most string content stored `pluginSettings` may hold in all (an import, a move): 1 MB. */
+export const MAX_PLUGIN_SETTINGS_CHARS = 1024 * 1024
 const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+/** A key every plain object has (`constructor`, `toString`…): `byId[id]` or `values[key]` would find Object's own. */
+const UNUSABLE_IDS: readonly string[] = Object.getOwnPropertyNames(Object.prototype)
+/** A field name's problem (its form, or one of Object's own names), or null. */
+function fieldNameProblem(key: string): string | null {
+  if (!FIELD_NAME_RE.test(key)) return `${JSON.stringify(key)} is not a field name`
+  if (UNUSABLE_IDS.includes(key)) return `${JSON.stringify(key)} is not a usable field name (every object has a key of that name)`
+  return null
+}
 
 /** A manifest's legacy capabilities, as a list. */
 export function legacyCapabilitiesOf(manifest: Pick<PluginManifest, 'legacyCapability'>): string[] {
@@ -72,7 +82,8 @@ export function pluginFieldsProblem(fields: unknown): string | null {
   if (fields === undefined) return null
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return 'must be an object of field names to kinds'
   for (const [key, kind] of Object.entries(fields)) {
-    if (!FIELD_NAME_RE.test(key)) return `${JSON.stringify(key)} is not a field name`
+    const nameProblem = fieldNameProblem(key)
+    if (nameProblem) return nameProblem
     if (!(PLUGIN_FIELD_KINDS as readonly unknown[]).includes(kind)) return `${key} has the kind ${JSON.stringify(kind)}, not one of ${PLUGIN_FIELD_KINDS.join(', ')}`
   }
   return null
@@ -111,15 +122,19 @@ export function pluginSettingsShapeProblem(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'must be an object of plugin ids to values'
   const entries = Object.entries(value)
   if (entries.length > 64) return 'names more than 64 plugins'
+  let chars = 0
   for (const [id, values] of entries) {
     if (!PLUGIN_ID_RE.test(id)) return `${JSON.stringify(id)} is not a plugin id`
+    if (UNUSABLE_IDS.includes(id)) return `${JSON.stringify(id)} is not a usable plugin id (every object has a key of that name)`
     if (!values || typeof values !== 'object' || Array.isArray(values)) return `${id} must be an object`
     const fields = Object.entries(values)
     if (fields.length > 100) return `${id} has more than 100 values`
     for (const [key, v] of fields) {
-      if (!FIELD_NAME_RE.test(key)) return `${id}: ${JSON.stringify(key)} is not a field name`
+      const nameProblem = fieldNameProblem(key)
+      if (nameProblem) return `${id}: ${nameProblem}`
       const ok = typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= MAX_PLUGIN_TEXT)
       if (!ok) return `${id}.${key} must be a string, a finite number or a boolean`
+      if (typeof v === 'string' && (chars += v.length) > MAX_PLUGIN_SETTINGS_CHARS) return 'holds more than 1 MB of text in all'
     }
   }
   return null
@@ -199,8 +214,6 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const MAX_VERSION_CHARS = 64
 /** What only a built-in plugin may declare. */
 const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms'] as const
-/** Matches PLUGIN_ID_RE, and is a key of every plain object: `byId[id]` would find Object's own. */
-const UNUSABLE_IDS: readonly string[] = ['constructor']
 /** Control characters, and the format ones: bidi overrides, zero-width characters. */
 const UNSEEN_RE = /[\p{Cc}\p{Cf}]/u
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length

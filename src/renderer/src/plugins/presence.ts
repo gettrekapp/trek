@@ -37,7 +37,12 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
   }
   // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
   const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
-  if (!listed) return manifest.legacyBuiltIn === true && !listsAllItHas(welcome) ? 'legacy' : 'missing'
+  if (!listed) {
+    // A built-in with legacy capabilities (Colima's `env`) was core only on a server that lists one of them.
+    const caps = legacyCapabilitiesOf(manifest)
+    const legacyHere = caps.length === 0 || caps.some((c) => welcome.capabilities?.includes(c) === true)
+    return manifest.legacyBuiltIn === true && !listsAllItHas(welcome) && legacyHere ? 'legacy' : 'missing'
+  }
   // Registered there, but not for its platform (plugins E1): as good as missing.
   if (listed.available === false) return 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
