@@ -3,7 +3,7 @@
 // show its session. Collapsed, it is a thin bar of "!" for those waiting.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
-import { campLayout, type CampHikerSpot } from '../shared/layout.ts'
+import { campLayout, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
 import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
@@ -57,10 +57,10 @@ export function Campsite(): React.JSX.Element | null {
   const unspottedWaiting = layout.moreWaiting > 0 ? sessions.find((s) => isWaiting(s) && !spotted.has(s.terminalId)) : undefined
   // The open camp's name ('Global' for the log), while it is still drawn
   const popName = !openTent || openGone ? undefined : openTent.worktreeId === null ? 'Global' : layout.tents.find((t) => t.worktreeId === openTent.worktreeId)?.name
-  const toggleCamp = (worktreeId: string | null, el: HTMLButtonElement): void => {
+  const toggleCamp = (worktreeId: string | null, el: HTMLButtonElement, side: FireSide): void => {
     badge.current = el
     const r = el.getBoundingClientRect()
-    setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, top: r.top }))
+    setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, right: r.right, top: r.top, side }))
   }
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
@@ -86,14 +86,14 @@ export function Campsite(): React.JSX.Element | null {
               +{layout.moreWaiting} waving
             </button>
           )}
-          {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el)} />}
+          {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el, 'left')} />}
           {layout.tents.map((t) => (
             <Tent
               key={t.worktreeId}
               tent={t}
               grouped={layout.grouped}
               open={openTent !== null && openTent.worktreeId === t.worktreeId}
-              onToggle={(el) => toggleCamp(t.worktreeId, el)}
+              onToggle={(el) => toggleCamp(t.worktreeId, el, t.x < layout.fireX ? 'left' : 'right')}
             />
           ))}
           {openTent && popName !== undefined && (

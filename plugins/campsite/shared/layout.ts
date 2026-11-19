@@ -5,7 +5,8 @@
 // tents carry counts and only waiting hikers are drawn. Exited Global sessions sit on the log (they
 // widen it) though MAX_SPREAD counts only the hikers out who are not exited. Pure.
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
-import { isWaiting } from './pose.ts'
+import { fnv1a } from './hiker.ts'
+import { isWaiting, type Sign } from './pose.ts'
 
 const SLOT = 40
 export const TENT_W = 84
@@ -28,14 +29,16 @@ export interface CampTent {
   /** Its sessions, all of them */
   hikers: number
   waiting: number
+  /** Of all its sessions, those with a decision pending */
+  deciding: number
 }
 export interface CampLayout {
   width: number
   fireX: number
   grouped: boolean
   tents: CampTent[]
-  /** Global's log: its sessions, all of them, and those waiting */
-  log: { x: number; hikers: number; waiting: number } | null
+  /** Global's log: its sessions, all of them, those waiting, and those with a decision pending */
+  log: { x: number; hikers: number; waiting: number; deciding: number } | null
   hikers: CampHikerSpot[]
   /** Camps left out for want of room (grouped mode): tents, or the Global log */
   moreTents: number
@@ -97,7 +100,7 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
     const w = grouped ? LOG_W : Math.max(LOG_W, out.length * SLOT)
     if (fitsLeft(w)) {
       const center = left - w / 2
-      log = { x: Math.round(center), hikers: global.members.length, waiting: global.members.length - out.length }
+      log = { x: Math.round(center), hikers: global.members.length, waiting: global.members.length - out.length, deciding: global.members.filter((m) => m.decision).length }
       if (!grouped) spreadAt(out, center, 'log', hikers)
       left -= w + GAP
     } else if (!grouped) return null
@@ -121,7 +124,7 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
     if (side === 'r') right += w + GAP
     else left -= w + GAP
     toRight = side === 'l'
-    tents.push({ worktreeId: g.worktreeId!, name: g.name, x: Math.round(center), hikers: g.members.length, waiting: g.members.filter(isWaiting).length })
+    tents.push({ worktreeId: g.worktreeId!, name: g.name, x: Math.round(center), hikers: g.members.length, waiting: g.members.filter(isWaiting).length, deciding: g.members.filter((m) => m.decision).length })
     if (!grouped) {
       spreadAt(out, center, 'tent', hikers)
       for (const s of g.members) if (s.status === 'exited' && !isWaiting(s)) hikers.push({ terminalId: s.terminalId, x: Math.round(center), place: 'inside' })
@@ -135,7 +138,24 @@ function spreadAt(members: readonly PluginSession[], center: number, place: Plac
 }
 
 export function tentBadge(tent: Pick<CampTent, 'hikers' | 'waiting'>): string {
-  return tent.waiting > 0 ? `${tent.hikers} · ${tent.waiting} waving` : String(tent.hikers)
+  return tent.waiting > 0 ? `${tent.hikers} · ${tent.waiting} waiting` : String(tent.hikers)
+}
+
+/** A camp's badge color: a pending decision says more than a bell */
+export function campTone(camp: Pick<CampTent, 'waiting' | 'deciding'>): Sign | null {
+  return camp.deciding > 0 ? 'decision' : camp.waiting > 0 ? 'attention' : null
+}
+
+/** Tent colors, [left face, right face]: ochre, moss, slate, plum */
+export const TENT_COLORS: readonly (readonly [string, string])[] = [
+  ['#c08a2e', '#9c6f22'],
+  ['#6b7a3a', '#55622c'],
+  ['#4a5d7a', '#3a4a63'],
+  ['#7a4a6b', '#613a55']
+]
+/** A worktree's tent keeps its color */
+export function tentColors(worktreeId: string): readonly [string, string] {
+  return TENT_COLORS[fnv1a(worktreeId) % TENT_COLORS.length]
 }
 
 const SIGN_MAX = 14
@@ -146,7 +166,34 @@ export function signText(branch: string): string {
 }
 
 const EDGE = 8
-/** A tent's popover's left (px, window coordinates): at its badge, kept EDGE px inside the window */
-export function popoverLeft(anchorLeft: number, popoverWidth: number, viewportWidth: number): number {
-  return Math.max(EDGE, Math.min(anchorLeft, viewportWidth - popoverWidth - EDGE))
+/** Which side of the fire a camp is on */
+export type FireSide = 'left' | 'right'
+/**
+ * A camp's popover's left (px, window coordinates). It opens away from the fire, so it never covers
+ * a waiting hiker: a camp left of the fire right-aligns it to its badge, one right of the fire
+ * left-aligns it. Kept EDGE px inside the window.
+ */
+export function popoverLeft(badge: { left: number; right: number }, side: FireSide, popoverWidth: number, viewportWidth: number): number {
+  const wanted = side === 'left' ? badge.right - popoverWidth : badge.left
+  return Math.max(EDGE, Math.min(wanted, viewportWidth - popoverWidth - EDGE))
+}
+
+/** The strip's header line */
+export function campSummary(sessions: readonly Pick<PluginSession, 'status' | 'decision'>[]): string {
+  const parts = ['Campsite']
+  if (sessions.length > 0) parts.push(`${sessions.length} ${sessions.length === 1 ? 'hiker' : 'hikers'}`)
+  const waiting = sessions.filter(isWaiting).length
+  if (waiting > 0) parts.push(`${waiting} waiting`)
+  return parts.join(' · ')
+}
+
+/** A 1× hiker (12 px) and the gap after it, in the collapsed bar */
+export const MINI_SLOT = 18
+/** The collapsed bar's hikers for `room` px: waiting ones first; when they do not all fit, two slots are kept for a "+N" */
+export function collapsedRow<T extends Pick<PluginSession, 'status' | 'decision'>>(sessions: readonly T[], room: number): { shown: T[]; more: number } {
+  const ordered = [...sessions.filter(isWaiting), ...sessions.filter((x) => !isWaiting(x))]
+  const slots = Math.max(0, Math.floor(room / MINI_SLOT))
+  if (ordered.length <= slots) return { shown: ordered, more: 0 }
+  const shown = ordered.slice(0, Math.max(0, slots - 2))
+  return { shown, more: ordered.length - shown.length }
 }

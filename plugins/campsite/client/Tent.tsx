@@ -3,7 +3,7 @@
 // sits over the app, not inside the tent's stacking context).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
-import { LOG_W, TENT_W, popoverLeft, signText, tentBadge, type CampTent } from '../shared/layout.ts'
+import { LOG_W, TENT_W, popoverLeft, signText, tentBadge, type CampTent, type FireSide } from '../shared/layout.ts'
 import { hikerLabel } from '../shared/pose.ts'
 
 interface Props {
@@ -32,7 +32,7 @@ export function Tent({ tent, grouped, open, onToggle }: Props): React.JSX.Elemen
 }
 
 /** Global's log; grouped, it carries a badge like a tent's */
-export function CampLog({ log, grouped, open, onToggle }: { log: { x: number; hikers: number; waiting: number }; grouped: boolean; open: boolean; onToggle: (badge: HTMLButtonElement) => void }): React.JSX.Element {
+export function CampLog({ log, grouped, open, onToggle }: { log: { x: number; hikers: number; waiting: number; deciding: number }; grouped: boolean; open: boolean; onToggle: (badge: HTMLButtonElement) => void }): React.JSX.Element {
   return (
     <div className="cs-log" style={{ left: log.x - LOG_W / 2, width: LOG_W }}>
       {grouped && <CampBadge camp={log} open={open} onToggle={onToggle} />}
@@ -54,13 +54,15 @@ function CampBadge({ camp, open, onToggle }: { camp: { hikers: number; waiting: 
   )
 }
 
-/** The open camp: its worktree (null: Global's log) and where its badge is (window coordinates) */
+/** The open camp: its worktree (null: Global's log), where its badge is (window coordinates) and its side of the fire */
 export interface OpenTent {
   worktreeId: string | null
-  /** The badge's left */
+  /** The badge's left and right edges */
   left: number
+  right: number
   /** The badge's top; the popover sits just above */
   top: number
+  side: FireSide
 }
 
 interface PopoverProps {
@@ -76,8 +78,8 @@ export function TentPopover({ at, name, members, onPick }: PopoverProps): React.
   // Kept inside the window, once its width is known (before paint)
   useLayoutEffect(() => {
     const el = ref.current
-    if (el) setLeft(popoverLeft(at.left, el.offsetWidth, window.innerWidth))
-  }, [at.left, members.length])
+    if (el) setLeft(popoverLeft(at, at.side, el.offsetWidth, window.innerWidth))
+  }, [at, members.length])
   // Keyboard users land in the list
   useEffect(() => {
     ref.current?.querySelector('button')?.focus()

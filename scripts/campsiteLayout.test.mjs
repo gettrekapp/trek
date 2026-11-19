@@ -2,7 +2,7 @@
 // (right, left, …), Global on a log, waiting hikers at the fire, grouped mode when it is crowded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_SPREAD, campLayout, popoverLeft, signText, tentBadge } from '../plugins/campsite/shared/layout.ts'
+import { MAX_SPREAD, MINI_SLOT, TENT_COLORS, campLayout, campSummary, campTone, collapsedRow, popoverLeft, signText, tentBadge, tentColors } from '../plugins/campsite/shared/layout.ts'
 
 let n = 0
 const s = (worktreeId, over = {}) => ({ terminalId: `t${++n}`, label: 'Claude', provider: 'claude', status: 'working', decision: false, worktreeId, worktreeName: worktreeId, branch: worktreeId && `b/${worktreeId}`, ...over })
@@ -74,7 +74,7 @@ test('everything drawn is inside the strip', () => {
 
 test('tentBadge and signText', () => {
   assert.equal(tentBadge({ hikers: 3, waiting: 0 }), '3')
-  assert.equal(tentBadge({ hikers: 3, waiting: 1 }), '3 · 1 waving')
+  assert.equal(tentBadge({ hikers: 3, waiting: 1 }), '3 · 1 waiting')
   assert.equal(signText('feature/a-very-long-branch-name'), 'a-very-long-b…')
   assert.equal(signText('main'), 'main')
   assert.equal(signText('averyveryverylongbranchname'), 'averyveryvery…')
@@ -109,11 +109,13 @@ test('width 0 or less (not measured yet): an empty layout', () => {
   }
 })
 
-test('popoverLeft: at its badge, kept 8 px inside the window', () => {
-  assert.equal(popoverLeft(300, 200, 1000), 300)
-  assert.equal(popoverLeft(900, 200, 1000), 792)
-  assert.equal(popoverLeft(2, 200, 1000), 8)
-  assert.equal(popoverLeft(50, 400, 300), 8, 'a window narrower than the popover: its left edge')
+test('popoverLeft: opens away from the fire (left camps right-align to their badge), kept 8 px inside the window', () => {
+  const badge = { left: 300, right: 380 }
+  assert.equal(popoverLeft(badge, 'right', 200, 1000), 300)
+  assert.equal(popoverLeft(badge, 'left', 200, 1000), 180)
+  assert.equal(popoverLeft({ left: 900, right: 960 }, 'right', 200, 1000), 792)
+  assert.equal(popoverLeft({ left: 20, right: 90 }, 'left', 200, 1000), 8)
+  assert.equal(popoverLeft({ left: 50, right: 90 }, 'right', 400, 300), 8, 'a window narrower than the popover: its left edge')
 })
 
 test('the Global log counts its hikers and those waving, for its badge in grouped mode', () => {
@@ -124,8 +126,49 @@ test('the Global log counts its hikers and those waving, for its badge in groupe
   assert.ok(l.log)
   assert.equal(l.log.hikers, 4)
   assert.equal(l.log.waiting, 2)
-  assert.equal(tentBadge(l.log), '4 · 2 waving')
+  assert.equal(tentBadge(l.log), '4 · 2 waiting')
+  assert.equal(l.log.deciding, 1)
+  assert.equal(campTone(l.log), 'decision')
   const open = campLayout([s('w1'), s(null)], 1200)
   assert.equal(open.grouped, false)
   assert.deepEqual({ hikers: open.log.hikers, waiting: open.log.waiting }, { hikers: 1, waiting: 0 })
+})
+
+test('campTone: a pending decision wins over a bell; nobody waiting has no tone', () => {
+  assert.equal(campTone({ waiting: 0, deciding: 0 }), null)
+  assert.equal(campTone({ waiting: 2, deciding: 0 }), 'attention')
+  assert.equal(campTone({ waiting: 2, deciding: 1 }), 'decision')
+  const l = campLayout([s('w1', { status: 'attention' }), s('w1', { decision: true }), s('w2')], 1200)
+  const w1 = l.tents.find((t) => t.worktreeId === 'w1')
+  assert.deepEqual([w1.waiting, w1.deciding], [2, 1])
+  assert.equal(l.tents.find((t) => t.worktreeId === 'w2').deciding, 0)
+})
+
+test('tentColors: one of four pairs, the same for the same worktree, spread across worktrees', () => {
+  assert.deepEqual(tentColors('w1'), tentColors('w1'))
+  const seen = new Set()
+  for (let i = 0; i < 100; i++) {
+    const pair = tentColors(`worktree-${i}`)
+    assert.ok(TENT_COLORS.includes(pair))
+    seen.add(pair)
+  }
+  assert.equal(seen.size, TENT_COLORS.length)
+})
+
+test('campSummary: the strip header, counts left out at zero', () => {
+  assert.equal(campSummary([]), 'Campsite')
+  assert.equal(campSummary([s('w1')]), 'Campsite · 1 hiker')
+  assert.equal(campSummary([s('w1'), s('w2'), s(null, { decision: true })]), 'Campsite · 3 hikers · 1 waiting')
+})
+
+test('collapsedRow: waiting hikers first; cut to the room, leaving two slots for the "+N"', () => {
+  const a = s('w1')
+  const b = s('w1', { status: 'attention' })
+  const c = s('w2')
+  const d = s(null, { decision: true })
+  const all = [a, b, c, d]
+  assert.deepEqual(collapsedRow(all, 4 * MINI_SLOT), { shown: [b, d, a, c], more: 0 })
+  assert.deepEqual(collapsedRow(all, 3 * MINI_SLOT + 5), { shown: [b], more: 3 })
+  assert.deepEqual(collapsedRow(all, 0), { shown: [], more: 4 })
+  assert.deepEqual(collapsedRow([], 100), { shown: [], more: 0 })
 })
