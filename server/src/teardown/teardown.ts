@@ -218,9 +218,10 @@ export async function holdWorktree<T>(path: string, fn: (hold: WorktreeHold) => 
  * (the VM was deleted meanwhile), or one of an inactive participant, is skipped (logged). A
  * teardown that throws or takes over `teardownTimeoutMs` stops it: TOOL_ERROR, `details.tornDown`
  * the labels already done. One at a time per worktree: CONFLICT while it is busy (even with no ids),
- * unless `options.hold` is this worktree's hold (holdWorktree), which it then uses.
+ * unless `options.hold` is this worktree's hold (holdWorktree), which it then uses. Resolves with
+ * the labels of the items it tore down, in order (skipped ones left out).
  */
-export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<void> {
+export async function runTeardown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions = {}): Promise<string[]> {
   requireDistinct(participants)
   const key = realOrResolved(target.worktree.path)
   if (options.hold) {
@@ -228,7 +229,7 @@ export async function runTeardown(participants: readonly Participant[], target: 
   } else {
     assertFree(key)
   }
-  if (ids.length === 0) return
+  if (ids.length === 0) return []
   const warn = warnOf(options)
   const known = new Set(participants.map((p) => p.id))
   const inactive = new Set(options.inactive ?? [])
@@ -245,7 +246,7 @@ export async function runTeardown(participants: readonly Participant[], target: 
 }
 
 /** runTeardown's work, with the worktree held. */
-async function tearDown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions, hold: WorktreeHold): Promise<void> {
+async function tearDown(participants: readonly Participant[], target: TeardownTarget, op: WorktreeOp, ids: readonly string[], options: TeardownOptions, hold: WorktreeHold): Promise<string[]> {
   const warn = warnOf(options)
   const involved = participants.filter((p) => ids.some((id) => id.startsWith(`${p.id}:`)))
   const plans = await planEach(involved, target, op, options)
@@ -277,6 +278,7 @@ async function tearDown(participants: readonly Participant[], target: TeardownTa
     }
     tornDown.push(...labels)
   }
+  return tornDown
 }
 
 /** The first participant's reason the repository can't leave its project now, or null. A check that fails, hangs or answers something other than a string, null or undefined refuses too. */

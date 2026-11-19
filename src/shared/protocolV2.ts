@@ -699,7 +699,8 @@ export interface MethodResultsV2 {
   /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
   'worktree.create': { worktreeId: string; linkWarnings?: string[] }
   'worktree.teardownPlan': { items: TeardownItem[] }
-  'worktree.remove': null
+  /** `tornDown`: the labels of the teardown items that ran first, in order (`[]` with no `teardown`) */
+  'worktree.remove': { tornDown: string[] }
   'worktree.load': null
   'worktree.unload': null
   'worktree.pull': null

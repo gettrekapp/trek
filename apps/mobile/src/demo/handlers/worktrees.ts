@@ -79,7 +79,8 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
     delete ctx.server.state.changes[worktree.id]
     if (worktree.branch) record(ctx, repo.id, worktree.branch, 'removed', { text: worktree.path })
     ctx.server.changed()
-    return null
+    // As the server answers: the demo tears nothing down.
+    return { tornDown: [] }
   },
   'worktree.load': (ctx, p) => {
     loadWorktree(ctx, worktreeRef(ctx, p).worktree)

@@ -329,6 +329,9 @@ git, so a directory that still exists on disk at that path is left untouched.
 Other projects' rows for the same path are left to the poller, which drops them
 or, if they hold sessions or a review draft, keeps them as `missing`.
 With `teardown` (`worktreeTeardown`), see [Worktree teardown](#worktree-teardown).
+Its result is `{tornDown}`: the labels of the teardown items that ran first, in
+order (`[]` without `teardown`; an item skipped as gone meanwhile is not listed).
+A server before `worktreeTeardown` answers `null`.
 `worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` first
 re-read the repository's worktrees, then act on the branch git has checked out
 in the worktree now, which may differ from the branch the row last showed.
@@ -939,6 +942,8 @@ Before a worktree is removed, promoted or moved off the server, what runs for it
 - One operation at a time per worktree: while one is tearing a worktree down (or a teardown that ran out of time is still finishing), `worktree.remove`, `worktree.promote` and `move.finish` on it are `CONFLICT`, with or without `teardown`. No session or load starts in it from before its teardown until it is removed.
 - `worktree.remove {teardown}` without `force` refuses a worktree with changes (`GIT_ERROR`, `details.reason: 'dirty'`) before anything is torn down.
 - `worktree.promote`'s `dryRun` runs nothing.
+- `worktree.promote` runs the items before it takes the repository's lock (one promote or demote per repository at a time). Another promote or demote of the repository can take the lock meanwhile; ours then fails with `CONFLICT` after its teardown has already happened (the items stay torn down).
+- `move.unreceive` holds the worktree it removes the same way: while it runs, a promote, remove or move of that worktree is `CONFLICT`, and it is `CONFLICT` while one of them runs.
 - `move.finish` runs the items once the source checks unchanged, and refuses `teardown` with `verifyOnly`.
 
 **No `teardown`: nothing is torn down.** A client older than this tears down itself first, and sends none.
@@ -2083,7 +2088,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `create_worktree` | `branch`; `existingBranch?` (check out an existing branch; default false); `repo?` (name or id; required with several repositories) | the new worktree entry |
 | `load_worktree` | `worktree` | `{loaded: true, sessions}` |
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
-| `remove_worktree` | `worktree`; `force?` (true discards uncommitted and untracked changes; default false); `teardown?` (default true) | `{removed: true, path, branch, tornDown?}`, through `worktree.remove`: deletes the directory and git's record of it, keeps the branch. `BAD_REQUEST` for the primary checkout, `IN_USE` while it is loaded (unload it first), `GIT_ERROR` with `details.reason: 'dirty'` when it has changes and `force` is not true. First it tears down the items `worktree.teardownPlan` checks by default (see [Worktree teardown](#worktree-teardown)), listed in `tornDown` (their labels) when there were any; `teardown: false` tears nothing down |
+| `remove_worktree` | `worktree`; `force?` (true discards uncommitted and untracked changes; default false); `teardown?` (default true) | `{removed: true, path, branch, tornDown?}`, through `worktree.remove`: deletes the directory and git's record of it, keeps the branch. `BAD_REQUEST` for the primary checkout, `IN_USE` while it is loaded (unload it first), `GIT_ERROR` with `details.reason: 'dirty'` when it has changes and `force` is not true. First it tears down the items `worktree.teardownPlan` checks by default (see [Worktree teardown](#worktree-teardown)), listed in `tornDown` (the labels `worktree.remove` says it ran) when there were any; `teardown: false` tears nothing down |
 | `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
 | `get_selected_worktree` | none | `{worktree, terminalId, client, at}`: what the project's most recently used client shows (its newest `ui.report`, see [What a client shows](#what-a-client-shows)). `worktree` is an entry, or `null` (none selected, the Global panel, or one that no longer exists): the worktree the shown session is in now while that session exists in one (a promote can move it before the client reports again), else the reported worktree; `terminalId` is the session shown, or `null` (none, or one that no longer exists); `client` is `desktop`, `web` or `phone`; `at` is the report's ISO time. `BAD_REQUEST` when no reporting client has the project open |
 | `focus_session` | `terminalId` (a worktree session's) | `{focused: true, client}`: the project's most recently used client was sent `ui.focus` for the session and its worktree. It was asked; nothing says the user saw it. The client selects the worktree and the tab only: it does not raise its window, give the terminal the keyboard focus or mark the session seen. `BAD_REQUEST` when no reporting client has the project open, and, with its own message naming the client's kind, when that client could not be sent the event (its connection is busy or closing) |

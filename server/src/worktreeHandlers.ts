@@ -87,7 +87,7 @@ async function changesOrRefuse(worktreePath: string, refusal: string): Promise<b
 }
 
 /** IN_USE while any project has the worktree's path loaded (its sessions run there). */
-function assertNotLoaded(ctx: V2Context, worktreePath: string): void {
+export function assertNotLoaded(ctx: V2Context, worktreePath: string): void {
   const key = real(worktreePath)
   const running = [...ctx.projects.all()]
     .filter((project) => project.repositories.some((r) => r.worktrees.some((w) => w.loaded && real(w.path) === key)))
@@ -320,13 +320,13 @@ export const worktreeHandlers: Record<string, Handler> = {
     // Held for the teardown and the removal: a worktree being torn down (by this or another
     // operation) is CONFLICT, with or without `teardown`. From before the teardown until the
     // re-read has marked the row missing, no session or load may start in it.
-    await holdWorktree(worktree.path, async (hold) => {
+    const tornDown = await holdWorktree(worktree.path, async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
         // Again under the block: a load that landed after the first check would have its sessions
         // in a worktree being torn down. None can land from here on.
         assertNotLoaded(ctx, worktree.path)
-        await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        const done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
         // A directory that is already gone is removed from git's list too, and
         // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
         if (!worktree.missing) {
@@ -335,6 +335,7 @@ export const worktreeHandlers: Record<string, Handler> = {
           // Git has removed it. Even if the re-read fails, the row goes below.
           await ctx.poller.refresh(repo.path)
         }
+        return done
       } finally {
         unblock()
       }
@@ -355,7 +356,8 @@ export const worktreeHandlers: Record<string, Handler> = {
     // The `attention` topic lists the row's PR notice (5c-1), if it had one.
     ctx.sessions.refreshAttention()
     recordHistory(ctx, requireString(p.projectId, 'projectId'), repo.id, worktree.branch, [{ kind: 'removed', from: { text: worktree.path } }])
-    return null
+    // What was torn down first (plugins E1): the labels of the items that ran, none skipped.
+    return { tornDown }
   },
 
   'worktree.pull': async (p, ctx) => {

@@ -682,3 +682,64 @@ test('worktree.promote (plugins E1): a worktree being torn down is CONFLICT, wit
   assert.equal(branchOf(s.app), 'feat')
   assert.ok(!s.sessions.isBlocked(s.path))
 })
+
+test('worktree.promote {requestId, teardown} (plugins E1): the claim does not run out during the teardown; a failed teardown fails the request', async (t) => {
+  const s = await setup(t, { requests: { claimMs: 40 } })
+  let release
+  let started
+  let fail = false
+  const arm = () => {
+    const gate = new Promise((resolve) => (release = resolve))
+    const begun = new Promise((resolve) => (started = resolve))
+    return { gate, begun }
+  }
+  let gates = arm()
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      started()
+      await gates.gate
+      if (fail) throw new Error('it would not stop')
+    }
+  }
+  const plugins = { lifecycles: () => [{ id: 'probe', lifecycle }] }
+  const events = []
+  const window = { send() {}, event: (event, payload) => (events.push([event, payload]), true) }
+  s.hub.subscribe(`project:${s.projectId}`, window)
+  s.promoteRequests.listen(s.projectId, window)
+  const asWindow = (method, params) => dispatchV2(method, params, { ...s.ctx, subscriber: window, plugins })
+  const ask = async () => {
+    events.length = 0
+    const asked = s.promoteRequests.ask(s.projectId, { worktreeId: s.worktreeId, branch: 'feat' })
+    const { requestId } = events.find(([e]) => e === 'promote.request')[1]
+    const claim = await asWindow('promote.claim', { projectId: s.projectId, requestId })
+    assert.equal(claim.result.accepted, true, JSON.stringify(claim))
+    return { asked, requestId, claimToken: claim.result.claimToken }
+  }
+
+  // A failed teardown: the request fails with its message, nothing is promoted.
+  fail = true
+  const first = await ask()
+  const failing = asWindow('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, requestId: first.requestId, claimToken: first.claimToken, teardown: ['probe:vm'] })
+  await gates.begun
+  release()
+  assert.equal((await failing).error?.details?.reason, 'teardown')
+  const failed = await first.asked
+  assert.equal(failed.outcome, 'failed')
+  assert.match(failed.error, /Couldn't stop the VM: it would not stop/)
+  assert.equal(branchOf(s.app), 'main')
+
+  // A teardown that outlasts the claim's timeout: the request is still this promote's.
+  fail = false
+  gates = arm()
+  const second = await ask()
+  const promoting = asWindow('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, requestId: second.requestId, claimToken: second.claimToken, teardown: ['probe:vm'] })
+  await gates.begun
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  release()
+  const r = await promoting
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const settled = await second.asked
+  assert.equal(settled.outcome, 'promoted', JSON.stringify(settled))
+  assert.equal(branchOf(s.app), 'feat')
+})

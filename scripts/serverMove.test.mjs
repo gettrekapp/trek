@@ -19,7 +19,7 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { MAX_MOVE_CHUNK_BYTES, MOVE_TRANSFER_IDLE_MS, normalizeOrigin, sameOrigin } from '../src/shared/move.ts'
 import { MoveTransfers, sweepStaleMoveDirs } from '../server/src/move/transfers.ts'
-import { moveReceiving } from '../server/src/move/moveHandlers.ts'
+import { moveReceiving, moveTestHooks } from '../server/src/move/moveHandlers.ts'
 import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/host/gitService.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
@@ -47,7 +47,23 @@ async function server(t, dir, name, clone, prWatchable = true, providers = [crea
   const polled = []
   // available() is true if ANY provider is signed in; availableFor is the PR's own provider's.
   const prWatch = { available: () => true, availableFor: () => prWatchable, pollSoon: (...a) => polled.push(a), forget: (...a) => forgotten.push(a) }
-  const sessions = { blockPath: () => () => {}, refreshAttention: () => {} }
+  // A block that records: which paths are blocked now (blockPath nests, as the manager's does).
+  const blocked = new Map()
+  const sessions = {
+    blockPath: (path) => {
+      blocked.set(path, (blocked.get(path) ?? 0) + 1)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        const count = blocked.get(path) - 1
+        if (count > 0) blocked.set(path, count)
+        else blocked.delete(path)
+      }
+    },
+    isBlocked: (path) => blocked.has(path),
+    refreshAttention: () => {}
+  }
   const history = new HistoryStore(join(dir, `${name}-history`))
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history, plugins: { prProviders: () => providers, lifecycles: () => lifecycles } })
   const created = await call('project.create', { name: `P-${name}`, repositories: [{ path: clone }] })
@@ -55,10 +71,10 @@ async function server(t, dir, name, clone, prWatchable = true, providers = [crea
   await poller.refresh(clone)
   const project = () => projects.require(projectId)
   const repoId = project().repositories[0].id
-  return { call, projects, poller, projectId, repoId, project, forgotten, polled, clone, history }
+  return { call, projects, poller, projectId, repoId, project, forgotten, polled, clone, history, sessions }
 }
 
-async function setup(t, { lifecycles = [] } = {}) {
+async function setup(t, { lifecycles = [], lifecyclesB = [] } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-')))
   // The agents' histories (~/.claude) under a temp home: homedir() reads HOME, or USERPROFILE on Windows.
   const home = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
@@ -83,7 +99,7 @@ async function setup(t, { lifecycles = [] } = {}) {
   git(a, 'push', '-q', 'origin', 'main')
   execFileSync('git', ['clone', '-q', origin, b], { env: gitEnv })
   const A = await server(t, dir, 'a', a, true, undefined, lifecycles)
-  const B = await server(t, dir, 'b', b)
+  const B = await server(t, dir, 'b', b, true, undefined, lifecyclesB)
   // A worktree on A with a commit, work in progress and two sessions.
   const made = await A.call('worktree.create', { projectId: A.projectId, repoId: A.repoId, branch: 'feat', createBranch: true })
   assert.equal(made.ok, true, JSON.stringify(made))
@@ -925,7 +941,7 @@ test('move.finish {teardown} (plugins E1): once the source checks unchanged, the
   const log = []
   const lifecycle = {
     plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
-    teardown: async (_ctx, worktree, op, ids) => void log.push([op, ids, existsSync(worktree.path)])
+    teardown: async (_ctx, worktree, op, ids) => void log.push([op, ids, existsSync(worktree.path), s.A.sessions.isBlocked(worktree.path)])
   }
   const s = await setup(t, { lifecycles: [{ id: 'probe', lifecycle }] })
   const { exported, received } = await move(s, { finish: false })
@@ -934,8 +950,9 @@ test('move.finish {teardown} (plugins E1): once the source checks unchanged, the
   assert.deepEqual(log, [])
   const done = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, teardown: ['probe:vm'] })
   assert.equal(done.ok, true, JSON.stringify(done))
-  assert.deepEqual(log, [['move', ['vm'], true]])
+  assert.deepEqual(log, [['move', ['vm'], true, true]], 'the source is there and blocked while it is torn down')
   assert.ok(!existsSync(s.path))
+  assert.ok(!s.A.sessions.isBlocked(s.path))
 })
 
 test('move.finish {teardown}: a failed item keeps the source (TOOL_ERROR); a changed source tears nothing down (CONFLICT)', async (t) => {
@@ -979,4 +996,63 @@ test('move.finish (plugins E1): a source being torn down is CONFLICT, with no te
   const done = await first
   assert.equal(done.ok, true, JSON.stringify(done))
   assert.ok(!existsSync(s.path))
+})
+
+test('move.unreceive and worktree.promote (plugins E1) hold the worktree: each is CONFLICT while the other runs on it', async (t) => {
+  let release
+  let started
+  const reset = () => {
+    const gate = new Promise((resolve) => (release = resolve))
+    const begun = new Promise((resolve) => (started = resolve))
+    return { gate, begun }
+  }
+  let gates = reset()
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      started()
+      await gates.gate
+      throw new Error('stopped by the test')
+    }
+  }
+  const s = await setup(t, { lifecyclesB: [{ id: 'probe', lifecycle }] })
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const worktreeId = received.result.worktreeId ?? s.B.project().repositories[0].worktrees.find((w) => w.branch === 'feat').id
+  const target = s.B.project().repositories[0].worktrees.find((w) => w.id === worktreeId).path
+  const unref = { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken }
+  const promote = (params = {}) => s.B.call('worktree.promote', { projectId: s.B.projectId, worktreeId, ...params })
+
+  // A promote tearing it down: an unreceive is CONFLICT and keeps it.
+  const promoting = promote({ teardown: ['probe:vm'] })
+  await gates.begun
+  assert.equal((await s.B.call('move.unreceive', unref)).error?.code, 'CONFLICT')
+  assert.ok(existsSync(target))
+  release()
+  assert.equal((await promoting).error?.details?.reason, 'teardown')
+
+  // An unreceive running: a promote is CONFLICT and tears nothing down.
+  gates = reset()
+  let unreceiveStarted
+  const unreceiveBegun = new Promise((resolve) => (unreceiveStarted = resolve))
+  let releaseUnreceive
+  const unreceiveGate = new Promise((resolve) => (releaseUnreceive = resolve))
+  moveTestHooks.beforeUnreceive = async () => {
+    unreceiveStarted()
+    await unreceiveGate
+  }
+  t.after(() => { delete moveTestHooks.beforeUnreceive })
+  // A regression fails the test rather than leaving it waiting on a gate.
+  t.after(() => { release(); releaseUnreceive() })
+  const undoing = s.B.call('move.unreceive', unref)
+  await unreceiveBegun
+  let tornDown = false
+  started = () => { tornDown = true }
+  assert.equal((await promote({ teardown: ['probe:vm'] })).error?.code, 'CONFLICT')
+  assert.equal((await promote({ dryRun: true })).error?.code, 'CONFLICT')
+  assert.equal(tornDown, false)
+  releaseUnreceive()
+  const undone = await undoing
+  assert.equal(undone.ok, true, JSON.stringify(undone))
+  assert.ok(!existsSync(target))
 })

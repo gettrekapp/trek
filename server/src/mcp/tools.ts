@@ -26,6 +26,7 @@ import type { PromoteRequests } from '../promote/requests.ts'
 import type { UiSelections } from '../ui/selections.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { TeardownItem } from '../../../src/shared/teardown.ts'
+import { assertNotLoaded } from '../worktreeHandlers.ts'
 import type { ToolDefinition } from './protocol.ts'
 import type { PluginRegistry } from '../plugins/registry.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
@@ -1000,22 +1001,26 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (args.teardown !== undefined && typeof args.teardown !== 'boolean') throw bad('teardown must be a boolean')
         const { worktree } = resolveWorktree(project, args.worktree)
         // The confirm's defaults (plugins E1), unless the caller said not to. The main checkout has
-        // no plan: its removal keeps today's refusal.
-        const chosen: TeardownItem[] = []
+        // no plan: its removal keeps today's refusal. A loaded worktree is refused (as the removal
+        // would refuse it) before its participants are asked.
+        let teardown: string[] = []
         if (args.teardown !== false && !worktree.isMain) {
+          assertNotLoaded(ctx, worktree.path)
           const plan = (await v2('worktree.teardownPlan', { worktreeId: worktree.id, op: 'remove' })) as { items: TeardownItem[] }
-          chosen.push(...plan.items.filter((item) => item.checked))
+          teardown = plan.items.filter((item) => item.checked).map((item) => item.id)
         }
-        const teardown = chosen.map((item) => item.id)
+        let tornDown: string[] = []
         try {
-          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true, ...(teardown.length > 0 ? { teardown } : {}) }, by)
+          const removed = (await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true, ...(teardown.length > 0 ? { teardown } : {}) }, by)) as { tornDown?: string[] } | null
+          tornDown = removed?.tornDown ?? []
         } catch (err) {
           if ((err as { details?: { reason?: string } }).details?.reason === 'dirty') {
             throw codedError('GIT_ERROR', `${worktree.path} has uncommitted or untracked changes; pass force: true to discard them`, { reason: 'dirty' })
           }
           throw err
         }
-        return { removed: true, path: worktree.path, branch: worktree.branch ?? null, ...(chosen.length > 0 ? { tornDown: chosen.map((item) => item.label) } : {}) }
+        // What the server tore down (an item gone meanwhile is not listed).
+        return { removed: true, path: worktree.path, branch: worktree.branch ?? null, ...(tornDown.length > 0 ? { tornDown } : {}) }
       },
 
       set_worktree_tag: async (args, project) => {

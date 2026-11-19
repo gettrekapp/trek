@@ -1287,3 +1287,37 @@ test('remove_worktree (plugins E1) tears down what the plan ticks by default and
   assert.equal(log.length, 1)
   await assert.rejects(s.call('remove_worktree', { worktree: 'main', teardown: 'no' }), /teardown must be a boolean/)
 })
+
+test('remove_worktree (plugins E1): a loaded worktree is refused before its plan is asked; a failed teardown says what was already done', async (t) => {
+  let planned = 0
+  const plugin = (id, label, teardown) => ({
+    manifest: { id, version: '1.0.0', name: id, description: '', defaultEnabled: true },
+    setup: () => ({
+      handlers: {},
+      worktreeLifecycle: {
+        plan: async () => (planned++, [{ id: 'x', label, checked: true }]),
+        teardown
+      }
+    })
+  })
+  const s = await toolSetup(t, {
+    extraPlugins: [
+      plugin('first', 'Stop the VM', async () => {}),
+      plugin('second', 'Drop the cache', async () => {
+        throw new Error('it is stuck')
+      })
+    ]
+  })
+  const created = await s.call('create_worktree', { branch: 'feat/a' })
+  await s.call('load_worktree', { worktree: 'feat/a' })
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/a' }), (err) => err.code === 'IN_USE')
+  assert.equal(planned, 0, 'no plan for a worktree that is refused anyway')
+  await s.call('unload_worktree', { worktree: 'feat/a' })
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/a' }), (err) => {
+    assert.equal(err.details?.reason, 'teardown')
+    assert.match(err.message, /Couldn't drop the cache: it is stuck/)
+    assert.match(err.message, /\(already done: Stop the VM\)/)
+    return true
+  })
+  assert.ok(existsSync(created.path))
+})

@@ -341,7 +341,7 @@ test('worktree.remove deletes a clean worktree and its worktreeOrder entry', asy
   const key = `${s.repoId} ${wt.path}`
   await s.call('project.updateSettings', { projectId: s.projectId, settings: { worktreeOrder: [key] } })
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
-  assert.deepEqual(res, { ok: true, result: null })
+  assert.deepEqual(res, { ok: true, result: { tornDown: [] } })
   assert.equal(existsSync(wt.path), false)
   assert.equal(s.worktree(wt.id), undefined)
   assert.equal(s.project().settings.worktreeOrder, undefined)
@@ -361,7 +361,7 @@ test("worktree.remove: a removed worktree's PR notice leaves the attention topic
   const wt = await withWorktree(s, 'noticed')
   withNotice(s, wt)
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
-  assert.deepEqual(res, { ok: true, result: null })
+  assert.deepEqual(res, { ok: true, result: { tornDown: [] } })
   assert.deepEqual(s.attention.entries, [])
 })
 
@@ -665,7 +665,7 @@ test('worktree.remove deletes a worktree git lists outside the allowlist (an age
       assert.equal(refused.error.details?.reason, 'dirty')
     }
     const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id, force: dirty })
-    assert.deepEqual(res, { ok: true, result: null })
+    assert.deepEqual(res, { ok: true, result: { tornDown: [] } })
     assert.equal(existsSync(path), false)
     assert.equal(s.worktree(wt.id), undefined)
   }

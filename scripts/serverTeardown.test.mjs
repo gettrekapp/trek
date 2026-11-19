@@ -64,9 +64,9 @@ test('runTeardown: the chosen items in participant order, each participant once 
     participant('stack', [{ id: 'destroy', label: 'Tear down the dev stack', checked: true }], log),
     participant('env', [{ id: 'destroy', label: 'Stop the VM', checked: true }, { id: 'cache', label: 'Drop the cache', checked: false }], log)
   ]
-  await runTeardown(ps, target, 'promote', ['env:cache', 'stack:destroy', 'env:destroy'])
+  assert.deepEqual(await runTeardown(ps, target, 'promote', ['env:cache', 'stack:destroy', 'env:destroy']), ['Tear down the dev stack', 'Drop the cache', 'Stop the VM'], 'the labels it ran, in order')
   assert.deepEqual(log, [['stack', 'promote', ['destroy']], ['env', 'promote', ['cache', 'destroy']]])
-  await runTeardown(ps, target, 'remove', [])
+  assert.deepEqual(await runTeardown(ps, target, 'remove', []), [])
   assert.equal(log.length, 2)
 })
 
@@ -84,7 +84,7 @@ test('runTeardown: a failing item stops the rest (TOOL_ERROR naming it); an unkn
   }
   assert.deepEqual(log, [])
   const warnings = []
-  await runTeardown(ps, target, 'remove', ['env:gone'], { warn: (m) => warnings.push(m) })
+  assert.deepEqual(await runTeardown(ps, target, 'remove', ['env:gone'], { warn: (m) => warnings.push(m) }), [], 'a skipped item is not reported as torn down')
   assert.deepEqual(log, [])
   assert.match(warnings[0], /env:gone is no longer planned/)
 })
@@ -183,7 +183,7 @@ test('runTeardown: an id of a plugin that is now off is skipped; an unknown one 
   const log = []
   const warnings = []
   const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
-  await runTeardown(ps, target, 'remove', ['vms:vm', 'stack:destroy'], { inactive: ['vms'], warn: (m) => warnings.push(m) })
+  assert.deepEqual(await runTeardown(ps, target, 'remove', ['vms:vm', 'stack:destroy'], { inactive: ['vms'], warn: (m) => warnings.push(m) }), ['Tear down'])
   assert.deepEqual(log, [['stack', 'remove', ['destroy']]])
   assert.match(warnings.join('\n'), /vms:vm is no longer planned/)
   await assert.rejects(runTeardown(ps, target, 'remove', ['ghost:y']), (e) => e.code === 'BAD_REQUEST' && e.message === '"ghost:y" is not offered for this worktree; reopen the confirm')

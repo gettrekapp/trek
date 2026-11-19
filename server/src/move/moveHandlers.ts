@@ -149,8 +149,12 @@ function sweepReceipts(now = Date.now()): void {
 
 /** Repositories (real path) with a branch being received (or a receive of it undone) right now: `${path}\0${branch}` */
 const receiving = new Set<string>()
+
 /** For the tests: the receives in progress */
 export const moveReceiving: Set<string> = receiving
+
+/** For the tests: awaited by move.unreceive once it holds the worktree, before anything else. */
+export const moveTestHooks: { beforeUnreceive?: (path: string) => Promise<void> } = {}
 
 /** A Claude session's history file under the worktree's path, if it has one, and its size. */
 async function historyOf(worktree: Worktree, session: Session): Promise<{ file: string; size: number } | null> {
@@ -631,7 +635,13 @@ export const moveHandlers: Record<string, Handler> = {
     if (receiving.has(key)) throw codedError('CONFLICT', `another move is bringing ${receipt.branch} into ${repo.path} right now; try again once it is done`)
     receiving.add(key)
     try {
-      await unreceive(ctx, project, repo, token, receipt, row)
+      // The worktree is held (plugins E1), as a remove, promote or move holds it: none of them runs
+      // on it meanwhile, and an unreceive waits for none of theirs (CONFLICT). Taken with no await
+      // since the checks above.
+      await holdWorktree(receipt.path, async () => {
+        await moveTestHooks.beforeUnreceive?.(receipt.path)
+        await unreceive(ctx, project, repo, token, receipt, row)
+      })
       ctx.history?.remove(project.id, repo.id, receipt.branch, receipt.historyIds ?? [])
     } finally {
       receiving.delete(key)
