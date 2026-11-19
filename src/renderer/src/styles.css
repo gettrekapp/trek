@@ -876,6 +876,12 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+/* A second line or a card's facts with only plugins' slots, which rendered nothing (plugins E3) */
+.wt-meta:empty,
+.wt-card-facts:empty {
+  display: none;
+}
+
 /* Row text, not chips: only the workflow tag keeps its color (set inline), as the text color */
 .mini-chip {
   flex: 0 0 auto;

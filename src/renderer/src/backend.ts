@@ -280,7 +280,10 @@ export interface WindowBackend {
     readonly projectId: string | null
     /** The last welcome's plugins and capabilities; undefined before the first one */
     welcome(): PluginWelcome | undefined
-    request(method: string, params: Record<string, unknown>): Promise<unknown>
+    /** `timeoutMs`: a long one's (plugins E3) */
+    request(method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<unknown>
+    /** The server's worktree id of the window's row at `path` (plugins E3); undefined when it lists none there */
+    worktreeId(path: string): string | undefined
     /** The server's events of one name on the window's connection; returns the unsubscribe */
     onEvent(event: string, listener: (payload: unknown) => void): () => void
     /** Each time the window's connection comes up (a reconnect too); returns the unsubscribe */
@@ -365,7 +368,7 @@ export const idleBackend: WindowBackend = {
     promptFailed: (title, err) => void window.api.showError(title, String(err)),
     inline: (err) => errorText(err)
   },
-  plugins: { projectId: null, welcome: () => undefined, request: noProject, onEvent: () => () => {}, onConnected: () => () => {} }
+  plugins: { projectId: null, welcome: () => undefined, request: noProject, worktreeId: () => undefined, onEvent: () => () => {}, onConnected: () => () => {} }
 }
 
 let current: WindowBackend = idleBackend

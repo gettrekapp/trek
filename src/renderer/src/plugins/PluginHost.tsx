@@ -2,13 +2,15 @@
 // components, mounted where the window's server has the plugin and it is on for the project, each
 // inside its host and an error boundary (a plugin that throws hides its own UI, not the window's).
 import { Component, useMemo, useSyncExternalStore, type ReactNode } from 'react'
-import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type PluginSlotName, type PluginSlotProps } from '../../../shared/plugins/client.ts'
+import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type MultiSlotName, type PluginSlotProps } from '../../../shared/plugins/client.ts'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
 import { allBranchTickets, allWorktrees, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { revealTerminal, terminalLabel } from '../terminals'
+import { SettingNumber, SettingText } from '../components/SettingText'
 import type { ProjectFile, WorktreeInstance } from '../../../shared/types'
 import { createClientHost, type HostDeps } from './host'
+import { cachedRepos } from './projectView'
 import { pluginActive, pluginStatus, type PluginStatus } from './presence'
 import { sessionsSource, type SessionsSource } from './sessions.ts'
 import { activeSlotEntries } from './slots.ts'
@@ -61,6 +63,15 @@ function windowSessions(): SessionsSource {
   return sessionView
 }
 
+/** The window's repositories as each plugin sees them (plugins E3): the same array while nothing changed. */
+const windowRepos = cachedRepos(
+  () => {
+    const state = useAppStore.getState()
+    return { project: state.project, hostWorktrees: state.hostWorktrees, backend: getBackend() }
+  },
+  (path) => getBackend().plugins.worktreeId(path)
+)
+
 /** What every plugin host in this window is built with. */
 const hostDeps = (): HostDeps => ({
   appSettings: window.api.appSettings,
@@ -82,7 +93,23 @@ const hostDeps = (): HostDeps => ({
   focusSession: (terminalId) => {
     // Real sessions only: revealTerminal special-cases the bot's decision id and clears quiet state before its own check.
     if (Object.hasOwn(useAppStore.getState().terminals, terminalId)) revealTerminal(terminalId)
-  }
+  },
+  repos: windowRepos,
+  onReposChanged: (listener) => {
+    const offStore = useAppStore.subscribe((state, previous) => {
+      if (state.project !== previous.project || state.hostWorktrees !== previous.hostWorktrees) listener()
+    })
+    const offBackend = subscribeBackend(listener)
+    return () => {
+      offStore()
+      offBackend()
+    }
+  },
+  setRepoSettings: (pluginId, repoId, values, label) => useAppStore.getState().setPluginRepoSettings(pluginId, repoId, values, label),
+  setBranchSettings: (pluginId, repoId, branch, values, label) => useAppStore.getState().setPluginBranchSettings(pluginId, repoId, branch, values, label),
+  confirm: (prompt) => window.api.confirm(prompt),
+  showError: (title, message) => window.api.showError(title, message),
+  components: { SettingText, SettingNumber }
 })
 
 function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost {
@@ -145,6 +172,18 @@ export function usePluginEntries(plugins: readonly ClientPlugin[] = BUILTIN_CLIE
   }, [backend, key, hasProject, settings, plugins])
 }
 
+/** The entries as the window has them now, outside React (the old-server teardown fallbacks, plugins E3). */
+export function pluginEntriesNow(backend: WindowBackend = getBackend(), plugins: readonly ClientPlugin[] = BUILTIN_CLIENT_PLUGINS): PluginEntry[] {
+  const state = useAppStore.getState()
+  const welcome = backend.plugins.projectId && state.project ? backend.plugins.welcome() : undefined
+  return plugins.map((plugin) => ({
+    plugin,
+    status: pluginStatus(plugin.manifest, welcome, state.project?.plugins),
+    host: hostFor(backend, plugin),
+    key: `${plugin.manifest.id}:${generationOf(backend)}`
+  }))
+}
+
 class PluginBoundary extends Component<{ id: string; fallback?: ReactNode; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError(): { failed: boolean } {
@@ -186,7 +225,7 @@ export function PluginRuntimes(): React.JSX.Element {
   )
 }
 
-type MultiSlot = Exclude<PluginSlotName, 'settings' | 'sessionIndicator'>
+type MultiSlot = MultiSlotName
 /** `props` is required where the slot's props have required keys (terminalOverlay's terminalId) */
 type SlotArgs<N extends MultiSlot> = { name: N } & ({} extends PluginSlotProps<N> ? { props?: PluginSlotProps<N> } : { props: PluginSlotProps<N> })
 

@@ -1022,7 +1022,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const plugins = deps.welcomePlugins()
         return plugins ? { plugins, capabilities } : { capabilities }
       },
-      request: (method, params) => (deps.request as unknown as (m: string, p: Record<string, unknown>) => Promise<unknown>)(method, params),
+      request: (method, params, options) =>
+        (deps.request as unknown as (m: string, p: Record<string, unknown>, o?: { timeoutMs?: number }) => Promise<unknown>)(method, params, options),
+      worktreeId: (path) => {
+        const legacyId = legacyIdAt(path)
+        return legacyId === undefined ? undefined : ids().worktrees[legacyId]?.worktreeId
+      },
       onEvent: (event, listener) => (deps.onEvent as unknown as (e: string, l: (payload: unknown) => void) => () => void)(event, listener),
       onConnected: (listener) => deps.onConnected(listener)
     }

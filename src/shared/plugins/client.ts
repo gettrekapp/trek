@@ -7,12 +7,77 @@
 // plugin and the window import the same copy. An installed plugin gets it, and React, from the
 // window (globalThis.__trekPlugin, set by the renderer's pluginGlobals.ts); it must never bundle
 // its own.
-import { createContext, useContext, type FC } from 'react'
-import type { PluginManifest, PluginPrefValue } from './manifest.ts'
+import { createContext, useContext, useSyncExternalStore, type FC } from 'react'
+import type { PluginManifest, PluginPrefValue, PluginSettingValues } from './manifest.ts'
 import type { PrProvider } from './pullRequests.ts'
 import type { TicketInfo, TicketProvider } from './tickets.ts'
 
 export type { PluginPrefValue }
+
+/** A worktree of the window's project as a plugin's slots see it (plugins E3) */
+export interface PluginWorktree {
+  /** The server's worktree id (what `worktree.*` and a plugin's own methods take); '' while the window has not mapped it yet */
+  id: string
+  repoId: string
+  path: string
+  /** Absent on a detached HEAD */
+  branch?: string
+  isMain: boolean
+  /** Git no longer lists it on the server: nothing can run in it */
+  missing: boolean
+}
+
+/** A repository of the window's project, with this plugin's settings (plugins E3) */
+export interface PluginRepo {
+  id: string
+  name: string
+  path: string
+  /** This plugin's repoSettings values, a pending edit of this window included ({} when none) */
+  settings: Readonly<PluginSettingValues>
+  /** This plugin's branchSettings values by branch; a branch with none is left out */
+  branchSettings: Readonly<Record<string, Readonly<PluginSettingValues>>>
+  /** Its worktrees on the server, its main checkout among them */
+  worktrees: readonly PluginWorktree[]
+}
+
+/** A Run-menu entry's dot (plugins E3): something runs, is stopped, or is busy */
+export type PluginRunDot = 'running' | 'exited' | 'attention'
+
+/** What a worktree's Run menu shows for a plugin's panel (plugins E3) */
+export interface PluginPanelEntry {
+  label: string
+  title?: string
+  /** No dot without one */
+  dot?: PluginRunDot
+}
+
+/** Core's confirm dialog's question (plugins E3) */
+export interface PluginConfirmPrompt {
+  title: string
+  message: string
+  detail?: string
+  confirmLabel: string
+}
+
+/** Core's Settings text field (plugins E3): a draft committed on blur (Enter for one line), a stale draft asked about */
+export interface PluginSettingTextProps {
+  value: string
+  onCommit(value: string): void
+  /** A textarea of this many rows; one line without it */
+  rows?: number
+  className?: string
+  placeholder?: string
+  title?: string
+  spellCheck?: boolean
+}
+
+/** Core's Settings number field (plugins E3): committed on blur or Enter; a blank or non-positive entry commits `fallback` */
+export interface PluginSettingNumberProps {
+  value: number
+  onCommit(value: number): void
+  min?: number
+  fallback: number
+}
 
 /** A session's status, as the window tracks it */
 export type PluginSessionStatus = 'starting' | 'working' | 'attention' | 'done' | 'complete' | 'idle' | 'exited'
@@ -37,8 +102,8 @@ export interface ClientPluginHost {
   readonly id: string
   /** The window's project */
   readonly projectId: string
-  /** `<id>.<method>` on the window's server */
-  request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>
+  /** `<id>.<method>` on the window's server; `timeoutMs` for a long one (plugins E3; the default is a minute) */
+  request<T = unknown>(method: string, params?: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<T>
   /**
    * `<id>.<event>` from the window's server; an event whose payload names another `projectId` is
    * not delivered. Returns the unsubscribe.
@@ -79,6 +144,23 @@ export interface ClientPluginHost {
   selectedTerminalId(): string | null
   /** Shows that session: selects its worktree (or opens the Global panel) and its tab. Unknown ids do nothing. */
   focusSession(terminalId: string): void
+  /** The window's project's repositories with this plugin's settings (plugins E3); [] before the project is in. The same array until it changes. */
+  repos(): readonly PluginRepo[]
+  /** Called when repos() may have changed; returns the unsubscribe */
+  onReposChanged(listener: () => void): () => void
+  /**
+   * This plugin's settings for a repository (plugins E3): `values` replaces them ({} clears). Saved on
+   * the server as a compare-and-set; repos() shows it at once, while it is pending.
+   */
+  setRepoSettings(repoId: string, values: PluginSettingValues): void
+  /** This plugin's settings for a branch (plugins E3), as setRepoSettings */
+  setBranchSettings(repoId: string, branch: string, values: PluginSettingValues): void
+  /** Core's confirm dialog (plugins E3) */
+  confirm(prompt: PluginConfirmPrompt): Promise<boolean>
+  /** Core's error dialog (plugins E3) */
+  showError(title: string, message: string): Promise<void>
+  /** Core's Settings fields (plugins E3) */
+  readonly components: { SettingText: FC<PluginSettingTextProps>; SettingNumber: FC<PluginSettingNumberProps> }
 }
 
 export interface SessionIndicatorProps {
@@ -89,6 +171,38 @@ export interface SessionIndicatorProps {
    */
   status: PluginSessionStatus | null
   onToggleComplete?: () => void
+}
+
+/** A worktree slot's props (plugins E3) */
+export interface WorktreeSlotProps {
+  worktree: PluginWorktree
+}
+
+/** An entry in a worktree's Run menu and the panel it opens (plugins E3) */
+export interface WorktreePanelSlot {
+  /**
+   * The entry for this worktree, or null to leave it out. Called while the window renders, so no
+   * hooks: read the plugin's own state and host.repos(). `subscribe` says when the answer may change.
+   */
+  entry(host: ClientPluginHost, worktree: PluginWorktree): PluginPanelEntry | null
+  /** Calls `listener` when the plugin's own state behind `entry` changes; returns the unsubscribe */
+  subscribe(listener: () => void): () => void
+  /** The panel, mounted while the entry shows; `visible` while it is the worktree's open panel */
+  Component: FC<WorktreeSlotProps & { visible: boolean }>
+}
+
+/**
+ * The old-server fallback (a server without `worktreeTeardown`, plugins E1): what the plugin tears
+ * down itself before a worktree is deleted, promoted or moved, and whether it keeps a repository in
+ * its project. Remove with the fallbacks.
+ */
+export interface LegacyTeardownSlot {
+  /** What it would tear down for the worktree now, from its own state: the move dialog's `label`, the confirm's `notice`; null for nothing */
+  part(host: ClientPluginHost, worktree: PluginWorktree): { label: string; notice: string; running: boolean } | null
+  /** Tears it down: a warning to show instead of a rejection */
+  run(host: ClientPluginHost, worktree: PluginWorktree): Promise<string | undefined>
+  /** Why the repository can't leave its project now, or null */
+  repoRemoveBlock(host: ClientPluginHost, repo: PluginRepo): string | null
 }
 
 export interface ClientPlugin {
@@ -116,7 +230,19 @@ export interface ClientPlugin {
     terminalOverlay?: FC<{ terminalId: string }>
     /** A strip along the bottom of the project window, above the Global bar; the plugin sets its height */
     bottomBar?: FC
+    /** An entry in a worktree's Run menu, between Docker and Stack, and the panel it opens (plugins E3) */
+    worktreePanel?: WorktreePanelSlot
+    /** In a worktree's header, after its git chip (plugins E3); `openPanel` opens the plugin's worktreePanel */
+    worktreeChip?: FC<WorktreeSlotProps & { openPanel(): void }>
+    /** On a worktree's sidebar row, after its PR (plugins E3) */
+    sidebarBadge?: FC<WorktreeSlotProps>
+    /** `<dt>`/`<dd>` pairs in a worktree's hover card, after Git (plugins E3) */
+    hoverRow?: FC<WorktreeSlotProps>
+    /** A Settings tab, before Plugins, for the repository chosen there (plugins E3): core shows `title` and the repository picker */
+    repoSettings?: { title: string; Component: FC<{ repo: PluginRepo }> }
   }
+  /** The old-server fallback's teardown (plugins E3; LegacyTeardownSlot) */
+  legacyTeardown?: LegacyTeardownSlot
   /**
    * A theme plugin's look (theme plugins; `manifest.type: 'theme'`), applied while it is the
    * window's active theme. Of a theme, the window mounts `Runtime` and the `overlay` slot only.
@@ -132,6 +258,9 @@ export type PluginSlotName = keyof NonNullable<ClientPlugin['slots']>
 /** A slot's props (`{}` for the slots that take none) */
 export type PluginSlotProps<N extends PluginSlotName> = NonNullable<ClientPlugin['slots']>[N] extends FC<infer P> | undefined ? P : never
 
+/** The slots PluginSlot mounts, each active plugin's component (the others have mounts of their own) */
+export type MultiSlotName = 'sidebarToolbar' | 'overlay' | 'terminalOverlay' | 'bottomBar'
+
 /** Types a plugin's client half. */
 export const defineClientPlugin = (plugin: ClientPlugin): ClientPlugin => plugin
 
@@ -143,4 +272,10 @@ export function usePluginHost(): ClientPluginHost {
   const host = useContext(PluginHostContext)
   if (!host) throw new Error('usePluginHost() outside a plugin component')
   return host
+}
+
+/** The host's repos(), kept current (plugins E3). */
+export function usePluginRepos(): readonly PluginRepo[] {
+  const host = usePluginHost()
+  return useSyncExternalStore(host.onReposChanged, host.repos)
 }

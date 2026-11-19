@@ -1,8 +1,9 @@
 // A plugin's host in a project window (plugin system phase 1): its `<id>.*` requests and events
 // on the window's backend, its per-app preferences in the app settings, the window's session
-// labels, and its read-only session view (campsite). One per (backend, plugin): a window that moves to another server or project gets new ones.
-import type { ClientPluginHost, PluginSession } from '../../../shared/plugins/client.ts'
-import type { PluginManifest, PluginPrefValue } from '../../../shared/plugins/manifest.ts'
+// labels, its read-only session view (campsite), and its project's repositories and core's dialogs
+// (plugins E3). One per (backend, plugin): a window that moves to another server or project gets new ones.
+import type { ClientPluginHost, PluginConfirmPrompt, PluginRepo, PluginSession } from '../../../shared/plugins/client.ts'
+import type { PluginManifest, PluginPrefValue, PluginSettingValues } from '../../../shared/plugins/manifest.ts'
 import type { AppSettings, AppSettingsPatch } from '../../../shared/appSettings.ts'
 import type { WindowBackend } from '../backend'
 import { changedFor, forProject } from './presence.ts'
@@ -29,6 +30,18 @@ export interface HostDeps {
   onSessionsChanged?: (listener: () => void) => () => void
   selectedTerminalId?: () => string | null
   focusSession?: (terminalId: string) => void
+  /** The window's repositories as a plugin sees them (plugins E3; default: none) */
+  repos?: (pluginId: string) => readonly PluginRepo[]
+  /** Called when they may have changed; returns the unsubscribe */
+  onReposChanged?: (listener: () => void) => () => void
+  /** The store's plugin settings setters (plugins E3; default: nothing is written) */
+  setRepoSettings?: (pluginId: string, repoId: string, values: PluginSettingValues, label: string) => void
+  setBranchSettings?: (pluginId: string, repoId: string, branch: string, values: PluginSettingValues, label: string) => void
+  /** Core's dialogs (plugins E3; default: a confirm declined, an error not shown) */
+  confirm?: (prompt: PluginConfirmPrompt) => Promise<boolean>
+  showError?: (title: string, message: string) => Promise<void>
+  /** Core's Settings fields (plugins E3; default: ones that render nothing) */
+  components?: ClientPluginHost['components']
 }
 
 const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefValue> =>
@@ -39,6 +52,9 @@ const prefsKey = (prefs: Record<string, PluginPrefValue>): string => JSON.string
 
 /** A constant, so useSyncExternalStore gets a stable empty snapshot */
 const NO_SESSIONS: readonly PluginSession[] = []
+/** A host without the window's project (a test's): one array, so it is a stable snapshot. */
+const NO_REPOS: readonly PluginRepo[] = []
+const NO_COMPONENTS: ClientPluginHost['components'] = { SettingText: () => null, SettingNumber: () => null }
 
 export function createClientHost(manifest: PluginManifest, backend: WindowBackend, deps: HostDeps): ClientPluginHost {
   const { id } = manifest
@@ -46,7 +62,8 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
   return {
     id,
     projectId,
-    request: <T>(method: string, params: Record<string, unknown> = {}) => backend.plugins.request(`${id}.${method}`, params) as Promise<T>,
+    request: <T>(method: string, params: Record<string, unknown> = {}, options?: { timeoutMs?: number }) =>
+      backend.plugins.request(`${id}.${method}`, params, options) as Promise<T>,
     onEvent: <T>(event: string, listener: (data: T) => void) =>
       backend.plugins.onEvent(`${id}.${event}`, (payload) => {
         if (forProject(payload, projectId)) listener(payload as T)
@@ -99,6 +116,14 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     sessions: () => deps.sessions?.() ?? NO_SESSIONS,
     onSessionsChanged: (listener) => deps.onSessionsChanged?.(listener) ?? (() => {}),
     selectedTerminalId: () => deps.selectedTerminalId?.() ?? null,
-    focusSession: (terminalId) => deps.focusSession?.(terminalId)
+    focusSession: (terminalId) => deps.focusSession?.(terminalId),
+    repos: () => deps.repos?.(id) ?? NO_REPOS,
+    onReposChanged: (listener) => deps.onReposChanged?.(listener) ?? (() => {}),
+    // The plugin's name labels its settings in a conflict dialog.
+    setRepoSettings: (repoId, values) => deps.setRepoSettings?.(id, repoId, values, manifest.name),
+    setBranchSettings: (repoId, branch, values) => deps.setBranchSettings?.(id, repoId, branch, values, manifest.name),
+    confirm: (prompt) => deps.confirm?.(prompt) ?? Promise.resolve(false),
+    showError: (title, message) => deps.showError?.(title, message) ?? Promise.resolve(),
+    components: deps.components ?? NO_COMPONENTS
   }
 }

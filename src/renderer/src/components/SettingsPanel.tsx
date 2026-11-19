@@ -13,6 +13,7 @@ import { SessionsTab } from './settings/SessionsTab'
 import { WorktreesTab } from './settings/WorktreesTab'
 import { EnvironmentsTab } from './settings/EnvironmentsTab'
 import { RepoSelector } from './settings/RepoSelector'
+import { PluginRepoSettings, usePluginSettingsTabs } from '../plugins/WorktreeSlots'
 
 interface Props {
   visible: boolean
@@ -29,6 +30,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const sections = settingsSections(features)
   const reload = useAppStore((s) => s.settingsReload)
   const pluginEntries = usePluginEntries()
+  const pluginTabs = usePluginSettingsTabs()
   // Default applied outside the selector — `?? []` inside it would return a
   // fresh array every snapshot and loop React's store re-render (error #185).
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
@@ -47,9 +49,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const pluginSelection = pluginPick?.backend === backend ? pluginPick.selection : null
   const tabs = visibleSettingsTabs({
     environments: sections.environments !== 'hidden',
-    plugins: hasPluginSettings(pluginEntries)
+    plugins: hasPluginSettings(pluginEntries),
+    pluginTabs
   })
   const active = resolveSettingsTab(chosen, tabs)
+  const pluginTab = pluginTabs.find((t) => t.id === active)
 
   const onTabKey = (e: React.KeyboardEvent): void => {
     const next = nextSettingsTab(tabs, active, e.key)
@@ -91,6 +95,14 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           {active === 'worktrees' && <WorktreesTab repo={settingsRepo} repoSelector={repoSelector} />}
           {active === 'environments' && <EnvironmentsTab repo={settingsRepo} repoSelector={repoSelector} />}
           {active === 'plugins' && <PluginsSettings chosen={pluginSelection} onChoose={(selection) => setPluginPick({ backend, selection })} />}
+          {/* A plugin's repository settings (plugins E3): core's heading and repository picker, then its own part. */}
+          {pluginTab && (
+            <>
+              <h3>{pluginTab.label}</h3>
+              {repoSelector}
+              <PluginRepoSettings tab={pluginTab} repoId={settingsRepo?.id} />
+            </>
+          )}
         </div>
       </div>
     </div>

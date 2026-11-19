@@ -2,6 +2,8 @@ import { tagStyle } from '../store'
 import { safeStatusColor } from '../plugins/ticketProviders'
 import type { DotKind } from '../sidebarRow'
 import type { WorktreeTag } from '../../../shared/types'
+import { PluginWorktreeSlot } from '../plugins/WorktreeSlots'
+import type { PluginWorktree } from '../../../shared/plugins/client.ts'
 
 export interface HoverCardSession {
   key: string
@@ -28,6 +30,10 @@ export interface HoverCardProps {
   git: string
   /** "running — 10.0.0.4" */
   environment?: string
+  /** The worktree as the plugins' hover rows see it (plugins E3) */
+  worktree: PluginWorktree
+  /** A plugin fills the hover rows: the facts list shows for them (it hides when they render nothing) */
+  pluginRows: boolean
   /** Open decisions' questions */
   questions: string[]
   sessions: HoverCardSession[]
@@ -62,7 +68,7 @@ export function WorktreeHoverCard(props: HoverCardProps): React.JSX.Element {
           ))}
         </div>
       )}
-      {(ticket || pullRequest || props.git || props.environment) && (
+      {(ticket || pullRequest || props.git || props.environment || props.pluginRows) && (
         <dl className="wt-card-facts">
           {ticket && (
             <>
@@ -103,6 +109,7 @@ export function WorktreeHoverCard(props: HoverCardProps): React.JSX.Element {
               <dd>{props.environment}</dd>
             </>
           )}
+          {props.pluginRows && <PluginWorktreeSlot name="hoverRow" worktree={props.worktree} />}
         </dl>
       )}
       {props.questions.length > 0 && (

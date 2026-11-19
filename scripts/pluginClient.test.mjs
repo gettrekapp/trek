@@ -286,3 +286,51 @@ test('host (campsite): the session view and focusSession go through the deps; wi
   assert.equal(typeof bare.onSessionsChanged(() => {}), 'function')
   bare.focusSession('x')
 })
+
+test("the host (plugins E3): a request's timeout; the repos, their changes and the settings writes through the window; core's dialogs and fields", async () => {
+  const sent = []
+  const backend = {
+    plugins: {
+      projectId: 'p1',
+      welcome: () => undefined,
+      request: async (method, params, options) => (sent.push([method, params, options]), null),
+      onEvent: () => () => {},
+      onConnected: () => () => {}
+    }
+  }
+  const env = { id: 'env', version: '1.0.0', name: 'Colima environments', description: '', defaultEnabled: true }
+  const repos = [{ id: 'r1', name: 'app', path: '/r', settings: {}, branchSettings: {}, worktrees: [] }]
+  const writes = []
+  const listeners = []
+  const host = createClientHost(env, backend, {
+    appSettings: fakeAppSettings(),
+    terminalLabel: String,
+    currentBackend: () => backend,
+    repos: (id) => (id === 'env' ? repos : []),
+    onReposChanged: (l) => (listeners.push(l), () => listeners.splice(listeners.indexOf(l), 1)),
+    setRepoSettings: (...args) => void writes.push(['repo', ...args]),
+    setBranchSettings: (...args) => void writes.push(['branch', ...args]),
+    confirm: async (prompt) => prompt.confirmLabel === 'Reset',
+    showError: async (title) => void writes.push(['error', title])
+  })
+  await host.request('up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 })
+  assert.deepEqual(sent, [['env.up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 }]])
+  assert.equal(host.repos(), repos)
+  const off = host.onReposChanged(() => {})
+  assert.equal(listeners.length, 1)
+  off()
+  assert.equal(listeners.length, 0)
+  host.setRepoSettings('r1', { enabled: true })
+  host.setBranchSettings('r1', 'feat', { env: 'A=1' })
+  await host.showError('Could not remove environment', 'x')
+  assert.deepEqual(writes, [
+    ['repo', 'env', 'r1', { enabled: true }, 'Colima environments'],
+    ['branch', 'env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments'],
+    ['error', 'Could not remove environment']
+  ])
+  assert.equal(await host.confirm({ title: 'T', message: 'M', confirmLabel: 'Reset' }), true)
+  // Without the window's deps (a test's host): no repos (one stable array), a confirm declined, fields that render nothing.
+  const bare = createClientHost(env, backend, { appSettings: fakeAppSettings(), terminalLabel: String, currentBackend: () => backend })
+  assert.deepEqual([bare.repos(), bare.repos() === bare.repos(), await bare.confirm({ title: 'T', message: 'M', confirmLabel: 'OK' })], [[], true, false])
+  assert.equal(bare.components.SettingText({ value: '', onCommit: () => {} }), null)
+})

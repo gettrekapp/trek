@@ -321,7 +321,7 @@ test("skills go to the window's server", async () => {
 test("the plugins' channel: the project, the welcome's plugins and capabilities, untyped <id>.* requests and events", async () => {
   let plugins
   let caps
-  const { backend, calls, listeners } = setup({ replies: { 'voice.settings': { hasKey: false } }, capabilities: () => caps, welcomePlugins: () => plugins })
+  const { backend, calls, listeners, timeouts } = setup({ replies: { 'voice.settings': { hasKey: false } }, capabilities: () => caps, welcomePlugins: () => plugins })
   assert.equal(backend.plugins.projectId, 'p1')
   assert.equal(backend.plugins.welcome(), undefined, 'before the welcome')
   caps = ['mcp', 'voice']
@@ -335,6 +335,11 @@ test("the plugins' channel: the project, the welcome's plugins and capabilities,
   for (const l of listeners['voice.summary']) l({ text: 'hi' })
   off()
   assert.deepEqual(listeners['voice.summary'], [])
+  // A long one's timeout (plugins E3: an environment's first boot), and a worktree's server id by its path.
+  await backend.plugins.request('env.up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 })
+  assert.deepEqual(timeouts.at(-1), ['env.up', 1_800_000])
+  assert.equal(backend.plugins.worktreeId('/r-feat'), 'w2')
+  assert.equal(backend.plugins.worktreeId('/nowhere'), undefined)
   assert.deepEqual(heard, ['hi'])
 })
 

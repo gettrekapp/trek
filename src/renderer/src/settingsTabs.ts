@@ -1,20 +1,29 @@
 // The Settings page's tabs. Pure: SettingsPanel renders what this picks.
 
-export const SETTINGS_TABS = [
+export interface SettingsTab {
+  id: string
+  label: string
+}
+
+/** A core tab's id, or a plugin's (`plugin:<id>`, plugins E3) */
+export type SettingsTabId = string
+
+export const SETTINGS_TABS: readonly SettingsTab[] = [
   { id: 'general', label: 'General' },
   { id: 'agents', label: 'Agents' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'worktrees', label: 'Worktrees' },
   { id: 'environments', label: 'Environments' },
   { id: 'plugins', label: 'Plugins' }
-] as const
+]
 
-export type SettingsTab = (typeof SETTINGS_TABS)[number]
-export type SettingsTabId = SettingsTab['id']
-
-/** The tabs to show: Environments where the server runs them, Plugins where there is one to list. */
-export function visibleSettingsTabs(has: { environments: boolean; plugins: boolean }): SettingsTab[] {
-  return SETTINGS_TABS.filter((t) => (t.id === 'environments' ? has.environments : t.id === 'plugins' ? has.plugins : true))
+/**
+ * The tabs to show: Environments where the server runs them, the plugins' repository settings
+ * tabs (plugins E3) right before Plugins, Plugins where there is one to list.
+ */
+export function visibleSettingsTabs(has: { environments: boolean; plugins: boolean; pluginTabs?: readonly SettingsTab[] }): SettingsTab[] {
+  const core = SETTINGS_TABS.filter((t) => t.id !== 'plugins' && (t.id !== 'environments' || has.environments))
+  return [...core, ...(has.pluginTabs ?? []), ...(has.plugins ? SETTINGS_TABS.filter((t) => t.id === 'plugins') : [])]
 }
 
 /** The tab on screen: the chosen one while it shows, General once it is gone. */

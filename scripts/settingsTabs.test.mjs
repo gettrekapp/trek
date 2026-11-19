@@ -41,3 +41,10 @@ test('nextSettingsTab: arrows step and stop at the ends, Home and End jump, othe
   assert.equal(nextSettingsTab(some, 'general', 'Home'), null)
   assert.equal(nextSettingsTab(some, 'sessions', 'Enter'), null)
 })
+
+test("visibleSettingsTabs (plugins E3): a plugin's repository settings tab comes right before Plugins", () => {
+  const pluginTabs = [{ id: 'plugin:env', label: 'Environments' }]
+  assert.deepEqual(ids(visibleSettingsTabs({ environments: false, plugins: true, pluginTabs })), ['general', 'agents', 'sessions', 'worktrees', 'plugin:env', 'plugins'])
+  assert.deepEqual(ids(visibleSettingsTabs({ environments: false, plugins: false, pluginTabs })), ['general', 'agents', 'sessions', 'worktrees', 'plugin:env'])
+  assert.equal(resolveSettingsTab('plugin:env', visibleSettingsTabs({ environments: false, plugins: true })), 'general', 'gone once the plugin is off')
+})

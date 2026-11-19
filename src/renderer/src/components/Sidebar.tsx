@@ -17,6 +17,8 @@ import { prLabel } from '../../../shared/plugins/pullRequests.ts'
 import { NotificationsMenu } from './NotificationsMenu'
 import { toggleSidebar } from '../sidebarToggle'
 import { PluginSlot } from '../plugins/PluginHost'
+import { PluginWorktreeSlot, useSlotEntries } from '../plugins/WorktreeSlots'
+import { pluginWorktreeOf } from '../plugins/projectView'
 import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
@@ -147,6 +149,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
   const features = useFeatures()
+  // The plugins' badges and hover rows (plugins E3): a row's second line and its card make room for them.
+  const badgeSlots = useSlotEntries('sidebarBadge').length > 0
+  const hoverSlots = useSlotEntries('hoverRow').length > 0
+  const asPluginWorktree = (info: GitWorktreeInfo) => pluginWorktreeOf(info, (path) => getBackend().plugins.worktreeId(path))
   const projectPage = useAppStore((s) => s.projectPage)
   const toggleProjectPage = useAppStore((s) => s.toggleProjectPage)
   const automationCount = project.automations?.length ?? 0
@@ -445,7 +451,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </div>
           ) : (
             !view.compact &&
-            (tag || rowCustomTags.length > 0 || ticket || pullRequest || env) && (
+            (tag || rowCustomTags.length > 0 || ticket || pullRequest || env || badgeSlots) && (
               <div className="wt-meta">
                 {tag && (
                   <span className="mini-chip" style={{ color: tag.color }}>
@@ -484,6 +490,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                     env
                   </span>
                 )}
+                {badgeSlots && <PluginWorktreeSlot name="sidebarBadge" worktree={asPluginWorktree(info)} />}
               </div>
             )
           )}
@@ -521,6 +528,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         : undefined,
       git: gitWords(info),
       environment: m.env ? `${m.envIsBusy ? 'busy' : m.env.vmState}${m.env.address ? ` — ${m.env.address}` : ''}` : undefined,
+      worktree: asPluginWorktree(info),
+      pluginRows: hoverSlots,
       questions: m.rowDecisions.map((d) => d.question).filter((q): q is string => !!q),
       sessions: [
         ...(m.order ?? []).flatMap((id) => {

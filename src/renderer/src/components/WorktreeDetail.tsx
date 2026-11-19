@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
   baseName,
   branchCustomTags,
@@ -14,6 +14,9 @@ import { usePrProviders } from '../plugins/usePrProviders'
 import { prLabel, prOwner } from '../../../shared/plugins/pullRequests.ts'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { getBackend } from '../backend'
+import { PluginPanels, PluginWorktreeSlot, usePluginPanels } from '../plugins/WorktreeSlots'
+import { pluginWorktreeOf } from '../plugins/projectView'
+import { runDot as runMenuDot } from '../plugins/slots'
 import { useFeatures } from '../useFeatures'
 import { branchLabel, splitBranch } from './Sidebar'
 import { SessionIndicator } from '../plugins/SessionIndicator'
@@ -59,6 +62,7 @@ type Panel =
   | 'docker'
   | 'environment'
   | 'stack'
+  | `plugin:${string}`
 
 const STACK_POLL_MS = 4000
 
@@ -209,6 +213,19 @@ export function WorktreeDetail({
   // Rendered whatever the detail shows now: the moved worktree's row goes when the move finishes.
   const moveModal = moving && <MoveWorktreeModal from={moving.from} info={moving.info} name={moving.name} onClose={() => setMoving(null)} />
 
+  // The worktree as the plugins' slots see it, and their Run-menu entries for it (plugins E3).
+  const pluginWorktree = useMemo(
+    () => (info ? pluginWorktreeOf(info, (path) => getBackend().plugins.worktreeId(path)) : undefined),
+    // The project's patches map the paths to the server's ids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [info?.path, info?.repoId, info?.branch, info?.isMain, info?.prunable, project]
+  )
+  const pluginPanels = usePluginPanels(pluginWorktree)
+  // A plugin's panel whose entry went (the plugin switched off, or it left this worktree out): back to the sessions.
+  useEffect(() => {
+    if (panel.startsWith('plugin:') && !pluginPanels.some((p) => p.panelId === panel)) setPanel('sessions')
+  }, [panel, pluginPanels])
+
   if (!info && unreadableRepo) {
     return (
       <main className="detail detail-empty detail-unreadable muted">
@@ -332,16 +349,16 @@ export function WorktreeDetail({
     }
   }
 
-  // The runtime panels: Docker (the repository's compose), the worktree's environment, its stack.
-  const runGrouped = [showDocker, showEnv, showStack].filter(Boolean).length >= 2
-  const runActive = panel === 'docker' || panel === 'environment' || panel === 'stack'
+  // The runtime panels: Docker (the repository's compose), the worktree's environment, the plugins'
+  // panels (plugins E3), its stack.
+  const runGrouped = [showDocker, showEnv, showStack].filter(Boolean).length + pluginPanels.length >= 2
+  const runActive = panel === 'docker' || panel === 'environment' || panel === 'stack' || panel.startsWith('plugin:')
   const stackBusy = showStack && stackStateNow !== 'running' && stackStateNow !== 'stopped'
-  const runDot =
-    envOpBusy || stackBusy
-      ? 'attention'
-      : (showEnv && env?.vmState === 'running') || (showStack && stackStateNow === 'running')
-        ? 'running'
-        : 'exited'
+  const runDot = runMenuDot([
+    envOpBusy ? 'attention' : showEnv && env?.vmState === 'running' ? 'running' : undefined,
+    stackBusy ? 'attention' : showStack && stackStateNow === 'running' ? 'running' : undefined,
+    ...pluginPanels.map((p) => p.entry.dot)
+  ])
   const runtimeButtons = (
     <>
           {showDocker && (
@@ -366,6 +383,17 @@ export function WorktreeDetail({
               )}
             </button>
           )}
+          {pluginPanels.map((p) => (
+            <button
+              key={p.panelId}
+              className={`panel-btn ${panel === p.panelId ? 'active' : ''}`}
+              title={p.entry.title}
+              onClick={() => setPanel(panel === p.panelId ? 'sessions' : p.panelId)}
+            >
+              {p.entry.label}
+              {p.entry.dot && <span className={`docker-dot ${p.entry.dot}`} />}
+            </button>
+          ))}
           {showStack && (
             <button
               className={`panel-btn ${panel === 'stack' ? 'active' : ''}`}
@@ -550,6 +578,7 @@ export function WorktreeDetail({
                 {envChipLabel}
               </span>
             )}
+            {pluginWorktree && <PluginWorktreeSlot name="worktreeChip" worktree={pluginWorktree} openPanel={setPanel} />}
             {showStack && stackStateNow !== 'stopped' && (
               <span
                 className={`chip chip-env ${stackStateNow === 'running' ? 'running' : 'busy'}`}
@@ -1023,6 +1052,7 @@ export function WorktreeDetail({
         {features.history && info.branch && <HistoryPanel visible={panel === 'history'} repoId={repo.id} branch={info.branch} />}
         {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}
+        {pluginWorktree && <PluginPanels worktree={pluginWorktree} panels={pluginPanels} open={panel} />}
         {showStack && stack && (
           <StackPanel
             visible={panel === 'stack'}
