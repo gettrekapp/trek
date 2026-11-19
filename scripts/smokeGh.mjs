@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const dir = mkdtempSync(join(tmpdir(), 'trek-smoke-gh-'))
-// Windows has no sh: a Node script there, which the server runs with its own Node (gh.ts).
+// Windows has no sh: a Node script there, which the server runs with its own Node (plugins/run.ts).
 const windows = process.platform === 'win32'
 const stub = join(dir, windows ? 'gh.mjs' : 'gh')
 if (windows) writeFileSync(stub, "process.stderr.write('You are not logged into any GitHub hosts. (a smoke stub)\\n')\nprocess.exit(1)\n")

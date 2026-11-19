@@ -3,6 +3,7 @@
 // Run: npm run smoke:server-prwatch   (builds the app and the server, then runs this script)
 //
 // A plain `trek-server start` (no `local`) runs with its own HOME, TREK_SERVER_GH pointed at a stub gh
+// (the github plugin reaches it through host.testCommand and host.run)
 // and TREK_SERVER_PR_POLL_MS=1000: nothing here runs the real gh or reaches GitHub. The stub answers
 // `gh auth status` while a marker file exists, and `gh api graphql` (the watch's one query) with a JSON
 // file this script rewrites.
@@ -36,7 +37,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { PR_QUERY } from '../src/shared/prWatch.ts'
+import { PR_QUERY } from '../plugins/github/server/query.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
@@ -87,7 +88,7 @@ const prJson = join(work, 'gh-pr.json')
 const ghCalls = join(work, 'gh-calls')
 // gh: `auth status` while the marker exists; `api graphql` answers with gh-pr.json (exit 1 when it is gone).
 // A Node script (writeFakeAgent): its sh launcher is TREK_SERVER_GH on macOS and Linux; on Windows,
-// which runs no sh, the script itself is, and the server runs it with its own Node (gh.ts).
+// which runs no sh, the script itself is, and the server runs it with its own Node (plugins/run.ts).
 const ghLauncher = writeFakeAgent(
   stubs,
   'gh',
