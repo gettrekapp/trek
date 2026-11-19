@@ -63,7 +63,9 @@ export interface PluginRegistry {
   /** Each plugin's `legacyCapability`, for the welcome's `capabilities` */
   legacyCapabilities(): string[]
   /** The plugin method this name calls, if a plugin has it */
-  handler(method: string): ((params: unknown) => Promise<unknown>) | undefined
+  handler(method: string): ((params: unknown, caller?: string) => Promise<unknown>) | undefined
+  /** A connection's sender for host.emitTo, under its caller id (plugins E1); returns the disconnect */
+  connect(caller: string, send: (event: string, payload: unknown) => void): () => void
   enabled(projectId: string, id: string): boolean
   /** The MCP tools of the plugins on in the project */
   tools(projectId: string): PluginMcpTool[]
@@ -108,6 +110,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const settingOwners = new Map<string, string>()
   /** Each plugin's abort for its running programs (host.run, host.spawn unless detached): fired by dispose */
   const aborts = new Map<string, AbortController>()
+  /** Each open connection's sender, by its caller id (server.ts): what host.emitTo reaches */
+  const callers = new Map<string, (event: string, payload: unknown) => void>()
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -184,6 +188,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
+      emitTo: (caller, event, payload) => {
+        if (!event.startsWith(`${manifest.id}.`) || event.length === manifest.id.length + 1) {
+          throw new Error(`plugin ${manifest.id} sends only its own events (${manifest.id}.*), not ${JSON.stringify(event)}`)
+        }
+        callers.get(caller)?.(event, payload)
+      },
       subscriberCount: (projectId) => options.hub.eventSubscriberCount(projectTopic(projectId)),
       isEnabled: (projectId) => enabled(projectId, manifest.id),
       changed: () => {
@@ -289,16 +299,22 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       const name = method.slice(dot + 1)
       const handler: PluginHandler | undefined = entry && Object.hasOwn(entry.instance.handlers, name) ? entry.instance.handlers[name] : undefined
       if (!handler) return undefined
-      return async (params) => {
+      return async (params, caller = '') => {
         const p = params && typeof params === 'object' && !Array.isArray(params) ? (params as Record<string, unknown>) : {}
         try {
-          return await handler(p, typeof p.projectId === 'string' ? { projectId: p.projectId } : {})
+          return await handler(p, { ...(typeof p.projectId === 'string' ? { projectId: p.projectId } : {}), caller })
         } catch (err) {
           throw wireError(err)
         }
       }
     },
     enabled,
+    connect: (caller, send) => {
+      callers.set(caller, send)
+      return () => {
+        if (callers.get(caller) === send) callers.delete(caller)
+      }
+    },
     tools: (projectId) =>
       on(projectId).flatMap((e) =>
         (e.instance.mcpTools ?? []).map((tool) => ({

@@ -45,6 +45,11 @@ export interface EventSink {
   send<E extends keyof EventPayloadsV2>(event: E, payload: EventPayloadsV2[E]): void
 }
 
+/** The same sink for an event no core type names (a plugin's `<id>.*`, through host.emitTo; plugins E1). */
+export interface RawEventSink {
+  send(event: string, payload: unknown): void
+}
+
 const DROPPED = '[output dropped: the connection fell behind]\n'
 
 /**
@@ -53,11 +58,11 @@ const DROPPED = '[output dropped: the connection fell behind]\n'
  * (its event and, for env.log, its profile) follows one DROPPED chunk. Sending resumes below
  * SINK_LOW_WATER.
  */
-export function createEventSink(send: (event: string, payload: unknown) => void, bufferedAmount: () => number): EventSink {
+export function createEventSink(send: (event: string, payload: unknown) => void, bufferedAmount: () => number): EventSink & RawEventSink {
   const dropped = new Set<string>()
   let congested = false
   return {
-    send(event, payload) {
+    send(event: string, payload: unknown) {
       const p = payload as { done?: boolean; step?: unknown; profile?: string }
       const key = `${event}\0${p.profile ?? ''}`
       const buffered = bufferedAmount()

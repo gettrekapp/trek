@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import type { Socket } from 'node:net'
 import { LOCAL_TOKEN_NAME } from '../../src/shared/localServer.ts'
 import { createPhoneAccess, phoneAccessOf, type PhoneAccessControl } from './phoneAccess.ts'
@@ -512,6 +513,9 @@ export function startServer(
       (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
       () => ws.bufferedAmount
     )
+    /** This connection's id for plugins' host.emitTo (plugins E1): opaque, never sent to anyone */
+    const caller = randomUUID()
+    let disconnectCaller: (() => void) | undefined
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })
@@ -652,6 +656,7 @@ export function startServer(
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
+        disconnectCaller = plugins?.connect(caller, (event, payload) => events.send(event, payload))
         if (frame.client === PHONE_CLIENT) {
           connectedTokens.set(ws, entry.name)
           pusher?.heardFrom(entry.name)
@@ -698,6 +703,7 @@ export function startServer(
         sessions,
         terminal,
         events,
+        caller,
         machine: options.machine,
         integrations: options.integrations,
         integrationsChanged,
@@ -751,6 +757,7 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
+      disconnectCaller?.()
       localSockets.delete(ws)
       const tokenName = connectedTokens.get(ws)
       connectedTokens.delete(ws)

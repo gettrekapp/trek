@@ -17,6 +17,7 @@ import { pluginError } from '../src/shared/plugins/server.ts'
 import { applySettingsPatch, isSettingsKey, PLUGIN_OWNED_SETTINGS, validateSettings } from '../server/src/projects/settings.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 import { removeDir } from './testPlatform.mjs'
+import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
 const posix = process.platform !== 'win32'
@@ -569,4 +570,57 @@ test("host.spawn (plugins E1): only in a project's repository or worktree, or th
   }
   live[1].ended = detachedGone
   assert.ok(detachedGone, 'kill() ends a detached child')
+})
+
+test("emitTo (plugins E1): a plugin's event to the connection that sent the request (ctx.caller); an unknown or closed caller is a no-op; only its own events", async (t) => {
+  let host
+  const teller = {
+    manifest: manifest('teller'),
+    setup: (h) => {
+      host = h
+      return {
+        handlers: {
+          tell: (p, ctx) => {
+            host.emitTo(ctx.caller, 'teller.told', { text: p.text })
+            return ctx.caller
+          }
+        }
+      }
+    }
+  }
+  const { registry } = setup(t, [teller])
+  const a = []
+  const b = []
+  const offA = registry.connect('ca', (event, payload) => a.push([event, payload]))
+  registry.connect('cb', (event, payload) => b.push([event, payload]))
+  assert.deepEqual(await dispatchV2('teller.tell', { text: 'hi', projectId: 'p1' }, { plugins: registry, caller: 'ca' }), { ok: true, result: 'ca' })
+  assert.deepEqual(a, [['teller.told', { text: 'hi' }]])
+  assert.deepEqual(b, [])
+  offA()
+  await dispatchV2('teller.tell', { text: 'again' }, { plugins: registry, caller: 'ca' })
+  host.emitTo('nobody', 'teller.told', {})
+  assert.equal(a.length, 1, 'a closed or unknown caller hears nothing')
+  assert.throws(() => host.emitTo('cb', 'other.told', {}), /teller\./)
+  assert.throws(() => host.emitTo('cb', 'teller.', {}), /teller\./)
+  // A call from no connection (an MCP tool, an automation): the caller is '', which reaches no one.
+  assert.deepEqual(await dispatchV2('teller.tell', { text: 'x' }, { plugins: registry }), { ok: true, result: '' })
+  assert.deepEqual(b, [])
+})
+
+test("emitTo goes through the connection's sink: past the high-water mark a chunk is dropped and said so; a done never is", (t) => {
+  let host
+  const { registry } = setup(t, [{ manifest: manifest('teller'), setup: (h) => ((host = h), { handlers: {} }) }])
+  const sent = []
+  let buffered = 64 * 1024 * 1024
+  const sink = createEventSink((event, payload) => sent.push([event, payload]), () => buffered)
+  registry.connect('c1', (event, payload) => sink.send(event, payload))
+  host.emitTo('c1', 'teller.log', { data: 'lost' })
+  host.emitTo('c1', 'teller.log', { data: '', done: true })
+  buffered = 0
+  host.emitTo('c1', 'teller.log', { data: 'b' })
+  assert.deepEqual(sent, [
+    ['teller.log', { data: '[output dropped: the connection fell behind]\n' }],
+    ['teller.log', { data: '', done: true }],
+    ['teller.log', { data: 'b' }]
+  ])
 })

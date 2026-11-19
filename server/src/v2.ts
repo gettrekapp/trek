@@ -82,6 +82,8 @@ export interface V2Context {
   machine?: Machine
   /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
   events?: EventSink
+  /** This connection's id for plugins' host.emitTo (plugins E1); absent for a call from no connection (an MCP tool) */
+  caller?: string
   /** Linear with the server's own key, and the skills on its disk (phase 5b) */
   integrations?: Integrations
   /** Tells every authenticated connection the Linear key changed (and a plugin's legacy capability, for clients older than plugins) (`integrations.changed`) */
@@ -499,7 +501,7 @@ export function isCoreMethod(prefix: string): boolean {
 /** A plugin's method (`<id>.<name>`), when no core method has the name. */
 function pluginHandler(method: string, ctx: V2Context): Handler | undefined {
   const call = ctx.plugins?.handler(method)
-  return call ? (params) => call(params) : undefined
+  return call ? (params) => call(params, ctx.caller) : undefined
 }
 
 /**

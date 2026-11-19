@@ -125,6 +125,12 @@ export interface ServerPluginHost {
    * nothing, where the plugin is off for the project.
    */
   emit(projectId: string, event: string, data: unknown): number
+  /**
+   * `event` (its full name, which must start with `<id>.`) to one connection only (plugins E1),
+   * through that connection's event sink: past its high-water mark a chunk is dropped and said so,
+   * one with `done: true` never is. An unknown or closed caller is a no-op.
+   */
+  emitTo(caller: string, event: string, payload: unknown): void
   /** The project's open windows: what `emit` could reach */
   subscriberCount(projectId: string): number
   /** On for the project (its `plugins` setting, or the manifest's default); false for a project that is not there */
@@ -139,6 +145,11 @@ export interface ServerPluginHost {
 export interface PluginCallContext {
   /** The request's `projectId`, when it names one */
   projectId?: string
+  /**
+   * The connection that sent the request (plugins E1): opaque, one per connection, never on the
+   * wire; '' for a call from no connection (an MCP tool, an automation). `host.emitTo`'s address.
+   */
+  caller: string
 }
 
 export type PluginHandler = (params: Record<string, unknown>, ctx: PluginCallContext) => unknown
