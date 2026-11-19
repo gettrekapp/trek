@@ -1,5 +1,6 @@
 // A session tab's hiker, in place of the status dot. Done or complete with a toggle: clicking it
-// marks complete (or resumes tracking), as the dot did.
+// marks complete (or resumes tracking), as the dot did. The tab names the session, so the hiker is
+// decorative; the title says its status.
 import { useMemo } from 'react'
 import { usePluginHost, type SessionIndicatorProps } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
@@ -29,7 +30,7 @@ export function SessionIndicator({ terminalId, onToggleComplete }: SessionIndica
           : undefined
       }
     >
-      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} sign={stance.sign} scale={1} label={hikerLabel(session)} />
+      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} sign={stance.sign} scale={1} label={hikerLabel(session)} decorative />
     </span>
   )
 }

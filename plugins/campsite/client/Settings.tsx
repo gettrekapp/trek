@@ -12,14 +12,14 @@ const ROWS: readonly { key: CampsitePrefKey; label: string; hint: string }[] = [
 
 export function CampsiteSettings(): React.JSX.Element {
   const host = usePluginHost()
-  const [prefs, setPref] = usePrefs(host)
+  const [{ loaded, prefs }, setPref] = usePrefs(host)
   return (
     <>
       <h3>Campsite</h3>
       <p className="settings-desc">These are for this app, in every project window.</p>
       {ROWS.map((row) => (
         <label key={row.key} className="settings-row">
-          <input type="checkbox" checked={prefs[row.key]} onChange={(e) => setPref(row.key, e.target.checked)} />
+          <input type="checkbox" disabled={!loaded} checked={prefs[row.key]} onChange={(e) => setPref(row.key, e.target.checked)} />
           <span className="settings-label">
             <span className="settings-name">{row.label}</span>
             <span className="settings-desc">{row.hint}</span>

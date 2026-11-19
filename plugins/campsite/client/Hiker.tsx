@@ -22,9 +22,11 @@ interface Props {
   label: string
   grey?: boolean
   sign?: boolean
+  /** Hidden from assistive tech: its container already says who it is (a session tab) */
+  decorative?: boolean
 }
 
-export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey = false, sign = false }: Props): React.JSX.Element {
+export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey = false, sign = false, decorative = false }: Props): React.JSX.Element {
   const frames = FRAMES[pose]
   return (
     <svg
@@ -33,8 +35,9 @@ export const Hiker = memo(function Hiker({ look, pose, gear, scale, label, grey 
       height={16 * scale}
       viewBox="0 0 12 16"
       shapeRendering="crispEdges"
-      role="img"
-      aria-label={label}
+      role={decorative ? undefined : 'img'}
+      aria-label={decorative ? undefined : label}
+      aria-hidden={decorative || undefined}
     >
       {sign && (
         <g className="cs-sign">

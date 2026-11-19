@@ -1,4 +1,4 @@
-// A hiker at the campsite strip (2.5×): walks in from the nearer edge, walks to each new spot, and
+// A hiker at the campsite strip (2.5×): a new session's walks in from the nearer edge, walks to each new spot, and
 // walks off when its session closes (Campsite's departures). A button: click to show its session.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -6,6 +6,7 @@ import { lookFor } from '../shared/hiker.ts'
 import type { Place } from '../shared/layout.ts'
 import { hikerLabel, hikerTooltip, stanceFor, type Chore, type Stance } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
+import { useReducedMotion } from './hooks.ts'
 
 export const SCALE = 2.5
 export const HALF = 6 * SCALE
@@ -24,7 +25,7 @@ interface Props {
   width: number
   chore: Chore
   selected: boolean
-  /** Where it appears before walking to `x` (a leaving hiker's last spot); default: the nearer edge */
+  /** Where it appears before walking to `x`: a leaving hiker's last spot, or `x` for one already at camp; default: the nearer edge */
   startX?: number
   leaving?: boolean
   onClick?: () => void
@@ -32,29 +33,33 @@ interface Props {
 
 export function CampHiker({ session, x, place, width, chore, selected, startX, leaving = false, onClick }: Props): React.JSX.Element {
   const look = useMemo(() => lookFor(session.terminalId, session.provider), [session.terminalId, session.provider])
+  const reduced = useReducedMotion()
   const [initialX] = useState(() => startX ?? offstage(x, width))
   const shown = useRef(initialX)
   const [shownX, setShownX] = useState(initialX)
-  const [walking, setWalking] = useState(true)
+  // Reduced motion: no walk pose (the move itself is instant, campsite.css)
+  const [walking, setWalking] = useState(() => !reduced && initialX !== x)
   const [facingLeft, setFacingLeft] = useState(x < initialX)
-  // Any move is a walk; the next frame, so the transition runs from where it stands
+  // Any move is a walk, set two frames on so the start position has been painted and the transition runs from it
   useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      const from = shown.current
-      if (from === x) return
-      shown.current = x
-      setFacingLeft(x < from)
-      setWalking(true)
-      setShownX(x)
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        const from = shown.current
+        if (from === x) return
+        shown.current = x
+        setFacingLeft(x < from)
+        if (!reduced) setWalking(true)
+        setShownX(x)
+      })
     })
     return () => cancelAnimationFrame(raf)
-  }, [x])
+  }, [x, reduced])
   useEffect(() => {
     if (!walking) return
     const timer = setTimeout(() => setWalking(false), WALK_MS)
     return () => clearTimeout(timer)
   }, [walking, shownX])
-  const stance = walking || leaving ? WALK : stanceFor(session, chore)
+  const stance = walking || (leaving && !reduced) ? WALK : stanceFor(session, chore)
   const inside = place === 'inside'
   return (
     <button

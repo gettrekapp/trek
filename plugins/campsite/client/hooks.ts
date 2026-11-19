@@ -1,8 +1,9 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
-// prefs, the document's visibility and an element's width.
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+// prefs, the document's visibility, reduced motion and an element's width.
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
-import { DEFAULT_PREFS, readPrefs, type CampsitePrefKey, type CampsitePrefs } from '../shared/prefs.ts'
+import type { CampsitePrefKey } from '../shared/prefs.ts'
+import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
 
 export function useSessions(host: ClientPluginHost): readonly PluginSession[] {
   return useSyncExternalStore(host.onSessionsChanged, host.sessions)
@@ -23,10 +24,14 @@ const ticks = new Set<() => void>()
 let timer: ReturnType<typeof setInterval> | null = null
 function subscribeClock(listener: () => void): () => void {
   ticks.add(listener)
-  timer ??= setInterval(() => {
+  if (!timer) {
+    // The clock may have been stopped a while
     now = Date.now()
-    for (const l of ticks) l()
-  }, TICK_MS)
+    timer = setInterval(() => {
+      now = Date.now()
+      for (const l of ticks) l()
+    }, TICK_MS)
+  }
   return () => {
     ticks.delete(listener)
     if (ticks.size === 0 && timer) {
@@ -39,40 +44,10 @@ export function useNow(): number {
   return useSyncExternalStore(subscribeClock, () => now)
 }
 
-export function usePrefs(host: ClientPluginHost): [CampsitePrefs, (key: CampsitePrefKey, value: boolean) => void] {
-  const [prefs, setPrefs] = useState<CampsitePrefs>(DEFAULT_PREFS)
-  useEffect(() => {
-    let live = true
-    host.prefs.load().then(
-      (raw) => {
-        if (live) setPrefs(readPrefs(raw))
-      },
-      (err) => console.warn('Campsite preferences could not be read', err)
-    )
-    const off = host.prefs.onChange((raw) => setPrefs(readPrefs(raw)))
-    return () => {
-      live = false
-      off()
-    }
-  }, [host])
-  const set = useCallback(
-    (key: CampsitePrefKey, value: boolean) => {
-      setPrefs((p) => ({ ...p, [key]: value }))
-      host.prefs.set(key, value).then(
-        (raw) => setPrefs(readPrefs(raw)),
-        (err) => {
-          console.warn('Campsite preference could not be saved', err)
-          // Back to what is stored
-          host.prefs.load().then(
-            (raw) => setPrefs(readPrefs(raw)),
-            () => {}
-          )
-        }
-      )
-    },
-    [host]
-  )
-  return [prefs, set]
+/** The plugin's prefs, shared by every component (one load, one change feed); `loaded` false until they are read */
+export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, (key: CampsitePrefKey, value: boolean) => void] {
+  const store = prefsStore(host)
+  return [useSyncExternalStore(store.subscribe, store.snapshot), store.set]
 }
 
 function subscribeVisibility(listener: () => void): () => void {
@@ -81,6 +56,16 @@ function subscribeVisibility(listener: () => void): () => void {
 }
 export function useDocumentHidden(): boolean {
   return useSyncExternalStore(subscribeVisibility, () => document.hidden)
+}
+
+const REDUCED = '(prefers-reduced-motion: reduce)'
+function subscribeReducedMotion(listener: () => void): () => void {
+  const query = window.matchMedia(REDUCED)
+  query.addEventListener('change', listener)
+  return () => query.removeEventListener('change', listener)
+}
+export function useReducedMotion(): boolean {
+  return useSyncExternalStore(subscribeReducedMotion, () => window.matchMedia(REDUCED).matches)
 }
 
 /**

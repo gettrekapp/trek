@@ -9,12 +9,12 @@ import { useNow, usePrefs, useSession } from './hooks.ts'
 
 export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX.Element | null {
   const host = usePluginHost()
-  const [prefs] = usePrefs(host)
+  const [{ loaded, prefs }] = usePrefs(host)
   const session = useSession(host, terminalId)
   const now = useNow()
   const provider = session?.provider ?? 'claude'
   const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
-  if (!prefs.showTerminalHiker || !session) return null
+  if (!loaded || !prefs.showTerminalHiker || !session) return null
   const stance = stanceFor(session, choreFor(terminalId, now))
   return (
     <div className="cs-terminal-hiker">

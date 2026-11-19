@@ -2,7 +2,7 @@
 // (right, left, …), Global on a log, waiting hikers at the fire, grouped mode when it is crowded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_SPREAD, campLayout, signText, tentBadge } from '../plugins/campsite/shared/layout.ts'
+import { MAX_SPREAD, campLayout, popoverLeft, signText, tentBadge } from '../plugins/campsite/shared/layout.ts'
 
 let n = 0
 const s = (worktreeId, over = {}) => ({ terminalId: `t${++n}`, label: 'Claude', provider: 'claude', status: 'working', decision: false, worktreeId, worktreeName: worktreeId, branch: worktreeId && `b/${worktreeId}`, ...over })
@@ -107,4 +107,11 @@ test('width 0 or less (not measured yet): an empty layout', () => {
   for (const w of [0, -5]) {
     assert.deepEqual(campLayout([s('w1'), s(null)], w), { width: w, fireX: 0, grouped: false, tents: [], log: null, hikers: [], moreTents: 0, moreWaiting: 0 })
   }
+})
+
+test('popoverLeft: at its badge, kept 8 px inside the window', () => {
+  assert.equal(popoverLeft(300, 200, 1000), 300)
+  assert.equal(popoverLeft(900, 200, 1000), 792)
+  assert.equal(popoverLeft(2, 200, 1000), 8)
+  assert.equal(popoverLeft(50, 400, 300), 8, 'a window narrower than the popover: its left edge')
 })

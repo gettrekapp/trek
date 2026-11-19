@@ -196,10 +196,11 @@
   border-color: #ffb020;
   color: #ffb020;
 }
+/* A child of .campsite (no z-index), placed from its badge's rect when it opens */
 .cs-tent-popover {
   position: fixed;
   transform: translateY(-100%);
-  margin-top: -20px;
+  max-width: calc(100vw - 16px);
   background: #1d2433;
   border: 1px solid #3a4356;
   display: flex;
@@ -214,6 +215,9 @@
   padding: 4px 10px;
   cursor: pointer;
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cs-tent-popover button:hover {
   background: #2a3346;
@@ -264,14 +268,15 @@
 }
 .cs-more {
   right: 12px;
+  z-index: 3;
+  padding: 0 4px;
+  background: rgba(18, 23, 38, 0.85);
 }
 /* Waiting hikers the fire has no room for: just above it */
 .cs-more-waiting {
   right: auto;
   transform: translateX(-50%);
-  background: none;
   border: none;
-  padding: 0 2px;
   color: #ffb020;
   cursor: pointer;
   white-space: nowrap;
@@ -281,4 +286,13 @@
   left: 50%;
   transform: translateX(-50%);
   bottom: 44px;
+}
+
+.cs-chevron:focus-visible,
+.cs-tent-badge:focus-visible,
+.cs-waiting-chip:focus-visible,
+.cs-more-waiting:focus-visible,
+.cs-tent-popover button:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 1px;
 }

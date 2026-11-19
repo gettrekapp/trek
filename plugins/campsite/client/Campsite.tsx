@@ -8,22 +8,32 @@ import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
 import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
-import { Tent } from './Tent.tsx'
+import { Tent, TentPopover, type OpenTent } from './Tent.tsx'
 
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
-  const [prefs, setPref] = usePrefs(host)
+  const [{ loaded, prefs }, setPref] = usePrefs(host)
   const sessions = useSessions(host)
   const selected = useSelected(host)
   const now = useNow()
   const hidden = useDocumentHidden()
   const [ref, width] = useWidth<HTMLDivElement>()
-  const [openTent, setOpenTent] = useState<string | null>(null)
+  const [openTent, setOpenTent] = useState<OpenTent | null>(null)
+  const badge = useRef<HTMLButtonElement | null>(null)
   const layout = useMemo(() => campLayout(sessions, width), [sessions, width])
   const departing = useDepartures(sessions, layout.hikers, width)
-  const closeTent = useCallback(() => setOpenTent(null), [])
+  const known = useKnownSessions(sessions, width)
+  const closeTent = useCallback((refocus: boolean) => {
+    setOpenTent(null)
+    if (refocus) badge.current?.focus()
+  }, [])
   useCloseOnOutside(openTent !== null, closeTent)
-  if (!prefs.showCampsite) return null
+  // Out of grouped mode, or its tent gone: nothing to show
+  const openGone = openTent !== null && (!layout.grouped || !layout.tents.some((t) => t.worktreeId === openTent.worktreeId))
+  useEffect(() => {
+    if (openGone) setOpenTent(null)
+  }, [openGone])
+  if (!loaded || !prefs.showCampsite) return null
 
   if (prefs.campsiteCollapsed) {
     return (
@@ -32,7 +42,7 @@ export function Campsite(): React.JSX.Element | null {
           ▴
         </button>
         {sessions.filter(isWaiting).map((s) => (
-          <button key={s.terminalId} className="cs-waiting-chip" title={hikerLabel(s)} onClick={() => host.focusSession(s.terminalId)}>
+          <button key={s.terminalId} className="cs-waiting-chip" title={hikerLabel(s)} aria-label={hikerLabel(s)} onClick={() => host.focusSession(s.terminalId)}>
             !
           </button>
         ))}
@@ -43,6 +53,7 @@ export function Campsite(): React.JSX.Element | null {
   const byId = new Map(sessions.map((s) => [s.terminalId, s]))
   const spotted = new Set(layout.hikers.map((h) => h.terminalId))
   const unspottedWaiting = layout.moreWaiting > 0 ? sessions.find((s) => isWaiting(s) && !spotted.has(s.terminalId)) : undefined
+  const popTent = openTent && !openGone ? layout.tents.find((t) => t.worktreeId === openTent.worktreeId) : undefined
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       <CampScene />
@@ -73,15 +84,26 @@ export function Campsite(): React.JSX.Element | null {
               key={t.worktreeId}
               tent={t}
               grouped={layout.grouped}
-              open={openTent === t.worktreeId}
-              onToggle={() => setOpenTent((o) => (o === t.worktreeId ? null : t.worktreeId))}
-              members={sessions.filter((s) => s.worktreeId === t.worktreeId)}
+              open={openTent?.worktreeId === t.worktreeId}
+              onToggle={(el) => {
+                badge.current = el
+                const r = el.getBoundingClientRect()
+                setOpenTent((o) => (o?.worktreeId === t.worktreeId ? null : { worktreeId: t.worktreeId, left: r.left, top: r.top }))
+              }}
+            />
+          ))}
+          {popTent && openTent && (
+            <TentPopover
+              key={popTent.worktreeId}
+              at={openTent}
+              name={popTent.name}
+              members={sessions.filter((s) => s.worktreeId === popTent.worktreeId)}
               onPick={(id) => {
                 setOpenTent(null)
                 host.focusSession(id)
               }}
             />
-          ))}
+          )}
           {layout.moreTents > 0 && <span className="cs-more">+{layout.moreTents} more camps</span>}
           {layout.hikers.map((h) => {
             const s = byId.get(h.terminalId)
@@ -91,6 +113,8 @@ export function Campsite(): React.JSX.Element | null {
                 key={h.terminalId}
                 session={s}
                 x={h.x}
+                // Already at camp: appears in place; new since the strip first laid out: walks in
+                startX={known(h.terminalId) ? h.x : undefined}
                 place={h.place}
                 width={width}
                 chore={choreFor(s.terminalId, now)}
@@ -100,7 +124,7 @@ export function Campsite(): React.JSX.Element | null {
             )
           })}
           {departing.map((d) => (
-            <CampHiker key={`gone:${d.session.terminalId}`} session={d.session} x={d.x} startX={d.from} place="tent" width={width} chore="map" selected={false} leaving />
+            <CampHiker key={`gone:${d.seq}`} session={d.session} x={d.x} startX={d.from} place="tent" width={width} chore="map" selected={false} leaving />
           ))}
           {sessions.length === 0 && <span className="cs-empty">No one&apos;s at camp yet</span>}
         </>
@@ -109,14 +133,35 @@ export function Campsite(): React.JSX.Element | null {
   )
 }
 
+/**
+ * Whether a session was already there: at the strip's first measured layout, or any render since
+ * (collapsed or hidden too). Those appear in place when the strip mounts, expands or leaves grouped
+ * mode; only sessions new since walk in.
+ */
+function useKnownSessions(sessions: readonly PluginSession[], width: number): (terminalId: string) => boolean {
+  const seen = useRef<Set<string> | null>(null)
+  const measured = width > 0 || seen.current !== null
+  useEffect(() => {
+    if (!measured) return
+    seen.current ??= new Set()
+    for (const s of sessions) seen.current.add(s.terminalId)
+  }, [sessions, measured])
+  // Before the first measured layout has committed, everyone counts as already there
+  return (id) => seen.current === null || seen.current.has(id)
+}
+
 /** A closed session's hiker, walking off to the nearer edge for WALK_MS */
 interface Departure {
+  /** Unique per departure (a key) */
+  seq: number
   session: PluginSession
   /** Where it stood */
   from: number
   /** The edge it walks to */
   x: number
 }
+
+let departures = 0
 
 function useDepartures(sessions: readonly PluginSession[], spots: readonly CampHikerSpot[], width: number): Departure[] {
   const last = useRef(new Map<string, { session: PluginSession; x: number }>())
@@ -130,13 +175,20 @@ function useDepartures(sessions: readonly PluginSession[], spots: readonly CampH
       const s = byId.get(h.terminalId)
       if (s) current.set(h.terminalId, { session: s, x: h.x })
     }
-    const gone = [...last.current.values()].filter((p) => !byId.has(p.session.terminalId)).map((p) => ({ session: p.session, from: p.x, x: offstage(p.x, width) }))
+    const gone: Departure[] = [...last.current.values()]
+      .filter((p) => !byId.has(p.session.terminalId))
+      .map((p) => ({ seq: ++departures, session: p.session, from: p.x, x: offstage(p.x, width) }))
     last.current = current
+    // A session back under the same id is at camp again, not leaving
+    setDeparting((d) => {
+      const kept = d.filter((x) => !byId.has(x.session.terminalId))
+      return gone.length === 0 && kept.length === d.length ? d : [...kept, ...gone]
+    })
     if (gone.length === 0) return
-    setDeparting((d) => [...d, ...gone])
+    const ids = new Set(gone.map((g) => g.seq))
     const timer = setTimeout(() => {
       timers.current.delete(timer)
-      setDeparting((d) => d.filter((x) => !gone.includes(x)))
+      setDeparting((d) => d.filter((x) => !ids.has(x.seq)))
     }, WALK_MS)
     timers.current.add(timer)
   }, [sessions, spots, width])
@@ -150,21 +202,24 @@ function useDepartures(sessions: readonly PluginSession[], spots: readonly CampH
   return departing
 }
 
-/** While `open`, a press outside any tent or Escape calls `close` */
-function useCloseOnOutside(open: boolean, close: () => void): void {
+/** While `open`: a press outside the tents and their popover, or a window resize, closes; Escape closes and refocuses the badge */
+function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): void {
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent): void => {
-      if (!(e.target instanceof Element) || !e.target.closest('.cs-tent')) close()
+      if (!(e.target instanceof Element) || !e.target.closest('.cs-tent, .cs-tent-popover')) close(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close()
+      if (e.key === 'Escape') close(true)
     }
+    const onResize = (): void => close(false)
     document.addEventListener('pointerdown', onDown)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('pointerdown', onDown)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onResize)
     }
   }, [open, close])
 }

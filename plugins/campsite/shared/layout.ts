@@ -143,3 +143,9 @@ export function signText(branch: string): string {
   const name = branch.split('/').pop() ?? branch
   return name.length > SIGN_MAX ? `${name.slice(0, SIGN_MAX - 1)}…` : name
 }
+
+const EDGE = 8
+/** A tent's popover's left (px, window coordinates): at its badge, kept EDGE px inside the window */
+export function popoverLeft(anchorLeft: number, popoverWidth: number, viewportWidth: number): number {
+  return Math.max(EDGE, Math.min(anchorLeft, viewportWidth - popoverWidth - EDGE))
+}
