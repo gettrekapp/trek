@@ -305,3 +305,21 @@ test("an import whose env plugin copy has no old field (an older Trek cleared it
   assert.deepEqual([out.repositories[0].pluginSettings, out.repositories[0].environments], [{ env: { later: 'x' } }, undefined])
   assert.deepEqual(out.repositories[0].branchData.main, { note: 'n' })
 })
+
+test('envFieldsRetired (plugins E3) travels with an import: only true is kept, and with it a plugin copy without the old field stands', (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.envFieldsRetired = true
+  p.repositories[0].pluginSettings = { env: { enabled: true, cpu: 2 } }
+  p.repositories[0].branchData.main.pluginSettings = { env: { env: 'A=1' } }
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })
+  assert.equal(out.envFieldsRetired, true)
+  assert.deepEqual([out.repositories[0].pluginSettings, out.repositories[0].environments], [{ env: { enabled: true, cpu: 2 } }, { enabled: true, cpu: 2 }])
+  assert.deepEqual(out.repositories[0].branchData.main, { note: 'n', pluginSettings: { env: { env: 'A=1' } }, env: 'A=1' })
+  const plain = project()
+  plain.envFieldsRetired = 'yes'
+  plain.repositories[0].pluginSettings = { env: { enabled: true } }
+  const dropped = checkImport(plain, { registry, guard, existingIds: new Set(), projectId: 'new-id-2' })
+  assert.equal('envFieldsRetired' in dropped, false)
+  assert.equal(dropped.repositories[0].pluginSettings, undefined, "without it, E2's rule: a copy without the old field was cleared by an older Trek")
+})

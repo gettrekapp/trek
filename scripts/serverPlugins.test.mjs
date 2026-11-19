@@ -838,6 +838,71 @@ test('repo.setPluginSettings and branch.setPluginSettings (plugins E1): checked 
   assert.equal(repo().branchData.feat, undefined, 'an emptied branch entry goes')
 })
 
+test("repo.setPluginSettings and branch.setPluginSettings (plugins E3): `expected` is a compare-and-set on the plugin's own values", async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  const repoId = projects.require(projectId).repositories[0].id
+  const envy = { manifest: manifest('envy', { repoSettings: { enabled: 'boolean', cpu: 'number' }, branchSettings: { env: 'text' } }), setup: () => ({ handlers: {} }) }
+  const other = { manifest: manifest('other', { repoSettings: { on: 'boolean' } }), setup: () => ({ handlers: {} }) }
+  const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-expected-'))
+  t.after(() => removeDir(dir))
+  const registry = createPluginRegistry({ plugins: [envy, other], secretsFile: join(dir, 'secrets.json'), dataDir: join(dir, 'data'), hub, projects, isCoreMethod, coreToolNames: [], warn: () => {} })
+  const call = (method, params) => dispatchV2(method, { projectId, repoId, ...params }, { projects, hub, plugins: registry })
+  const repo = () => projects.require(projectId).repositories[0]
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'envy', values: { enabled: true }, expected: null })).ok, true, 'null: none stored yet')
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'other', values: { on: true }, expected: null })).ok, true, "another plugin's values are not this one's")
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'envy', values: { enabled: true, cpu: 2 }, expected: { enabled: true } })).ok, true)
+  const stale = await call('repo.setPluginSettings', { pluginId: 'envy', values: { enabled: false }, expected: { enabled: true } })
+  assert.deepEqual([stale.error?.code, stale.error?.message], ['CONFLICT', 'pluginSettings.envy changed since you read it'])
+  assert.deepEqual(repo().pluginSettings, { envy: { enabled: true, cpu: 2 }, other: { on: true } }, 'nothing written')
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'envy', values: { cpu: 3 } })).ok, true, 'no expected: no check, as before')
+  assert.equal((await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'A=1' }, expected: null })).ok, true)
+  assert.equal((await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: { env: 'B=2' }, expected: null })).error?.code, 'CONFLICT')
+  assert.equal((await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'envy', values: {}, expected: { env: 'A=1' } })).ok, true)
+  assert.equal(repo().branchData.feat, undefined, 'cleared, and the emptied entry goes')
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'envy', values: {}, expected: 'x' })).error?.code, 'BAD_REQUEST')
+  await registry.dispose()
+})
+
+test("`expected` on the env plugin (plugins E3): its settings and their old names guard each other, whichever method wrote them", async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const projectId = projects.create('P', [{ registered: { id: 'a', name: 'app', path: '/r/app' }, name: undefined }])
+  const repoId = projects.require(projectId).repositories[0].id
+  const env = { manifest: manifest('env', { repoSettings: { enabled: 'boolean', cpu: 'number', later: 'string' }, branchSettings: { env: 'text' } }), setup: () => ({ handlers: {} }) }
+  const dir = mkdtempSync(join(tmpdir(), 'trek-plugin-expected-env-'))
+  t.after(() => removeDir(dir))
+  const registry = createPluginRegistry({ plugins: [env], secretsFile: join(dir, 'secrets.json'), dataDir: join(dir, 'data'), hub, projects, isCoreMethod, coreToolNames: [], warn: () => {} })
+  const call = (method, params) => dispatchV2(method, { projectId, repoId, ...params }, { projects, hub, plugins: registry })
+  const repo = () => projects.require(projectId).repositories[0]
+  assert.equal((await call('repo.update', { environments: { enabled: true, cpu: 2 }, expected: { environments: null } })).ok, true)
+  // The old name's write is the plugin's: its values as read are what the plugin's expected names.
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'env', values: { enabled: true, cpu: 4 }, expected: { enabled: true, cpu: 2 } })).ok, true)
+  // ... and the plugin's write changed the old name: a client that read it before is stale.
+  const staleOld = await call('repo.update', { environments: { enabled: false }, expected: { environments: { enabled: true, cpu: 2 } } })
+  assert.deepEqual([staleOld.error?.code, staleOld.error?.message], ['CONFLICT', 'environments changed since you read it'])
+  assert.equal((await call('repo.update', { environments: { enabled: false }, expected: { environments: { enabled: true, cpu: 4 } } })).ok, true)
+  const stalePlugin = await call('repo.setPluginSettings', { pluginId: 'env', values: { enabled: true }, expected: { enabled: true, cpu: 4 } })
+  assert.deepEqual([stalePlugin.error?.code, stalePlugin.error?.message], ['CONFLICT', 'pluginSettings.env changed since you read it'])
+  // A plugin-only value the old name can't hold: the old name is unchanged, and repo.update keeps it.
+  assert.equal((await call('repo.setPluginSettings', { pluginId: 'env', values: { enabled: false, later: 'x' }, expected: { enabled: false } })).ok, true)
+  assert.equal((await call('repo.update', { environments: { enabled: true }, expected: { environments: { enabled: false } } })).ok, true)
+  assert.deepEqual([repo().pluginSettings, repo().environments], [{ env: { later: 'x', enabled: true } }, { enabled: true }])
+
+  assert.equal((await call('branch.setEnv', { branch: 'feat', env: 'A=1', expected: null })).ok, true)
+  assert.equal((await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'env', values: { env: 'B=2' }, expected: { env: 'A=1' } })).ok, true)
+  assert.equal((await call('branch.setEnv', { branch: 'feat', env: 'C=3', expected: 'A=1' })).error?.code, 'CONFLICT')
+  assert.equal((await call('branch.setEnv', { branch: 'feat', env: 'C=3', expected: 'B=2' })).ok, true)
+  assert.equal((await call('branch.setPluginSettings', { branch: 'feat', pluginId: 'env', values: {}, expected: { env: 'B=2' } })).error?.code, 'CONFLICT')
+  assert.deepEqual(repo().branchData.feat, { pluginSettings: { env: { env: 'C=3' } }, env: 'C=3' })
+  await registry.dispose()
+})
+
 test('a plugin settings write (plugins E1) that would leave the map unmovable (over 1 MB in all) is refused, and nothing changes', async (t) => {
   const { ProjectState } = await import('../server/src/projects/state.ts')
   const { TopicHub } = await import('../server/src/topicHub.ts')

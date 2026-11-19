@@ -189,7 +189,11 @@ function setBranchField<K extends keyof BranchData>(
  * `project.import` and `move.receive` keep its values by shape (pluginSettingsShapeProblem), so
  * nothing is lost when the project moves to a server where it runs.
  */
-function pluginSettingsOf(ctx: V2Context, p: any, scope: 'repo' | 'branch'): { pluginId: string; values: PluginSettingValues } {
+function pluginSettingsOf(
+  ctx: V2Context,
+  p: any,
+  scope: 'repo' | 'branch'
+): { pluginId: string; values: PluginSettingValues; expected: Record<string, unknown> | null | undefined } {
   const pluginId = requireString(p.pluginId, 'pluginId')
   const fields = ctx.plugins?.settingFields(pluginId, scope)
   if (!fields) throw codedError('BAD_REQUEST', `no plugin ${JSON.stringify(pluginId)} on this server has ${scope} settings`)
@@ -198,7 +202,19 @@ function pluginSettingsOf(ctx: V2Context, p: any, scope: 'repo' | 'branch'): { p
   assertNoProtoKeys(values, 'values')
   const problem = pluginValuesProblem(fields, values)
   if (problem) throw codedError('BAD_REQUEST', `values.${problem}`)
-  return { pluginId, values: values as PluginSettingValues }
+  // `expected` (plugins E3): absent, no check; null, none stored; else the plugin's values as read.
+  const expected = p.expected === undefined || p.expected === null ? p.expected : requireRecord(p.expected, 'expected')
+  return { pluginId, values: values as PluginSettingValues, expected }
+}
+
+/**
+ * A plugin's own entry in a stored pluginSettings map (an own key only), for `expected` (plugins E3).
+ * For `env` this is the plugin's copy, not its old name: every write to either keeps the mirror made
+ * from it (legacyEnv.ts), so a change the old name shows changes this entry too, and a change only
+ * this entry shows (a plugin-only key) is one repo.update keeps.
+ */
+function ownPluginValues(map: Record<string, PluginSettingValues> | undefined, pluginId: string): PluginSettingValues | undefined {
+  return map && Object.hasOwn(map, pluginId) ? map[pluginId] : undefined
 }
 
 /**
@@ -385,10 +401,12 @@ const handlers: Record<string, Handler> = {
   },
 
   // A plugin's per-repository settings (plugins E1): `values` replaces the plugin's own; {} clears them.
+  // `expected` (plugins E3): a compare-and-set on the plugin's own values.
   'repo.setPluginSettings': (p, ctx) => {
-    const { pluginId, values } = pluginSettingsOf(ctx, p, 'repo')
+    const { pluginId, values, expected } = pluginSettingsOf(ctx, p, 'repo')
     ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
+      checkExpected(`pluginSettings.${pluginId}`, ownPluginValues(repo.pluginSettings, pluginId), expected)
       const next = withPluginValues(repo.pluginSettings, pluginId, values)
       if (next) repo.pluginSettings = next
       else delete repo.pluginSettings
@@ -460,13 +478,14 @@ const handlers: Record<string, Handler> = {
     return null
   },
   // A plugin's per-branch settings (plugins E1), kept with the branch's data: they outlive the worktree and move with it.
-  // No history is recorded, as for setEnv.
+  // No history is recorded, as for setEnv. `expected` (plugins E3): a compare-and-set on the plugin's own values.
   'branch.setPluginSettings': (p, ctx) => {
-    const { pluginId, values } = pluginSettingsOf(ctx, p, 'branch')
+    const { pluginId, values, expected } = pluginSettingsOf(ctx, p, 'branch')
     const branch = requireBranch(p.branch)
     ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      checkExpected(`pluginSettings.${pluginId}`, ownPluginValues(data.pluginSettings, pluginId), expected)
       const next = withPluginValues(data.pluginSettings, pluginId, values)
       if (next) data.pluginSettings = next
       else delete data.pluginSettings

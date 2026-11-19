@@ -133,9 +133,12 @@ export function checkImport(raw: unknown, ctx: ImportContext): Project {
   const used = new Set<string>()
   const repositories = raw.repositories.map((r, i) => checkRepository(r, `project.repositories[${i}]`, ctx, seen, used))
   const globalSessions = raw.globalSessions.map((s, i) => checkSession(s, `project.globalSessions[${i}]`, seen, ctx.existingIds))
+  // E3's switch (Project.envFieldsRetired) travels with the project, as a load and a move keep it:
+  // only `true` is kept. With it a plugin copy without its old field stands (legacyEnv.ts).
+  const retired = raw.envFieldsRetired === true ? { envFieldsRetired: true } : {}
   // An older Trek's environments and .env (the file's, the importer's profileKey) become the env
   // plugin's settings (plugins E2), held to the same caps as the plugin settings checked above.
-  const project = migrateProjectEnv(structuredClone({ id: ctx.projectId, name, settings, repositories, globalSessions }), (where, problem) => {
+  const project = migrateProjectEnv(structuredClone({ id: ctx.projectId, name, settings, repositories, globalSessions, ...retired }), (where, problem) => {
     throw bad(`project.${where} ${problem}`)
   })
   return resetRuntime(project)

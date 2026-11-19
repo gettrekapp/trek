@@ -384,6 +384,15 @@ Since plugins E2, `repo.update`'s `environments` and `branch.setEnv` write the `
 project imported (`project.import`) or moved in (`move.receive`) that carries the old fields has them
 taken into the plugin's settings.
 
+`repo.setPluginSettings`/`branch.setPluginSettings` for `env` compare `expected` with the plugin's own
+values, and `repo.update`/`branch.setEnv` with the mirror. Since every write keeps the mirror made from
+the plugin's values, a write through either method is a `CONFLICT` for a stale `expected` on the other;
+the one change the mirror doesn't show, a plugin-only value, is one `repo.update` keeps.
+
+`project.import` keeps a project's `envFieldsRetired` when it is `true` (plugins E3), as a load and
+`move.receive` read it: with it, a plugin copy without its old field stands and the old field is
+made from it. No server sets it yet.
+
 `repo.remove` refuses to remove a project's last repository (`BAD_REQUEST`) and
 drops that repository's `worktreeOrder` entries. On a server with
 `worktreeTeardown` it is also refused (`BAD_REQUEST`, with the reason) while a
@@ -1112,8 +1121,8 @@ nothing is lost when the project reaches a server where it runs.
 
 | Method | Params | Result |
 |---|---|---|
-| `repo.setPluginSettings` | `{projectId, repoId, pluginId, values}` | `null`: `values` replaces the plugin's settings for the repository; `{}` clears them. `BAD_REQUEST` when no plugin of that id set up on the server declares repository settings, when `values` is not an object, or for a field it doesn't declare or a value of another kind |
-| `branch.setPluginSettings` | `{projectId, repoId, branch, pluginId, values}` | `null`: the same for the branch (its `branchSettings`); an emptied branch entry is removed |
+| `repo.setPluginSettings` | `{projectId, repoId, pluginId, values, expected?}` | `null`: `values` replaces the plugin's settings for the repository; `{}` clears them. `expected` (plugins E3): the plugin's values as the client read them (`null`: none); `CONFLICT` (`pluginSettings.<pluginId> changed since you read it`) when they changed, absent no check. `BAD_REQUEST` when no plugin of that id set up on the server declares repository settings, when `values` (or a non-null `expected`) is not an object, or for a field it doesn't declare or a value of another kind |
+| `branch.setPluginSettings` | `{projectId, repoId, branch, pluginId, values, expected?}` | `null`: the same for the branch (its `branchSettings`, `expected` compared with the branch's values); an emptied branch entry is removed |
 
 **Ticket trackers** (phase 2). A branch's ticket (`branchData.ticket`) is an id the project's
 trackers read: each is a plugin's ticket provider (its ids and URLs, the chip's label, the link

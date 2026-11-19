@@ -407,8 +407,11 @@ export interface MethodParamsV2 {
       environments?: EnvironmentSettings | null
     }
   }
-  /** A plugin's per-repository settings (plugins E1): `values` (its manifest's `repoSettings`) replaces the plugin's; `{}` clears them */
-  'repo.setPluginSettings': RepoRef & { pluginId: string; values: PluginSettingValues }
+  /**
+   * A plugin's per-repository settings (plugins E1): `values` (its manifest's `repoSettings`) replaces the plugin's; `{}` clears them.
+   * `expected` (plugins E3): the plugin's values as read (null: none); CONFLICT when they changed
+   */
+  'repo.setPluginSettings': RepoRef & { pluginId: string; values: PluginSettingValues; expected?: PluginSettingValues | null }
   'repo.listBranches': RepoRef
   // Worktrees
   /**
@@ -530,8 +533,11 @@ export interface MethodParamsV2 {
   /** Clears the worktree's pull request notice */
   'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
-  /** A plugin's per-branch settings (plugins E1): `values` (its manifest's `branchSettings`) replaces the plugin's; `{}` clears them */
-  'branch.setPluginSettings': BranchRef & { pluginId: string; values: PluginSettingValues }
+  /**
+   * A plugin's per-branch settings (plugins E1): `values` (its manifest's `branchSettings`) replaces the plugin's; `{}` clears them.
+   * `expected` (plugins E3): the plugin's values for the branch as read (null: none); CONFLICT when they changed
+   */
+  'branch.setPluginSettings': BranchRef & { pluginId: string; values: PluginSettingValues; expected?: PluginSettingValues | null }
   // The Changes tab's review (5c-2): the draft is the worktree's `review` in the project topic
   /** A new line comment; `lineText` is the line as shown, without the diff's +, - or space */
   'review.add': WorktreeRef & {
