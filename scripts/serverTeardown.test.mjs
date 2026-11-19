@@ -338,7 +338,7 @@ test('the core participants say whether their stack or VM is running (plugins E1
   assert.deepEqual((await stackOf({ ...stack, containers: 0, upRunning: true }).plan(target, 'move')).map((i) => i.running), [true])
   const { deriveProfileName, envRepoKey } = await import('../src/shared/environments.ts')
   const profile = deriveProfileName(envRepoKey(target.repo), 'feat')
-  const envOf = (vmState) => envParticipant(ctx, { env: { list: async () => [{ profile, vmState, worktreePath: target.worktree.path }] } })
+  const envOf = (vmState) => envParticipant(ctx, { env: { known: async (p) => p === profile, list: async () => [{ profile, vmState, worktreePath: target.worktree.path }] } })
   assert.deepEqual((await envOf('running').plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', true]])
   for (const state of ['stopped', 'missing']) assert.deepEqual((await envOf(state).plan(target, 'move')).map((i) => [i.id, i.running]), [['destroy', undefined]], state)
 })

@@ -592,6 +592,14 @@ test('worktree.teardownPlan (plugins E1): the dev stack once it has run and the 
   refused(await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: 'nope', op: 'remove' }), 'NOT_FOUND')
 })
 
+test('worktree.teardownPlan: a branch the environments registry has no VM for runs no colima', { skip }, async (t) => {
+  const s = await setup(t)
+  const worktreeId = s.worktreeAt(s.feature).id
+  resetCalls()
+  assert.deepEqual((await s.call('worktree.teardownPlan', { projectId: s.projectId, worktreeId, op: 'remove' })).result.items, [])
+  assert.deepEqual(calls().filter((c) => c.startsWith('colima|')), [])
+})
+
 test('worktree.remove {teardown} (plugins E1): the chosen items, the stack then the VM, while the worktree is there; then git removes it', { skip }, async (t) => {
   const s = await setup(t)
   writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')

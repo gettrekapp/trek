@@ -61,7 +61,8 @@ export function envParticipant(ctx: Pick<V2Context, 'store' | 'events'>, machine
     id: 'env',
     plan: async ({ repo, worktree }) => {
       const profile = profileOf(repo, worktree)
-      if (!profile) return []
+      // Only a branch the registry has a VM for: no colima runs for every delete, promote or move.
+      if (!profile || !(await machine.env.known(profile))) return []
       const vm = (await vmsOf(machine, repo)).find((e) => e.profile === profile)
       return vm ? [{ id: 'destroy', label: vmLabel(profile), checked: true, ...(vm.vmState === 'running' ? { running: true } : {}) }] : []
     },
