@@ -3,6 +3,7 @@
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
 import type { PluginManifest } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
+import type { ParsedPr, PrProvider, PrView } from './pullRequests.ts'
 
 export { readBodyCapped, MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES } from '../../host/httpBody.ts'
 export { writeFileAtomic } from '../../host/atomicWrite.ts'
@@ -18,7 +19,7 @@ export interface KeySlot {
 export const PRESENT_ERROR = 'This server already has a key; it was kept'
 
 /** The wire error codes a plugin may throw; anything else reaches the client as TOOL_ERROR. */
-export type PluginErrorCode = 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'TOOL_ERROR'
+export type PluginErrorCode = 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'TOOL_ERROR' | 'NOT_SIGNED_IN'
 
 /** An error that reaches the client with `code` (as the server's own codedError). */
 export function pluginError(code: PluginErrorCode, message: string): Error {
@@ -45,6 +46,30 @@ export function optionalFlag(value: unknown, field: string): boolean {
   return value
 }
 
+export interface RunOptions {
+  /** Default 30 s, at most 120 s */
+  timeoutMs?: number
+  /** stdout past this fails the call; default 1 MiB, at most 16 MiB */
+  maxBytes?: number
+  signal?: AbortSignal
+  /** Added to the server's env */
+  env?: Record<string, string>
+}
+
+/** A pull request host's server half (plugins P3): what the core's watch, `pr.resolve` and the MCP tools ask it. */
+export interface PrServerProvider extends PrProvider {
+  /** Signed in and usable now (gh: `gh auth status`); never rejects */
+  available(signal?: AbortSignal): Promise<boolean>
+  /** The pull request now. Rejects on any failure; with `code: 'NOT_SIGNED_IN'` when the sign-in is the problem */
+  read(pr: ParsedPr, signal?: AbortSignal): Promise<PrView>
+  /** The PR's head branch; null when it can't be told */
+  headBranch(pr: ParsedPr, signal?: AbortSignal): Promise<string | null>
+  /** The ref `git fetch origin` takes for PR `n`'s head ('refs/pull/12/head') */
+  fetchRef(n: number): string
+  /** How an agent reads a PR's checks and comments itself, for the watch's prompt; `{url}` is replaced with the PR's link */
+  promptHint: { checks: string; comments: string }
+}
+
 export interface ServerPluginHost {
   readonly id: string
   /** A name its manifest lists in `secrets`; any other throws */
@@ -58,6 +83,10 @@ export interface ServerPluginHost {
   legacyDataFile(name: string): string
   /** A test endpoint from the server's environment (`envName`), taken only as http(s) on loopback */
   testEndpoint(envName: string): string | undefined
+  /** Runs a program (a bare name on PATH, or an absolute path) with no shell; resolves with stdout, rejects with stderr's first line (`code: 'ENOENT'` when it is not installed). Aborted by the plugin's dispose. */
+  run(command: string, args: readonly string[], options?: RunOptions): Promise<string>
+  /** A test stub from the server's environment: `fallback` when `envName` is unset, its value when it is an absolute path, null otherwise (fail closed) */
+  testCommand(envName: string, fallback: string): string | null
   /**
    * `<id>.<event>` to the project's subscribers (its open windows); the number reached. 0, sending
    * nothing, where the plugin is off for the project.
@@ -104,6 +133,8 @@ export interface PluginInstance {
   sessionPrompt?(projectId: string): string | undefined
   /** A ticket tracker (phase 2): `set_worktree_ticket` parses through it in the projects where the plugin is on */
   ticketProvider?: TicketProvider
+  /** A pull request host (plugins P3): the watch, `pr.resolve` and the PR tools go through it in the projects where the plugin is on */
+  prProvider?: PrServerProvider
   /** A value for one of the manifest's `projectSettings` keys (already the declared kind): its problem, or null */
   checkProjectSetting?(key: string, value: string): string | null
   dispose?(): void

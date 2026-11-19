@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import { PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
-import type { PluginHandler, PluginInstance, PluginMcpTool, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
 import { codedError } from '../errors.ts'
@@ -15,6 +15,7 @@ import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { createSecretFile } from '../secrets.ts'
 import { findSession } from '../sessions/locate.ts'
+import { commandFromEnv, runCommand } from './run.ts'
 import type { TopicHub } from '../topicHub'
 
 /** Namespaces a plugin may not take, beside those of the core methods. */
@@ -37,7 +38,7 @@ function fileIn(dir: string, name: string): string {
 }
 
 /** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. */
-const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR'])
+const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR', 'NOT_SIGNED_IN'])
 
 export interface PluginRegistryOptions {
   plugins: readonly ServerPlugin[]
@@ -71,6 +72,10 @@ export interface PluginRegistry {
   sessionPrompt(projectId: string): string | undefined
   /** The ticket providers of the plugins on in the project, in registration order (phase 2) */
   ticketProviders(projectId: string): TicketProvider[]
+  /** The PR providers of the plugins on in the project, in registration order (plugins P3) */
+  prProviders(projectId: string): PrServerProvider[]
+  /** Every registered plugin's PR provider, on in a project or not: the watch checks their sign-ins */
+  allPrProviders(): PrServerProvider[]
   /** The project settings the registered plugins own (phase 2), whether or not they are on in a project */
   readonly settingRules: PluginSettingRules
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
@@ -100,6 +105,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const toolOwners = new Map<string, string>()
   /** A plugin project setting's key → the plugin that owns it */
   const settingOwners = new Map<string, string>()
+  /** Each plugin's abort for its running programs (host.run): fired by dispose */
+  const aborts = new Map<string, AbortController>()
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -116,6 +123,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const hostFor = (manifest: PluginManifest): ServerPluginHost => {
     const dir = join(options.dataDir, 'plugins', manifest.id)
     const allowedSecrets = new Set(manifest.secrets ?? [])
+    const abort = new AbortController()
+    aborts.set(manifest.id, abort)
     return {
       id: manifest.id,
       secret: (name) => {
@@ -129,6 +138,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       },
       legacyDataFile: (name) => fileIn(options.dataDir, name),
       testEndpoint: (envName) => testEndpoint(envName, env[envName], warn),
+      run: (command, args, opts = {}) =>
+        runCommand(command, args, {
+          ...opts,
+          signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
+        }),
+      testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
       subscriberCount: (projectId) => options.hub.eventSubscriberCount(projectTopic(projectId)),
       isEnabled: (projectId) => enabled(projectId, manifest.id),
@@ -193,6 +208,11 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     }
     if (instance.ticketProvider && instance.ticketProvider.id !== manifest.id) {
       refuse(`its ticket provider's id ${JSON.stringify(instance.ticketProvider.id)} is not the plugin's id`)
+      instance.dispose?.()
+      continue
+    }
+    if (instance.prProvider && instance.prProvider.id !== manifest.id) {
+      refuse(`its pull request provider's id ${JSON.stringify(instance.prProvider.id)} is not the plugin's id`)
       instance.dispose?.()
       continue
     }
@@ -271,6 +291,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       return prompts.length > 0 ? prompts.join('\n\n') : undefined
     },
     ticketProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.ticketProvider ? [e.instance.ticketProvider] : [])),
+    prProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
+    allPrProviders: () => [...entries.values()].flatMap((e) => (e.instance.prProvider ? [e.instance.prProvider] : [])),
     settingRules,
     onChanged: (listener) => {
       changedListeners.push(listener)
@@ -280,6 +302,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       const disposing = [...entries.values()]
       entries.clear()
       changedListeners.length = 0
+      for (const a of aborts.values()) a.abort()
+      aborts.clear()
       for (const e of disposing) {
         try {
           e.instance.dispose?.()

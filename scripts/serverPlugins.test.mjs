@@ -429,3 +429,41 @@ test("project.import keeps a built-in plugin's setting when that plugin didn't l
   assert.doesNotMatch(err?.message ?? '', /linearWorkspace|azureDevOpsBaseUrl/)
   assert.throws(() => checkImport({ ...raw, settings: { notAKey: 'x' } }, ctx), /notAKey is not a project setting/)
 })
+
+test("prProviders: the PR providers of plugins on for the project; one whose id is not its plugin's is refused", (t) => {
+  const provider = (id) => ({ id, hint: 'h', signInName: 's', parse: () => null, owns: () => false, available: async () => true, read: async () => { throw new Error('x') }, headBranch: async () => null, fetchRef: (n) => `refs/pull/${n}/head`, promptHint: { checks: '', comments: '' } })
+  const { registry: reg, warnings } = setup(t, [
+    { manifest: manifest('hosta', { name: 'A' }), setup: () => ({ handlers: {}, prProvider: provider('hosta') }) },
+    { manifest: manifest('hostb', { name: 'B', defaultEnabled: false }), setup: () => ({ handlers: {}, prProvider: provider('hostb') }) },
+    { manifest: manifest('liar', { name: 'L' }), setup: () => ({ handlers: {}, prProvider: provider('other') }) }
+  ])
+  assert.deepEqual(reg.prProviders('p1').map((p) => p.id), ['hosta'])
+  assert.deepEqual(reg.allPrProviders().map((p) => p.id), ['hosta', 'hostb'])
+  assert.ok(warnings.some((w) => w.includes('liar') && w.includes('pull request provider')))
+})
+
+test("a plugin's NOT_SIGNED_IN reaches the wire as it is; host.run is aborted by dispose", async (t) => {
+  let host
+  const { registry: reg } = setup(t, [
+    {
+      manifest: manifest('hosta', { name: 'A' }),
+      setup: (h) => {
+        host = h
+        return { handlers: { check: () => { throw Object.assign(new Error('sign in'), { code: 'NOT_SIGNED_IN' }) } } }
+      }
+    }
+  ])
+  await assert.rejects(reg.handler('hosta.check')({ projectId: 'p1' }), (e) => e.code === 'NOT_SIGNED_IN')
+  const running = host.run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'])
+  reg.dispose()
+  await assert.rejects(running)
+})
+
+test('host.testCommand: the fallback when unset, an absolute path as it is, null otherwise', (t) => {
+  let host
+  const plugin = { manifest: manifest('hosta'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { warnings } = setup(t, [plugin])
+  assert.equal(host.testCommand('TREK_SERVER_NOPE', 'gh'), 'gh')
+  assert.equal(host.testCommand('TREK_SERVER_BAD_URL', 'gh'), null)
+  assert.ok(warnings.some((w) => w.includes('TREK_SERVER_BAD_URL')))
+})
