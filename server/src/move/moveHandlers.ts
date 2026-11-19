@@ -46,7 +46,9 @@ import { realOrResolved as real } from '../repos.ts'
 import { MAX_SESSIONS_PER_PROJECT, checkTitle } from '../sessions/limits.ts'
 import { isRecord, requireBranch, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
-import { checkBranchName, checkedOut, defaultWorktreePath, present } from '../worktreeHandlers.ts'
+import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
+import { holdWorktree, optionalTeardown, runTeardown } from '../teardown/teardown.ts'
+import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
 import { moveTransfers, type StagedHistories } from './transfers.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -467,30 +469,50 @@ export const moveHandlers: Record<string, Handler> = {
    * The last step, once the target has the worktree: the source's copy is removed (force) only if
    * its HEAD and uncommitted work are what was exported; otherwise CONFLICT and nothing changes.
    * Its PR watch ends (the target watches it now). `verifyOnly`: the same checks, nothing removed
-   * (the app asks before it tears the source's VM and dev stack down, the point of commitment).
+   * (an older app asks before it tears the source's VM and dev stack down, the point of commitment).
+   * `teardown` (plugins E1): ids from the plan (`op: 'move'`), run after the checks and before the
+   * removal; a failure there keeps the source (TOOL_ERROR, `details.reason: 'teardown'`). Not
+   * taken with `verifyOnly`. A source being torn down is CONFLICT, with or without `teardown`.
    */
   'move.finish': async (p, ctx): Promise<null> => {
     const expected = requireString(p.fingerprint, 'fingerprint')
     if (!FINGERPRINT.test(expected)) throw bad('fingerprint must be what move.export returned')
     if (p.verifyOnly !== undefined && typeof p.verifyOnly !== 'boolean') throw bad('verifyOnly must be a boolean')
+    const teardown = optionalTeardown(p.teardown)
+    if (teardown.length > 0 && p.verifyOnly === true) throw bad('teardown is not taken with verifyOnly, which changes nothing')
     const toServer = optionalServerName(p.toServer, 'toServer')
-    const { repo, worktree, branch } = await source(ctx, p)
-    if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} was loaded again after it was copied; it is kept`)
-    const unblock = ctx.sessions.blockPath(worktree.path)
-    try {
-      // A patch that can no longer be built (too big, not UTF-8 now) is a change since the export too.
-      const { patch, headSha } = await dirtyPatch(worktree.path, repo).catch((err: Error) => {
-        throw codedError('CONFLICT', `${worktree.path} changed after it was copied (${err.message}); it is kept`)
-      })
-      if (fingerprint(headSha, patch, fingerprinted((await hashedSessions(worktree)).carried)) !== expected) {
-        throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
+    const { project, repo, worktree, branch } = await source(ctx, p)
+    const loadedAgain = (): void => {
+      if (locate(ctx.projects.require(project.id), worktree.id).worktree.loaded) {
+        throw codedError('IN_USE', `${worktree.path} was loaded again after it was copied; it is kept`)
       }
-      if (p.verifyOnly === true) return null
-      await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
-      await ctx.poller.refresh(repo.path)
-    } finally {
-      unblock()
     }
+    loadedAgain()
+    // Held for the checks, the teardown and the removal: a source being torn down (by this or
+    // another operation) is CONFLICT, with or without `teardown`.
+    const verified = await holdWorktree(worktree.path, async (hold) => {
+      const unblock = ctx.sessions.blockPath(worktree.path)
+      try {
+        // Again under the block: no load can land from here on.
+        loadedAgain()
+        // A patch that can no longer be built (too big, not UTF-8 now) is a change since the export too.
+        const { patch, headSha } = await dirtyPatch(worktree.path, repo).catch((err: Error) => {
+          throw codedError('CONFLICT', `${worktree.path} changed after it was copied (${err.message}); it is kept`)
+        })
+        if (fingerprint(headSha, patch, fingerprinted((await hashedSessions(worktree)).carried)) !== expected) {
+          throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
+        }
+        if (p.verifyOnly === true) return true
+        // The point of commitment: the source is what was copied. Its chosen teardown (plugins E1), then its removal.
+        await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'move', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
+        await ctx.poller.refresh(repo.path)
+        return false
+      } finally {
+        unblock()
+      }
+    })
+    if (verified) return null
     let watched = false
     ctx.projects.apply(p.projectId, (d) => {
       const r = repoIn(d, repo.id)

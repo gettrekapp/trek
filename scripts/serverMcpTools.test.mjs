@@ -111,9 +111,11 @@ async function toolSetup(t, opts = {}) {
   t.after(() => clearInterval(keepAlive))
   const projectId = projects.create('P', [{ registered, name: undefined }])
   await poller.refresh(a)
+  // `extraPlugins` in opts: test plugins registered after the built-ins.
+  const extraPlugins = opts.extraPlugins ?? []
   // The built-in plugins, as the server registers them: their project settings and ticket providers.
   const plugins = createPluginRegistry({
-    plugins: BUILTIN_SERVER_PLUGINS,
+    plugins: [...BUILTIN_SERVER_PLUGINS, ...extraPlugins],
     secretsFile: join(dir, 'secrets.json'),
     dataDir: join(dir, 'data'),
     hub,
@@ -127,7 +129,7 @@ async function toolSetup(t, opts = {}) {
   // The automations scheduler over the real session manager, never started: runs happen only when a tool asks.
   // `automations: false` in opts leaves it out, as a server without one.
   // `automationsNow` is the scheduler's clock, for tests that move it.
-  const { automations: withAutomations = true, automationsNow, ...callerOpts } = opts
+  const { automations: withAutomations = true, automationsNow, extraPlugins: _extraPlugins, ...callerOpts } = opts
   const automations = withAutomations ? new AutomationScheduler({ projects, sessions, now: automationsNow }) : undefined
   // What the clients show (ui.report); `selections: undefined` in opts leaves it out, as a server without it.
   const selections = new UiSelections(hub)
@@ -1259,4 +1261,29 @@ test("run_automation refuses a run that would restart its own tab, however quiet
   await s.call('save_automation', { ...MORNING, name: 'Other' })
   assert.equal(typeof (await s.call('run_automation', { automation: 'Other', terminalId })).terminalId, 'string', 'a run may start another automation')
   assert.deepEqual(await s.call('run_automation', { automation: 'Morning', terminalId: 'someone-else' }), { terminalId })
+})
+
+test('remove_worktree (plugins E1) tears down what the plan ticks by default and says so; teardown: false skips it', async (t) => {
+  const log = []
+  const probe = {
+    manifest: { id: 'probe', version: '1.0.0', name: 'Probe', description: '', defaultEnabled: true },
+    setup: () => ({
+      handlers: {},
+      worktreeLifecycle: {
+        plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }, { id: 'cache', label: 'Drop the cache', checked: false }],
+        teardown: async (_ctx, worktree, op, ids) => void log.push([worktree.branch, op, ids])
+      }
+    })
+  }
+  const s = await toolSetup(t, { extraPlugins: [probe] })
+  await s.call('create_worktree', { branch: 'feat/a' })
+  await s.call('create_worktree', { branch: 'feat/b' })
+  const removed = await s.call('remove_worktree', { worktree: 'feat/a' })
+  assert.deepEqual([removed.removed, removed.tornDown], [true, ['Stop the VM']])
+  assert.deepEqual(log, [['feat/a', 'remove', ['vm']]])
+  const skipped = await s.call('remove_worktree', { worktree: 'feat/b', teardown: false })
+  assert.deepEqual([skipped.removed, skipped.tornDown], [true, undefined])
+  assert.ok(!('tornDown' in skipped))
+  assert.equal(log.length, 1)
+  await assert.rejects(s.call('remove_worktree', { worktree: 'main', teardown: 'no' }), /teardown must be a boolean/)
 })

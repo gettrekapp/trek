@@ -25,6 +25,7 @@ import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
 import type { UiSelections } from '../ui/selections.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
+import type { TeardownItem } from '../../../src/shared/teardown.ts'
 import type { ToolDefinition } from './protocol.ts'
 import type { PluginRegistry } from '../plugins/registry.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
@@ -216,12 +217,13 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'remove_worktree',
     description:
-      'Delete a linked worktree: its directory, git\'s record of it and its row. The branch is kept. Refused for the primary checkout and for a loaded worktree (unload_worktree first, which ends its sessions). A worktree with uncommitted or untracked changes is refused unless force is true, which discards them.',
+      "Delete a linked worktree: its directory, git's record of it and its row. The branch is kept. Refused for the primary checkout and for a loaded worktree (unload_worktree first, which ends its sessions). A worktree with uncommitted or untracked changes is refused unless force is true, which discards them. First it tears down what runs for the worktree on the server's machine that Trek ticks by default (its dev stack, its Colima VM, a plugin's part), and says what in tornDown; teardown: false leaves all of that running.",
     inputSchema: {
       type: 'object',
       properties: {
         worktree: WORKTREE_PARAM,
         force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' },
+        teardown: { type: 'boolean', description: "Tear down what runs for it first, as Trek's confirm ticks by default. Default true." },
         ...ATTRIBUTION_PARAMS
       },
       required: ['worktree']
@@ -995,16 +997,25 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       remove_worktree: async (args, project) => {
         const by = attributionOf(args, project)
         if (args.force !== undefined && typeof args.force !== 'boolean') throw bad('force must be a boolean')
+        if (args.teardown !== undefined && typeof args.teardown !== 'boolean') throw bad('teardown must be a boolean')
         const { worktree } = resolveWorktree(project, args.worktree)
+        // The confirm's defaults (plugins E1), unless the caller said not to. The main checkout has
+        // no plan: its removal keeps today's refusal.
+        const chosen: TeardownItem[] = []
+        if (args.teardown !== false && !worktree.isMain) {
+          const plan = (await v2('worktree.teardownPlan', { worktreeId: worktree.id, op: 'remove' })) as { items: TeardownItem[] }
+          chosen.push(...plan.items.filter((item) => item.checked))
+        }
+        const teardown = chosen.map((item) => item.id)
         try {
-          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true }, by)
+          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true, ...(teardown.length > 0 ? { teardown } : {}) }, by)
         } catch (err) {
           if ((err as { details?: { reason?: string } }).details?.reason === 'dirty') {
             throw codedError('GIT_ERROR', `${worktree.path} has uncommitted or untracked changes; pass force: true to discard them`, { reason: 'dirty' })
           }
           throw err
         }
-        return { removed: true, path: worktree.path, branch: worktree.branch ?? null }
+        return { removed: true, path: worktree.path, branch: worktree.branch ?? null, ...(chosen.length > 0 ? { tornDown: chosen.map((item) => item.label) } : {}) }
       },
 
       set_worktree_tag: async (args, project) => {

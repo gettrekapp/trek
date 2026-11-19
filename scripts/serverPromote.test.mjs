@@ -11,6 +11,7 @@ import { promoteChanging, promoteTestHooks, pruneRecoveryFiles } from '../server
 import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixture.mjs'
 import { realPath } from '../src/host/pathContainment.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
+import { dispatchV2 } from '../server/src/v2.ts'
 
 test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
   const s = await setup(t)
@@ -613,4 +614,71 @@ test('PromoteRequests: the attribution given to ask comes back on bind', async (
   assert.deepEqual(binding.attribution, attribution)
   binding.settle({ outcome: 'declined' })
   await asked
+})
+
+/** A plugin participant (plugins E1) that records each teardown and whether the worktree was still there. */
+function probe(path, { fail = false } = {}) {
+  const log = []
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async (_ctx, _worktree, op, ids) => {
+      log.push([op, ids, existsSync(path)])
+      if (fail) throw new Error('it would not stop')
+    }
+  }
+  return { log, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] } }
+}
+
+test('worktree.promote {teardown} (plugins E1): the chosen items run after the checks and before the switch; dryRun runs none', async (t) => {
+  const s = await setup(t)
+  const { log, plugins } = probe(s.path)
+  const call = (method, params) => dispatchV2(method, params, { ...s.ctx, plugins })
+  assert.equal((await call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true, teardown: ['probe:vm'] })).ok, true)
+  assert.deepEqual(log, [])
+  const plan = await call('worktree.teardownPlan', { projectId: s.projectId, worktreeId: s.worktreeId, op: 'promote' })
+  assert.deepEqual(plan.result.items, [{ id: 'probe:vm', label: 'Stop the VM', checked: true }])
+  const r = await call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['probe:vm'] })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.deepEqual(log, [['promote', ['vm'], true]])
+  assert.equal(branchOf(s.app), 'feat')
+})
+
+test('worktree.promote {teardown}: a failed item stops it and nothing is promoted; an unknown id is refused', async (t) => {
+  const s = await setup(t)
+  const { log, plugins } = probe(s.path, { fail: true })
+  const call = (params) => dispatchV2('worktree.promote', params, { ...s.ctx, plugins })
+  const r = await call({ projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['probe:vm'] })
+  assert.deepEqual([r.error?.code, r.error?.details?.reason], ['TOOL_ERROR', 'teardown'])
+  assert.match(r.error.message, /Couldn't stop the VM: it would not stop/)
+  assert.equal(branchOf(s.app), 'main')
+  assert.ok(existsSync(s.path))
+  assert.equal((await call({ projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['ghost:x'] })).error?.code, 'BAD_REQUEST')
+  assert.equal(log.length, 1)
+})
+
+test('worktree.promote (plugins E1): a worktree being torn down is CONFLICT, with no teardown and on a dry run; its block lasts through the teardown', async (t) => {
+  const s = await setup(t)
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  let started
+  const begun = new Promise((resolve) => (started = resolve))
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      started()
+      await gate
+    }
+  }
+  const plugins = { lifecycles: () => [{ id: 'probe', lifecycle }] }
+  const call = (params) => dispatchV2('worktree.promote', params, { ...s.ctx, plugins })
+  const first = call({ projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['probe:vm'] })
+  await begun
+  assert.ok(s.sessions.isBlocked(s.path))
+  assert.equal((await call({ projectId: s.projectId, worktreeId: s.worktreeId })).error?.code, 'CONFLICT')
+  assert.equal((await call({ projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true })).error?.code, 'CONFLICT')
+  release()
+  const r = await first
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.equal(branchOf(s.app), 'feat')
+  assert.ok(!s.sessions.isBlocked(s.path))
 })

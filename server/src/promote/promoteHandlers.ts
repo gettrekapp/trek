@@ -21,6 +21,9 @@
 // changed meanwhile (the main checkout's own sessions keep running) is left as it is (CONFLICT).
 //
 // `dryRun: true` answers the plan the confirmation shows, after the same checks.
+//
+// `teardown` (plugins E1): the chosen teardown items run after the checks, before the promote;
+// never on a dry run. A worktree being torn down is CONFLICT, with or without `teardown`.
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -50,6 +53,8 @@ import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
 import { promoteChanging as changing } from './changing.ts'
 import type { PromoteBinding } from './requests.ts'
+import { assertNotTearingDown, holdWorktree, optionalTeardown, runTeardown } from '../teardown/teardown.ts'
+import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -341,7 +346,11 @@ async function checkPromote(ctx: V2Context, p: any, blocked = true): Promise<Pro
   assertNotLoadedElsewhere(ctx, projectId, worktree.path)
   if (await isLocked(repo.path, worktree.path)) throw codedError('CONFLICT', `${worktree.path} is locked (git worktree lock); unlock it first`)
   const main = mainOf(ctx, projectId, repo)
-  if (blocked) assertNotBlocked(ctx, [worktree.path, main.path])
+  if (blocked) {
+    assertNotBlocked(ctx, [worktree.path, main.path])
+    // The real promote's own hold is taken after this check; a dry run says so too.
+    assertNotTearingDown(worktree.path)
+  }
   const mainHead = await viaGit(() => gitService.headState(main.path))
   if (await isDirty(main.path)) {
     throw codedError('CONFLICT', `the main checkout ${main.path} has uncommitted changes; commit or stash them there first`)
@@ -751,6 +760,7 @@ export const promoteHandlers: Record<string, Handler> = {
     const dryRun = optionalDryRun(p.dryRun)
     const requestId = optionalRequestId(p.requestId)
     if (dryRun) return (await checkPromote(ctx, p)).plan
+    const teardown = optionalTeardown(p.teardown)
     let binding: PromoteBinding | undefined
     if (requestId !== undefined) {
       const projectId = requireString(p.projectId, 'projectId')
@@ -760,16 +770,33 @@ export const promoteHandlers: Record<string, Handler> = {
     }
     try {
       const first = await checkPromote(ctx, p)
-      const { result, checked } = await locked(first.repo, async () => {
-        // Again, with no await since: no other operation blocks them between this and ours.
-        assertNotBlocked(ctx, [first.worktree.path, first.main.path])
+      // Held for the teardown and the promote: a worktree being torn down (by this or another
+      // operation) is CONFLICT, with or without `teardown`. Its path is blocked from before the
+      // teardown (no session or load may start in it) until its row is gone.
+      const { result, checked } = await holdWorktree(first.worktree.path, async (hold) => {
         const unblockWorktree = ctx.sessions.blockPath(first.worktree.path)
-        const unblockMain = ctx.sessions.blockPath(first.main.path)
         try {
-          const checked = await checkPromote(ctx, p, false)
-          return { result: await promote(ctx, checked, { main: unblockMain, worktree: unblockWorktree }), checked }
+          // Again under the block: a load elsewhere that landed after the first check.
+          assertNotLoadedElsewhere(ctx, first.project.id, first.worktree.path)
+          // The chosen teardown (plugins E1): after the same checks (a promote the server would
+          // refuse tears nothing down), before the repository's lock.
+          await runTeardown(participantsFor(ctx, first.project.id), { project: first.project, repo: first.repo, worktree: first.worktree }, 'promote', teardown, {
+            hold,
+            inactive: inactiveParticipants(ctx, first.project.id)
+          })
+          return await locked(first.repo, async () => {
+            // Again, with no await since: no other operation blocks the main checkout between this
+            // and ours (the worktree's block is ours, taken above).
+            assertNotBlocked(ctx, [first.main.path])
+            const unblockMain = ctx.sessions.blockPath(first.main.path)
+            try {
+              const checked = await checkPromote(ctx, p, false)
+              return { result: await promote(ctx, checked, { main: unblockMain, worktree: unblockWorktree }), checked }
+            } finally {
+              unblockMain()
+            }
+          })
         } finally {
-          unblockMain()
           unblockWorktree()
         }
       })

@@ -35,7 +35,7 @@ const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
 const FRESH_ID = '99999999-2222-4333-8444-555555555555'
 
 /** One server's handlers over its own config, projects and poller, with `clone` as its one repo. */
-async function server(t, dir, name, clone, prWatchable = true, providers = [createGithubPrProvider(async () => '')]) {
+async function server(t, dir, name, clone, prWatchable = true, providers = [createGithubPrProvider(async () => '')], lifecycles = []) {
   const configPath = join(dir, `${name}.json`)
   saveConfig(configPath, { serverId: name, name, repos: [{ id: 'r', name: 'app', path: clone }] })
   const store = new ConfigStore(configPath)
@@ -49,7 +49,7 @@ async function server(t, dir, name, clone, prWatchable = true, providers = [crea
   const prWatch = { available: () => true, availableFor: () => prWatchable, pollSoon: (...a) => polled.push(a), forget: (...a) => forgotten.push(a) }
   const sessions = { blockPath: () => () => {}, refreshAttention: () => {} }
   const history = new HistoryStore(join(dir, `${name}-history`))
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history, plugins: { prProviders: () => providers } })
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history, plugins: { prProviders: () => providers, lifecycles: () => lifecycles } })
   const created = await call('project.create', { name: `P-${name}`, repositories: [{ path: clone }] })
   const projectId = created.result.projectId
   await poller.refresh(clone)
@@ -58,7 +58,7 @@ async function server(t, dir, name, clone, prWatchable = true, providers = [crea
   return { call, projects, poller, projectId, repoId, project, forgotten, polled, clone, history }
 }
 
-async function setup(t) {
+async function setup(t, { lifecycles = [] } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-')))
   // The agents' histories (~/.claude) under a temp home: homedir() reads HOME, or USERPROFILE on Windows.
   const home = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
@@ -82,7 +82,7 @@ async function setup(t) {
   git(a, 'remote', 'add', 'origin', origin)
   git(a, 'push', '-q', 'origin', 'main')
   execFileSync('git', ['clone', '-q', origin, b], { env: gitEnv })
-  const A = await server(t, dir, 'a', a)
+  const A = await server(t, dir, 'a', a, true, undefined, lifecycles)
   const B = await server(t, dir, 'b', b)
   // A worktree on A with a commit, work in progress and two sessions.
   const made = await A.call('worktree.create', { projectId: A.projectId, repoId: A.repoId, branch: 'feat', createBranch: true })
@@ -919,4 +919,64 @@ test("a move whose plugin settings, with the target's own, would pass 1 MB is re
   assert.deepEqual(repo.branchData.feat, { pluginSettings: { kept } })
   assert.equal(repo.worktrees.some((w) => w.branch === 'feat'), false, 'the worktree it began is undone')
   assert.equal(s.A.project().repositories[0].worktrees.some((w) => w.id === s.worktreeId), true, 'the source keeps its worktree')
+})
+
+test('move.finish {teardown} (plugins E1): once the source checks unchanged, the chosen items run while its folder is there, then it goes; verifyOnly takes none', async (t) => {
+  const log = []
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async (_ctx, worktree, op, ids) => void log.push([op, ids, existsSync(worktree.path)])
+  }
+  const s = await setup(t, { lifecycles: [{ id: 'probe', lifecycle }] })
+  const { exported, received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.equal((await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, verifyOnly: true, teardown: ['probe:vm'] })).error?.code, 'BAD_REQUEST')
+  assert.deepEqual(log, [])
+  const done = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, teardown: ['probe:vm'] })
+  assert.equal(done.ok, true, JSON.stringify(done))
+  assert.deepEqual(log, [['move', ['vm'], true]])
+  assert.ok(!existsSync(s.path))
+})
+
+test('move.finish {teardown}: a failed item keeps the source (TOOL_ERROR); a changed source tears nothing down (CONFLICT)', async (t) => {
+  const log = []
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      log.push('teardown')
+      throw new Error('stuck')
+    }
+  }
+  const s = await setup(t, { lifecycles: [{ id: 'probe', lifecycle }] })
+  const { exported } = await move(s, { finish: false })
+  const failed = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, teardown: ['probe:vm'] })
+  assert.deepEqual([failed.error?.code, failed.error?.details?.reason], ['TOOL_ERROR', 'teardown'])
+  assert.ok(existsSync(s.path))
+  writeFileSync(join(s.path, 'later.txt'), 'typed after the copy\n')
+  const changed = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, teardown: ['probe:vm'] })
+  assert.equal(changed.error?.code, 'CONFLICT')
+  assert.deepEqual(log, ['teardown'])
+})
+
+test('move.finish (plugins E1): a source being torn down is CONFLICT, with no teardown too', async (t) => {
+  let release
+  const gate = new Promise((resolve) => (release = resolve))
+  let started
+  const begun = new Promise((resolve) => (started = resolve))
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => {
+      started()
+      await gate
+    }
+  }
+  const s = await setup(t, { lifecycles: [{ id: 'probe', lifecycle }] })
+  const { exported } = await move(s, { finish: false })
+  const first = s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, teardown: ['probe:vm'] })
+  await begun
+  assert.equal((await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint })).error?.code, 'CONFLICT')
+  release()
+  const done = await first
+  assert.equal(done.ok, true, JSON.stringify(done))
+  assert.ok(!existsSync(s.path))
 })
