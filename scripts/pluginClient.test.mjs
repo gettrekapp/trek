@@ -5,6 +5,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { changedFor, forProject, pluginActive, pluginStatus, withPluginEnabled } from '../src/renderer/src/plugins/presence.ts'
+import { COLIMA_MANIFEST } from '../plugins/colima/manifest.ts'
+import { GITHUB_MANIFEST } from '../plugins/github/manifest.ts'
 import { createClientHost } from '../src/renderer/src/plugins/host.ts'
 import { parseAppSettings, DEFAULT_APP_SETTINGS } from '../src/shared/appSettings.ts'
 
@@ -68,6 +70,10 @@ test('pluginStatus (plugins E3): a built-in with a legacy capability is legacy w
   assert.equal(pluginStatus(github, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, undefined), 'missing')
   // A server older than plugins: GitHub was built in there.
   assert.equal(pluginStatus(github, { capabilities: [] }, undefined), 'legacy')
+  // The real manifests on the E1-era welcome: env is legacy, GitHub listed per P3 (its setting decides).
+  assert.equal(pluginStatus(COLIMA_MANIFEST, e1, undefined), 'legacy')
+  assert.equal(pluginStatus(GITHUB_MANIFEST, e1, undefined), 'on')
+  assert.equal(pluginStatus(GITHUB_MANIFEST, e1, { github: { enabled: false } }), 'off')
 })
 
 test('withPluginEnabled keeps the other plugins', () => {

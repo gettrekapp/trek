@@ -29,6 +29,8 @@ import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/qu
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree, teardownRemove } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { COLIMA_MANIFEST } from '../plugins/colima/manifest.ts'
+import { GITHUB_MANIFEST } from '../plugins/github/manifest.ts'
 import { activePrProviders } from '../apps/mobile/src/logic/pullRequests.ts'
 import { UNTAGGED, cleanTagFilter, matchesTagFilter, tagFilterLabel, tagFilterOptions, toggledTagFilter } from '../apps/mobile/src/logic/worktreeFilter.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker, teardownPlan } from '../apps/mobile/src/state/teardown.ts'
@@ -1238,6 +1240,10 @@ test('pluginOn (plugins E3): a built-in with a legacy capability is on wherever 
   // A server before P3 that lists plugins: the same rule (its env capability decides).
   assert.equal(pluginOn(env, { plugins: [], capabilities: ['env'] }, {}), true)
   assert.equal(pluginOn(env, { plugins: [], capabilities: [] }, {}), false)
+  // An installed plugin's entry with the built-in's id is not the built-in: the capability still decides.
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '9.0.0', defaultEnabled: true, sha256: 'ab' }], capabilities: ['prResolve', 'env'] }, {}), true)
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '9.0.0', defaultEnabled: true, sha256: 'ab' }], capabilities: ['prResolve'] }, {}), false)
+  assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '9.0.0', defaultEnabled: true, type: 'theme' }], capabilities: ['prResolve'] }, {}), false)
   // Listed (E2+): the project's setting decides; listed as unavailable: off, whatever it says.
   assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, { plugins: { env: { enabled: false } } }), false)
   assert.equal(pluginOn(env, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true, available: false }], capabilities: ['prResolve', 'env'] }, {}), false)
@@ -1248,6 +1254,11 @@ test('pluginOn (plugins E3): a built-in with a legacy capability is on wherever 
   assert.equal(pluginOn(github, { plugins: [{ id: 'env', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env'] }, {}), false)
   // A server older than plugins: GitHub was built in there.
   assert.equal(pluginOn(github, { capabilities: [] }, {}), true)
+  // The real manifests on an E1-era welcome (plugins listed without env, prResolve and env said): env is on, GitHub listed per P3.
+  const e1Real = { plugins: [{ id: 'github', version: '1.0.0', defaultEnabled: true }], capabilities: ['prResolve', 'env', 'worktreeTeardown'] }
+  assert.equal(pluginOn(COLIMA_MANIFEST, e1Real, {}), true)
+  assert.equal(pluginOn(GITHUB_MANIFEST, e1Real, { plugins: { github: { enabled: false } } }), false)
+  assert.equal(pluginOn(GITHUB_MANIFEST, e1Real, {}), true)
 })
 
 test("tickets: a ticket's label and link from the project's settings; the raw id with no provider", () => {

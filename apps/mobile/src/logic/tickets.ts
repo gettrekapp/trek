@@ -48,7 +48,8 @@ export function pluginOn(manifest: PluginManifest, server: TicketServer, setting
     const capability = legacyCapabilitiesOf(manifest).some((c) => server.capabilities?.includes(c) === true)
     return capability || manifest.legacyBuiltIn === true
   }
-  const listed = server.plugins.find((p) => p.id === manifest.id)
+  // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
+  const listed = server.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
   if (!listed) {
     if (manifest.legacyBuiltIn !== true) return false
     // A built-in with legacy capabilities (Colima's `env`, plugins E3): core's where the server says one.
