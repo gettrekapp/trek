@@ -8,7 +8,7 @@ import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
 import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
-import { Tent, TentPopover, type OpenTent } from './Tent.tsx'
+import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
 
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
@@ -29,7 +29,9 @@ export function Campsite(): React.JSX.Element | null {
   }, [])
   useCloseOnOutside(openTent !== null, closeTent)
   // Out of grouped mode, or its tent gone: nothing to show
-  const openGone = openTent !== null && (!layout.grouped || !layout.tents.some((t) => t.worktreeId === openTent.worktreeId))
+  const openGone =
+    openTent !== null &&
+    (!layout.grouped || (openTent.worktreeId === null ? layout.log === null : !layout.tents.some((t) => t.worktreeId === openTent.worktreeId)))
   useEffect(() => {
     if (openGone) setOpenTent(null)
   }, [openGone])
@@ -53,7 +55,13 @@ export function Campsite(): React.JSX.Element | null {
   const byId = new Map(sessions.map((s) => [s.terminalId, s]))
   const spotted = new Set(layout.hikers.map((h) => h.terminalId))
   const unspottedWaiting = layout.moreWaiting > 0 ? sessions.find((s) => isWaiting(s) && !spotted.has(s.terminalId)) : undefined
-  const popTent = openTent && !openGone ? layout.tents.find((t) => t.worktreeId === openTent.worktreeId) : undefined
+  // The open camp's name ('Global' for the log), while it is still drawn
+  const popName = !openTent || openGone ? undefined : openTent.worktreeId === null ? 'Global' : layout.tents.find((t) => t.worktreeId === openTent.worktreeId)?.name
+  const toggleCamp = (worktreeId: string | null, el: HTMLButtonElement): void => {
+    badge.current = el
+    const r = el.getBoundingClientRect()
+    setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, top: r.top }))
+  }
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       <CampScene />
@@ -78,26 +86,22 @@ export function Campsite(): React.JSX.Element | null {
               +{layout.moreWaiting} waving
             </button>
           )}
-          {layout.log && <div className="cs-log" style={{ left: layout.log.x - 36 }} aria-hidden="true" />}
+          {layout.log && <CampLog log={layout.log} grouped={layout.grouped} open={openTent !== null && openTent.worktreeId === null} onToggle={(el) => toggleCamp(null, el)} />}
           {layout.tents.map((t) => (
             <Tent
               key={t.worktreeId}
               tent={t}
               grouped={layout.grouped}
-              open={openTent?.worktreeId === t.worktreeId}
-              onToggle={(el) => {
-                badge.current = el
-                const r = el.getBoundingClientRect()
-                setOpenTent((o) => (o?.worktreeId === t.worktreeId ? null : { worktreeId: t.worktreeId, left: r.left, top: r.top }))
-              }}
+              open={openTent !== null && openTent.worktreeId === t.worktreeId}
+              onToggle={(el) => toggleCamp(t.worktreeId, el)}
             />
           ))}
-          {popTent && openTent && (
+          {openTent && popName !== undefined && (
             <TentPopover
-              key={popTent.worktreeId}
+              key={openTent.worktreeId === null ? 'global' : `worktree:${openTent.worktreeId}`}
               at={openTent}
-              name={popTent.name}
-              members={sessions.filter((s) => s.worktreeId === popTent.worktreeId)}
+              name={popName}
+              members={sessions.filter((s) => s.worktreeId === openTent.worktreeId)}
               onPick={(id) => {
                 setOpenTent(null)
                 host.focusSession(id)
@@ -202,12 +206,12 @@ function useDepartures(sessions: readonly PluginSession[], spots: readonly CampH
   return departing
 }
 
-/** While `open`: a press outside the tents and their popover, or a window resize, closes; Escape closes and refocuses the badge */
+/** While `open`: a press outside the camps' badges and the popover, or a window resize, closes; Escape closes and refocuses the badge */
 function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): void {
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent): void => {
-      if (!(e.target instanceof Element) || !e.target.closest('.cs-tent, .cs-tent-popover')) close(false)
+      if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-badge, .cs-tent-popover')) close(false)
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') close(true)

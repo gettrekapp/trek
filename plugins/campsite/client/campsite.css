@@ -160,6 +160,10 @@
   border-radius: 3px;
   z-index: 1;
 }
+.cs-log .cs-camp-badge {
+  top: auto;
+  bottom: 10px;
+}
 .cs-tent {
   position: absolute;
   bottom: 18px;
@@ -172,17 +176,19 @@
 .cs-tent-sign {
   position: absolute;
   left: 56px;
-  bottom: 30px;
+  /* On its post, 56 px above the strip's bottom: clear of a 2.5× hiker (40 px, standing at 10 px) */
+  bottom: 38px;
   background: #7a5230;
   color: #f1e6cc;
   font: 9px ui-monospace, Menlo, monospace;
   padding: 1px 3px;
   white-space: nowrap;
 }
-.cs-tent-badge {
+.cs-camp-badge {
   position: absolute;
   left: 50%;
-  top: -14px;
+  /* Above the tent's peak and its sign */
+  top: -18px;
   transform: translateX(-50%);
   background: #1d2433;
   color: #dfe5ee;
@@ -192,7 +198,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.cs-tent-badge.waiting {
+.cs-camp-badge.waiting {
   border-color: #ffb020;
   color: #ffb020;
 }
@@ -289,7 +295,7 @@
 }
 
 .cs-chevron:focus-visible,
-.cs-tent-badge:focus-visible,
+.cs-camp-badge:focus-visible,
 .cs-waiting-chip:focus-visible,
 .cs-more-waiting:focus-visible,
 .cs-tent-popover button:focus-visible {

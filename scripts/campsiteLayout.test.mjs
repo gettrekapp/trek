@@ -115,3 +115,17 @@ test('popoverLeft: at its badge, kept 8 px inside the window', () => {
   assert.equal(popoverLeft(2, 200, 1000), 8)
   assert.equal(popoverLeft(50, 400, 300), 8, 'a window narrower than the popover: its left edge')
 })
+
+test('the Global log counts its hikers and those waving, for its badge in grouped mode', () => {
+  const crowd = Array.from({ length: 14 }, (_, i) => s(`w${i % 2}`))
+  const global = [s(null), s(null), s(null, { status: 'attention' }), s(null, { decision: true })]
+  const l = campLayout([...crowd, ...global], 1200)
+  assert.equal(l.grouped, true)
+  assert.ok(l.log)
+  assert.equal(l.log.hikers, 4)
+  assert.equal(l.log.waiting, 2)
+  assert.equal(tentBadge(l.log), '4 · 2 waving')
+  const open = campLayout([s('w1'), s(null)], 1200)
+  assert.equal(open.grouped, false)
+  assert.deepEqual({ hikers: open.log.hikers, waiting: open.log.waiting }, { hikers: 1, waiting: 0 })
+})

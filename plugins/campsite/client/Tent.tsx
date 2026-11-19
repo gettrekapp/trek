@@ -1,5 +1,5 @@
-// A worktree's tent at the campsite strip, with its branch on a sign. Grouped (a crowded camp), it
-// carries a count badge that opens a list of its sessions (TentPopover, drawn beside the tents so it
+// A worktree's tent at the campsite strip, with its branch on a sign, and Global's log. Grouped (a
+// crowded camp), each carries a count badge that opens a list of its sessions (TentPopover, drawn beside the tents so it
 // sits over the app, not inside the tent's stacking context).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -20,29 +20,42 @@ export function Tent({ tent, grouped, open, onToggle }: Props): React.JSX.Elemen
       <svg width={84} height={52} viewBox="0 0 84 52" aria-hidden="true">
         <polygon points="4,52 42,8 80,52" fill="#c08a2e" />
         <polygon points="34,52 42,24 50,52" fill="#3a2a16" />
-        <rect x={60} y={30} width={2} height={22} fill="#5a3a22" />
+        <rect x={60} y={14} width={2} height={38} fill="#5a3a22" />
       </svg>
       <span className="cs-tent-sign" title={tent.name}>
         {signText(tent.name)}
       </span>
-      {grouped && (
-        <button
-          className={`cs-tent-badge${tent.waiting ? ' waiting' : ''}`}
-          onClick={(e) => onToggle(e.currentTarget)}
-          aria-haspopup="true"
-          aria-expanded={open}
-          title="Who's in this camp"
-        >
-          {tentBadge(tent)}
-        </button>
-      )}
+      {grouped && <CampBadge camp={tent} open={open} onToggle={onToggle} />}
     </div>
   )
 }
 
-/** The open tent: its worktree and where its badge is (window coordinates) */
+/** Global's log; grouped, it carries a badge like a tent's */
+export function CampLog({ log, grouped, open, onToggle }: { log: { x: number; hikers: number; waiting: number }; grouped: boolean; open: boolean; onToggle: (badge: HTMLButtonElement) => void }): React.JSX.Element {
+  return (
+    <div className="cs-log" style={{ left: log.x - 36 }}>
+      {grouped && <CampBadge camp={log} open={open} onToggle={onToggle} />}
+    </div>
+  )
+}
+
+function CampBadge({ camp, open, onToggle }: { camp: { hikers: number; waiting: number }; open: boolean; onToggle: (badge: HTMLButtonElement) => void }): React.JSX.Element {
+  return (
+    <button
+      className={`cs-camp-badge${camp.waiting ? ' waiting' : ''}`}
+      onClick={(e) => onToggle(e.currentTarget)}
+      aria-haspopup="true"
+      aria-expanded={open}
+      title="Who's in this camp"
+    >
+      {tentBadge(camp)}
+    </button>
+  )
+}
+
+/** The open camp: its worktree (null: Global's log) and where its badge is (window coordinates) */
 export interface OpenTent {
-  worktreeId: string
+  worktreeId: string | null
   /** The badge's left */
   left: number
   /** The badge's top; the popover sits just above */

@@ -34,7 +34,8 @@ export interface CampLayout {
   fireX: number
   grouped: boolean
   tents: CampTent[]
-  log: { x: number; hikers: number } | null
+  /** Global's log: its sessions, all of them, and those waiting */
+  log: { x: number; hikers: number; waiting: number } | null
   hikers: CampHikerSpot[]
   /** Camps left out for want of room (grouped mode): tents, or the Global log */
   moreTents: number
@@ -96,7 +97,7 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
     const w = grouped ? LOG_W : Math.max(LOG_W, out.length * SLOT)
     if (fitsLeft(w)) {
       const center = left - w / 2
-      log = { x: Math.round(center), hikers: global.members.length }
+      log = { x: Math.round(center), hikers: global.members.length, waiting: global.members.length - out.length }
       if (!grouped) spreadAt(out, center, 'log', hikers)
       left -= w + GAP
     } else if (!grouped) return null
