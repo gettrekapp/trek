@@ -18,10 +18,9 @@ import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { assertNotTearingDown } from '../teardown/teardown.ts'
 import { SINK_HIGH_WATER, SINK_LOW_WATER } from '../sessions/terminalHost.ts'
-import { findRegistered, repoIn } from '../projects/model.ts'
 import { requireBoolean } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
-import { checkedOut, present } from '../worktreeHandlers.ts'
+import { checkedOut, checkedRepository, present } from '../worktreeHandlers.ts'
 import {
   optionalComposeFile,
   optionalEnvVars,
@@ -116,14 +115,6 @@ const machine = (ctx: V2Context): Machine => {
   return ctx.machine
 }
 
-/** A repository the project has and the registry still has, inside the allowlist: its main checkout. */
-function repository(ctx: V2Context, p: any) {
-  const repo = repoIn(ctx.projects.require(p.projectId), p.repoId)
-  findRegistered(ctx.store.config.repos, repo.path)
-  ctx.store.guard.check(repo.path)
-  return repo
-}
-
 /**
  * CONFLICT while a worktree whose branch's VM is `profile` is being torn down or held (plugins E1):
  * an older client's own teardown (env.destroy) must not run during the server's. The core
@@ -160,14 +151,14 @@ const allMachineHandlers: Record<string, Handler> = {
   // run with code -1 and says so in the output.
   'docker.compose': (p, ctx) => {
     const action = requireComposeAction(p.action)
-    const repo = repository(ctx, p)
+    const repo = checkedRepository(ctx, p)
     return docker.compose(action, repo.path, (event) => ctx.events?.send('docker.log', event))
   },
 
   'env.check': (_p, ctx) => machine(ctx).env.check(),
 
   'env.list': (p, ctx) => {
-    const repo = repository(ctx, p)
+    const repo = checkedRepository(ctx, p)
     return viaTool(() => machine(ctx).env.list(envRepoKey(repo)))
   },
 

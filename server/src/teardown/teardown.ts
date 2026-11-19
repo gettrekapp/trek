@@ -201,6 +201,11 @@ function assertFree(key: string): void {
   if (busy) throw codedError('CONFLICT', busyMessage(busy))
 }
 
+/** Whether any worktree is held or finishing now: busyWorktrees' fast path (plugins E2). */
+export function anyBusy(): boolean {
+  return running.size > 0
+}
+
 /** Why the worktree at `path` is busy now (the CONFLICT message), or null (plugins E2: host.busyWorktrees). */
 export function busyReason(path: string): string | null {
   const busy = running.get(realOrResolved(path))

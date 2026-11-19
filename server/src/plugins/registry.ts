@@ -29,7 +29,7 @@ import { findSession } from '../sessions/locate.ts'
 import { commandFromEnv, runCommand, spawnCommand, SPAWN_KILL_GRACE_MS } from './run.ts'
 import { realOrResolved } from '../repos.ts'
 import { pluginRepo, pluginWorktree } from './worktrees.ts'
-import { busyReason } from '../teardown/teardown.ts'
+import { anyBusy, busyReason } from '../teardown/teardown.ts'
 import type { TopicHub } from '../topicHub'
 
 /**
@@ -305,15 +305,18 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         const { repo, worktree } = await requirePaths().worktree(projectId, worktreeId, opts.refresh === true)
         return pluginWorktree(repo, worktree)
       },
-      busyWorktrees: () =>
-        [...options.projects.all()].flatMap((project) =>
+      // Nothing held (almost always): no walk over every project's worktrees.
+      busyWorktrees: () => {
+        if (!anyBusy()) return []
+        return [...options.projects.all()].flatMap((project) =>
           project.repositories.flatMap((repo) =>
             repo.worktrees.flatMap((worktree) => {
               const reason = busyReason(worktree.path)
               return reason ? [{ projectId: project.id, worktree: pluginWorktree(repo, worktree), reason }] : []
             })
           )
-        ),
+        )
+      },
       legacySiblingDataFiles: (name) => {
         checkFileName(name)
         return (options.siblingDataDirs?.() ?? []).map((sibling) => {

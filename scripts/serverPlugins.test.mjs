@@ -1105,3 +1105,42 @@ test("host.legacySiblingDataFiles and host.legacyImportFile (plugins E2): each s
   assert.deepEqual(host.legacySiblingDataFiles('reg.json'), [])
   assert.equal(host.legacyImportFile('reg.json'), undefined)
 })
+
+test("pluginPathChecks' repo and worktree (plugins E2): core's own checks and codes", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-core-checks-')))
+  t.after(() => removeDir(root))
+  const dirs = ['app', 'app-feat', 'app-detached', 'other'].map((name) => join(root, name))
+  for (const dir of dirs) mkdirSync(dir)
+  const [app, feat, detached, other] = dirs
+  const repo = {
+    id: 'r1', name: 'app', path: app, branchData: {},
+    worktrees: [
+      { id: 'w1', path: app, branch: 'main', isMain: true, sessions: [] },
+      { id: 'w2', path: feat, branch: 'feat', isMain: false, missing: true, sessions: [] },
+      { id: 'w3', path: detached, isMain: false, sessions: [] },
+      { id: 'w4', path: feat, branch: 'feat', isMain: false, sessions: [] }
+    ]
+  }
+  const unregistered = { id: 'r2', name: 'other', path: other, branchData: {}, worktrees: [{ id: 'w5', path: other, branch: 'main', isMain: true, sessions: [] }] }
+  let refreshes = true
+  const checks = pluginPathChecks({
+    projects: fakeProjects({ p1: { ...project('p1'), repositories: [repo, unregistered] } }),
+    store: { config: { repos: [{ id: 'a', name: 'app', path: app }] }, guard: { check: () => {} } },
+    poller: { refresh: async () => refreshes, warning: () => ({ message: 'git broke' }) }
+  })
+  const code = async (fn, expected) => {
+    await assert.rejects(Promise.resolve().then(fn), (e) => {
+      assert.equal(e.code, expected, e.message)
+      return true
+    })
+  }
+  assert.equal(checks.repo('p1', 'r1'), repo)
+  await code(() => checks.repo('p1', 'r9'), 'NOT_FOUND')
+  await code(() => checks.repo('p1', 'r2'), 'PATH_DENIED')
+  assert.deepEqual(await checks.worktree('p1', 'w4', false), { repo, worktree: repo.worktrees[3] })
+  await code(() => checks.worktree('p1', 'w9', false), 'NOT_FOUND')
+  await code(() => checks.worktree('p1', 'w2', false), 'BAD_REQUEST')
+  await code(() => checks.worktree('p1', 'w3', true), 'BAD_REQUEST')
+  refreshes = false
+  await code(() => checks.worktree('p1', 'w4', true), 'GIT_ERROR')
+})

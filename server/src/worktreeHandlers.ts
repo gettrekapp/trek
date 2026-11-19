@@ -145,6 +145,14 @@ export function locate(project: Project, worktreeId: unknown): { repo: Repositor
   throw codedError('NOT_FOUND', `No worktree with id "${id}" in this project`)
 }
 
+/** A repository the project has and the registry still has, inside the allowlist: its main checkout (machine methods, plugins' host.checkedRepo). */
+export function checkedRepository(ctx: Pick<V2Context, 'projects' | 'store'>, p: any): Repository {
+  const repo = repoIn(ctx.projects.require(p.projectId), p.repoId)
+  findRegistered(ctx.store.config.repos, repo.path)
+  ctx.store.guard.check(repo.path)
+  return repo
+}
+
 /**
  * A worktree git still has, in a repository the registry still has, at a path
  * the allowlist covers (a row from a hand-edited file or a not-yet-polled

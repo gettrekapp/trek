@@ -4,7 +4,7 @@
 // ids refused before anything runs, and the repository veto.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { TEARDOWN_RUN_TIMEOUT_MS, assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
+import { TEARDOWN_RUN_TIMEOUT_MS, anyBusy, assertNotTearingDown, busyReason, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
 import { envParticipant, inactiveParticipants, participantsFor, stackParticipant } from '../server/src/teardown/participants.ts'
 import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
@@ -399,4 +399,23 @@ test("the VM participant's repository check asks the registry first: no VM of th
   assert.equal(listed, 0)
   assert.equal(await envWith([envRepoKey(target.repo)]).beforeRepoRemove(target.project, target.repo), 'It has a running environment. Stop it in the Env tab first.')
   assert.equal(listed, 1)
+})
+
+test("busyReason and anyBusy (plugins E2): a hold's label, then 'finishing' while a timed-out teardown runs on, then free", async () => {
+  const path = '/r/app-busy-reason'
+  const where = { ...target, worktree: { ...target.worktree, id: 'w-busy', path } }
+  assert.equal(busyReason(path), null)
+  let finish
+  const late = { id: 'env', plan: async () => [{ id: 'destroy', label: 'Stop the VM', checked: true }], teardown: () => new Promise((resolve) => (finish = resolve)) }
+  await holdWorktree(path, 'removing it', async () => {
+    assert.equal(anyBusy(), true)
+    assert.equal(busyReason(path), 'this worktree is busy: removing it; try again once it is done')
+  })
+  assert.equal(busyReason(path), null)
+  await assert.rejects(runTeardown([late], where, 'remove', ['env:destroy'], { teardownTimeoutMs: 30 }), (e) => e.code === 'TOOL_ERROR')
+  assert.equal(busyReason(path), 'a teardown is still finishing for this worktree')
+  assert.equal(anyBusy(), true)
+  finish()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(busyReason(path), null)
 })

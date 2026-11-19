@@ -897,3 +897,15 @@ test("repo.remove (plugins E1): a running VM whose worktree folder is gone still
   writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: profile, status: 'Stopped' })}\n${JSON.stringify({ name: 'twb-leftover-000000', status: 'Running' })}\n`)
   assert.equal((await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })).ok, true)
 })
+
+test('env.list and env.up refuse an unknown repository and a missing row before colima runs (the codes the Colima plugin keeps)', { skip }, async (t) => {
+  const s = await setup(t)
+  resetCalls()
+  refused(await s.call('env.list', { projectId: s.projectId, repoId: 'nope' }), 'NOT_FOUND')
+  const worktreeId = s.worktreeAt(s.feature).id
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.id === worktreeId).missing = true
+  })
+  refused(await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } }), 'BAD_REQUEST')
+  assert.deepEqual(calls(), [])
+})
