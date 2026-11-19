@@ -3,8 +3,10 @@
 import { defineClientPlugin } from '../../../src/shared/plugins/client.ts'
 import { CAMPSITE_MANIFEST } from '../manifest.ts'
 import './campsite.css'
+import { SessionIndicator } from './SessionIndicator.tsx'
+import { TerminalHiker } from './TerminalHiker.tsx'
 
 export const campsiteClientPlugin = defineClientPlugin({
   manifest: CAMPSITE_MANIFEST,
-  slots: {}
+  slots: { sessionIndicator: SessionIndicator, terminalOverlay: TerminalHiker }
 })
