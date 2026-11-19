@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
 import { globalPanelMode } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
@@ -17,7 +17,7 @@ import { PluginSlot } from '../plugins/PluginHost'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 import { defaultTeardown, teardownBlocking } from '../../../shared/teardown'
 import { usePluginEntries } from '../plugins/PluginHost'
-import { answerTeardown, cancelTeardown, teardownHeld, uncheckedName, useTeardownQuestion, type TeardownQuestion } from './teardownPrompt'
+import { answerTeardown, hostTeardownPrompt, teardownHeld, uncheckedText, useTeardownQuestion, type TeardownQuestion } from './teardownPrompt'
 
 /**
  * A server project's workspace: the Sidebar, WorktreeDetail and Global panel
@@ -67,7 +67,14 @@ export function V2Workspace(): React.JSX.Element {
     if (projectPage && focused instanceof HTMLElement && focused.closest('.detail')) focused.blur()
   }, [projectPage])
 
-  if (!project) return <p className="muted server-window-loading">Loading…</p>
+  // The teardown confirm is up while loading too: an agent's promote request that comes then waits for it.
+  if (!project)
+    return (
+      <>
+        <p className="muted server-window-loading">Loading…</p>
+        <TeardownPrompt />
+      </>
+    )
   const worktrees = mergedWorktrees(project, hostWorktrees)
   const info = selectedWorktreeInfo(project, worktrees, selected, activeWorktreeId)
   return (
@@ -146,76 +153,134 @@ function RepoPathPrompt(): React.JSX.Element | null {
   )
 }
 
-/** A delete's or promote's teardown confirm (plugins E3): a checkbox per item the server plans. */
+/**
+ * A delete's or promote's teardown confirm (plugins E3): a checkbox per item the server plans. While
+ * it is mounted the questions show (teardownPrompt.ts); with none mounted a new one is cancelled at
+ * once. It does not cancel the queued ones as it goes: installV2's leave() does, and a remount
+ * shows them again.
+ */
 function TeardownPrompt(): React.JSX.Element | null {
   const question = useTeardownQuestion()
-  // Gone with the workspace (Pick another project, Server removed): the question ends cancelled.
-  useEffect(() => () => cancelTeardown(), [])
+  useEffect(() => hostTeardownPrompt(), [])
   if (!question) return null
   return <TeardownDialog key={question.id} question={question} />
 }
 
+/** Another overlay over the dialog (the web client's dialogs) takes Escape for itself. */
+const OVERLAYS = '.web-dialog-backdrop'
+
 function TeardownDialog({ question }: { question: TeardownQuestion }): React.JSX.Element {
-  const { prompt, items, unplanned } = question
+  const { id, prompt, items, unplanned } = question
   const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set(defaultTeardown(items)))
   // Past the participants the server could not ask, on purpose (their plan failed).
   const [withoutUnplanned, setWithoutUnplanned] = useState(false)
   const pluginEntries = usePluginEntries()
-  const nameOf = (id: string): string => pluginEntries.find((e) => e.plugin.manifest.id === id)?.plugin.manifest.name ?? id
-  const unchecked = unplanned.map((id) => uncheckedName(id, nameOf))
+  const nameOf = (participant: string): string => pluginEntries.find((e) => e.plugin.manifest.id === participant)?.plugin.manifest.name ?? participant
+  const warning = uncheckedText(unplanned, nameOf)
   const blocking = teardownBlocking(items, ticked)
   const held = teardownHeld(question, ticked, withoutUnplanned)
-  const tick = (id: string, on: boolean): void =>
+  const ids = useId()
+  const dialog = useRef<HTMLDivElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
+  const tick = (itemId: string, on: boolean): void =>
     setTicked((prev) => {
       const next = new Set(prev)
-      if (on) next.add(id)
-      else next.delete(id)
+      if (on) next.add(itemId)
+      else next.delete(itemId)
       return next
     })
-  const cancel = (): void => answerTeardown(false, ticked)
-  // Escape cancels wherever the focus is (Confirm may start disabled, so nothing in the dialog has it).
+  const cancel = (): void => answerTeardown(id, false, ticked)
+
+  // The dialog takes the focus (a terminal must not keep the typing): the first checkbox (an
+  // item's, or "Go ahead without it" with no items), else Confirm. It goes back where it was after.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') answerTeardown(false, new Set())
+    const before = document.activeElement
+    const first = dialog.current?.querySelector<HTMLInputElement>('input[type=checkbox]')
+    ;(first ?? confirmButton.current ?? dialog.current)?.focus()
+    return () => {
+      if (before instanceof HTMLElement && before.isConnected && (document.activeElement === document.body || document.activeElement === null)) before.focus()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
   }, [])
+  // Escape cancels, taken in the capture phase so a terminal never sees it; not while another
+  // overlay is over the dialog, or the focus is somewhere else (a menu).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || document.querySelector(OVERLAYS)) return
+      const focused = document.activeElement
+      if (focused && focused !== document.body && !dialog.current?.contains(focused)) return
+      e.preventDefault()
+      e.stopPropagation()
+      answerTeardown(id, false, new Set())
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [id])
+
+  const titleId = `${ids}-title`
+  const messageId = `${ids}-message`
+  const detailId = `${ids}-detail`
   return (
     <div className="modal-backdrop" onMouseDown={cancel}>
       <div
+        ref={dialog}
         className="modal teardown-prompt"
-        role="dialog"
+        role="alertdialog"
         aria-modal="true"
-        aria-label={prompt.title}
+        aria-labelledby={titleId}
+        aria-describedby={prompt.detail ? `${messageId} ${detailId}` : messageId}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // Enter confirms only on Confirm itself, and never while it is disabled.
+          if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) e.preventDefault()
+        }}
       >
-        <h2>{prompt.title}</h2>
-        <p className="teardown-message">{prompt.message}</p>
-        {prompt.detail && <p className="muted teardown-detail">{prompt.detail}</p>}
+        <h2 id={titleId}>{prompt.title}</h2>
+        <p id={messageId} className="teardown-message">
+          {prompt.message}
+        </p>
+        {prompt.detail && (
+          <p id={detailId} className="muted teardown-detail">
+            {prompt.detail}
+          </p>
+        )}
         <ul className="teardown-items">
-          {items.map((item) => (
-            <li key={item.id} className={blocking.includes(item.id) ? 'warn' : undefined}>
-              <label className="teardown-item">
-                <input type="checkbox" checked={ticked.has(item.id)} onChange={(e) => tick(item.id, e.target.checked)} /> {item.label}
-              </label>
-              {blocking.includes(item.id) && ' It is running: stop it first, or tick this.'}
-            </li>
-          ))}
-          {unchecked.length > 0 && (
+          {items.map((item, i) => {
+            const runningId = `${ids}-running-${i}`
+            const blocks = blocking.includes(item.id)
+            return (
+              <li key={item.id} className={blocks ? 'warn' : undefined}>
+                <label className="teardown-item">
+                  <input
+                    type="checkbox"
+                    checked={ticked.has(item.id)}
+                    aria-describedby={blocks ? runningId : undefined}
+                    onChange={(e) => tick(item.id, e.target.checked)}
+                  />{' '}
+                  {item.label}
+                </label>
+                {blocks && <span id={runningId}> It is running: stop it first, or tick this.</span>}
+              </li>
+            )
+          })}
+          {warning && (
             <li className="warn teardown-unchecked">
-              This server could not check what {unchecked.join(' and ')} would tear down, so {unchecked.length > 1 ? 'they' : 'it'} may be left running.
-              Cancel and try again, or go ahead without {unchecked.length > 1 ? 'them' : 'it'}.
+              <span id={`${ids}-unchecked`}>{warning}</span>
               <label className="teardown-item">
-                <input type="checkbox" checked={withoutUnplanned} onChange={(e) => setWithoutUnplanned(e.target.checked)} /> Go ahead without{' '}
-                {unchecked.length > 1 ? 'them' : 'it'}
+                <input
+                  type="checkbox"
+                  checked={withoutUnplanned}
+                  aria-describedby={`${ids}-unchecked`}
+                  onChange={(e) => setWithoutUnplanned(e.target.checked)}
+                />{' '}
+                Go ahead without {unplanned.length > 1 ? 'them' : 'it'}
               </label>
             </li>
           )}
         </ul>
         <div className="modal-footer">
           <button onClick={cancel}>Cancel</button>
-          <button className="primary" autoFocus disabled={held} onClick={() => answerTeardown(true, ticked, withoutUnplanned)}>
+          <button ref={confirmButton} className="primary" disabled={held} onClick={() => answerTeardown(id, true, ticked, withoutUnplanned)}>
             {prompt.confirmLabel}
           </button>
         </div>
