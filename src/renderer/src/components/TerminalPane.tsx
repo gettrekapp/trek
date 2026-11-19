@@ -21,8 +21,11 @@ import {
   isQuietReveal,
   foreignSize,
   sendV2Size,
+  onTerminalScroll,
   subscribeForeignSize
 } from '../terminals'
+import { PluginSlot } from '../plugins/PluginHost'
+import { DIM_AFTER_KEY_MS, overlayDimmed } from '../plugins/overlayDim.ts'
 import { getBackend } from '../backend'
 import { QueueChip, QueuePanel } from './QueuePanel'
 import { moreLabel, moveButton, overflowCount, splitOverflow } from '../quickButtonRow'
@@ -70,6 +73,17 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     plan: QuickButtonPlan
     builtins: BuiltinValues
   } | null>(null)
+  // The plugin overlay steps back while the user types here or scrolls back (campsite's hiker).
+  const [lastKeyAt, setLastKeyAt] = useState<number | null>(null)
+  const [scrolledUp, setScrolledUp] = useState(false)
+  const [, setTick] = useState(0)
+  useEffect(() => (visible ? onTerminalScroll(terminalId, setScrolledUp) : undefined), [terminalId, visible])
+  useEffect(() => {
+    if (lastKeyAt === null) return
+    const timer = setTimeout(() => setTick((n) => n + 1), DIM_AFTER_KEY_MS)
+    return () => clearTimeout(timer)
+  }, [lastKeyAt])
+  const dimmed = overlayDimmed({ lastKeyAt, now: Date.now(), scrolledUp })
 
   const send = (text: string): void => {
     const backend = getBackend()
@@ -233,6 +247,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
         className="terminal-pane"
         style={{ display: visible ? 'flex' : 'none' }}
         onMouseDown={() => focusTerminal(terminalId)}
+        onKeyDownCapture={() => setLastKeyAt(Date.now())}
       >
         <div className="terminal-main">
           {foreign && !offline && (
@@ -252,6 +267,9 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
             </div>
           )}
           <div ref={ref} className="terminal-host" />
+          <div className={`plugin-terminal-overlay${dimmed ? ' dimmed' : ''}`}>
+            <PluginSlot name="terminalOverlay" props={{ terminalId }} />
+          </div>
           {/* Over the exited overlay (not the offline one): editing needs no live session */}
           <div className={`quick-buttons${exited && !offline ? ' exited' : ''}`}>
             {/* One row: the buttons wrap and everything below the first line is clipped, so what fits shows */}

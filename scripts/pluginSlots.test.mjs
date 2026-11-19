@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { activeSlotEntries, firstActiveSlot } from '../src/renderer/src/plugins/slots.ts'
+import { DIM_AFTER_KEY_MS, overlayDimmed } from '../src/renderer/src/plugins/overlayDim.ts'
 
 const entry = (id, status, slots) => ({ plugin: { manifest: { id }, slots }, status, host: {}, key: id })
 const Comp = () => null
@@ -16,4 +17,12 @@ test('firstActiveSlot: the first active one, or undefined', () => {
   const entries = [entry('a', 'missing', { sessionIndicator: Comp }), entry('b', 'on', { sessionIndicator: Comp }), entry('c', 'on', { sessionIndicator: Comp })]
   assert.equal(firstActiveSlot(entries, 'sessionIndicator')?.plugin.manifest.id, 'b')
   assert.equal(firstActiveSlot([], 'sessionIndicator'), undefined)
+})
+
+test('overlayDimmed: while scrolled back, or within 3 s of a key', () => {
+  assert.equal(DIM_AFTER_KEY_MS, 3000)
+  assert.equal(overlayDimmed({ lastKeyAt: null, now: 10_000, scrolledUp: false }), false)
+  assert.equal(overlayDimmed({ lastKeyAt: null, now: 10_000, scrolledUp: true }), true)
+  assert.equal(overlayDimmed({ lastKeyAt: 8_000, now: 10_000, scrolledUp: false }), true)
+  assert.equal(overlayDimmed({ lastKeyAt: 7_000, now: 10_000, scrolledUp: false }), false)
 })

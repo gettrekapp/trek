@@ -1834,6 +1834,19 @@ button:disabled {
   flex-direction: column;
 }
 
+/* A plugin's corner of the terminal (campsite's hiker): above the output, under the quick buttons; takes no clicks */
+.plugin-terminal-overlay {
+  position: absolute;
+  right: 22px;
+  bottom: 48px;
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 0.3s ease;
+}
+.plugin-terminal-overlay.dimmed {
+  opacity: 0.3;
+}
+
 .terminal-host {
   flex: 1;
   min-height: 0;
