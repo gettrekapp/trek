@@ -369,7 +369,11 @@ export function v2SettingsOverrides(
         if (Object.keys(values).length > 0) writer.write(pluginField(), { ...values })
         return
       }
-      writer.write(pluginField(), Object.keys(values).length > 0 ? { ...values } : null)
+      // An empty .env is none (as branch.setEnv's null): the Env panel clears with `env: ''`, which the
+      // branch above needs to see, but the plugin's copy keeps no empty text.
+      const { [LEGACY_ENV_BRANCH_FIELD]: text, ...rest } = values
+      const kept = pluginId === LEGACY_ENV_PLUGIN && text === '' ? rest : values
+      writer.write(pluginField(), Object.keys(kept).length > 0 ? { ...kept } : null)
     }
   }
 }

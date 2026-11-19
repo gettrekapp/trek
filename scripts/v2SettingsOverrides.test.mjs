@@ -514,6 +514,19 @@ test("a branch's .env the plugin's copy lacks (over its limit, kept only in the 
   assert.deepEqual(sends[2].args, ['r1', 'feat', 'env', { env: 'F=6' }, { env: 'E=5' }])
 })
 
+test("an empty .env is none (plugins E3): the Env panel's cleared variables leave no `env: ''` in the plugin's copy, its other keys kept", () => {
+  const { o, calls, mirror } = setup()
+  mirror.repositories[0].branchData = { feat: { env: 'A=1', pluginSettings: { env: { env: 'A=1' } } }, keep: { env: 'B=2', pluginSettings: { env: { env: 'B=2', later: true } } } }
+  o.setPluginBranchSettings('env', 'r1', 'feat', { env: '' }, 'Colima environments')
+  o.setPluginBranchSettings('env', 'r1', 'keep', { env: '', later: true }, 'Colima environments')
+  o.setPluginBranchSettings('other', 'r1', 'feat', { env: '' })
+  assert.deepEqual(calls, [
+    ['setBranchPluginSettings', 'r1', 'feat', 'env', {}, { env: 'A=1' }],
+    ['setBranchPluginSettings', 'r1', 'keep', 'env', { later: true }, { env: 'B=2', later: true }],
+    ['setBranchPluginSettings', 'r1', 'feat', 'other', { env: '' }, null]
+  ])
+})
+
 test('over the limit, keys other than env go through branch.setPluginSettings, the text untouched (plugins E3)', () => {
   const { o, calls, mirror } = setup()
   const big = 'A=' + 'x'.repeat(100_001)
