@@ -2,7 +2,7 @@
 // for each pose, stances, chores and labels.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HATS, JACKETS, NEUTRAL_JACKET, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
+import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
 import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
@@ -20,6 +20,17 @@ test('lookFor: the same look for the same id; jacket by provider, neutral when u
   const { jacket: _a, ...rest1 } = lookFor('t-1', 'claude')
   const { jacket: _b, ...rest2 } = lookFor('t-1', 'gemini')
   assert.deepEqual(rest1, rest2, 'the provider changes only the jacket')
+})
+
+test('lookFor: pants are drawn last, so hikers from before keep every other trait', () => {
+  const { pants: p1, ...before1 } = lookFor('t-1', 'claude')
+  assert.deepEqual(before1, { jacket: '#d97757', hat: 'headlamp', hatColor: '#b9a77a', hair: '#e0b050', skin: '#d9a066', beard: true, pack: '#7a4a6b', gear: 'compass' })
+  const { pants: p2, ...before2 } = lookFor('session-7', 'codex')
+  assert.deepEqual(before2, { jacket: '#3fae6a', hat: 'headlamp', hatColor: '#b9a77a', hair: '#3b2a1a', skin: '#f2c9a0', beard: true, pack: '#8a5a2b', gear: 'mug' })
+  for (const p of [p1, p2]) assert.ok(PANTS.includes(p), p)
+  const seen = new Set()
+  for (let i = 0; i < 200; i++) seen.add(lookFor(`session-${i}`, 'claude').pants)
+  assert.equal(seen.size, PANTS.length)
 })
 
 test('lookFor: looks spread out (no hat on more than 35% of 1000 sessions; beards near 30%)', () => {
