@@ -68,6 +68,21 @@
 .cs-indicator.clickable {
   cursor: pointer;
 }
+/* A waiting tab's sign: beside the hiker, inside the tab's height */
+.cs-tab-sign {
+  align-self: center;
+  margin-left: 3px;
+  width: 12px;
+  font: 700 11px/14px ui-monospace, 'SF Mono', Menlo, monospace;
+  text-align: center;
+  color: #111113;
+}
+.cs-tab-sign.attention {
+  background: var(--attention, #e2a336);
+}
+.cs-tab-sign.decision {
+  background: var(--decision, #b18cff);
+}
 .cs-terminal-hiker {
   filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.5));
 }
@@ -111,7 +126,7 @@
   padding: 2px 4px;
 }
 .cs-waiting-chip {
-  background: #ffb020;
+  background: var(--attention, #e2a336);
   color: #111111;
   border: none;
   font: 700 10px monospace;
@@ -199,8 +214,8 @@
   white-space: nowrap;
 }
 .cs-camp-badge.waiting {
-  border-color: #ffb020;
-  color: #ffb020;
+  border-color: var(--attention, #e2a336);
+  color: var(--attention, #e2a336);
 }
 /* A child of .campsite (no z-index), placed from its badge's rect when it opens */
 .cs-tent-popover {
@@ -283,7 +298,7 @@
   right: auto;
   transform: translateX(-50%);
   border: none;
-  color: #ffb020;
+  color: var(--attention, #e2a336);
   cursor: pointer;
   white-space: nowrap;
   z-index: 3;
