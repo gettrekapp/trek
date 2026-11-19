@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useAppStore } from '../store'
 import { PluginsSettings, hasPluginSettings } from '../plugins/PluginsSettings'
 import { usePluginEntries } from '../plugins/PluginHost'
@@ -54,6 +54,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   })
   const active = resolveSettingsTab(chosen, tabs)
   const pluginTab = pluginTabs.find((t) => t.id === active)
+  // A plugin's tab that went (the plugin switched off, or another server): General is chosen, so
+  // the tab doesn't come back by itself when the plugin does.
+  useEffect(() => {
+    if (active !== chosen) setChosen(active)
+  }, [active, chosen])
 
   const onTabKey = (e: React.KeyboardEvent): void => {
     const next = nextSettingsTab(tabs, active, e.key)

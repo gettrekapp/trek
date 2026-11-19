@@ -5,7 +5,7 @@ import { useMemo, useSyncExternalStore } from 'react'
 import type { PluginWorktree } from '../../../shared/plugins/client.ts'
 import { PluginScope, usePluginEntries, type PluginEntry } from './PluginHost'
 import { pluginActive } from './presence'
-import { panelEntries, pluginSlotId, type PluginPanel } from './slots'
+import { panelEntries, pluginSlotId, subscribeAll, type PluginPanel } from './slots'
 
 type WorktreeSlot = 'worktreePanel' | 'worktreeChip' | 'sidebarBadge' | 'hoverRow' | 'repoSettings'
 
@@ -18,20 +18,7 @@ export function useSlotEntries(name: WorktreeSlot): PluginEntry[] {
 /** The worktree's Run-menu entries from the plugins, kept current with each plugin's own state. */
 export function usePluginPanels(worktree: PluginWorktree | undefined): PluginPanel[] {
   const sources = useSlotEntries('worktreePanel')
-  const subscribe = useMemo(
-    () => (listener: () => void) => {
-      const offs = sources.map((e) => {
-        try {
-          return e.plugin.slots!.worktreePanel!.subscribe(listener)
-        } catch (err) {
-          console.error(`[plugin ${e.plugin.manifest.id}] its Run menu subscription failed`, err)
-          return () => {}
-        }
-      })
-      return () => offs.forEach((off) => off())
-    },
-    [sources]
-  )
+  const subscribe = useMemo(() => (listener: () => void) => subscribeAll(sources, listener), [sources])
   const key = useSyncExternalStore(subscribe, () => JSON.stringify(panelEntries(sources, worktree)))
   return useMemo(() => JSON.parse(key) as PluginPanel[], [key])
 }
@@ -106,7 +93,7 @@ export function usePluginSettingsTabs(): PluginSettingsTab[] {
 export function PluginRepoSettings({ tab, repoId }: { tab: PluginSettingsTab; repoId: string | undefined }): React.JSX.Element | null {
   const repos = useSyncExternalStore(tab.entry.host.onReposChanged, tab.entry.host.repos)
   const repo = repos.find((r) => r.id === repoId)
-  if (!repo) return null
+  if (!repo) return <div className="settings-desc">Choose a repository</div>
   const Component = tab.entry.plugin.slots!.repoSettings!.Component
   return (
     <PluginScope entry={tab.entry}>

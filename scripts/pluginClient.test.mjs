@@ -310,9 +310,17 @@ test("the host (plugins E3): a request's timeout; the repos, their changes and t
     onReposChanged: (l) => (listeners.push(l), () => listeners.splice(listeners.indexOf(l), 1)),
     setRepoSettings: (...args) => void writes.push(['repo', ...args]),
     setBranchSettings: (...args) => void writes.push(['branch', ...args]),
-    confirm: async (prompt) => prompt.confirmLabel === 'Reset',
+    confirm: async (prompt) => (writes.push(['confirm', prompt]), prompt.confirmLabel === 'Reset'),
     showError: async (title) => void writes.push(['error', title])
   })
+  await host.request('up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 })
+  assert.deepEqual(sent, [['env.up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 }]])
+  // A timeout is used only when finite and positive, capped at an hour.
+  sent.length = 0
+  for (const timeoutMs of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '9000', 2 * 3_600_000]) await host.request('up', {}, { timeoutMs })
+  await host.request('up', {})
+  assert.deepEqual(sent.map(([, , options]) => options), [undefined, undefined, undefined, undefined, undefined, { timeoutMs: 3_600_000 }, undefined])
+  sent.length = 0
   await host.request('up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 })
   assert.deepEqual(sent, [['env.up', { worktreeId: 'w2' }, { timeoutMs: 1_800_000 }]])
   assert.equal(host.repos(), repos)
@@ -328,7 +336,14 @@ test("the host (plugins E3): a request's timeout; the repos, their changes and t
     ['branch', 'env', 'r1', 'feat', { env: 'A=1' }, 'Colima environments'],
     ['error', 'Could not remove environment']
   ])
-  assert.equal(await host.confirm({ title: 'T', message: 'M', confirmLabel: 'Reset' }), true)
+  writes.length = 0
+  assert.equal(await host.confirm({ title: 'T', message: 'M', confirmLabel: 'Reset', dialogId: 'x', defaultCancel: true }), true)
+  // Only the four fields, as strings: a plugin can't reach the dialog's other options.
+  await host.confirm({ title: 1, message: 'M', detail: 2, confirmLabel: 'OK', cancelLabel: 'Nope' })
+  assert.deepEqual(writes, [
+    ['confirm', { title: 'T', message: 'M', confirmLabel: 'Reset' }],
+    ['confirm', { title: '1', message: 'M', detail: '2', confirmLabel: 'OK' }]
+  ])
   // Without the window's deps (a test's host): no repos (one stable array), a confirm declined, fields that render nothing.
   const bare = createClientHost(env, backend, { appSettings: fakeAppSettings(), terminalLabel: String, currentBackend: () => backend })
   assert.deepEqual([bare.repos(), bare.repos() === bare.repos(), await bare.confirm({ title: 'T', message: 'M', confirmLabel: 'OK' })], [[], true, false])

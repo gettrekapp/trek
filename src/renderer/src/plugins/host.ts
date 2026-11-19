@@ -56,6 +56,23 @@ const NO_SESSIONS: readonly PluginSession[] = []
 const NO_REPOS: readonly PluginRepo[] = []
 const NO_COMPONENTS: ClientPluginHost['components'] = { SettingText: () => null, SettingNumber: () => null }
 
+/** The longest a plugin's request may wait (plugins E3): an hour. */
+export const MAX_PLUGIN_TIMEOUT_MS = 60 * 60_000
+
+/** A plugin's timeout, kept only when it is a finite positive number, capped at MAX_PLUGIN_TIMEOUT_MS; else the default. */
+function requestOptions(options: { timeoutMs?: unknown } | undefined): { timeoutMs: number } | undefined {
+  const ms = options?.timeoutMs
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? { timeoutMs: Math.min(ms, MAX_PLUGIN_TIMEOUT_MS) } : undefined
+}
+
+/** Core's confirm gets the plugin's four fields as strings, nothing else of its object. */
+const confirmFields = (prompt: PluginConfirmPrompt): PluginConfirmPrompt => ({
+  title: String(prompt.title),
+  message: String(prompt.message),
+  ...(prompt.detail !== undefined ? { detail: String(prompt.detail) } : {}),
+  confirmLabel: String(prompt.confirmLabel)
+})
+
 export function createClientHost(manifest: PluginManifest, backend: WindowBackend, deps: HostDeps): ClientPluginHost {
   const { id } = manifest
   const projectId = backend.plugins.projectId ?? ''
@@ -63,7 +80,7 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     id,
     projectId,
     request: <T>(method: string, params: Record<string, unknown> = {}, options?: { timeoutMs?: number }) =>
-      backend.plugins.request(`${id}.${method}`, params, options) as Promise<T>,
+      backend.plugins.request(`${id}.${method}`, params, requestOptions(options)) as Promise<T>,
     onEvent: <T>(event: string, listener: (data: T) => void) =>
       backend.plugins.onEvent(`${id}.${event}`, (payload) => {
         if (forProject(payload, projectId)) listener(payload as T)
@@ -122,7 +139,8 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     // The plugin's name labels its settings in a conflict dialog.
     setRepoSettings: (repoId, values) => deps.setRepoSettings?.(id, repoId, values, manifest.name),
     setBranchSettings: (repoId, branch, values) => deps.setBranchSettings?.(id, repoId, branch, values, manifest.name),
-    confirm: (prompt) => deps.confirm?.(prompt) ?? Promise.resolve(false),
+    // Async, so a prompt whose fields can't be read rejects rather than throws.
+    confirm: async (prompt) => (deps.confirm ? deps.confirm(confirmFields(prompt)) : false),
     showError: (title, message) => deps.showError?.(title, message) ?? Promise.resolve(),
     components: deps.components ?? NO_COMPONENTS
   }

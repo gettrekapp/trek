@@ -2,7 +2,7 @@
 // components, mounted where the window's server has the plugin and it is on for the project, each
 // inside its host and an error boundary (a plugin that throws hides its own UI, not the window's).
 import { Component, useMemo, useSyncExternalStore, type ReactNode } from 'react'
-import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type MultiSlotName, type PluginSlotProps } from '../../../shared/plugins/client.ts'
+import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type MultiSlotName, type PluginRepo, type PluginSlotProps } from '../../../shared/plugins/client.ts'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
 import { allBranchTickets, allWorktrees, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
@@ -126,9 +126,13 @@ function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost
 /** Themes' hosts, apart from the built-ins': an installed theme may carry any id. */
 const themeHosts = new WeakMap<WindowBackend, Map<string, ClientPluginHost>>()
 
+/** A theme's repos(): none, one array so it is a stable snapshot. */
+const THEME_REPOS: readonly PluginRepo[] = []
+
 /**
  * The window's active theme as an entry for PluginScope (theme plugins). Its host has no server
- * half: `request` rejects, `onEvent` never fires and it publishes no ticket info; `prefs` works.
+ * half: `request` rejects, `onEvent` never fires and it publishes no ticket info; `prefs` works. It
+ * sees no repositories, writes no settings and shows no dialogs (plugins E3).
  */
 export function themeEntry(backend: WindowBackend, plugin: ClientPlugin): PluginEntry {
   let byId = themeHosts.get(backend)
@@ -139,7 +143,13 @@ export function themeEntry(backend: WindowBackend, plugin: ClientPlugin): Plugin
       ...createClientHost(plugin.manifest, backend, hostDeps()),
       request: () => Promise.reject(new Error('A theme has no server half to ask')),
       onEvent: () => () => {},
-      setTicketInfo: () => {}
+      setTicketInfo: () => {},
+      repos: () => THEME_REPOS,
+      onReposChanged: () => () => {},
+      setRepoSettings: () => {},
+      setBranchSettings: () => {},
+      confirm: () => Promise.resolve(false),
+      showError: () => Promise.resolve()
     }
     byId.set(plugin.manifest.id, host)
   }
