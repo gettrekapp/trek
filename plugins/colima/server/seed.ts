@@ -108,8 +108,9 @@ function readAppRegistry(file: string, skipped: string[]): Record<string, SeedEn
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
-  } catch (err) {
-    throw new Error(`${file} does not parse (${(err as Error).message})`)
+  } catch {
+    // Never the parser's message: it can quote the file, and with it a branch's variables (secrets).
+    throw new Error(`${file} does not parse`)
   }
   if (!isRecord(parsed)) throw new Error(`${file} is not a JSON object`)
   const out: Record<string, SeedEntry> = {}

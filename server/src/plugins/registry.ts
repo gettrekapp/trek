@@ -2,7 +2,7 @@
 // with its host (secrets, data files, its programs (run, spawn), its project's subscribers, the
 // session lookup), then asked for its methods (`<id>.*` when no core method has the name), its MCP
 // tools, instructions and session prompt in the projects where it is on.
-import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
@@ -151,6 +151,20 @@ function wireError(err: unknown): Error {
   const code = (err as { code?: unknown } | null)?.code
   if (typeof code === 'string' && PASSTHROUGH.has(code)) return err as Error
   return codedError('TOOL_ERROR', err instanceof Error ? err.message : String(err))
+}
+
+/**
+ * Whether anything (a file, a directory, a symlink, even a dangling one) is at the path: as the
+ * Colima plugin's data.ts decides whose a registry is. Only ENOENT is nothing: a path that can't be
+ * looked at (EACCES) may hold a file, so the stale old one beside it is not read instead.
+ */
+function present(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
 }
 
 export function createPluginRegistry(options: PluginRegistryOptions): PluginRegistry {
@@ -321,7 +335,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         checkFileName(name)
         return (options.siblingDataDirs?.() ?? []).map((sibling) => {
           const own = fileIn(join(sibling, 'plugins', manifest.id), name)
-          return existsSync(own) ? own : fileIn(sibling, name)
+          return present(own) ? own : fileIn(sibling, name)
         })
       },
       legacyImportFile: (name) => {

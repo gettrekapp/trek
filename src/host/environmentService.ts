@@ -113,12 +113,20 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
    * `list`, which would show every VM as an orphan to delete); the other reads take it as empty.
    */
   const readRegistry = async (strict = false): Promise<Registry> => {
-    let parsed: unknown
+    let text: string
     try {
-      parsed = JSON.parse(await readFile(registryFile, 'utf8'))
+      text = await readFile(registryFile, 'utf8')
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' || !strict) return {}
       throw registryUnreadable(registryFile, (err as Error).message)
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      if (!strict) return {}
+      // Never the parser's message: it can quote the file, and with it a branch's variables (secrets).
+      throw registryUnreadable(registryFile, 'it does not parse')
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Registry
     if (!strict) return {}

@@ -4,7 +4,7 @@
 // files, and the welcome's plugins and legacy capabilities.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
@@ -1104,6 +1104,21 @@ test("host.legacySiblingDataFiles and host.legacyImportFile (plugins E2): each s
   t.after(() => plain.dispose())
   assert.deepEqual(host.legacySiblingDataFiles('reg.json'), [])
   assert.equal(host.legacyImportFile('reg.json'), undefined)
+})
+
+test("host.legacySiblingDataFiles: a sibling's plugin file that is a dangling symlink is still its file (lstat), never its stale old one", { skip: posixOnly('symlinks') }, (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-siblings-link-')))
+  t.after(() => removeDir(root))
+  const own = join(root, 'local')
+  for (const name of ['local', 'local-dev']) mkdirSync(join(root, name))
+  mkdirSync(join(root, 'local-dev', 'plugins', 'runner'), { recursive: true })
+  symlinkSync(join(root, 'local-dev', 'nowhere.json'), join(root, 'local-dev', 'plugins', 'runner', 'reg.json'))
+  writeFileSync(join(root, 'local-dev', 'reg.json'), '{"stale":{}}')
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const registry = createPluginRegistry({ plugins: [runner], secretsFile: join(root, 'secrets.json'), dataDir: own, hub: fakeHub(), projects: fakeProjects({}), isCoreMethod, coreToolNames: [], warn: () => {}, siblingDataDirs: () => localSiblingDataDirs(own) })
+  t.after(() => registry.dispose())
+  assert.deepEqual(host.legacySiblingDataFiles('reg.json'), [join(root, 'local-dev', 'plugins', 'runner', 'reg.json')])
 })
 
 test("pluginPathChecks' repo and worktree (plugins E2): core's own checks and codes", async (t) => {

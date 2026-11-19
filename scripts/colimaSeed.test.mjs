@@ -4,11 +4,12 @@
 // (5a's upgrade, server/src/integrations/envSeed.ts before E2).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareRegistry } from '../plugins/colima/server/data.ts'
-import { seedRegistryFromApp } from '../plugins/colima/server/seed.ts'
+import { seedRegistryFromApp, writeFileOnce } from '../plugins/colima/server/seed.ts'
+import { createEnvironmentService } from '../plugins/colima/server/service.ts'
 import { removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX file modes (stat reports 0666): the 0600 checks are POSIX only.
@@ -48,7 +49,7 @@ test("prepareRegistry: the server's old registry is copied (0600) and kept where
   const { data } = dirs(t)
   mkdirSync(data, { recursive: true })
   const old = JSON.stringify({ 'twb-a-000001': entry() })
-  writeFileSync(join(data, 'environments.json'), old, { mode: 0o600 })
+  writeFileSync(join(data, 'environments.json'), old, { mode: 0o644 })
   const host = fakeHost(data)
   const file = prepareRegistry(host)
   assert.equal(file, join(data, 'plugins', 'env', 'environments.json'))
@@ -239,4 +240,49 @@ test("the server's registry is never replaced, even a dangling symlink or a file
   if (posix) assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
   assert.equal(existsSync(stale), false)
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), ['twb-a-000001'])
+})
+
+test('writeFileOnce on a path that is already there returns false and leaves it as it was', (t) => {
+  const { data } = dirs(t)
+  mkdirSync(data, { recursive: true })
+  const file = join(data, 'environments.json')
+  writeFileSync(file, '{"mine":{}}')
+  assert.equal(writeFileOnce(file, '{}'), false)
+  assert.equal(readFileSync(file, 'utf8'), '{"mine":{}}')
+  assert.deepEqual(readdirSync(data), ['environments.json'], 'no temp file left')
+})
+
+test("prepareRegistry removes stray seed temp files (another pid's crash) before copying", (t) => {
+  const { data } = dirs(t)
+  const dir = join(data, 'plugins', 'env')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(data, 'environments.json'), '{}')
+  for (const pid of ['1', '99999']) writeFileSync(join(dir, `environments.json.${pid}.seed.tmp`), '{"twb-secret-000001":{}}', { mode: 0o644 })
+  writeFileSync(join(dir, 'other.json'), 'kept')
+  prepareRegistry(fakeHost(data))
+  assert.deepEqual(readdirSync(dir).sort(), ['environments.json', 'other.json'])
+})
+
+test('a registry that does not parse never quotes its contents: not in a log line, a thrown error, or the wire message', async (t) => {
+  const secretText = '{"twb-a-000001": {"envVars": {"TOKEN": sk-secret}}}'
+  const leaks = (text) => assert.equal(String(text).includes('sk-secret'), false, String(text))
+  // The old place: not copied, logged.
+  const one = dirs(t)
+  mkdirSync(one.data, { recursive: true })
+  writeFileSync(join(one.data, 'environments.json'), secretText)
+  const host = fakeHost(one.data)
+  const legacy = prepareRegistry(host)
+  assert.ok(host.logs.length > 0)
+  for (const [, m] of host.logs) leaks(m)
+  // The app's: the take-over's throw and its log.
+  const two = dirs(t)
+  writeFileSync(join(two.app, 'environments.json'), secretText)
+  assert.throws(() => seed(two.app, two.data), (err) => (leaks(err.message), /does not parse/.test(err.message)))
+  const appHost = fakeHost(two.data, two.app)
+  prepareRegistry(appHost)
+  assert.ok(appHost.logs.length > 0)
+  for (const [, m] of appHost.logs) leaks(m)
+  // The service: list's TOOL_ERROR message (what reaches the wire).
+  const service = createEnvironmentService({ registryFile: legacy, tools: { listColimaProfiles: async () => [] } })
+  await assert.rejects(service.list(), (err) => (leaks(err.message), /does not parse/.test(err.message) && err.reason === 'registry'))
 })

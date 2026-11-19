@@ -9,7 +9,8 @@
 // anything at the old path is the server's own (it was 5a's take-over marker), so the app's is
 // then never taken. Both writes are write-once (seed.ts's writeFileOnce: a temp file hard-linked
 // into place), so a plugin copy that appeared meanwhile is never overwritten by an older one.
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, unlinkSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import type { ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { isRecord, present, seedRegistryFromApp, writeFileOnce } from './seed.ts'
 
@@ -23,8 +24,9 @@ function readLegacy(file: string): string {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
-  } catch (err) {
-    throw new Error(`it does not parse (${messageOf(err)})`)
+  } catch {
+    // Never the parser's message: it can quote the file, and with it a branch's variables (secrets).
+    throw new Error('it does not parse')
   }
   if (!isRecord(parsed)) throw new Error('it is not a JSON object')
   return text
@@ -36,8 +38,32 @@ function readLegacy(file: string): string {
  * logged and read in place (the service then says it is unreadable, naming that file), and copied
  * at a later start once it is fixed; a take-over that fails is logged and retried at the next start.
  */
+/**
+ * Removes the seed temp files (`<file>.<pid>.seed.tmp`) a start that crashed mid-write left beside
+ * `file`, under any pid: each may hold a copy of a registry (a branch's variables). Best effort.
+ */
+function removeStrayTemps(file: string): void {
+  const dir = dirname(file)
+  const prefix = `${basename(file)}.`
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !/^\d+\.seed\.tmp$/.test(name.slice(prefix.length))) continue
+    try {
+      unlinkSync(join(dir, name))
+    } catch {
+      // best effort: a directory, or gone meanwhile
+    }
+  }
+}
+
 export function prepareRegistry(host: Pick<ServerPluginHost, 'dataFile' | 'legacyDataFile' | 'legacyImportFile' | 'log'>): string {
   const file = host.dataFile(REGISTRY_FILE)
+  removeStrayTemps(file)
   if (present(file)) return file
   const legacy = host.legacyDataFile(REGISTRY_FILE)
   if (present(legacy)) {
