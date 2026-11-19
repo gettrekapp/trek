@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
-import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
+import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
 import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
@@ -68,6 +68,43 @@ test("pixels: the jacket and the hat show; a two-frame pose's frames differ; gea
   for (const pose of POSES.filter((p) => FRAMES[p] === 2)) assert.notDeepEqual(pixels(look, pose, 0), pixels(look, pose, 1), pose)
   const withMug = pixels({ ...look, gear: 'pole' }, 'sit', 0, 'mug')
   assert.ok(withMug.some((r) => r.fill === '#e6e1d3'), 'the mug')
+})
+
+const top = (rects) => Math.min(...rects.map((r) => r.y))
+const right = (rects) => Math.max(...rects.map((r) => r.x + r.w))
+const bare = { ...lookFor('shape', 'claude'), hat: 'none', beard: false }
+
+test('shade: each channel × 0.76', () => {
+  assert.equal(shade('#000000'), '#000000')
+  assert.equal(shade('#ffffff'), '#c2c2c2')
+  assert.equal(shade('#d97757'), '#a55a42')
+})
+
+test('pixels: sitting is 2 rows lower than standing, crouched chores 1 row; legs reach forward when seated', () => {
+  assert.equal(top(pixels(bare, 'stand', 0, 'none')), 2)
+  assert.equal(top(pixels(bare, 'sit', 0, 'none')), 4)
+  assert.equal(top(pixels(bare, 'tent', 0)), 3)
+  assert.equal(top(pixels(bare, 'fire', 0)), 3)
+  assert.equal(right(pixels(bare, 'stand', 0, 'none')), 10)
+  assert.equal(right(pixels(bare, 'sit', 0, 'none')), 11, 'boots out front')
+})
+
+test('pixels: a sleeper lies down, low and full width, in a bag the color of its jacket; a second z on frame 1', () => {
+  const asleep = pixels(bare, 'sleep', 0)
+  assert.ok(asleep.filter((r) => r.fill !== '#b9b4c6').every((r) => r.y >= 11), 'everything but the z is in the bottom 5 rows')
+  assert.equal(Math.min(...asleep.map((r) => r.x)), 0)
+  assert.equal(right(asleep), 12)
+  assert.ok(asleep.some((r) => r.fill === bare.jacket && r.w === 8), 'the bag')
+  assert.equal(pixels(bare, 'sleep', 1).length, asleep.length + 3)
+})
+
+test('pixels: sleeves and the hem are the shaded jacket; pants and a bedroll show; wave, sleep and fire have two frames', () => {
+  const fills = (rects) => new Set(rects.map((r) => r.fill))
+  const standing = fills(pixels(bare, 'stand', 0, 'none'))
+  assert.ok(standing.has(shade(bare.jacket)), 'sleeves')
+  assert.ok(standing.has(bare.pants), 'pants')
+  assert.ok(standing.has('#d9c9a0'), 'bedroll')
+  assert.deepEqual([FRAMES.wave, FRAMES.sleep, FRAMES.fire, FRAMES.sit, FRAMES.cheer], [2, 2, 2, 1, 1])
 })
 
 const session = (over = {}) => ({ terminalId: 't', label: 'Claude 2', provider: 'claude', status: 'working', decision: false, worktreeId: 'w', worktreeName: 'auth', branch: 'feature/auth', ...over })
