@@ -51,6 +51,7 @@ export function lookFor(terminalId: string, provider: string): Look {
   const next = generator(fnv1a(terminalId))
   const pick = <T>(list: readonly T[]): T => list[Math.floor(next() * list.length)]
   // A fixed order of draws: adding a field later goes at the end, so existing hikers keep their looks.
+  // Changing the length of a palette list (HATS, HAIRS, …) reshuffles every existing hiker too.
   const hat = pick(HATS)
   const hatColor = pick(HAT_COLORS)
   const hair = pick(HAIRS)

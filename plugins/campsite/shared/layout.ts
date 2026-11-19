@@ -2,7 +2,8 @@
 // middle; waiting hikers stand around it. Global sessions sit on a log just left of the fire. Each
 // worktree with sessions pitches a tent, alternating right and left going out, with its hikers in
 // front. Crowded (more than MAX_SPREAD hikers out, or too wide for the strip): grouped mode, where
-// tents carry counts and only waiting hikers are drawn. Pure.
+// tents carry counts and only waiting hikers are drawn. Exited Global sessions sit on the log (they
+// widen it) though MAX_SPREAD counts only the hikers out who are not exited. Pure.
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { isWaiting } from './pose.ts'
 
@@ -35,8 +36,10 @@ export interface CampLayout {
   tents: CampTent[]
   log: { x: number; hikers: number } | null
   hikers: CampHikerSpot[]
-  /** Tents left out for want of room (grouped mode) */
+  /** Camps left out for want of room (grouped mode): tents, or the Global log */
   moreTents: number
+  /** Waiting hikers left out because the fire has no room for them */
+  moreWaiting: number
 }
 
 interface Group {
@@ -46,6 +49,8 @@ interface Group {
 }
 
 export function campLayout(sessions: readonly PluginSession[], width: number): CampLayout {
+  // Not measured yet
+  if (width <= 0) return { width, fireX: 0, grouped: false, tents: [], log: null, hikers: [], moreTents: 0, moreWaiting: 0 }
   const groups: Group[] = []
   let global: Group | null = null
   for (const s of sessions) {
@@ -69,7 +74,10 @@ export function campLayout(sessions: readonly PluginSession[], width: number): C
 function attempt(sessions: readonly PluginSession[], groups: Group[], global: Group | null, width: number, grouped: boolean): CampLayout | null {
   const fireX = Math.round(width / 2)
   const hikers: CampHikerSpot[] = []
-  const waiting = sessions.filter(isWaiting)
+  const allWaiting = sessions.filter(isWaiting)
+  const slots = Math.max(0, Math.floor((width - 2 * PAD - 2 * FIRE_CLEAR) / SLOT))
+  const waiting = allWaiting.slice(0, slots)
+  const moreWaiting = allWaiting.length - waiting.length
   waiting.forEach((s, i) => {
     const side = i % 2 === 0 ? 1 : -1
     hikers.push({ terminalId: s.terminalId, x: fireX + side * (FIRE_CLEAR + SLOT / 2 + Math.floor(i / 2) * SLOT), place: 'fire' })
@@ -81,6 +89,7 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
   const fitsLeft = (w: number): boolean => left - w >= PAD
 
   // Log: Global's hikers that are not at the fire (exited ones too, greyed by the client)
+  let moreTents = 0
   let log: CampLayout['log'] = null
   if (global) {
     const out = global.members.filter((s) => !isWaiting(s))
@@ -91,15 +100,15 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
       if (!grouped) spreadAt(out, center, 'log', hikers)
       left -= w + GAP
     } else if (!grouped) return null
+    else moreTents++
   }
 
   const tents: CampTent[] = []
-  let moreTents = 0
   let toRight = true
   for (const g of groups) {
     const out = g.members.filter((s) => !isWaiting(s) && s.status !== 'exited')
     const w = grouped ? TENT_W : Math.max(TENT_W, out.length * SLOT)
-    // Try the side whose turn it is, then the other
+    // Try the side whose turn it is, then the other (a fallback can make the outward order non-monotone in open mode)
     const sides: readonly ('r' | 'l')[] = toRight ? (['r', 'l'] as const) : (['l', 'r'] as const)
     const side: 'r' | 'l' | undefined = sides.find((x) => (x === 'r' ? fitsRight(w) : fitsLeft(w)))
     if (!side) {
@@ -117,7 +126,7 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
       for (const s of g.members) if (s.status === 'exited' && !isWaiting(s)) hikers.push({ terminalId: s.terminalId, x: Math.round(center), place: 'inside' })
     }
   }
-  return { width, fireX, grouped, tents, log, hikers, moreTents }
+  return { width, fireX, grouped, tents, log, hikers, moreTents, moreWaiting }
 }
 
 function spreadAt(members: readonly PluginSession[], center: number, place: Place, into: CampHikerSpot[]): void {

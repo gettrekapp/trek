@@ -70,7 +70,8 @@ export function statusText(session: Pick<PluginSession, 'status' | 'decision'>):
 
 export const hikerLabel = (session: PluginSession): string => `${session.label}, ${statusText(session)}`
 
-// The core StatusBadge's titles, so a hiker on a tab says the same.
+// The core StatusBadge's titles, so a hiker on a tab says the same, except idle: core shows no badge
+// for it, but a sleeping hiker still needs a title. Unknown statuses fall back to idle's.
 const TITLES: Readonly<Record<PluginSessionStatus, string>> = {
   starting: 'Starting…',
   working: 'Agent is working',
@@ -90,7 +91,8 @@ export function statusTitle(status: PluginSessionStatus, clickable: boolean): st
 }
 
 export function hikerTooltip(session: PluginSession, chore: Chore): string {
-  const parts = [session.label, session.worktreeName ?? 'Global', statusText(session)]
+  const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
+  const parts = [session.label, where, statusText(session)]
   if (session.status === 'working' && !isWaiting(session)) parts.push(CHORE_NAMES[chore])
   return parts.join(' · ')
 }

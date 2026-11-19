@@ -77,9 +77,34 @@ test('tentBadge and signText', () => {
   assert.equal(tentBadge({ hikers: 3, waiting: 1 }), '3 · 1 waving')
   assert.equal(signText('feature/a-very-long-branch-name'), 'a-very-long-b…')
   assert.equal(signText('main'), 'main')
+  assert.equal(signText('averyveryverylongbranchname'), 'averyveryvery…')
 })
 
 test('no sessions: just the fire', () => {
   const l = campLayout([], 800)
   assert.deepEqual([l.tents, l.hikers, l.log, l.grouped], [[], [], null, false])
+})
+
+test('waiting hikers are placed inside the strip; those past the room are counted', () => {
+  for (const width of [360, 400, 900]) {
+    const waiting = Array.from({ length: 10 }, () => s('w1', { status: 'attention' }))
+    const l = campLayout(waiting, width)
+    const placed = l.hikers.filter((h) => h.place === 'fire')
+    for (const h of placed) assert.ok(h.x >= 0 && h.x <= width, `${width}: hiker at ${h.x}`)
+    assert.equal(placed.length + l.moreWaiting, 10)
+  }
+  assert.equal(campLayout([s('w1', { status: 'attention' })], 800).moreWaiting, 0)
+})
+
+test('a Global log left out is counted in moreTents', () => {
+  const sessions = [...Array.from({ length: 6 }, () => s('w1', { status: 'attention' })), s(null), s(null), s('w2'), s('w3')]
+  const l = campLayout(sessions, 400)
+  assert.equal(l.log, null)
+  assert.equal(l.tents.length + l.moreTents + (l.log ? 1 : 0), 4)
+})
+
+test('width 0 or less (not measured yet): an empty layout', () => {
+  for (const w of [0, -5]) {
+    assert.deepEqual(campLayout([s('w1'), s(null)], w), { width: w, fireX: 0, grouped: false, tents: [], log: null, hikers: [], moreTents: 0, moreWaiting: 0 })
+  }
 })

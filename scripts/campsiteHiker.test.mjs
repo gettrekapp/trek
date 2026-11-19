@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, isWaiting, stanceFor, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -35,7 +35,7 @@ test('lookFor: looks spread out (no hat on more than 35% of 1000 sessions; beard
   assert.ok(beards > 220 && beards < 380, `beards: ${beards}`)
 })
 
-test('pixels: every pose and frame stays on the 12×16 grid (a sign may sit above it)', () => {
+test('pixels: every pose and frame stays on the 12×16 grid', () => {
   const look = lookFor('grid', 'claude')
   for (const pose of POSES) {
     for (let frame = 0; frame < FRAMES[pose]; frame++) {
@@ -83,11 +83,16 @@ test('choreFor: stable for at least 20 s at a time, and it changes over ten minu
     const seen = new Set()
     let changes = 0
     let last = choreFor(id, 0)
+    let lastChange = null
     for (let t = 0; t <= 600_000; t += 500) {
       const c = choreFor(id, t)
       assert.ok(CHORES.includes(c))
       seen.add(c)
-      if (c !== last) changes++
+      if (c !== last) {
+        changes++
+        if (lastChange !== null) assert.ok(t - lastChange >= 20_000, `${id}: changed after ${t - lastChange} ms`)
+        lastChange = t
+      }
       last = c
     }
     assert.ok(changes <= 600_000 / 20_000 + 1, `${id}: ${changes} changes`)
@@ -103,5 +108,14 @@ test('labels: the aria label, the badge titles, the tooltip', () => {
   assert.equal(statusTitle('done', true), 'Agent finished — click to mark fully complete')
   assert.equal(statusTitle('complete', true), 'Marked complete — status tracking paused — click to resume tracking')
   assert.equal(hikerTooltip(session(), 'chop'), `Claude 2 · auth · working · ${CHORE_NAMES.chop}`)
-  assert.equal(hikerTooltip(session({ worktreeName: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
+  assert.equal(hikerTooltip(session({ worktreeId: null, worktreeName: null, branch: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
+})
+
+test('labels: an unknown status reads as idle; a worktree session with no name falls back to its branch', () => {
+  assert.equal(statusText(session({ status: 'someday' })), 'idle')
+  assert.equal(hikerLabel(session({ status: 'someday' })), 'Claude 2, idle')
+  assert.equal(statusTitle('someday', true), 'Agent is idle')
+  assert.equal(hikerTooltip(session({ worktreeName: null, branch: 'feature/x', status: 'idle' }), 'chop'), 'Claude 2 · feature/x · idle')
+  assert.equal(hikerTooltip(session({ worktreeName: null, branch: null, status: 'idle' }), 'chop'), 'Claude 2 ·  · idle')
+  assert.equal(hikerTooltip(session({ worktreeId: null, worktreeName: 'x', branch: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
 })
