@@ -37,30 +37,43 @@ export function indicatorState(session: Pick<PluginSession, 'status' | 'decision
   return { status: status ?? 'idle', decision: false }
 }
 
+/** What a waiting hiker's sign says: the bell rang, or a decision is pending */
+export type Sign = 'attention' | 'decision'
+export const SIGN_TEXT: Readonly<Record<Sign, string>> = { attention: '!', decision: '?' }
+/** The core's tokens, with their values as fallbacks */
+export const SIGN_COLORS: Readonly<Record<Sign, string>> = { attention: 'var(--attention, #e2a336)', decision: 'var(--decision, #b18cff)' }
+/** Each glyph's filled cells, [x, y] on a 3×5 grid */
+export const SIGN_GLYPHS: Readonly<Record<Sign, readonly (readonly [number, number])[]>> = {
+  attention: [[1, 0], [1, 1], [1, 2], [1, 4]],
+  decision: [[0, 0], [1, 0], [2, 0], [2, 1], [1, 2], [1, 4]]
+}
+
 export interface Stance {
   pose: Pose
   /** What the hands hold instead of the look's own */
   gear?: Gear | 'none'
   grey: boolean
-  /** The "!" sign over the head */
-  sign: boolean
+  /** The sign it waves under, if it is waiting */
+  sign: Sign | null
 }
 
-// `stand` and `cheer` poses are reserved: drawn by pixels.ts, not returned here yet.
+// The `stand` pose is reserved: drawn by pixels.ts, not returned here yet.
 export function stanceFor(session: Pick<PluginSession, 'status' | 'decision'>, chore: Chore): Stance {
-  if (isWaiting(session)) return { pose: 'wave', gear: 'none', grey: false, sign: true }
+  // A pending decision says more than a bell
+  if (isWaiting(session)) return { pose: 'wave', gear: 'none', grey: false, sign: session.decision ? 'decision' : 'attention' }
   switch (session.status) {
     case 'working':
-      return { pose: chore, grey: false, sign: false }
+      return { pose: chore, grey: false, sign: null }
     case 'starting':
-      return { pose: 'walk', grey: false, sign: false }
+      return { pose: 'walk', grey: false, sign: null }
     case 'done':
+      return { pose: 'cheer', gear: 'none', grey: false, sign: null }
     case 'complete':
-      return { pose: 'sit', gear: 'mug', grey: false, sign: false }
+      return { pose: 'sit', gear: 'mug', grey: false, sign: null }
     case 'exited':
-      return { pose: 'sit', gear: 'none', grey: true, sign: false }
+      return { pose: 'sit', gear: 'none', grey: true, sign: null }
     default:
-      return { pose: 'sleep', grey: false, sign: false }
+      return { pose: 'sleep', grey: false, sign: null }
   }
 }
 

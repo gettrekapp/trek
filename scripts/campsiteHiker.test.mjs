@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerLabel, hikerTooltip, indicatorState, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -109,19 +109,29 @@ test('pixels: sleeves and the hem are the shaded jacket; pants and a bedroll sho
 
 const session = (over = {}) => ({ terminalId: 't', label: 'Claude 2', provider: 'claude', status: 'working', decision: false, worktreeId: 'w', worktreeName: 'auth', branch: 'feature/auth', ...over })
 
-test('stanceFor: each status; a decision waves like attention; unknown sleeps', () => {
-  assert.deepEqual(stanceFor(session({ status: 'working' }), 'chop'), { pose: 'chop', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'attention' }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: true })
-  assert.deepEqual(stanceFor(session({ status: 'idle', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: true })
-  assert.deepEqual(stanceFor(session({ status: 'starting' }), 'map'), { pose: 'walk', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'done' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'complete' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'idle' }), 'map'), { pose: 'sleep', grey: false, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'exited' }), 'map'), { pose: 'sit', gear: 'none', grey: true, sign: false })
-  assert.deepEqual(stanceFor(session({ status: 'someday' }), 'map'), { pose: 'sleep', grey: false, sign: false })
+test('stanceFor: each status; a decision waves with its own sign, and wins over attention; finished cheers; unknown sleeps', () => {
+  assert.deepEqual(stanceFor(session({ status: 'working' }), 'chop'), { pose: 'chop', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'attention' }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'attention' })
+  assert.deepEqual(stanceFor(session({ status: 'idle', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'attention', decision: true }), 'chop'), { pose: 'wave', gear: 'none', grey: false, sign: 'decision' })
+  assert.deepEqual(stanceFor(session({ status: 'starting' }), 'map'), { pose: 'walk', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'done' }), 'map'), { pose: 'cheer', gear: 'none', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'complete' }), 'map'), { pose: 'sit', gear: 'mug', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'idle' }), 'map'), { pose: 'sleep', grey: false, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'exited' }), 'map'), { pose: 'sit', gear: 'none', grey: true, sign: null })
+  assert.deepEqual(stanceFor(session({ status: 'someday' }), 'map'), { pose: 'sleep', grey: false, sign: null })
   assert.equal(isWaiting(session({ status: 'attention' })), true)
   assert.equal(isWaiting(session({ decision: true })), true)
   assert.equal(isWaiting(session()), false)
+})
+
+test("signs: '!' and '?' on a 3×5 grid, in the core's attention and decision colors", () => {
+  assert.deepEqual(SIGN_TEXT, { attention: '!', decision: '?' })
+  assert.equal(SIGN_COLORS.attention, 'var(--attention, #e2a336)')
+  assert.equal(SIGN_COLORS.decision, 'var(--decision, #b18cff)')
+  for (const cells of Object.values(SIGN_GLYPHS)) for (const [x, y] of cells) assert.ok(x >= 0 && x < 3 && y >= 0 && y < 5)
+  assert.deepEqual(SIGN_GLYPHS.attention, [[1, 0], [1, 1], [1, 2], [1, 4]])
+  assert.deepEqual(SIGN_GLYPHS.decision, [[0, 0], [1, 0], [2, 0], [2, 1], [1, 2], [1, 4]])
 })
 
 test('choreFor: stable for at least 20 s at a time, and it changes over ten minutes', () => {
