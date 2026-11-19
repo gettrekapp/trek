@@ -4,9 +4,9 @@
 // files, and the welcome's plugins and legacy capabilities.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, statSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, statSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { toWireError } from '../server/src/errors.ts'
 import { dispatchV2, isCoreMethod } from '../server/src/v2.ts'
@@ -28,7 +28,8 @@ function fakeProjects(projects) {
       const p = projects[id]
       if (!p) throw Object.assign(new Error(`No project with id "${id}"`), { code: 'NOT_FOUND' })
       return p
-    }
+    },
+    all: () => Object.values(projects)
   }
 }
 const project = (id, plugins) => ({
@@ -470,4 +471,46 @@ test('host.testCommand: the fallback when unset, an absolute path as it is, null
   assert.equal(host.testCommand('TREK_SERVER_NOPE', 'gh'), 'gh')
   assert.equal(host.testCommand('TREK_SERVER_BAD_URL', 'gh'), null)
   assert.ok(warnings.some((w) => w.includes('TREK_SERVER_BAD_URL')))
+})
+
+test("host.spawn (plugins E1): only in a project's repository or worktree, or the plugin's data directory; dispose kills its children, not a detached one", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-spawn-cwd-')))
+  t.after(() => removeDir(root))
+  const repoPath = join(root, 'app')
+  const wtPath = join(root, 'app-feat')
+  const gonePath = join(root, 'app-gone')
+  for (const dir of [repoPath, wtPath, gonePath]) mkdirSync(dir)
+  const repo = {
+    id: 'r1', name: 'app', path: repoPath, branchData: {},
+    worktrees: [
+      { id: 'w1', path: repoPath, isMain: true, sessions: [] },
+      { id: 'w2', path: wtPath, branch: 'feat', isMain: false, sessions: [] },
+      { id: 'w3', path: gonePath, branch: 'gone', isMain: false, missing: true, sessions: [] }
+    ]
+  }
+  let host
+  const runner = { manifest: manifest('runner'), setup: (h) => ((host = h), { handlers: {} }) }
+  const { registry } = setup(t, [runner], { projects: { p1: { ...project('p1'), repositories: [repo] } } })
+  const dataDir = dirname(host.dataFile('state.json'))
+  for (const cwd of [repoPath, wtPath, dataDir]) {
+    const child = await host.spawn(process.execPath, ['-e', ''], { cwd })
+    assert.equal((await child.done).code, 0, cwd)
+  }
+  for (const cwd of [root, tmpdir(), gonePath, join(wtPath, 'sub'), '', undefined]) {
+    await assert.rejects(host.spawn(process.execPath, ['-e', ''], { cwd }), /not a repository, a worktree|needs a cwd/, String(cwd))
+  }
+  const attached = await host.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: repoPath })
+  const detached = await host.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: repoPath, detached: true })
+  t.after(() => {
+    for (const child of [attached, detached]) {
+      try {
+        process.kill(child.pid)
+      } catch {}
+    }
+  })
+  registry.dispose()
+  const end = await attached.done
+  assert.ok(end.code !== 0 || end.signal !== null, 'killed by dispose')
+  assert.doesNotThrow(() => process.kill(detached.pid, 0), 'a detached child outlives the dispose')
+  process.kill(detached.pid)
 })

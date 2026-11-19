@@ -56,6 +56,32 @@ export interface RunOptions {
   env?: Record<string, string>
 }
 
+export interface SpawnOptions {
+  /**
+   * A repository's main checkout or one of its present worktrees, in one of the server's projects,
+   * or the plugin's data directory (dataFile's); anything else is refused
+   */
+  cwd: string
+  /** Added to the server's env; PATH (in any case) is dropped, as for `run` */
+  env?: Record<string, string>
+  /** Kills the program when it aborts */
+  signal?: AbortSignal
+  /** Each chunk of its output as it comes (UTF-8); not with `detached` */
+  onOutput?(stream: 'stdout' | 'stderr', chunk: string): void
+  /**
+   * Outlives the plugin and the server (no stdio): keep its pid yourself (a data file) to end it
+   * later. Default false: killed by the plugin's dispose.
+   */
+  detached?: boolean
+}
+
+export interface SpawnedProgram {
+  pid: number
+  /** How it ended: its exit code, or the signal that ended it */
+  done: Promise<{ code: number | null; signal: string | null }>
+  kill(): void
+}
+
 /** A pull request host's server half (plugins P3): what the core's watch, `pr.resolve` and the MCP tools ask it. */
 export interface PrServerProvider extends PrProvider {
   /** Signed in and usable now (gh: `gh auth status`); never rejects */
@@ -85,6 +111,12 @@ export interface ServerPluginHost {
   testEndpoint(envName: string): string | undefined
   /** Runs a program (a bare name on PATH, or an absolute path) with no shell; resolves with stdout, rejects with stderr's first line (`code: 'ENOENT'` when it is not installed). Aborted by the plugin's dispose. */
   run(command: string, args: readonly string[], options?: RunOptions): Promise<string>
+  /**
+   * Starts a program (plugins E1) under `run`'s rules (no shell; a bare name on PATH or an absolute
+   * path; a Windows .js/.mjs stub through Node), with no timeout. Resolves once it has started;
+   * rejects for a refused command or `cwd`, or `code: 'ENOENT'` when it is not installed.
+   */
+  spawn(command: string, args: readonly string[], options: SpawnOptions): Promise<SpawnedProgram>
   /** A test stub from the server's environment: `fallback` when `envName` is unset, its value when it is an absolute path, null otherwise (fail closed) */
   testCommand(envName: string, fallback: string): string | null
   /**

@@ -1,7 +1,7 @@
 // The server's plugins (plugin system phase 1): each built-in plugin's server half, set up once
-// with its host (secrets, data files, its project's subscribers, the session lookup), then asked
-// for its methods (`<id>.*` when no core method has the name), its MCP tools, instructions and
-// session prompt in the projects where it is on.
+// with its host (secrets, data files, its programs (run, spawn), its project's subscribers, the
+// session lookup), then asked for its methods (`<id>.*` when no core method has the name), its MCP
+// tools, instructions and session prompt in the projects where it is on.
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInside } from '../../../src/host/pathContainment.ts'
@@ -15,7 +15,8 @@ import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { createSecretFile } from '../secrets.ts'
 import { findSession } from '../sessions/locate.ts'
-import { commandFromEnv, runCommand } from './run.ts'
+import { commandFromEnv, runCommand, spawnCommand } from './run.ts'
+import { realOrResolved } from '../repos.ts'
 import type { TopicHub } from '../topicHub'
 
 /** Namespaces a plugin may not take, beside those of the core methods. */
@@ -47,7 +48,7 @@ export interface PluginRegistryOptions {
   /** The server's data dir: plugins' files go in `plugins/<id>/` there */
   dataDir: string
   hub: Pick<TopicHub, 'emit' | 'eventSubscriberCount'>
-  projects: Pick<ProjectState, 'require'>
+  projects: Pick<ProjectState, 'require' | 'all'>
   /** Whether a core method has this name (a plugin can't take a core method's namespace) */
   isCoreMethod: (prefix: string) => boolean
   /** The core MCP tools' names (a plugin's tool can't shadow one) */
@@ -105,7 +106,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const toolOwners = new Map<string, string>()
   /** A plugin project setting's key → the plugin that owns it */
   const settingOwners = new Map<string, string>()
-  /** Each plugin's abort for its running programs (host.run): fired by dispose */
+  /** Each plugin's abort for its running programs (host.run, host.spawn unless detached): fired by dispose */
   const aborts = new Map<string, AbortController>()
 
   const enabled = (projectId: string, id: string): boolean => {
@@ -125,6 +126,20 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const allowedSecrets = new Set(manifest.secrets ?? [])
     const abort = new AbortController()
     aborts.set(manifest.id, abort)
+    /** A spawn's cwd (plugins E1): exactly a project's repository or present worktree, or this plugin's data directory. */
+    const spawnCwd = (cwd: unknown): string => {
+      if (typeof cwd !== 'string' || cwd === '') throw new Error("spawn needs a cwd: a repository, a worktree or the plugin's data directory")
+      const key = realOrResolved(cwd)
+      if (key === realOrResolved(dir)) return dir
+      for (const project of options.projects.all()) {
+        for (const repo of project.repositories) {
+          if (realOrResolved(repo.path) === key) return repo.path
+          const worktree = repo.worktrees.find((w) => w.missing !== true && realOrResolved(w.path) === key)
+          if (worktree) return worktree.path
+        }
+      }
+      throw new Error(`${cwd} is not a repository, a worktree or this plugin's data directory`)
+    }
     return {
       id: manifest.id,
       secret: (name) => {
@@ -143,6 +158,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
           ...opts,
           signal: opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
         }),
+      spawn: async (command, args, opts) => {
+        const cwd = spawnCwd(opts?.cwd)
+        // A detached child outlives the plugin: the dispose's abort is not its signal.
+        const signal = opts.detached === true ? opts.signal : opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
+        return spawnCommand(command, args, { ...opts, cwd, signal })
+      },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
       subscriberCount: (projectId) => options.hub.eventSubscriberCount(projectTopic(projectId)),

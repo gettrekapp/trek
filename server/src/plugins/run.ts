@@ -3,8 +3,9 @@
 // (the plugin's dispose, the server stopping). Windows: a test stub given as a Node script
 // (TREK_SERVER_GH=/…/gh.mjs) runs with this process's binary and ELECTRON_RUN_AS_NODE=1, as the
 // gh runner did (server/src/prWatch/gh.ts before P3): Windows can't run a sh stub, and execFile
-// can't start a batch file without a shell.
-import { execFile } from 'node:child_process'
+// can't start a batch file without a shell. And host.spawn (plugins E1): a long-running program
+// with its output streamed, killed by the plugin's dispose unless detached.
+import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { isAbsolute, win32 } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
@@ -29,6 +30,26 @@ const clamp = (value: number | undefined, fallback: number, max: number): number
 
 const stopped = (command: string): Error => Object.assign(new Error(`${command} was stopped`), { code: 'ABORT_ERR' })
 
+/** A command's problem (the same rules for run and spawn): a bare name or an absolute path, string arguments. */
+function commandProblem(command: string, args: readonly unknown[], platform: NodeJS.Platform): Error | null {
+  const absolute = (platform === 'win32' ? win32.isAbsolute : isAbsolute)(command)
+  if (!command || (!absolute && /[\\/]/.test(command))) return new Error(`not a command: ${JSON.stringify(command)} (a bare name or an absolute path)`)
+  if (args.some((a) => typeof a !== 'string')) return new Error('every argument must be a string')
+  return null
+}
+
+/** Windows: an absolute Node script runs with this binary (a bare `tool.mjs` would be relative to the server's cwd). */
+const throughNode = (command: string, platform: NodeJS.Platform): boolean => platform === 'win32' && win32.isAbsolute(command) && /\.[cm]?js$/i.test(command)
+
+/** This process's env plus the plugin's, never its PATH (in any case): that would change which program a bare name runs. */
+function childEnv(extra: Record<string, string> | undefined, viaNode: boolean): NodeJS.ProcessEnv {
+  const added = Object.fromEntries(Object.entries(extra ?? {}).filter(([k]) => k.toUpperCase() !== 'PATH'))
+  return { ...process.env, ...added, ...(viaNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }
+}
+
+const notInstalled = (command: string, cause?: unknown): Error =>
+  Object.assign(new Error(`${command} is not installed on the server`), { code: 'ENOENT' }, cause === undefined ? {} : { cause })
+
 /**
  * Resolves with stdout. Rejects with stderr's first non-empty line, else a message naming only the
  * program (never its arguments: they may hold a query or a token): `code: 'ENOENT'` when the program
@@ -36,18 +57,12 @@ const stopped = (command: string): Error => Object.assign(new Error(`${command} 
  */
 export function runCommand(command: string, args: readonly string[], options: RunCommandOptions = {}): Promise<string> {
   const platform = options.platform ?? process.platform
-  const absolute = (platform === 'win32' ? win32.isAbsolute : isAbsolute)(command)
-  if (!command || (!absolute && /[\\/]/.test(command))) {
-    return Promise.reject(new Error(`not a command: ${JSON.stringify(command)} (a bare name or an absolute path)`))
-  }
-  if (args.some((a) => typeof a !== 'string')) return Promise.reject(new Error('every argument must be a string'))
-  // Only an absolute script: a bare `tool.mjs` would be a script relative to the server's cwd.
-  const viaNode = platform === 'win32' && win32.isAbsolute(command) && /\.[cm]?js$/i.test(command)
+  const problem = commandProblem(command, args, platform)
+  if (problem) return Promise.reject(problem)
+  const viaNode = throughNode(command, platform)
   if (options.signal?.aborted) return Promise.reject(stopped(command))
   const timeoutMs = clamp(options.timeoutMs, RUN_DEFAULT_TIMEOUT_MS, RUN_MAX_TIMEOUT_MS)
-  // A plugin's env never sets PATH (in any case): it would change which program a bare name runs.
-  const added = Object.fromEntries(Object.entries(options.env ?? {}).filter(([k]) => k.toUpperCase() !== 'PATH'))
-  const env: NodeJS.ProcessEnv = { ...process.env, ...added, ...(viaNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }
+  const env = childEnv(options.env, viaNode)
   return new Promise((resolve, reject) => {
     try {
       // On Windows a bare name is found on PATH, never in the server's current directory.
@@ -66,7 +81,7 @@ export function runCommand(command: string, args: readonly string[], options: Ru
             const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
             if (options.signal?.aborted) reject(stopped(command))
             else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') reject(new Error(`${command}'s output passed the limit`))
-            else if (e.code === 'ENOENT') reject(Object.assign(new Error(`${command} is not installed on the server`), { code: 'ENOENT' }))
+            else if (e.code === 'ENOENT') reject(notInstalled(command))
             // killed: Node ended it at the timeout (a child that died of its own signal was not)
             else if (e.killed) reject(new Error(`${command} timed out after ${timeoutMs / 1000} s`))
             else {
@@ -83,7 +98,7 @@ export function runCommand(command: string, args: readonly string[], options: Ru
       )
     } catch (err) {
       // commandPath's ENOENT (Windows: not on PATH)
-      reject(Object.assign(new Error(`${command} is not installed on the server`), { code: 'ENOENT', cause: err }))
+      reject(notInstalled(command, err))
     }
   })
 }
@@ -99,4 +114,89 @@ export function commandFromEnv(envName: string, value: string | undefined, fallb
   if (isAbsolute(value)) return value
   warn(`[plugins] ${envName} (${JSON.stringify(value)}) is not an absolute path: ${fallback} is treated as not installed`)
   return null
+}
+
+export interface SpawnCommandOptions {
+  cwd: string
+  /** Added to this process's env; PATH (in any case) is dropped */
+  env?: Record<string, string>
+  /** Kills the child when it aborts */
+  signal?: AbortSignal
+  /** Each chunk of its output, as UTF-8, as it comes; not with `detached` */
+  onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
+  /** Its own process group, with no stdio, unref'd: it outlives the server */
+  detached?: boolean
+  /** For tests */
+  platform?: NodeJS.Platform
+}
+
+export interface SpawnedCommand {
+  pid: number
+  /** How it ended: its exit code, or the signal that ended it */
+  done: Promise<{ code: number | null; signal: string | null }>
+  kill(): void
+}
+
+/**
+ * Starts a program for a plugin (plugins E1: host.spawn): no shell, no timeout, the command rules of
+ * runCommand. Resolves once it has started; rejects when the command is refused or not installed
+ * (`code: 'ENOENT'`). `signal` and `kill()` end it (SIGTERM; Windows: TerminateProcess). No error
+ * holds its arguments.
+ */
+export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions): Promise<SpawnedCommand> {
+  const platform = options.platform ?? process.platform
+  const problem = commandProblem(command, args, platform)
+  if (problem) return Promise.reject(problem)
+  if (options.detached && options.onOutput) return Promise.reject(new Error('a detached program has no output to follow: its stdout and stderr go nowhere'))
+  if (options.signal?.aborted) return Promise.reject(stopped(command))
+  const viaNode = throughNode(command, platform)
+  return new Promise((resolve, reject) => {
+    let child: ChildProcess
+    try {
+      // On Windows a bare name is found on PATH, never in the server's current directory.
+      child = spawn(
+        viaNode ? process.execPath : commandPath(command, { platform }),
+        viaNode ? [command, ...args] : [...args],
+        hidden<SpawnOptions>({
+          cwd: options.cwd,
+          env: childEnv(options.env, viaNode),
+          detached: options.detached === true,
+          stdio: options.detached ? 'ignore' : ['ignore', 'pipe', 'pipe']
+        })
+      )
+    } catch (err) {
+      // commandPath's ENOENT (Windows: not on PATH)
+      reject(notInstalled(command, err))
+      return
+    }
+    const done = new Promise<{ code: number | null; signal: string | null }>((settle) => {
+      child.once('close', (code, signal) => settle({ code, signal }))
+    })
+    const kill = (): void => {
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+    }
+    if (!options.detached) {
+      // Read even with no onOutput: an unread pipe would stall the child once it fills.
+      for (const stream of ['stdout', 'stderr'] as const) {
+        child[stream]?.setEncoding('utf8')
+        child[stream]?.on('data', (chunk: string) => options.onOutput?.(stream, chunk))
+      }
+    }
+    child.once('error', (err: NodeJS.ErrnoException) => {
+      // Before 'spawn': it never started. Never err.message: it holds the command line.
+      if (child.pid === undefined) reject(err.code === 'ENOENT' ? notInstalled(command) : Object.assign(new Error(`${command} could not start`), { code: err.code }))
+    })
+    child.once('spawn', () => {
+      if (options.detached) child.unref()
+      if (options.signal?.aborted) {
+        // Aborted while it was starting
+        kill()
+        reject(stopped(command))
+        return
+      }
+      options.signal?.addEventListener('abort', kill, { once: true })
+      void done.then(() => options.signal?.removeEventListener('abort', kill))
+      resolve({ pid: child.pid!, done, kill })
+    })
+  })
 }

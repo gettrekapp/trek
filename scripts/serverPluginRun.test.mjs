@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { commandFromEnv, runCommand } from '../server/src/plugins/run.ts'
+import { commandFromEnv, runCommand, spawnCommand } from '../server/src/plugins/run.ts'
+import { realPath } from '../src/host/pathContainment.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const node = process.execPath
@@ -92,4 +93,66 @@ test('commandFromEnv: the fallback when unset, an absolute path as it is, anythi
   assert.equal(commandFromEnv('TREK_SERVER_GH', '/tmp/stub/gh', 'gh', warn), '/tmp/stub/gh')
   for (const v of ['', 'gh', './gh', 'stub/gh']) assert.equal(commandFromEnv('TREK_SERVER_GH', v, 'gh', warn), null, v)
   assert.equal(warnings.length, 4)
+})
+
+/** A temp directory (its real path, as a child's process.cwd() says it), removed after the test. */
+function tempDir(t) {
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-spawn-')))
+  t.after(() => removeDir(dir))
+  return dir
+}
+
+test('spawnCommand (plugins E1): stdout and stderr stream as they come; done has the exit code', async (t) => {
+  const dir = tempDir(t)
+  const out = { stdout: '', stderr: '' }
+  const child = await spawnCommand(node, ['-e', 'process.stdout.write("a"); process.stderr.write("b"); process.exit(3)'], { cwd: dir, onOutput: (stream, chunk) => { out[stream] += chunk } })
+  assert.equal(typeof child.pid, 'number')
+  assert.deepEqual(await child.done, { code: 3, signal: null })
+  assert.deepEqual(out, { stdout: 'a', stderr: 'b' })
+})
+
+test("spawnCommand: in the cwd, with the env added and the server's own PATH", async (t) => {
+  const dir = tempDir(t)
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+  let text = ''
+  const child = await spawnCommand(node, ['-e', `process.stdout.write(process.cwd() + "|" + process.env.TREK_SPAWN_TEST + "|" + process.env[${JSON.stringify(pathKey)}])`], {
+    cwd: dir,
+    env: { TREK_SPAWN_TEST: 'yes', PATH: '/nowhere', Path: '/nowhere' },
+    onOutput: (_stream, chunk) => { text += chunk }
+  })
+  await child.done
+  assert.equal(text, `${dir}|yes|${process.env[pathKey]}`)
+})
+
+test('spawnCommand: refuses a relative command, a non-string argument, onOutput with detached, an aborted signal; ENOENT for a missing program', async (t) => {
+  const dir = tempDir(t)
+  await assert.rejects(spawnCommand('./x', [], { cwd: dir }), /bare name or an absolute path/)
+  await assert.rejects(spawnCommand(node, [1], { cwd: dir }), /every argument must be a string/)
+  await assert.rejects(spawnCommand(node, [], { cwd: dir, detached: true, onOutput: () => {} }), /detached/)
+  const ac = new AbortController()
+  ac.abort()
+  await assert.rejects(spawnCommand(node, [], { cwd: dir, signal: ac.signal }), (e) => e.code === 'ABORT_ERR')
+  await assert.rejects(spawnCommand('/no/such/program-trek', [], { cwd: dir }), (e) => e.code === 'ENOENT')
+})
+
+test('spawnCommand: kill() and an abort end it', async (t) => {
+  const dir = tempDir(t)
+  const ended = (end) => end.code !== 0 || end.signal !== null
+  const killed = await spawnCommand(node, ['-e', 'setInterval(() => {}, 1000)'], { cwd: dir })
+  killed.kill()
+  assert.ok(ended(await killed.done))
+  const ac = new AbortController()
+  const aborted = await spawnCommand(node, ['-e', 'setInterval(() => {}, 1000)'], { cwd: dir, signal: ac.signal })
+  ac.abort()
+  assert.ok(ended(await aborted.done))
+})
+
+test('spawnCommand on Windows: a .mjs stub runs with this binary and ELECTRON_RUN_AS_NODE=1', async (t) => {
+  const dir = tempDir(t)
+  const stub = join(dir, 'tool.mjs')
+  writeFileSync(stub, 'process.stdout.write(JSON.stringify([process.argv.slice(2), process.env.ELECTRON_RUN_AS_NODE]))\n')
+  let text = ''
+  const child = await spawnCommand(stub, ['a b'], { cwd: dir, platform: 'win32', onOutput: (_s, chunk) => { text += chunk } })
+  await child.done
+  assert.equal(text, JSON.stringify([['a b'], '1']))
 })
