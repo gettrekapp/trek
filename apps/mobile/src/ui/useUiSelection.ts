@@ -2,10 +2,12 @@
 // to (`ui.focus`), for the MCP tools get_selected_worktree and focus_session. Used by the
 // project, worktree and session screens; only the focused one reports and listens, so a
 // `ui.focus` is taken once however many of them are in the stack. The rules are logic/uiSelection.ts'.
-import { useCallback } from 'react'
+// A ui.focus for a Global session opens the Global tray on it instead (ui/globalTrayContext.tsx).
+import { useCallback, useRef } from 'react'
 import { router, useFocusEffect } from 'expo-router'
 import { focusEventOf, focusNavigation, focusRoute, reportParams, shouldFollow } from '../logic/uiSelection.ts'
 import { useServer } from '../state/hooks.ts'
+import { useGlobalTray } from './globalTrayContext.tsx'
 
 /**
  * `known` is false while the screen cannot say what it shows yet (the session screen before the
@@ -14,6 +16,10 @@ import { useServer } from '../state/hooks.ts'
 export function useUiSelection(serverId: string, projectId: string, selection: { worktreeId: string | null; sessionId: string | null }, known = true): void {
   const server = useServer(serverId)
   const { worktreeId, sessionId } = selection
+  // In a ref: the tray's identity changes as it moves, which must not re-run this effect (and re-report).
+  const tray = useGlobalTray()
+  const trayRef = useRef(tray)
+  trayRef.current = tray
   useFocusEffect(
     useCallback(() => {
       if (!server) return
@@ -29,7 +35,13 @@ export function useUiSelection(serverId: string, projectId: string, selection: {
       const offWelcome = conn.on('welcome', report)
       const offEvent = conn.on('event', (event) => {
         const focus = focusEventOf(event)
-        if (!focus || !shouldFollow(focus, projectId, current)) return
+        if (!focus || focus.projectId !== projectId) return
+        // A Global session is shown in the tray, over this screen, which keeps its place.
+        if (trayRef.current?.claims(focus.sessionId)) {
+          trayRef.current.open(focus.sessionId)
+          return
+        }
+        if (!shouldFollow(focus, projectId, current)) return
         const route = focusRoute(serverId, focus)
         // A session screen is replaced: repeated requests do not grow the stack.
         if (focusNavigation(current) === 'replace') router.replace(route)

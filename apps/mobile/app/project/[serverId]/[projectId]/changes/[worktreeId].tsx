@@ -5,10 +5,9 @@
 // worktree's sessions or discards it. The rules are logic/review.ts'. Without the capability (an
 // older server): the branch against its base, read-only (6a).
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react'
-import { Keyboard, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   BRANCH_SOURCE,
   CAPABILITY,
@@ -205,7 +204,6 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
-  const insets = useSafeAreaInsets()
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -507,17 +505,8 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
       })
     })
   }, [])
-  // The home indicator's inset is under the bar only while the keyboard is away.
-  const [keyboardUp, setKeyboardUp] = useState(false)
-  useEffect(() => {
-    const shown = Keyboard.addListener('keyboardDidShow', () => setKeyboardUp(true))
-    const hidden = Keyboard.addListener('keyboardDidHide', () => setKeyboardUp(false))
-    return () => {
-      shown.remove()
-      hidden.remove()
-    }
-  }, [])
-  const inset = keyboardUp ? 0 : insets.bottom
+  // The Global tray's collapsed bar, under the stack, pads the home indicator's inset.
+  const inset = 0
 
   // One object for the screen's life: each callback is the latest render's.
   const latest = useRef({ openNew, openBox, save, remove })
