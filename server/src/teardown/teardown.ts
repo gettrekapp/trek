@@ -186,7 +186,19 @@ export class WorktreeHold {
 
 function assertFree(key: string): void {
   const busy = running.get(key)
-  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : `this worktree is busy: ${busy.label}`)
+  if (busy) throw codedError('CONFLICT', busy === 'finishing' ? 'a teardown is still finishing for this worktree' : `this worktree is busy: ${busy.label}; try again once it is done`)
+}
+
+/**
+ * `err`, thrown after the chosen items were torn down (`tornDown`, their labels), with
+ * `details.tornDown` added: its code, message and other details as they were. None torn down: as it is.
+ */
+export function withTornDown(err: unknown, tornDown: readonly string[]): unknown {
+  if (tornDown.length === 0) return err
+  const out = err instanceof Error ? err : new Error(String(err))
+  const details = (out as { details?: unknown }).details
+  ;(out as { details?: unknown }).details = { ...(details && typeof details === 'object' ? details : {}), tornDown: [...tornDown] }
+  return out
 }
 
 /** CONFLICT while the worktree at `path` is being torn down, or a timed-out teardown of it is still finishing. */

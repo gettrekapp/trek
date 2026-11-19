@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createV2Backend, tornDownNote, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
 import { PROMPT_NOT_CONFIRMED, withPromptText } from '../src/renderer/src/v2/errors.ts'
+import { TEARDOWN_REQUEST_TIMEOUT_MS, teardownCheckbox } from '../src/shared/teardown.ts'
 
 const PRIMARY = '__primary__:r1'
 const ids = () => ({
@@ -158,12 +159,14 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
         if (machine.dirty instanceof Error) throw machine.dirty
         return machine.dirty === true
       },
-      // The plan's confirm (plugins E1): `machine.ticked` false sends no ids.
+      // The plan's confirm (plugins E1), one box as the real one (all or none): `machine.ticked` is
+      // the box's answer, its default otherwise.
       confirmPlan: async (prompt, items, stillWanted) => {
         ui.push(['confirm+plan', prompt.title, prompt.detail, items.map((i) => i.id)])
         if (stillWanted && !stillWanted()) return { confirmed: false, teardown: [] }
         const confirmed = answers.shift() ?? false
-        return { confirmed, teardown: confirmed && machine.ticked !== false ? items.filter((i) => i.checked).map((i) => i.id) : [] }
+        const box = teardownCheckbox(items)
+        return { confirmed, teardown: confirmed && box ? box.ids(machine.ticked ?? box.checked) : [] }
       }
     },
     left
@@ -724,13 +727,14 @@ test('remove on a server with worktreeTeardown: the plan in the confirm, the cho
   assert.deepEqual([asked[1], asked[3]], ['Delete Worktree', ['stack:destroy', 'env:destroy']])
   assert.doesNotMatch(asked[2], /Colima VM/, 'the VM is an item, not the detail')
   assert.ok(!ui.some(([kind]) => kind === 'env?' || kind === 'git status'))
-  assert.ok(timeouts.some(([m]) => m === 'worktree.remove'))
+  assert.deepEqual(timeouts.filter(([m]) => m === 'worktree.remove'), [['worktree.remove', TEARDOWN_REQUEST_TIMEOUT_MS]])
 })
 
 test('remove on a server with worktreeTeardown: unticked sends no teardown; git refusing the changes asks, then forces with the same ids; a failed plan deletes nothing', async () => {
   const unticked = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS } }, machine: { ticked: false } })
   await unticked.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(unticked.calls.at(-1), ['worktree.remove', { projectId: 'p1', worktreeId: 'w2', force: false }])
+  assert.deepEqual(unticked.timeouts.filter(([m]) => m === 'worktree.remove'), [], 'no teardown: the usual timeout')
   const dirty = new CodedError('GIT_ERROR', '/r-feat has modified or untracked files; nothing was torn down', { reason: 'dirty' })
   let n = 0
   const refused = setup({ ...TEARDOWN_CAPS, confirms: [true, true], replies: { 'worktree.teardownPlan': { items: ITEMS }, 'worktree.remove': () => (n++ === 0 ? dirty : null) } })
@@ -741,6 +745,28 @@ test('remove on a server with worktreeTeardown: unticked sends no teardown; git 
   await broken.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(broken.calls.map(([m]) => m), ['worktree.teardownPlan'])
   assert.deepEqual(broken.ui.at(-1), ['error', 'Could not delete worktree', 'No worktree'])
+})
+
+test('remove on a server with worktreeTeardown: a failure after the teardown says what was torn down; changes that appeared during it are forced without tearing down again', async () => {
+  const locked = new CodedError('GIT_ERROR', "fatal: '/r-feat' is locked", { tornDown: [ITEMS[0].label, ITEMS[1].label] })
+  const after = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS }, 'worktree.remove': locked } })
+  await after.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(after.ui.at(-1), ['error', 'Could not delete worktree', `fatal: '/r-feat' is locked The teardown had already run and is not undone: ${ITEMS[0].label}; ${ITEMS[1].label}.`])
+  // The teardown's own failure already names what was done.
+  const own = new CodedError('TOOL_ERROR', "Couldn't stop it: no (already done: X)", { reason: 'teardown', tornDown: ['X'] })
+  const failed = setup({ ...TEARDOWN_CAPS, confirms: [true], replies: { 'worktree.teardownPlan': { items: ITEMS }, 'worktree.remove': own } })
+  await failed.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(failed.ui.at(-1), ['error', 'Could not delete worktree', own.message])
+  // git refused files that appeared while the items ran: the forced retry sends none of them again.
+  const appeared = new CodedError('GIT_ERROR', "fatal: '/r-feat' contains modified or untracked files, use --force", { reason: 'dirty', tornDown: [ITEMS[0].label] })
+  let n = 0
+  const retried = setup({ ...TEARDOWN_CAPS, confirms: [true, true], replies: { 'worktree.teardownPlan': { items: ITEMS }, 'worktree.remove': () => (n++ === 0 ? appeared : null) } })
+  await retried.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(retried.calls.filter(([m]) => m === 'worktree.remove').map(([, p]) => p), [
+    { projectId: 'p1', worktreeId: 'w2', force: false, teardown: ['stack:destroy', 'env:destroy'] },
+    { projectId: 'p1', worktreeId: 'w2', force: true }
+  ])
+  assert.ok(!retried.ui.some(([kind]) => kind === 'error'))
 })
 
 test('remove and repos show the NOT_CONNECTED hint and resolve', async () => {
@@ -1018,26 +1044,31 @@ test('worktrees.promote on a server with worktreeTeardown: the plan, then one wo
   assert.doesNotMatch(asked[2], /Colima VM/)
 })
 
-test('worktrees.promote on a server with worktreeTeardown: a CONFLICT for the repository lock after the teardown says it already ran; a refused teardown says what it did', async () => {
-  const lock = new CodedError('CONFLICT', 'another promote is changing /r right now; try again once it is done')
-  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : lock), 'worktree.teardownPlan': { items: ITEMS } }
-  const raced = setup({ replies, confirms: [true], capabilities: ['promote', 'worktreeTeardown'] })
-  assert.equal((await raced.backend.worktrees.promote(FEAT, undefined)).outcome, 'failed')
-  const shown = raced.ui.find((u) => u[0] === 'error')
+test('worktrees.promote on a server with worktreeTeardown: a failure after the teardown says what was torn down; the teardown failing says nothing was promoted', async () => {
+  const promoteFails = (err) => ({ 'worktree.promote': (p) => (p.dryRun ? PLAN : err), 'worktree.teardownPlan': { items: ITEMS } })
+  const caps = ['promote', 'worktreeTeardown']
+  // The main checkout changed while the items ran: the re-check refuses it, after them.
+  const changed = new CodedError('CONFLICT', 'the main checkout /r has uncommitted changes; commit or stash them there first', { tornDown: [ITEMS[0].label, ITEMS[1].label] })
+  const after = setup({ replies: promoteFails(changed), confirms: [true], capabilities: caps })
+  assert.equal((await after.backend.worktrees.promote(FEAT, undefined)).outcome, 'failed')
+  const shown = after.ui.find((u) => u[0] === 'error')
   assert.equal(shown[1], 'Could not promote worktree')
-  assert.match(shown[2], /^another promote is changing \/r right now.* The teardown had already run and is not undone: Tear down the dev stack “trek-r-feat” \(drops its databases\); Stop and delete this worktree's Colima VM “twb-x”\.$/)
-  // Unticked: nothing was torn down, so nothing to say.
-  const plain = setup({ replies, confirms: [true], capabilities: ['promote', 'worktreeTeardown'], machine: { ticked: false } })
+  assert.equal(shown[2], `${changed.message} The teardown had already run and is not undone: ${ITEMS[0].label}; ${ITEMS[1].label}.`)
+  // Nothing torn down (the box unticked, or a busy worktree refused first): the error as it is.
+  const lock = new CodedError('CONFLICT', 'another promote is changing /r right now; try again once it is done')
+  const plain = setup({ replies: promoteFails(lock), confirms: [true], capabilities: caps, machine: { ticked: false } })
   await plain.backend.worktrees.promote(FEAT, undefined)
-  assert.doesNotMatch(plain.ui.find((u) => u[0] === 'error')[2], /teardown/)
-  // A busy worktree (before any teardown) says only that.
-  const busy = setup({ replies: { ...replies, 'worktree.promote': (p) => (p.dryRun ? PLAN : new CodedError('CONFLICT', 'this worktree is busy: removing it')) }, confirms: [true], capabilities: ['promote', 'worktreeTeardown'] })
+  assert.equal(plain.ui.find((u) => u[0] === 'error')[2], lock.message)
+  const busy = setup({ replies: promoteFails(new CodedError('CONFLICT', 'this worktree is busy: removing it; try again once it is done')), confirms: [true], capabilities: caps })
   await busy.backend.worktrees.promote(FEAT, undefined)
-  assert.equal(busy.ui.find((u) => u[0] === 'error')[2], 'this worktree is busy: removing it')
-  const failedTeardown = new CodedError('TOOL_ERROR', "Couldn't stop and delete this worktree's Colima VM “twb-x”: exit 1 (already done: Tear down the dev stack “trek-r-feat” (drops its databases))", { reason: 'teardown', tornDown: [ITEMS[0].label] })
-  const broke = setup({ replies: { ...replies, 'worktree.promote': (p) => (p.dryRun ? PLAN : failedTeardown) }, confirms: [true], capabilities: ['promote', 'worktreeTeardown'] })
-  await broke.backend.worktrees.promote(FEAT, undefined)
-  assert.equal(broke.ui.find((u) => u[0] === 'error')[2], failedTeardown.message)
+  assert.equal(busy.ui.find((u) => u[0] === 'error')[2], 'this worktree is busy: removing it; try again once it is done')
+  // The teardown's own failure: its text names what was done.
+  const own = new CodedError('TOOL_ERROR', "Couldn't stop and delete this worktree's Colima VM “twb-x”: exit 1 (already done: Tear down the dev stack “trek-r-feat” (drops its databases))", { reason: 'teardown', tornDown: [ITEMS[0].label] })
+  const broke = setup({ replies: promoteFails(own), confirms: [true], capabilities: caps })
+  const outcome = await broke.backend.worktrees.promote(FEAT, undefined)
+  const error = `The teardown before the promote failed: ${own.message}. Nothing was promoted.`
+  assert.deepEqual(outcome, { outcome: 'failed', error })
+  assert.equal(broke.ui.find((u) => u[0] === 'error')[2], error)
 })
 
 test('worktrees.promote: declined sends nothing more; a refused plan is shown and nothing is torn down', async () => {

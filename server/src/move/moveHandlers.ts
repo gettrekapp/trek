@@ -47,7 +47,7 @@ import { MAX_SESSIONS_PER_PROJECT, checkTitle } from '../sessions/limits.ts'
 import { isRecord, requireBranch, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
-import { holdWorktree, optionalTeardown, runTeardown } from '../teardown/teardown.ts'
+import { holdWorktree, optionalTeardown, runTeardown, withTornDown } from '../teardown/teardown.ts'
 import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
 import { moveTransfers, type StagedHistories } from './transfers.ts'
 
@@ -508,9 +508,14 @@ export const moveHandlers: Record<string, Handler> = {
         }
         if (p.verifyOnly === true) return true
         // The point of commitment: the source is what was copied. Its chosen teardown (plugins E1), then its removal.
-        await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'move', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
-        await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
-        await ctx.poller.refresh(repo.path)
+        const done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'move', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        try {
+          await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
+          await ctx.poller.refresh(repo.path)
+        } catch (err) {
+          // What ran before the removal failed: its error says so (`details.tornDown`).
+          throw withTornDown(err, done)
+        }
         return false
       } finally {
         unblock()

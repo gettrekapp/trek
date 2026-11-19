@@ -17,7 +17,7 @@ import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
 import { isInside } from '../../src/host/pathContainment.ts'
 import { prOwner, safeParse } from '../../src/shared/plugins/pullRequests.ts'
-import { holdWorktree, optionalTeardown, planTeardown, requireOp, runTeardown } from './teardown/teardown.ts'
+import { holdWorktree, optionalTeardown, planTeardown, requireOp, runTeardown, withTornDown } from './teardown/teardown.ts'
 import { inactiveParticipants, participantsFor } from './teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -322,11 +322,13 @@ export const worktreeHandlers: Record<string, Handler> = {
     // re-read has marked the row missing, no session or load may start in it.
     const tornDown = await holdWorktree(worktree.path, 'removing it', async (hold) => {
       const unblock = ctx.sessions.blockPath(worktree.path)
+      // What ran before a later failure: its error says so (`details.tornDown`).
+      let done: string[] = []
       try {
         // Again under the block: a load that landed after the first check would have its sessions
         // in a worktree being torn down. None can land from here on.
         assertNotLoaded(ctx, worktree.path)
-        const done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
+        done = await runTeardown(participantsFor(ctx, project.id), { project, repo, worktree }, 'remove', teardown, { hold, inactive: inactiveParticipants(ctx, project.id) })
         // A directory that is already gone is removed from git's list too, and
         // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
         if (!worktree.missing) {
@@ -336,6 +338,8 @@ export const worktreeHandlers: Record<string, Handler> = {
           await ctx.poller.refresh(repo.path)
         }
         return done
+      } catch (err) {
+        throw withTornDown(err, done)
       } finally {
         unblock()
       }

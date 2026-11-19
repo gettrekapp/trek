@@ -617,13 +617,14 @@ test('PromoteRequests: the attribution given to ask comes back on bind', async (
 })
 
 /** A plugin participant (plugins E1) that records each teardown and whether the worktree was still there. */
-function probe(path, { fail = false } = {}) {
+function probe(path, { fail = false, during } = {}) {
   const log = []
   const lifecycle = {
     plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
     teardown: async (_ctx, _worktree, op, ids) => {
       log.push([op, ids, existsSync(path)])
       if (fail) throw new Error('it would not stop')
+      during?.()
     }
   }
   return { log, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }] } }
@@ -654,6 +655,17 @@ test('worktree.promote {teardown}: a failed item stops it and nothing is promote
   assert.ok(existsSync(s.path))
   assert.equal((await call({ projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['ghost:x'] })).error?.code, 'BAD_REQUEST')
   assert.equal(log.length, 1)
+})
+
+test('worktree.promote {teardown}: a failure after the teardown (the main checkout changed meanwhile) carries what was torn down', async (t) => {
+  const s = await setup(t)
+  const { log, plugins } = probe(s.path, { during: () => writeFileSync(join(s.app, 'README'), 'one\nchanged in main\n') })
+  const r = await dispatchV2('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, teardown: ['probe:vm'] }, { ...s.ctx, plugins })
+  assert.equal(r.error?.code, 'CONFLICT', JSON.stringify(r))
+  assert.match(r.error.message, /the main checkout .* has uncommitted changes/)
+  assert.deepEqual(r.error.details, { tornDown: ['Stop the VM'] })
+  assert.equal(log.length, 1)
+  assert.equal(branchOf(s.app), 'main')
 })
 
 test('worktree.promote (plugins E1): a worktree being torn down is CONFLICT, with no teardown and on a dry run; its block lasts through the teardown', async (t) => {

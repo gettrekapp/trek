@@ -4,7 +4,7 @@
 // ids refused before anything runs, and the repository veto.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown } from '../server/src/teardown/teardown.ts'
+import { assertNotTearingDown, holdWorktree, optionalTeardown, planTeardown, repoRemoveVeto, requireOp, runTeardown, withTornDown } from '../server/src/teardown/teardown.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
 import { inactiveParticipants, participantsFor } from '../server/src/teardown/participants.ts'
 import { defaultTeardown } from '../src/shared/teardown.ts'
@@ -139,7 +139,7 @@ test('runTeardown: one at a time per worktree; the next one may run once it ends
   }
   const first = runTeardown([slow], target, 'remove', ['slow:x'])
   await new Promise((resolve) => setImmediate(resolve))
-  await assert.rejects(runTeardown([slow], target, 'remove', ['slow:x']), (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: tearing it down')
+  await assert.rejects(runTeardown([slow], target, 'remove', ['slow:x']), (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: tearing it down; try again once it is done')
   const other = { ...target, worktree: { ...target.worktree, id: 'w3', path: '/r/app-other' } }
   const third = runTeardown([participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)], other, 'remove', ['stack:destroy'])
   await third
@@ -239,7 +239,7 @@ test('holdWorktree: the worktree is busy for the whole operation; runTeardown in
   const log = []
   const ps = [participant('stack', [{ id: 'destroy', label: 'Tear down', checked: true }], log)]
   // The CONFLICT names what holds the worktree (an unreceive is no teardown).
-  const running = (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: undoing a move'
+  const running = (e) => e.code === 'CONFLICT' && e.message === 'this worktree is busy: undoing a move; try again once it is done'
   const answer = await holdWorktree(target.worktree.path, 'undoing a move', async (hold) => {
     assert.throws(() => assertNotTearingDown(target.worktree.path), running)
     await assert.rejects(runTeardown(ps, target, 'remove', ['stack:destroy']), running)
@@ -298,4 +298,18 @@ test('inactiveParticipants: the plugins with a lifecycle that are off in the pro
   assert.deepEqual(inactiveParticipants({ plugins: { inactiveLifecycles: (projectId) => [`off-in-${projectId}`] } }, 'p1'), ['off-in-p1'])
   assert.deepEqual(inactiveParticipants({ plugins: { prProviders: () => [] } }, 'p1'), [])
   assert.deepEqual(inactiveParticipants({}, 'p1'), [])
+})
+
+test('withTornDown: a failure after the teardown keeps its code, message and reason, and says what was torn down; toWireError passes it on any code', () => {
+  const dirty = codedError('GIT_ERROR', 'has modified or untracked files', { reason: 'dirty' })
+  const out = withTornDown(dirty, ['Stop the VM'])
+  assert.equal(out, dirty)
+  assert.deepEqual(toWireError('worktree.remove', out), { code: 'GIT_ERROR', message: 'has modified or untracked files', details: { reason: 'dirty', tornDown: ['Stop the VM'] } })
+  const plain = codedError('CONFLICT', 'locked')
+  assert.equal(withTornDown(plain, []), plain)
+  assert.equal(plain.details, undefined, 'nothing torn down: as it was')
+  assert.deepEqual(toWireError('worktree.promote', withTornDown(new Error('boom'), ['A'])), { code: 'INTERNAL', message: 'boom', details: { tornDown: ['A'] } })
+  assert.deepEqual(toWireError('worktree.promote', withTornDown('odd', ['A'])), { code: 'INTERNAL', message: 'odd', details: { tornDown: ['A'] } })
+  // An unexpected error's own reason stays on the server.
+  assert.deepEqual(toWireError('worktree.promote', Object.assign(new Error('x'), { details: { reason: 'r' } })), { code: 'INTERNAL', message: 'x' })
 })

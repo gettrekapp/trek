@@ -128,15 +128,29 @@ const discardPrompt = (name: string): ConfirmPrompt => ({
   confirmLabel: 'Delete Changes & Worktree'
 })
 
+/** The error's `details` from a server that tears down itself (plugins E1). */
+function teardownDetails(err: unknown): { reason?: unknown; tornDown?: unknown } {
+  const details = (err as { details?: unknown } | null)?.details
+  return details && typeof details === 'object' ? details : {}
+}
+
+/** The teardown itself failed (`details.reason: 'teardown'`); its text names what was already done. */
+const teardownFailed = (err: unknown): boolean => teardownDetails(err).reason === 'teardown'
+
+/** What a failure after the teardown found already torn down (`details.tornDown`); none for the teardown's own failure. */
+function tornDownBefore(err: unknown): string[] {
+  const { tornDown } = teardownDetails(err)
+  if (teardownFailed(err) || !Array.isArray(tornDown)) return []
+  return tornDown.filter((label): label is string => typeof label === 'string')
+}
+
 /**
- * Added to a failed promote's error on a server that tore down first (plugins E1): another promote
- * of the repository took its lock while the chosen items ran (CONFLICT, after them), so they are
- * gone though nothing was promoted.
+ * Added to a failed remove's or promote's error on a server that tore down first (plugins E1): the
+ * items ran, then something else failed, so they are gone though nothing else happened.
  */
-function promoteTornDownNote(err: unknown, items: readonly TeardownItem[], teardown: readonly string[]): string {
-  if (teardown.length === 0 || errorCode(err) !== 'CONFLICT' || !/another promote is changing/.test(errorText(err))) return ''
-  const labels = items.filter((i) => teardown.includes(i.id)).map((i) => i.label)
-  return ` The teardown had already run and is not undone: ${labels.join('; ')}.`
+function serverTornDownNote(err: unknown): string {
+  const labels = tornDownBefore(err)
+  return labels.length > 0 ? ` The teardown had already run and is not undone: ${labels.join('; ')}.` : ''
 }
 
 export interface V2BackendDeps {
@@ -335,42 +349,47 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     }
     const { confirmed, teardown } = await deps.teardown.confirmPlan(removePrompt(info, loaded, dirty), items)
     if (!confirmed) return
-    const send = (force: boolean): Promise<unknown> =>
+    const send = (force: boolean, ids: readonly string[]): Promise<unknown> =>
       request(
         'worktree.remove',
-        { projectId, worktreeId, force, ...(teardown.length > 0 ? { teardown } : {}) },
-        teardown.length > 0 ? { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS } : undefined
+        { projectId, worktreeId, force, ...(ids.length > 0 ? { teardown: [...ids] } : {}) },
+        ids.length > 0 ? { timeoutMs: TEARDOWN_REQUEST_TIMEOUT_MS } : undefined
       )
     let wasLoaded = false
     // Best effort: the removal's own error is the one to show.
     const reload = async (): Promise<void> => {
       if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
     }
-    // A failed teardown's text names what was already done ("(already done: …)").
+    // A failed teardown's text names what was already done ("(already done: …)"); a failure after
+    // the teardown gets the note.
     const fail = async (err: unknown): Promise<void> => {
       await reload()
-      await deps.showError(REMOVE_FAILED, errorText(err))
+      await deps.showError(REMOVE_FAILED, errorText(err) + serverTornDownNote(err))
     }
+    // The ids for the forced retry: the same ones, unless the refusal came after they ran.
+    let retryIds: readonly string[] = teardown
     try {
       if (loaded) {
         await request('worktree.unload', { projectId, worktreeId })
         wasLoaded = true
       }
-      await send(dirty)
+      await send(dirty, teardown)
       return
     } catch (err) {
-      // Changes can appear between the poll and the removal; the server refuses them before any teardown.
+      // Changes can appear between the poll and the removal; the server refuses them before any
+      // teardown, or (files written while the items ran) after it, saying so.
       if (dirty || !refusedAsDirty(err)) {
         await fail(err)
         return
       }
+      if (tornDownBefore(err).length > 0) retryIds = []
     }
     if (!(await deps.confirm(discardPrompt(name)))) {
       await reload()
       return
     }
     try {
-      await send(true)
+      await send(true, retryIds)
     } catch (forceErr) {
       await fail(forceErr)
     }
@@ -642,7 +661,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             if (notes) await deps.showError('Promoted, with notes', notes)
             return { outcome: 'promoted', worktreeId: result.worktreeId }
           } catch (err) {
-            return failed(err, promoteTornDownNote(err, items, teardown))
+            if (teardownFailed(err)) {
+              // Its text names what was already done.
+              const text = errorText(err)
+              const error = `The teardown before the promote failed: ${text}${/[.!?]$/.test(text) ? '' : '.'} Nothing was promoted.`
+              await deps.showError(PROMOTE_FAILED, error)
+              return { outcome: 'failed', error }
+            }
+            return failed(err, serverTornDownNote(err))
           } finally {
             release()
           }

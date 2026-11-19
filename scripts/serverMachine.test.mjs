@@ -670,6 +670,20 @@ test('worktree.remove (plugins E1): a worktree being torn down is CONFLICT with 
   assert.deepEqual([...blocked], [], 'unblocked once removed')
 })
 
+test('worktree.remove {teardown}: git refusing changes that appeared during the teardown carries the reason and what was torn down', { skip }, async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  const lifecycle = {
+    plan: async () => [{ id: 'vm', label: 'Stop the VM', checked: true }],
+    teardown: async () => writeFileSync(join(s.feature, 'appeared.txt'), 'new\n')
+  }
+  const res = await dispatchV2('worktree.remove', { ...ref, teardown: ['probe:vm'] }, { ...s.ctx, plugins: { lifecycles: () => [{ id: 'probe', lifecycle }], inactiveLifecycles: () => [] } })
+  refused(res, 'GIT_ERROR', 'dirty')
+  assert.deepEqual(res.error.details, { reason: 'dirty', tornDown: ['Stop the VM'] })
+  assert.equal(existsSync(s.feature), true)
+})
+
 test('repo.remove (plugins E1): refused while a VM of one of its worktrees runs, with the reason; allowed once it is stopped', { skip }, async (t) => {
   const s = await setup(t)
   s.ctx.sessions.forgetRepo = () => {}

@@ -53,7 +53,7 @@ import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
 import { promoteChanging as changing } from './changing.ts'
 import type { PromoteBinding } from './requests.ts'
-import { assertNotTearingDown, holdWorktree, optionalTeardown, runTeardown } from '../teardown/teardown.ts'
+import { assertNotTearingDown, holdWorktree, optionalTeardown, runTeardown, withTornDown } from '../teardown/teardown.ts'
 import { inactiveParticipants, participantsFor } from '../teardown/participants.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -777,12 +777,14 @@ export const promoteHandlers: Record<string, Handler> = {
         // Again, with no await since the hold: an operation that blocks the path without holding it.
         assertNotBlocked(ctx, [first.worktree.path])
         const unblockWorktree = ctx.sessions.blockPath(first.worktree.path)
+        // What ran before a later failure (the lock, the re-check, the switch): its error says so (`details.tornDown`).
+        let done: string[] = []
         try {
           // Again under the block: a load elsewhere that landed after the first check.
           assertNotLoadedElsewhere(ctx, first.project.id, first.worktree.path)
           // The chosen teardown (plugins E1): after the same checks (a promote the server would
           // refuse tears nothing down), before the repository's lock.
-          await runTeardown(participantsFor(ctx, first.project.id), { project: first.project, repo: first.repo, worktree: first.worktree }, 'promote', teardown, {
+          done = await runTeardown(participantsFor(ctx, first.project.id), { project: first.project, repo: first.repo, worktree: first.worktree }, 'promote', teardown, {
             hold,
             inactive: inactiveParticipants(ctx, first.project.id)
           })
@@ -798,6 +800,8 @@ export const promoteHandlers: Record<string, Handler> = {
               unblockMain()
             }
           })
+        } catch (err) {
+          throw withTornDown(err, done)
         } finally {
           unblockWorktree()
         }
