@@ -16,6 +16,7 @@ import type { StackService } from '../../../src/host/stackService.ts'
 import { REGISTRY_REASON, deriveProfileName } from '../../../src/shared/environments.ts'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
+import { assertNotTearingDown } from '../teardown/teardown.ts'
 import { SINK_HIGH_WATER, SINK_LOW_WATER } from '../sessions/terminalHost.ts'
 import { findRegistered, repoIn } from '../projects/model.ts'
 import { requireBoolean } from '../validate.ts'
@@ -123,6 +124,21 @@ function repository(ctx: V2Context, p: any) {
   return repo
 }
 
+/**
+ * CONFLICT while a worktree whose branch's VM is `profile` is being torn down or held (plugins E1):
+ * an older client's own teardown (env.destroy) must not run during the server's. The core
+ * participants call the machine's services directly, not this.
+ */
+function assertProfileFree(ctx: V2Context, profile: string): void {
+  for (const project of ctx.projects.all()) {
+    for (const repo of project.repositories) {
+      for (const worktree of repo.worktrees) {
+        if (worktree.branch && deriveProfileName(envRepoKey(repo), worktree.branch) === profile) assertNotTearingDown(worktree.path)
+      }
+    }
+  }
+}
+
 /** The worktree's branch's environment: its VM is named after the repository's envRepoKey and the branch. */
 function environmentOf(ctx: V2Context, p: any) {
   const { repo, worktree } = present(ctx, p)
@@ -174,6 +190,7 @@ const allMachineHandlers: Record<string, Handler> = {
   // docker compose runs in it; outside the allowlist, or gone, only the VM is deleted.
   'env.destroy': (p, ctx) => {
     const profile = requireProfile(p.profile)
+    assertProfileFree(ctx, profile)
     const allowed = (path: string): boolean => {
       try {
         ctx.store.guard.check(path)
@@ -221,8 +238,10 @@ const allMachineHandlers: Record<string, Handler> = {
     return viaTool(() => machine(ctx).stacks.down(worktree.path))
   },
 
+  // Not while the server tears the worktree down (plugins E1): an older client tears down itself.
   'stack.destroy': (p, ctx) => {
     const { worktree } = present(ctx, p)
+    assertNotTearingDown(worktree.path)
     return viaTool(() => machine(ctx).stacks.destroy(worktree.path))
   },
 

@@ -18,6 +18,7 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
+import { holdWorktree } from '../server/src/teardown/teardown.ts'
 import { createMachine, localSiblingRegistries } from '../server/src/integrations/machine.ts'
 import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
@@ -751,6 +752,27 @@ test('repo.remove (plugins E1): a repository the environments registry has no VM
   const res = await s.call('repo.remove', { projectId: s.projectId, repoId: s.repoId })
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.deepEqual(calls().filter((c) => c.startsWith('colima|')), [])
+})
+
+test("stack.destroy and env.destroy (plugins E1) are CONFLICT while the server tears the worktree down; the server's own teardown still runs them", { skip }, async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.a, '.git', 'info', 'exclude'), '.trek/\n')
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  mkdirSync(join(s.feature, '.trek', 'stack'), { recursive: true })
+  assert.equal((await s.call('env.up', { ...ref, settings: { enabled: true, networkAddress: false } })).result.code, 0)
+  const profile = deriveProfileName(s.a, 'feature-x')
+  resetCalls()
+  await holdWorktree(s.feature, 'removing it', async () => {
+    refused(await s.call('stack.destroy', ref), 'CONFLICT')
+    refused(await s.call('env.destroy', { profile }), 'CONFLICT')
+  })
+  assert.deepEqual(calls().filter((c) => c.startsWith('colima|') || c.startsWith('stack|')), [], 'neither ran')
+  // Free again: the client's own call goes through.
+  assert.equal((await s.call('stack.destroy', ref)).result, 0)
+  // The server's teardown calls the machine directly, under its own hold.
+  const res = await s.call('worktree.remove', { ...ref, teardown: ['stack:destroy', 'env:destroy'] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.ok(calls().some((c) => c.startsWith('colima|') && c.includes(`delete `)), 'the VM was deleted by the teardown')
 })
 
 /** A plugin participant (plugins E1) that records its teardowns. */
