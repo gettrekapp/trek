@@ -3,11 +3,12 @@
 // show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
-import { campLayout, campSummary, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
+import { campLayout, campSummary, collapsedRow, type CampHikerSpot, type FireSide } from '../shared/layout.ts'
 import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
 import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
+import { MiniHiker } from './MiniHiker.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
 
 export function Campsite(): React.JSX.Element | null {
@@ -18,6 +19,8 @@ export function Campsite(): React.JSX.Element | null {
   const now = useNow()
   const hidden = useDocumentHidden()
   const [ref, width] = useWidth<HTMLDivElement>()
+  // The collapsed bar's row of hikers: measured, to know how many fit
+  const [rowRef, rowWidth] = useWidth<HTMLDivElement>()
   const [openTent, setOpenTent] = useState<OpenTent | null>(null)
   const badge = useRef<HTMLButtonElement | null>(null)
   const layout = useMemo(() => campLayout(sessions, width), [sessions, width])
@@ -38,16 +41,25 @@ export function Campsite(): React.JSX.Element | null {
   if (!loaded || !prefs.showCampsite) return null
 
   if (prefs.campsiteCollapsed) {
+    const waiting = sessions.filter(isWaiting)
+    const row = collapsedRow(sessions, rowWidth)
     return (
       <div className="campsite collapsed">
-        <button className="cs-chevron" title="Show the campsite" aria-label="Show the campsite" onClick={() => setPref('campsiteCollapsed', false)}>
-          ▴
+        <button className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => setPref('campsiteCollapsed', false)}>
+          <Chevron up />
         </button>
-        {sessions.filter(isWaiting).map((s) => (
-          <button key={s.terminalId} className="cs-waiting-chip" title={hikerLabel(s)} aria-label={hikerLabel(s)} onClick={() => host.focusSession(s.terminalId)}>
-            !
+        <span className="cs-summary">{campSummary(sessions)}</span>
+        {waiting.length > 0 && (
+          <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
+            {waiting.length} waiting
           </button>
-        ))}
+        )}
+        <div ref={rowRef} className="cs-mini-row">
+          {row.shown.map((s) => (
+            <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => host.focusSession(s.terminalId)} />
+          ))}
+          {row.more > 0 && <span className="cs-mini-more">+{row.more}</span>}
+        </div>
       </div>
     )
   }

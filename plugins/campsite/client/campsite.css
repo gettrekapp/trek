@@ -99,11 +99,38 @@
   user-select: none;
 }
 .campsite.collapsed {
-  height: 20px;
+  height: 36px;
   display: flex;
   align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+  overflow: hidden;
+}
+.campsite.collapsed .cs-summary {
+  padding: 0;
+  background: none;
+}
+/* Takes the room that is left; collapsedRow cuts the hikers to it */
+.cs-mini-row {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  display: flex;
+  align-items: flex-end;
   gap: 6px;
-  padding-left: 28px;
+  overflow: hidden;
+}
+.cs-mini {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.cs-mini-more {
+  align-self: center;
+  color: #9a9aa2;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .cs-paused,
 .cs-paused * {
@@ -210,11 +237,14 @@
   white-space: nowrap;
 }
 .cs-waiting-chip {
+  flex: none;
+  height: 20px;
+  padding: 0 8px;
   background: var(--attention, #e2a336);
-  color: #111111;
+  color: #111113;
   border: none;
-  font: 700 10px monospace;
-  padding: 0 5px;
+  border-radius: 4px;
+  font: 700 11px ui-monospace, 'SF Mono', Menlo, monospace;
   cursor: pointer;
 }
 .cs-fire {
@@ -485,6 +515,7 @@
 }
 
 .cs-toggle:focus-visible,
+.cs-mini:focus-visible,
 .cs-camp-badge:focus-visible,
 .cs-waiting-chip:focus-visible,
 .cs-more-waiting:focus-visible,
