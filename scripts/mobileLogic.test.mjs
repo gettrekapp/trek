@@ -14,7 +14,7 @@
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
 // tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
 // and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus),
-// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label), and over-the-air updates (when the phone checks, when the restart banner shows).
+// and the worktree list's tag filter (its options, which worktrees match, deleted tags, the chip's label), and over-the-air updates (when the phone checks, when the restart banner shows), and the Global tray (its heights, a drag's landing, the tab shown, the keyboard, which sessions it holds).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -36,6 +36,7 @@ import { defaultTeardown, promoteTeardownFailure, teardownFailed, teardownNote, 
 import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
+import { BAR_HEIGHT, inTray, snapHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../apps/mobile/src/logic/globalTray.ts'
 import { globalAgentLabel, globalGroupOpen, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
@@ -3151,4 +3152,70 @@ test('updates: what a check downloads, and what Later is keyed on', () => {
   assert.equal(pendingKey({ isUpdatePending: true, updateId: 'u1', createdAt: new Date(5) }), 'u1')
   assert.equal(pendingKey({ isUpdatePending: true, updateId: undefined, createdAt: new Date(5) }), 'rollback:5', 'a rollback has no id')
   assert.equal(pendingKey({ isUpdatePending: true }), 'rollback:0')
+})
+
+test('global tray: the three heights in a pane', () => {
+  // A phone: 800pt pane, 47pt top inset, 34pt home indicator.
+  assert.deepEqual(trayHeights(800, 47, 34), { collapsed: BAR_HEIGHT + 34, half: 400, full: 800 - 47 - 52 })
+  // A pane too short for half: half never drops under the bar, full never under half.
+  const tiny = trayHeights(100, 0, 0)
+  assert.equal(tiny.collapsed, BAR_HEIGHT)
+  assert.ok(tiny.half >= tiny.collapsed)
+  assert.ok(tiny.full >= tiny.half)
+})
+
+test('global tray: a drag snaps to the nearest height, a fling to the next one its way', () => {
+  const h = { collapsed: 78, half: 400, full: 701 }
+  assert.equal(snapHeight(h, 100, 0), 'collapsed')
+  assert.equal(snapHeight(h, 350, 0), 'half')
+  assert.equal(snapHeight(h, 650, 0), 'full')
+  // Flung up from just above the bar: the next height up, not the nearest.
+  assert.equal(snapHeight(h, 120, -1), 'half')
+  assert.equal(snapHeight(h, 420, -1), 'full')
+  // Flung down from near full: half; from half: collapsed.
+  assert.equal(snapHeight(h, 680, 1), 'half')
+  assert.equal(snapHeight(h, 390, 1), 'collapsed')
+  // Past the ends.
+  assert.equal(snapHeight(h, 720, -1), 'full')
+  assert.equal(snapHeight(h, 60, 1), 'collapsed')
+  // A slow release counts as no fling.
+  assert.equal(snapHeight(h, 230, -0.2), 'collapsed')
+})
+
+test('global tray: a tap on the bar opens it to half, and closes an open one', () => {
+  assert.equal(tapHeight('collapsed'), 'half')
+  assert.equal(tapHeight('half'), 'collapsed')
+  assert.equal(tapHeight('full'), 'collapsed')
+})
+
+test('global tray: the tab shown as sessions come and go', () => {
+  // The chosen one while it is listed.
+  assert.equal(trayTab(['a', 'b', 'c'], 'b', ['a', 'b', 'c']), 'b')
+  // None chosen: the first.
+  assert.equal(trayTab(['a', 'b'], null, []), 'a')
+  // The chosen one closed: the one now in its place (the next), or the last when it was last.
+  assert.equal(trayTab(['a', 'c'], 'b', ['a', 'b', 'c']), 'c')
+  assert.equal(trayTab(['a', 'b'], 'c', ['a', 'b', 'c']), 'b')
+  // A chosen id never listed (just started, the snapshot not there yet): kept.
+  assert.equal(trayTab(['a'], 'new', ['a']), 'new')
+  // No sessions: none.
+  assert.equal(trayTab([], 'a', ['a']), null)
+  assert.equal(trayTab([], null, []), null)
+})
+
+test('global tray: the keyboard hides the bar, and lifts an open tray', () => {
+  assert.deepEqual(trayLayout('collapsed', 0), { hidden: false, lift: 0 })
+  // The screen above has the keyboard: the bar steps aside.
+  assert.deepEqual(trayLayout('collapsed', 300), { hidden: true, lift: 0 })
+  // The tray's own composer: the tray rides above the keyboard.
+  assert.deepEqual(trayLayout('half', 300), { hidden: false, lift: 300 })
+  assert.deepEqual(trayLayout('full', 0), { hidden: false, lift: 0 })
+})
+
+test('global tray: it holds the Global sessions but an automation run', () => {
+  const sessions = [{ id: 'g1' }, { id: 'run', context: { kind: 'automation', automationId: 'a' } }]
+  assert.equal(inTray(sessions, 'g1'), true)
+  assert.equal(inTray(sessions, 'run'), false)
+  assert.equal(inTray(sessions, 's1'), false)
+  assert.equal(inTray(undefined, 'g1'), false)
 })
