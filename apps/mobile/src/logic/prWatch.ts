@@ -16,12 +16,14 @@ export function isWatching(data: Watched): boolean {
 }
 
 /**
- * Whether the pull request row offers the switch: a pull request is linked, and the server can
- * watch (`capable`: its welcome lists the `prWatch` capability now, which follows its host's sign-in)
- * or already does (so a watch can be stopped while it is signed out).
+ * Whether the pull request row offers the switch: a pull request is linked, and either the server
+ * already watches it (so a watch can be stopped while signed out, or with its provider off), or a
+ * provider on for the project (`providers`) owns the link and the server can watch (`capable`: its
+ * welcome lists the `prWatch` capability now, which follows its host's sign-in).
  */
-export function watchOffered(data: Watched, capable: boolean): boolean {
-  return !!data?.pr && (capable || isWatching(data))
+export function watchOffered(data: Watched, capable: boolean, providers: readonly PrProvider[]): boolean {
+  if (!data?.pr) return false
+  return isWatching(data) || (capable && !!prOwner(providers, data.pr))
 }
 
 /**

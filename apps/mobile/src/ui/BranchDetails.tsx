@@ -307,7 +307,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch, head
         ) : (
           <>
             {shown('pr', data?.pr ? `${pullRequestText(data.pr)}${watchSuffix(data, canWatch.current, prHosts)}` : null, 'No pull request', prLink)}
-            {watchOffered(data, canWatch.current) ? (
+            {watchOffered(data, canWatch.current, prHosts) ? (
               <View style={[ui.row, { marginTop: 6 }]}>
                 <Button ghost label={watch.label} disabled={off} onPress={() => void send((conn) => conn.request('branch.setPrWatch', { ...ref, watch: watch.watch }))} />
               </View>

@@ -689,7 +689,8 @@ export function WorktreeDetail({
                     Pull request {pullRequest ? prLabel(prProviders, pullRequest) : '(none)'}…
                   </div>
                 </div>
-                {pullRequest && info.branch && (features.prWatch || watchingPr) && (
+                {/* Watch is offered for a link a PR provider on for the project owns; Stop watching always, while watched. */}
+                {pullRequest && info.branch && (features.prWatch || watchingPr) && (watchingPr || prOwner(prProviders, pullRequest)) && (
                   <div
                     className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
                     onClick={() => {

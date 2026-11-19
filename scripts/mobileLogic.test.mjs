@@ -1881,7 +1881,7 @@ test('pr watch: a branch is watched while it has a pull request and a watch', ()
   assert.equal(isWatching({ prWatch: {} }), false)
 })
 
-test('pr watch: the switch is offered for a linked pull request when gh is signed in, or to stop a watch', () => {
+test('pr watch: the switch is offered for a linked pull request a provider on owns when its sign-in is there, or to stop a watch', () => {
   const pr = 'https://github.com/o/r/pull/1'
   const cases = [
     // data, capable, offered, suffix, action
@@ -1896,10 +1896,16 @@ test('pr watch: the switch is offered for a linked pull request when gh is signe
   const providers = activePrProviders({ capabilities: [] }, {})
   for (const [data, capable, offered, suffix, action] of cases) {
     const what = `${JSON.stringify(data)} capable=${capable}`
-    assert.equal(watchOffered(data, capable), offered, what)
+    assert.equal(watchOffered(data, capable, providers), offered, what)
     assert.equal(watchSuffix(data, capable, providers), suffix, what)
     assert.deepEqual(watchAction(data), action, what)
   }
+  // A link no provider on owns is not offered a watch; one already watched can still be stopped.
+  const other = 'https://example.com/o/r/pull/1'
+  assert.equal(watchOffered({ pr: other }, true, providers), false)
+  assert.equal(watchOffered({ pr }, true, []), false)
+  assert.equal(watchOffered({ pr: other, prWatch: {} }, true, providers), true)
+  assert.equal(watchOffered({ pr: other, prWatch: {} }, false, []), true)
 })
 
 test("pr watch: the server's refusals of a watch, as the section's error line shows them", () => {
