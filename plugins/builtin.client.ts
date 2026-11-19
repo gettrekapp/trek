@@ -4,5 +4,6 @@ import type { ClientPlugin } from '../src/shared/plugins/client.ts'
 import { voiceClientPlugin } from './voice/client/index.tsx'
 import { linearClientPlugin } from './linear/client/index.tsx'
 import { azureDevOpsClientPlugin } from './azure-devops/client/index.ts'
+import { githubClientPlugin } from './github/client/index.ts'
 
-export const BUILTIN_CLIENT_PLUGINS: readonly ClientPlugin[] = [voiceClientPlugin, linearClientPlugin, azureDevOpsClientPlugin]
+export const BUILTIN_CLIENT_PLUGINS: readonly ClientPlugin[] = [voiceClientPlugin, linearClientPlugin, azureDevOpsClientPlugin, githubClientPlugin]

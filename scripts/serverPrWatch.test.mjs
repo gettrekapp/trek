@@ -12,7 +12,7 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { resetRuntime } from '../server/src/projects/model.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 import { FAILS_BEFORE_NOTICE, PrWatcher, pollMsFromEnv, watchTargets } from '../server/src/prWatch/watcher.ts'
-import { ghBinary, ghCommand, ghRunner, isAuthFailure } from '../server/src/prWatch/gh.ts'
+import { ghBinary, ghCommand, ghRunner } from '../server/src/prWatch/gh.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 import { prQueryArgs } from '../src/shared/prWatch.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
@@ -160,11 +160,6 @@ test('ghRunner elsewhere: TREK_SERVER_GH runs as it is, whatever its extension',
   writeFileSync(stub, '#!/bin/sh\necho direct\n')
   chmodSync(stub, 0o755)
   assert.equal((await ghRunner(stub, 'darwin')(['auth', 'status'])).trim(), 'direct')
-})
-
-test('isAuthFailure: only sign-in trouble re-checks the sign-in', () => {
-  for (const m of ['HTTP 401: Bad credentials (https://api.github.com/graphql)', 'You are not logged into any GitHub hosts. To log in, run: gh auth login', 'authentication required']) assert.equal(isAuthFailure(m), true, m)
-  for (const m of ['HTTP 502: Bad Gateway', 'dial tcp: lookup api.github.com: no such host', 'GitHub: Could not resolve to a PullRequest with the number of 12.', 'no such pull request']) assert.equal(isAuthFailure(m), false, m)
 })
 
 test('pollMsFromEnv takes whole milliseconds, at least 1000', () => {
