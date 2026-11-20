@@ -1,4 +1,4 @@
-// The campsite's Settings section: per-app switches for the strip and the terminal-corner hiker
+// The campsite's Settings section: per-app switches for the strip and the terminal's hiker
 // (turning the plugin off for the project hides everything, tab hikers included). Rows as the
 // voice plugin's.
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
@@ -7,7 +7,7 @@ import { usePrefs } from './hooks.ts'
 
 const ROWS: readonly { key: CampsitePrefKey; label: string; hint: string }[] = [
   { key: 'showCampsite', label: 'Show the campsite', hint: 'The strip along the bottom of the window.' },
-  { key: 'showTerminalHiker', label: "Show a hiker in each terminal's corner", hint: 'It steps back while you type or scroll.' }
+  { key: 'showTerminalHiker', label: "Show a hiker on each terminal's button row", hint: 'With what its session is doing.' }
 ]
 
 export function CampsiteSettings(): React.JSX.Element {

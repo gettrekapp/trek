@@ -86,8 +86,31 @@
 .cs-tab-sign.decision {
   background: var(--decision, #b18cff);
 }
-.cs-terminal-hiker {
-  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.5));
+/* On a terminal's quick button row. The row's items are 24 px tall under 8 px of padding: the 2×
+   hiker (32 px) stands on the row's bottom and rises into that padding, so the row keeps its height. */
+.cs-bar-hiker {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.cs-bar-text {
+  align-self: center;
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #9a9aa2;
+}
+.cs-bar-text.attention {
+  color: var(--attention, #e2a336);
+}
+.cs-bar-text.decision {
+  color: var(--decision, #b18cff);
 }
 
 .campsite {

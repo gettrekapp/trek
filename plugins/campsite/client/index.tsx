@@ -1,4 +1,4 @@
-// The campsite plugin's client half: hikers on the session tabs, in the terminal corners and at the
+// The campsite plugin's client half: hikers on the session tabs, on the terminals' button rows and at the
 // campsite strip, and its Settings section.
 import { defineClientPlugin } from '../../../src/shared/plugins/client.ts'
 import { CAMPSITE_MANIFEST } from '../manifest.ts'
@@ -10,5 +10,5 @@ import { TerminalHiker } from './TerminalHiker.tsx'
 
 export const campsiteClientPlugin = defineClientPlugin({
   manifest: CAMPSITE_MANIFEST,
-  slots: { sessionIndicator: SessionIndicator, terminalOverlay: TerminalHiker, bottomBar: Campsite, settings: CampsiteSettings }
+  slots: { sessionIndicator: SessionIndicator, terminalBarEnd: TerminalHiker, bottomBar: Campsite, settings: CampsiteSettings }
 })

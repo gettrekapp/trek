@@ -1,9 +1,10 @@
-// The hiker in its terminal's corner (3×). The core's wrapper dims it while the user types or
-// scrolls back; it takes no clicks.
+// The hiker on its terminal's quick button row (2×), with what its session is doing. On the row,
+// not over the terminal, so it never covers output. A waiting session shows its tab's chip here
+// too: a sign board over the head would rise into the terminal's last line.
 import { useMemo } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
-import { choreFor, hikerLabel, stanceFor } from '../shared/pose.ts'
+import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, stanceFor } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
 import { useNow, usePrefs, useSession } from './hooks.ts'
 
@@ -15,10 +16,19 @@ export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX
   const provider = session?.provider ?? 'claude'
   const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
   if (!loaded || !prefs.showTerminalHiker || !session) return null
-  const stance = stanceFor(session, choreFor(terminalId, now))
+  const chore = choreFor(terminalId, now)
+  const stance = stanceFor(session, chore)
   return (
-    <div className="cs-terminal-hiker">
-      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} sign={stance.sign} scale={3} label={hikerLabel(session)} />
-    </div>
+    <span className="cs-bar-hiker" title={hikerTooltip(session, chore)}>
+      <span className={`cs-bar-text${stance.sign ? ` ${stance.sign}` : ''}`}>
+        {session.label} · {hikerDoing(session, chore)}
+      </span>
+      {stance.sign && (
+        <span className={`cs-tab-sign ${stance.sign}`} aria-hidden="true">
+          {SIGN_TEXT[stance.sign]}
+        </span>
+      )}
+      <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} scale={2} label={hikerLabel(session)} decorative />
+    </span>
   )
 }
