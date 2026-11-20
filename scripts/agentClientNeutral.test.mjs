@@ -3,6 +3,7 @@
 // folder, adapter import, or agent named in a string or in a component's words, in desktop main and
 // preload, the renderer, the web client, src/shared or the phone. Comments may name agents; code
 // may not. The agents' own client code is the plugins' (plugins/claude, codex, gemini, grok).
+// plugins/ isn't scanned at all, the non-agent plugins (campsite, the ticket and PR plugins…) included.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'

@@ -3,6 +3,7 @@
 // too: a sign board over the head would rise into the terminal's last line.
 import { useMemo } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { lookFor } from '../shared/hiker.ts'
 import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, stanceFor } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
@@ -13,7 +14,7 @@ export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX
   const [{ loaded, prefs }] = usePrefs(host)
   const session = useSession(host, terminalId)
   const now = useNow()
-  const provider = session?.provider ?? 'claude'
+  const provider = session?.provider ?? DEFAULT_AGENT_ID
   const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
   if (!loaded || !prefs.showTerminalHiker || !session) return null
   const chore = choreFor(terminalId, now)

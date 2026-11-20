@@ -4,6 +4,7 @@
 // draws from the tab's own status, so the tab is never blank.
 import { useMemo } from 'react'
 import { usePluginHost, type SessionIndicatorProps } from '../../../src/shared/plugins/client.ts'
+import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { lookFor } from '../shared/hiker.ts'
 import { SIGN_TEXT, choreFor, indicatorState, indicatorTitle, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
@@ -13,7 +14,7 @@ export function SessionIndicator({ terminalId, status, onToggleComplete }: Sessi
   const host = usePluginHost()
   const session = useSession(host, terminalId)
   const now = useNow()
-  const provider = session?.provider ?? 'claude'
+  const provider = session?.provider ?? DEFAULT_AGENT_ID
   const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
   const state = indicatorState(session, status)
   const stance = stanceFor(state, choreFor(terminalId, now))
