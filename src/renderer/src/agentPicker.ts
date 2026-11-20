@@ -38,17 +38,18 @@ export function needsModel(value: AgentSelection, catalog: AgentCatalog): boolea
 
 /**
  * The selection to switch to once an agent's models are listed: its first model, when none is
- * chosen. Only when the user picked the agent in this picker (`pickedHere`), or the picker holds a
- * one-off pick (`eager`: the New session menu's); a saved choice (a session type's, a default)
- * that is merely shown is left as it is, so showing it saves nothing.
+ * chosen. Only when the user picked this very agent in this picker (`pickedHere`, the id last
+ * picked there), or the picker holds a one-off pick (`eager`: the New session menu's). A saved
+ * choice (a session type's, a default) that is merely shown, or set from outside, is left as it
+ * is, so showing it saves nothing.
  */
 export function firstModelPick(
   current: AgentSelection,
   agentId: string,
   models: readonly { id: string }[],
-  when: { pickedHere: boolean; eager: boolean }
+  when: { pickedHere: string | null; eager: boolean }
 ): AgentSelection | null {
-  if (!when.pickedHere && !when.eager) return null
+  if (when.pickedHere !== agentId && !when.eager) return null
   if (current.provider !== agentId || current.model || !models[0]) return null
   return { provider: agentId, model: models[0].id, ...(current.effort ? { effort: current.effort } : {}) }
 }

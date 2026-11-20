@@ -21,6 +21,11 @@ interface Props {
    * choice that is merely shown is not rewritten.
    */
   eagerModel?: boolean
+  /**
+   * An agent to count as picked here from the start: the picker mounts for a choice the user just
+   * made elsewhere (a session type's "Use the default agent" unticked), so its first model is picked.
+   */
+  pickedAgent?: string
 }
 
 interface ListedModels {
@@ -39,7 +44,7 @@ function useListedModels(
   agentId: string | null,
   value: LlmSelection,
   onChange: (value: LlmSelection) => void,
-  when: () => { pickedHere: boolean; eager: boolean }
+  when: () => { pickedHere: string | null; eager: boolean }
 ): ListedModels {
   const [models, setModels] = useState<AgentModel[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -77,11 +82,11 @@ function useListedModels(
 }
 
 /** Agent → Model → Effort, over the server's agents. Changing the agent resets model and effort. */
-export function LlmPicker({ value, onChange, catalog, offer, eagerModel = false }: Props): React.JSX.Element {
+export function LlmPicker({ value, onChange, catalog, offer, eagerModel = false, pickedAgent }: Props): React.JSX.Element {
   const agent = catalog.get(value.provider)
   const agents = pickerAgents(value, catalog, offer)
-  /** The user picked the agent in this picker (not a saved choice it was given) */
-  const pickedHere = useRef(false)
+  /** The agent the user last picked in this picker (not a saved choice it was given), or null */
+  const pickedHere = useRef<string | null>(pickedAgent ?? null)
   const listed = useListedModels(agent?.modelsFrom === 'server' ? agent.id : null, value, onChange, () => ({
     pickedHere: pickedHere.current,
     eager: eagerModel
@@ -105,7 +110,7 @@ export function LlmPicker({ value, onChange, catalog, offer, eagerModel = false 
         value={value.provider}
         onChange={(e) => {
           setCustomOpen(false)
-          pickedHere.current = true
+          pickedHere.current = e.target.value
           onChange({ provider: e.target.value })
         }}
       >

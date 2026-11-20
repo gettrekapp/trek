@@ -38,14 +38,16 @@ test('needsModel: an agent whose models come from an endpoint has no default mod
 test("firstModelPick: a listed agent's first model, only once the user picked the agent here (or the picker is a one-off's)", () => {
   const list = [{ id: 'qwen', label: 'qwen' }, { id: 'llama', label: 'llama' }]
   // A saved choice (a session type's, the project's default) with no model: left as it is, nothing is saved.
-  assert.equal(firstModelPick({ provider: 'local' }, 'local', list, { pickedHere: false, eager: false }), null)
+  assert.equal(firstModelPick({ provider: 'local' }, 'local', list, { pickedHere: null, eager: false }), null)
   // The user picked Local in this picker: its first model, the effort kept.
-  assert.deepEqual(firstModelPick({ provider: 'local', effort: 'high' }, 'local', list, { pickedHere: true, eager: false }), { provider: 'local', model: 'qwen', effort: 'high' })
+  assert.deepEqual(firstModelPick({ provider: 'local', effort: 'high' }, 'local', list, { pickedHere: 'local', eager: false }), { provider: 'local', model: 'qwen', effort: 'high' })
   // A one-off pick (the New session menu's): picked straight away.
-  assert.deepEqual(firstModelPick({ provider: 'local' }, 'local', list, { pickedHere: false, eager: true }), { provider: 'local', model: 'qwen' })
-  assert.equal(firstModelPick({ provider: 'local', model: 'llama' }, 'local', list, { pickedHere: true, eager: true }), null, 'a model is already chosen')
-  assert.equal(firstModelPick({ provider: 'claude' }, 'local', list, { pickedHere: true, eager: true }), null, 'another agent is chosen now')
-  assert.equal(firstModelPick({ provider: 'local' }, 'local', [], { pickedHere: true, eager: true }), null, 'nothing listed')
+  assert.deepEqual(firstModelPick({ provider: 'local' }, 'local', list, { pickedHere: null, eager: true }), { provider: 'local', model: 'qwen' })
+  assert.equal(firstModelPick({ provider: 'local', model: 'llama' }, 'local', list, { pickedHere: 'local', eager: true }), null, 'a model is already chosen')
+  assert.equal(firstModelPick({ provider: 'claude' }, 'local', list, { pickedHere: 'local', eager: true }), null, 'another agent is chosen now')
+  assert.equal(firstModelPick({ provider: 'local' }, 'local', [], { pickedHere: 'local', eager: true }), null, 'nothing listed')
+  // Another agent was picked here earlier; Local without a model came from outside (an undo, another window): left as it is.
+  assert.equal(firstModelPick({ provider: 'local' }, 'local', list, { pickedHere: 'claude', eager: false }), null)
 })
 
 test('canStartPick: only an offered agent (on in the project), with a model where it needs one', () => {

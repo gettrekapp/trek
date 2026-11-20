@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { CLAUDE_PERMISSION_MODES } from '../../../../shared/providers/claude'
 import { useAppStore } from '../../store'
 import { ImagePicker, SESSION_ICON_LIMITS } from '../ImagePicker'
@@ -21,6 +22,8 @@ export function AgentsTab(): React.JSX.Element {
   // fresh array every snapshot and loop React's store re-render (error #185).
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
   const projectDefault = useAppStore((s) => s.project?.llmDefault)
+  /** The session type whose "Use the default agent" was just unticked: its picker counts that agent as picked, so an agent without a default model gets its first one */
+  const [justUnticked, setJustUnticked] = useState<string | null>(null)
   const updateSessionTypes = useAppStore((s) => s.setSessionTypes)
   const patchSessionType = (id: string, patch: Partial<SessionType>): void => {
     updateSessionTypes(sessionTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -100,17 +103,23 @@ export function AgentsTab(): React.JSX.Element {
               <input
                 type="checkbox"
                 checked={!type.llm}
-                onChange={(e) =>
+                onChange={(e) => {
+                  setJustUnticked(e.target.checked ? null : type.id)
                   patchSessionType(type.id, {
                     llm: e.target.checked ? undefined : typeAgentStart(projectDefault, serverDefault, catalog)
                   })
-                }
+                }}
               />
               Use the default agent
             </label>
             {type.llm && (
               <>
-                <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} catalog={catalog} />
+                <LlmPicker
+                  value={type.llm}
+                  onChange={(llm) => patchSessionType(type.id, { llm })}
+                  catalog={catalog}
+                  pickedAgent={justUnticked === type.id ? type.llm.provider : undefined}
+                />
                 <AgentNote llm={type.llm} />
               </>
             )}
