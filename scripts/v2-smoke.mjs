@@ -1068,7 +1068,8 @@ try {
       ? ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite']
       // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
       : ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Voice summaries']],
-    ['Appearance', 'Notifications', 'Local server']
+    // "Saved tokens" is there only when tokens are stored unencrypted (a Linux runner without a keyring).
+    ['Appearance', 'Notifications', 'Local server', ...((await w1.evaluate(() => window.api.secretStorage())) === 'unencrypted' ? ['Saved tokens'] : [])]
   ])
   await openSettingsTab(settings, 'Agents')
   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
