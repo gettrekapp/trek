@@ -167,3 +167,10 @@ test("the welcome's presence keeps an installed plugin's extra fields, and drops
   assert.deepEqual(installed, { id: 'solarized', version: '1.0.0', defaultEnabled: false, type: 'theme', name: 'Solarized', description: 'A calm theme.', contract: 1, sha256 })
   assert.deepEqual(bad, { id: 'odd', version: '1.0.0', defaultEnabled: false })
 })
+
+test('required (plugins A1b): built-in only; a welcome entry keeps it', () => {
+  const pkg = { manifest: { id: 'skin', version: '1.0.0', name: 'Skin', description: 'A skin', defaultEnabled: false, type: 'theme', contract: 1, required: true }, client: 'x' }
+  assert.match(checkPluginPackage(pkg).problem, /cannot declare required/)
+  assert.deepEqual(parsePluginPresence([{ id: 'claude', version: '1.0.0', defaultEnabled: true, required: true }]), [{ id: 'claude', version: '1.0.0', defaultEnabled: true, required: true }])
+  assert.deepEqual(parsePluginPresence([{ id: 'x', version: '1.0.0', defaultEnabled: true, required: 'yes' }]), [{ id: 'x', version: '1.0.0', defaultEnabled: true }])
+})

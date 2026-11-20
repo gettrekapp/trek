@@ -15,6 +15,7 @@ import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
+import type { SessionType } from '../../src/shared/types'
 import { MAX_PLUGIN_TEXT, pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
 import { envRepoValues, LEGACY_ENV_PLUGIN, mirrorBranch, mirrorRepo, repoValuesWithLegacy, setBranchEnv, setRepoEnv } from './projects/legacyEnv.ts'
 import type { GitPoller } from './git/poller.ts'
@@ -231,6 +232,21 @@ function withPluginValues(map: Record<string, PluginSettingValues> | undefined, 
   return Object.keys(next).length > 0 ? next : undefined
 }
 
+/**
+ * A session type may not change to an agent turned off in the project (plugins A1b). One that had
+ * it already stays: an old client resends the whole list to edit another type.
+ */
+function checkSessionTypeAgents(ctx: V2Context, projectId: string, before: readonly SessionType[] | undefined, after: readonly SessionType[] | undefined): void {
+  // A test's stand-in session manager may have no agents; the server's always has.
+  const agents = (ctx.sessions as { agentRegistry?: V2Context['sessions']['agentRegistry'] } | undefined)?.agentRegistry
+  if (!agents) return
+  for (const type of after ?? []) {
+    if (!type.llm) continue
+    const was = before?.find((t) => t.id === type.id)?.llm?.provider
+    if (type.llm.provider !== was) agents.checkOn(projectId, type.llm.provider)
+  }
+}
+
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
 
@@ -303,7 +319,9 @@ const handlers: Record<string, Handler> = {
         if (!isSettingsKey(key, ctx.plugins?.settingRules)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
       }
+      const typesBefore = d.settings.sessionTypes
       d.settings = applySettingsPatch(d.settings, patch, ctx.plugins?.settingRules)
+      if (Object.hasOwn(patch, 'sessionTypes')) checkSessionTypeAgents(ctx, d.id, typesBefore, d.settings.sessionTypes)
       // A deleted tag comes off every branch in the same change (one patch, one rev).
       const pruned = pruneDeletedTagsReporting(d.repositories, d.settings, patch)
       d.repositories = pruned.repositories

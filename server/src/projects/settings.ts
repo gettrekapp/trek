@@ -58,6 +58,11 @@ export interface PluginSettingRules {
   check(key: string, value: string): string | null
   /** Whether a session type's agent is one this server has (plugins A1: the set-up plugins' agents) */
   knownAgent?(id: string): boolean
+  /**
+   * Whether a plugin is always on (its manifest's `required`, plugins A1b): a live edit that switches
+   * it off (`plugins.<id>.enabled: false`) is refused. An import or a load keeps the value; it is ignored.
+   */
+  required?(pluginId: string): boolean
 }
 
 /** Whether `key` is a core project setting (an own key of the settings table). */
@@ -70,8 +75,15 @@ export function isSettingsKey(key: string, plugins?: PluginSettingRules): boolea
   return isCoreSettingsKey(key) || plugins?.kind(key) !== undefined
 }
 
-/** Session types are acted on at every session.start, so their fields are checked, not just their kind. */
-function checkSessionTypes(types: unknown[], field: string, knownAgent: (id: string) => boolean): void {
+/**
+ * Session types are acted on at every session.start, so their fields are checked, not just their kind.
+ * `before`: the stored list, on a live edit. A type whose agent is unchanged from the stored type of
+ * that id isn't held to `knownAgent` (plugins A1b): an old client resends the whole list to edit
+ * another type, and a stale type (its plugin gone) mustn't block that.
+ */
+function checkSessionTypes(types: unknown[], field: string, knownAgent: (id: string) => boolean, before?: unknown): void {
+  const stored = new Map<string, unknown>()
+  if (Array.isArray(before)) for (const t of before) if (isRecord(t) && typeof t.id === 'string' && isRecord(t.llm)) stored.set(t.id, t.llm.provider)
   const bad = (message: string): Error => codedError('BAD_REQUEST', `${field}${message}`)
   if (types.length > MAX_SESSION_TYPES) throw bad(` must hold at most ${MAX_SESSION_TYPES} session types`)
   types.forEach((t, i) => {
@@ -86,12 +98,15 @@ function checkSessionTypes(types: unknown[], field: string, knownAgent: (id: str
       if (typeof t.initialMessage !== 'string') throw bad(`${at}.initialMessage must be a string`)
       if (t.initialMessage.length > MAX_QUEUE_ENTRY) throw bad(`${at}.initialMessage must be at most ${MAX_QUEUE_ENTRY} characters`)
     }
-    if (t.llm !== undefined && (!isRecord(t.llm) || typeof t.llm.provider !== 'string' || !knownAgent(t.llm.provider))) throw bad(`${at}.llm must have a known provider`)
+    if (t.llm !== undefined && (!isRecord(t.llm) || typeof t.llm.provider !== 'string' || (stored.get(t.id) !== t.llm.provider && !knownAgent(t.llm.provider)))) {
+      throw bad(`${at}.llm must have a known provider`)
+    }
     if (t.icon !== undefined && typeof t.icon !== 'string') throw bad(`${at}.icon must be a string`)
   })
 }
 
-function checkValue(key: string, value: unknown, field: string, plugins?: PluginSettingRules): void {
+/** `current`: the stored settings, on a live edit (applySettingsPatch); absent for a whole settings object (an import). */
+function checkValue(key: string, value: unknown, field: string, plugins?: PluginSettingRules, current?: ProjectSettings): void {
   if (!isCoreSettingsKey(key)) {
     const kind = plugins?.kind(key)
     if (!kind) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
@@ -110,10 +125,22 @@ function checkValue(key: string, value: unknown, field: string, plugins?: Plugin
   if (!ok) throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
   assertNoProtoKeys(value, `${field}.${key}`)
   // Without the plugins' rules (a server with no plugins: tests), any well-formed agent id.
-  if (key === 'sessionTypes') checkSessionTypes(value as unknown[], `${field}.${key}`, plugins?.knownAgent ? (id) => plugins.knownAgent!(id) : (id) => AGENT_ID_RE.test(id))
+  if (key === 'sessionTypes') {
+    const knownAgent = plugins?.knownAgent ? (id: string) => plugins.knownAgent!(id) : (id: string) => AGENT_ID_RE.test(id)
+    checkSessionTypes(value as unknown[], `${field}.${key}`, knownAgent, current?.sessionTypes)
+  }
   if (key === 'plugins') {
     const problem = pluginSettingsProblem(value as Record<string, unknown>)
     if (problem) throw codedError('BAD_REQUEST', `${field}.plugins: ${problem}`)
+    // A live edit may not switch a required plugin off (plugins A1b). An import may, and a resent
+    // stored `false` (an old client sends the whole map) passes: either way it is ignored, still on.
+    if (current) {
+      const was = current.plugins
+      const off = Object.entries(value as Record<string, { enabled: boolean }>).find(
+        ([id, entry]) => entry.enabled === false && plugins?.required?.(id) === true && !(was && Object.hasOwn(was, id) && was[id]?.enabled === false)
+      )
+      if (off) throw codedError('BAD_REQUEST', `${field}.plugins.${off[0]}: it is always on and can't be turned off`)
+    }
   }
 }
 
@@ -132,7 +159,7 @@ export function applySettingsPatch(current: ProjectSettings, patch: Record<strin
       if (!isSettingsKey(key, plugins)) throw codedError('BAD_REQUEST', `settings.${key} is not a project setting`)
       delete next[key]
     } else if (value !== undefined) {
-      checkValue(key, value, 'settings', plugins)
+      checkValue(key, value, 'settings', plugins, current)
       next[key] = value
     }
   }

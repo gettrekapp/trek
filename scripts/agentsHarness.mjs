@@ -20,7 +20,11 @@ export function builtinAgentEntries(plugins = AGENT_PLUGINS) {
   )
 }
 
-/** The built-in agents' registry. `serverConfig`: an agent's llm.providers entry (default none; a ConfigStore's is `(id) => store.agentServerConfig(id)`). */
-export function builtinAgents({ serverConfig = () => ({}) } = {}) {
-  return createAgentRegistry({ agents: builtinAgentEntries(), serverConfig })
+/**
+ * The built-in agents' registry. `serverConfig`: an agent's llm.providers entry (default none; a
+ * ConfigStore's is `(id) => store.agentServerConfig(id)`). `enabled`: whether a plugin is on in a
+ * project (default: every one).
+ */
+export function builtinAgents({ serverConfig = () => ({}), enabled } = {}) {
+  return createAgentRegistry({ agents: builtinAgentEntries(), serverConfig, ...(enabled ? { enabled } : {}) })
 }

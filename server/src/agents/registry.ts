@@ -11,6 +11,8 @@ export interface AgentRegistryOptions {
   agents: readonly PluginAgent[]
   /** An agent's entry in the server config's `llm.providers`: ConfigStore.agentServerConfig */
   serverConfig: (agentId: string) => Readonly<Record<string, string>>
+  /** Whether a plugin is on in a project (the plugin registry's `enabled`); absent: every plugin is on */
+  enabled?: (projectId: string, pluginId: string) => boolean
 }
 
 export interface AgentRegistry extends AgentLookup {
@@ -24,6 +26,10 @@ export interface AgentRegistry extends AgentLookup {
   config(id: string, settings: ProjectSettings | undefined): AgentConfig
   /** Each agent's MCP file, in the agents' order: McpAccessStore writes them */
   mcpFiles(): AgentMcpFile[]
+  /** Whether the agent's plugin is on in the project (plugins A1b); an id the server lacks is not */
+  isOn(projectId: string, id: string): boolean
+  /** BAD_REQUEST "<label> is turned off for this project" unless the agent an id resolves to (an unknown one: the default agent) is on there */
+  checkOn(projectId: string, id: string): void
 }
 
 const DEFAULT_ORDER = 100
@@ -46,6 +52,10 @@ export function createAgentRegistry(options: AgentRegistryOptions): AgentRegistr
     }
     return found.agent
   }
+  const isOn = (projectId: string, id: string): boolean => {
+    const entry = byId.get(id)
+    return entry !== undefined && (options.enabled?.(projectId, entry.pluginId) ?? true)
+  }
   return {
     all: () => entries.map((e) => e.agent),
     has: (id) => byId.has(id),
@@ -61,6 +71,11 @@ export function createAgentRegistry(options: AgentRegistryOptions): AgentRegistr
       }
       return { server: { ...options.serverConfig(id) }, project }
     },
-    mcpFiles: () => entries.flatMap((e) => (e.agent.mcpFile ? [e.agent.mcpFile] : []))
+    mcpFiles: () => entries.flatMap((e) => (e.agent.mcpFile ? [e.agent.mcpFile] : [])),
+    isOn,
+    checkOn: (projectId, id) => {
+      const agent = get(id)
+      if (!isOn(projectId, agent.id)) throw codedError('BAD_REQUEST', `${agent.label} is turned off for this project`)
+    }
   }
 }

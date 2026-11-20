@@ -9,5 +9,7 @@ export const CLAUDE_MANIFEST: PluginManifest = {
   name: 'Claude Code',
   description: 'Run Claude Code in agent sessions, and Claude Code against a local model (Ollama or LM Studio) as the Local agent.',
   defaultEnabled: true,
+  // Claude is every server's fallback agent: the plugin is on in every project (plugins A1b).
+  required: true,
   projectSettings: { claudeCommand: 'string', claudeArgs: 'string', claudePermissionMode: 'string' }
 }

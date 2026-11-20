@@ -1374,3 +1374,54 @@ test("settingRules.knownAgent (plugins A1): the set-up plugins' agents", (t) => 
   assert.equal(registry.settingRules.knownAgent('alpha'), true)
   assert.equal(registry.settingRules.knownAgent('beta'), false)
 })
+
+test('required (plugins A1b): on in every project whatever its setting; listed so; turning it off is BAD_REQUEST', (t) => {
+  const core = { manifest: manifest('core', { required: true, defaultEnabled: true }), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [core, echoPlugin().plugin], { projects: { p1: project('p1', { core: { enabled: false }, echo: { enabled: false } }) } })
+  assert.equal(registry.enabled('p1', 'core'), true)
+  assert.equal(registry.enabled('p1', 'echo'), false)
+  assert.deepEqual(registry.presence().find((p) => p.id === 'core'), { id: 'core', version: '1.0.0', defaultEnabled: true, required: true })
+  assert.equal(registry.presence().find((p) => p.id === 'echo').required, undefined)
+  assert.throws(() => applySettingsPatch({}, { plugins: { core: { enabled: false } } }, registry.settingRules), (e) => e.code === 'BAD_REQUEST' && /core: it is always on/.test(e.message))
+  assert.deepEqual(applySettingsPatch({}, { plugins: { core: { enabled: true }, echo: { enabled: false } } }, registry.settingRules).plugins, { core: { enabled: true }, echo: { enabled: false } })
+})
+
+test('required (plugins A1b): an import or a load that turns it off is not refused; the plugin stays on', async (t) => {
+  const { checkImport } = await import('../server/src/projects/importCheck.ts')
+  const core = { manifest: manifest('core', { required: true, defaultEnabled: true }), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [core, echoPlugin().plugin], { projects: { p1: project('p1', { core: { enabled: false } }) } })
+  // A load: the stored setting is kept as it is, and read as on.
+  assert.equal(registry.enabled('p1', 'core'), true)
+  // An import: the settings pass (the repository's own check fails after them, as it should here).
+  const raw = { name: 'P', settings: { plugins: { core: { enabled: false } } }, repositories: [{ id: 'r', name: 'r', path: '/nowhere', worktrees: [] }], globalSessions: [] }
+  const ctx = { registry: [], guard: { check() {} }, existingIds: new Set(), projectId: 'new', settingRules: registry.settingRules }
+  const err = (() => {
+    try {
+      checkImport(raw, ctx)
+    } catch (e) {
+      return e
+    }
+  })()
+  assert.doesNotMatch(err?.message ?? '', /always on|plugins/)
+  // A whole settings object (validateSettings, an import's check) isn't refused either; a live edit is.
+  assert.doesNotThrow(() => validateSettings({ plugins: { core: { enabled: false } } }, 'project.settings', registry.settingRules))
+  // A live edit that switches it off is refused; one that resends an imported `false` (an old
+  // client sends the whole map to switch another plugin) is not: the plugin stays on either way.
+  assert.throws(() => applySettingsPatch({ plugins: { core: { enabled: true } } }, { plugins: { core: { enabled: false } } }, registry.settingRules), (e) => e.code === 'BAD_REQUEST')
+  const resent = applySettingsPatch({ plugins: { core: { enabled: false } } }, { plugins: { core: { enabled: false }, echo: { enabled: false } } }, registry.settingRules)
+  assert.deepEqual(resent.plugins, { core: { enabled: false }, echo: { enabled: false } })
+})
+
+test("session types (plugins A1b): a stored type whose agent the server lacks doesn't block an edit to another type; a new or changed one is checked", (t) => {
+  const { registry } = setup(t, [agentPlugin('alpha', [agent('alpha')])])
+  const stored = [{ id: 't1', name: 'Old', systemPrompt: '', llm: { provider: 'gone' } }]
+  const added = { id: 't2', name: 'New', systemPrompt: '', llm: { provider: 'alpha' } }
+  // An old client resends the whole list, the stale type unchanged.
+  const next = applySettingsPatch({ sessionTypes: stored }, { sessionTypes: [...stored, added] }, registry.settingRules)
+  assert.deepEqual(next.sessionTypes, [...stored, added])
+  // A new type, or a changed agent, naming an agent the server lacks is refused.
+  const unknown = (e) => e.code === 'BAD_REQUEST' && /llm must have a known provider/.test(e.message)
+  assert.throws(() => applySettingsPatch({ sessionTypes: stored }, { sessionTypes: [...stored, { ...added, llm: { provider: 'gone' } }] }, registry.settingRules), unknown)
+  assert.throws(() => applySettingsPatch({}, { sessionTypes: stored }, registry.settingRules), unknown)
+  assert.throws(() => applySettingsPatch({ sessionTypes: [added] }, { sessionTypes: [{ ...added, llm: { provider: 'gone' } }] }, registry.settingRules), unknown)
+})

@@ -205,7 +205,11 @@ export function startServer(
       })
     : undefined
   // The agents this server can launch (plugins A1): those its set-up plugins offer; none without plugins.
-  const agents: AgentRegistry = createAgentRegistry({ agents: plugins?.agentProviders() ?? [], serverConfig: (id) => store.agentServerConfig(id) })
+  const agents: AgentRegistry = createAgentRegistry({
+    agents: plugins?.agentProviders() ?? [],
+    serverConfig: (id) => store.agentServerConfig(id),
+    enabled: (projectId, pluginId) => plugins?.enabled(projectId, pluginId) ?? true
+  })
   if (!agents.has(DEFAULT_AGENT_ID)) console.warn(`[agents] no ${DEFAULT_AGENT_ID} agent: its plugin is not set up, so sessions cannot start`)
   // The core MCP tools with the server's agents in their enums (plugins A1): the agents are fixed for the server's life.
   const trekTools = coreTools(agents.all().map((a) => a.id), agents.all().filter((a) => a.capabilities.mcp).map((a) => a.id))

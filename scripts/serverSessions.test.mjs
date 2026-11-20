@@ -1276,7 +1276,7 @@ test("a session's output never throws when the server has no agent for it, not e
   const agents = (store) => {
     current = builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) })
     const pick = (name) => (...args) => current[name](...args)
-    return { all: pick('all'), has: pick('has'), get: pick('get'), facts: pick('facts'), pluginOf: pick('pluginOf'), config: pick('config'), mcpFiles: pick('mcpFiles') }
+    return { all: pick('all'), has: pick('has'), get: pick('get'), facts: pick('facts'), pluginOf: pick('pluginOf'), config: pick('config'), mcpFiles: pick('mcpFiles'), isOn: pick('isOn'), checkOn: pick('checkOn') }
   }
   const s = setup(t, { agents })
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
@@ -1468,4 +1468,48 @@ test("discovery (plugins A1) polls with the session's agent", async (t) => {
   const poll = s.scheduled.filter((job) => !job.cancelled).at(-1)
   await poll.fn()
   assert.equal(s.discoveries.at(-1).agentId, 'codex')
+})
+
+test('plugins A1b: an agent turned off in the project is refused for new sessions, defaults pass over it, and its sessions restart', (t) => {
+  const off = new Set(['codex'])
+  const enabled = (projectId, pluginId) => !off.has(pluginId)
+  const s = setup(t, { llm: { llmDefault: { provider: 'codex' } }, agents: (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }) })
+  const start = (more = {}) => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size, ...more })
+  // The server's default names Codex: passed over, to Claude.
+  start()
+  assert.match(cmd(s.spawned[0]), /^claude /)
+  // A pick or a session type's agent is refused, with the agent's label.
+  const refused = (e) => e.code === 'BAD_REQUEST' && e.message === 'Codex is turned off for this project'
+  assert.throws(() => start({ llm: { provider: 'codex' } }), refused)
+  s.projects.apply(s.projectId, (d) => { d.settings.sessionTypes = [{ id: 'cx', name: 'CX', systemPrompt: '', llm: { provider: 'codex' } }] })
+  assert.throws(() => start({ sessionTypeId: 'cx' }), refused)
+  // A project default naming it is passed over too; a Global session falls back to Claude.
+  s.projects.apply(s.projectId, (d) => { d.settings.llmDefault = { provider: 'codex' }; d.settings.globalLlm = { provider: 'codex' } })
+  start()
+  assert.match(cmd(s.spawned.at(-1)), /^claude /)
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  assert.match(cmd(s.spawned.at(-1)), /^claude /)
+  // A Codex session started while it was on restarts after it is turned off.
+  off.delete('codex')
+  const { sessionId } = start({ llm: { provider: 'codex' } })
+  off.add('codex')
+  s.spawned.at(-1).exit(0)
+  s.sessions.restart({ projectId: s.projectId, sessionId, ...size })
+  assert.match(cmd(s.spawned.at(-1)), /^codex /)
+})
+
+test('plugins A1b: renew (an automation run) naming an agent turned off is refused; with its default (llm null) it falls back to Claude', (t) => {
+  const enabled = (projectId, pluginId) => pluginId !== 'gemini'
+  const s = setup(t, { agents: (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }) })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  const spawned = s.spawned.length
+  assert.throws(
+    () => s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', llm: { provider: 'gemini' }, ...size }),
+    (e) => e.code === 'BAD_REQUEST' && e.message === 'Gemini is turned off for this project'
+  )
+  assert.equal(s.spawned.length, spawned, 'nothing launched')
+  assert.equal(s.spawned[0].killed, false, 'the running pty is left alone')
+  s.projects.apply(s.projectId, (d) => { d.settings.globalLlm = { provider: 'gemini' } })
+  s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', llm: null, ...size })
+  assert.match(cmd(s.spawned.at(-1)), /^claude /)
 })

@@ -376,3 +376,16 @@ test("checkInput (plugins A1): an automation's agent is one of the server's, wit
   assert.equal(code(() => checkInput(input({ llm: { provider: 'codex' } }), T0, few)), 'BAD_REQUEST', 'not an agent this server has')
   assert.equal(code(() => checkInput(input({ llm: { provider: 'grok' } }), T0, few)), 'BAD_REQUEST', 'no MCP tools')
 })
+
+test('automation.save (plugins A1b): refuses an agent turned off in the project, unless the automation already had it', () => {
+  const s = setupScheduler([auto({ llm: { provider: 'gemini' } })])
+  const off = builtinAgents({ enabled: (projectId, pluginId) => pluginId !== 'gemini' })
+  const call = (automation) => dispatchV2('automation.save', { projectId: 'p1', automation }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler, sessions: { agentRegistry: off } })
+  const refused = call(input({ llm: { provider: 'gemini' } }))
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+  assert.equal(refused.error?.message, 'Gemini is turned off for this project')
+  assert.equal(call(input({ id: 'a', name: 'Renamed', llm: { provider: 'gemini' } })).ok, true, 'its own agent, unchanged: still editable')
+  assert.equal(s.list().find((a) => a.id === 'a').name, 'Renamed')
+  const switched = call(input({ id: 'a', llm: { provider: 'gemini', model: 'x' } }))
+  assert.equal(switched.ok, true, 'a model change keeps its agent')
+})

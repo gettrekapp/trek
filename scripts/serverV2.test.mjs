@@ -61,7 +61,7 @@ function setup(t, guardOptions = {}) {
     refreshAttention: () => refreshed.push('attention')
   }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects, sessions })
-  return { dir, a, store, hub, sent, call, forgotten, refreshed, projects: holder.projects }
+  return { dir, a, store, hub, sent, call, forgotten, refreshed, projects: holder.projects, sessions }
 }
 
 test('subscribing to server returns identity, repos and no projects', async (t) => {
@@ -593,4 +593,48 @@ test('pairing.create records the caller\'s token name and says how long the code
   assert.equal(pairing.redeem(other, Date.now()).reason, 'withdrawn')
   assert.equal((await dispatchV2('pairing.cancel', { code: 5 }, ctx)).error.code, 'BAD_REQUEST')
   assert.equal((await dispatchV2('pairing.cancel', { code: 'x' }, { ...ctx, pairing: undefined })).error.code, 'NOT_FOUND')
+})
+
+test('project.updateSettings (plugins A1b): a session type may not change to an agent turned off in the project; one that had it already stays', async (t) => {
+  const { a, call, sessions, projects } = setup(t)
+  const { builtinAgents } = await import('./agentsHarness.mjs')
+  sessions.agentRegistry = builtinAgents({ enabled: (projectId, pluginId) => pluginId !== 'gemini' })
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  const types = (llm) => [{ id: 't1', name: 'T', systemPrompt: '', ...(llm ? { llm } : {}) }]
+  assert.equal((await call('project.updateSettings', { projectId, settings: { sessionTypes: types() } })).ok, true)
+  const refused = await call('project.updateSettings', { projectId, settings: { sessionTypes: types({ provider: 'gemini' }) } })
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+  assert.equal(refused.error?.message, 'Gemini is turned off for this project')
+  projects.apply(projectId, (d) => { d.settings.sessionTypes = types({ provider: 'gemini' }) })
+  const kept = await call('project.updateSettings', { projectId, settings: { sessionTypes: [...types({ provider: 'gemini' }), { id: 't2', name: 'U', systemPrompt: '' }] } })
+  assert.equal(kept.ok, true, 'an old client resends the whole list')
+  const added = await call('project.updateSettings', { projectId, settings: { sessionTypes: [...types({ provider: 'gemini' }), { id: 't2', name: 'U', systemPrompt: '', llm: { provider: 'gemini' } }] } })
+  assert.equal(added.error?.message, 'Gemini is turned off for this project', 'another type taking it is refused')
+})
+
+test('project.import (plugins A1b): a required plugin turned off in the file is taken; project.updateSettings refuses switching it off', async (t) => {
+  const { a, store, hub, projects } = setup(t)
+  const { createPluginRegistry } = await import('../server/src/plugins/registry.ts')
+  const { isCoreMethod } = await import('../server/src/v2.ts')
+  const { BUILTIN_SERVER_PLUGINS } = await import('../plugins/builtin.server.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'trek-v2-required-'))
+  t.after(() => removeDir(dir))
+  const claude = BUILTIN_SERVER_PLUGINS.find((p) => p.manifest.id === 'claude')
+  const plugins = createPluginRegistry({
+    plugins: [claude], secretsFile: join(dir, 'secrets.json'), dataDir: join(dir, 'data'), hub, projects, isCoreMethod, coreToolNames: [], env: {}, warn: () => {}
+  })
+  const sessions = { refreshAttention: () => {}, forgetProject: () => {}, forgetRepo: () => {}, forgetGlobal: () => {} }
+  const call = (method, params) => dispatchV2(method, params, { store, hub, projects, sessions, plugins })
+  const { importProjectFile } = await import('../src/shared/model/importProject.ts')
+  let n = 0
+  const raw = importProjectFile({ version: 3, name: 'Imported', repositories: [{ id: 'x', name: 'a', path: a, worktrees: [{ name: 'main', path: a }] }] }, () => `imp-${++n}`).projects[0].project
+  raw.settings = { ...raw.settings, plugins: { claude: { enabled: false } } }
+  const imported = await call('project.import', { project: raw })
+  assert.equal(imported.ok, true, imported.error?.message)
+  const { projectId } = imported.result
+  assert.equal(plugins.enabled(projectId, 'claude'), true, 'a required plugin stays on')
+  const other = await call('project.create', { name: 'Q', repositories: [{ path: a }] })
+  const refused = await call('project.updateSettings', { projectId: other.result.projectId, settings: { plugins: { claude: { enabled: false } } } })
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+  assert.match(refused.error?.message, /claude: it is always on/)
 })

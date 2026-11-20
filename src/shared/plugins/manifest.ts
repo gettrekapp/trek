@@ -12,6 +12,12 @@ export interface PluginManifest {
   /** Whether a project with no `plugins[id]` setting uses it */
   defaultEnabled: boolean
   /**
+   * On in every project, whatever its `plugins` setting (plugins A1b: the claude plugin, whose Claude
+   * is every server's fallback agent). Built-in only. A live edit can't switch it off (BAD_REQUEST);
+   * an imported or stored `enabled: false` is kept but ignored.
+   */
+  required?: true
+  /**
    * Welcome capabilities listed while the plugin is registered, for clients that predate plugins
    * (0.2.x): they gate the plugin's UI on them (`voice`). One, or several (plugins E1).
    */
@@ -152,6 +158,8 @@ export interface PluginPresence {
   defaultEnabled: boolean
   /** Registered but not set up on this server's platform (its manifest's `platforms`, plugins E1); absent: available */
   available?: false
+  /** Always on (its manifest's `required`): a client shows its switch on and disabled */
+  required?: true
   /** An installed plugin's (theme plugins): what a client that was not built with it needs to list and load it */
   type?: 'theme'
   name?: string
@@ -164,8 +172,9 @@ export interface PluginPresence {
 /** A project's `plugins` setting: each plugin's on/off there. A plugin it doesn't name uses its `defaultEnabled`. */
 export type ProjectPluginSettings = Record<string, { enabled: boolean }>
 
-/** Whether the plugin is on for a project with these `plugins` settings. */
-export function pluginEnabled(settings: ProjectPluginSettings | undefined, manifest: Pick<PluginManifest, 'id' | 'defaultEnabled'>): boolean {
+/** Whether the plugin is on for a project with these `plugins` settings; a `required` one always is. */
+export function pluginEnabled(settings: ProjectPluginSettings | undefined, manifest: Pick<PluginManifest, 'id' | 'defaultEnabled' | 'required'>): boolean {
+  if (manifest.required === true) return true
   const entry = settings && Object.hasOwn(settings, manifest.id) ? settings[manifest.id] : undefined
   return typeof entry?.enabled === 'boolean' ? entry.enabled : manifest.defaultEnabled
 }
@@ -180,6 +189,7 @@ export function parsePluginPresence(raw: unknown): PluginPresence[] | undefined 
     if (typeof e.id !== 'string' || !PLUGIN_ID_RE.test(e.id) || typeof e.version !== 'string' || typeof e.defaultEnabled !== 'boolean') continue
     const presence: PluginPresence = { id: e.id, version: e.version, defaultEnabled: e.defaultEnabled }
     if (e.available === false) presence.available = false
+    if (e.required === true) presence.required = true
     if (e.type === 'theme') presence.type = 'theme'
     if (typeof e.name === 'string') presence.name = e.name
     if (typeof e.description === 'string') presence.description = e.description
@@ -217,7 +227,7 @@ export interface PluginPackage {
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const MAX_VERSION_CHARS = 64
 /** What only a built-in plugin may declare. */
-const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms'] as const
+const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms', 'required'] as const
 /** Control characters, and the format ones: bidi overrides, zero-width characters. */
 const UNSEEN_RE = /[\p{Cc}\p{Cf}]/u
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length

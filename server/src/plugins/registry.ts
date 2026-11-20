@@ -504,12 +504,13 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         return `its check failed: ${err instanceof Error ? err.message : String(err)}`
       }
     },
-    knownAgent: (id) => agentOwners.has(id)
+    knownAgent: (id) => agentOwners.has(id),
+    required: (pluginId) => entries.get(pluginId)?.manifest.required === true
   }
 
   return {
     presence: () => [
-      ...[...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
+      ...[...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled, ...(e.manifest.required ? { required: true as const } : {}) })),
       ...unavailable.map((m) => ({ id: m.id, version: m.version, defaultEnabled: m.defaultEnabled, available: false as const }))
     ],
     legacyCapabilities: () => [...entries.values()].flatMap((e) => legacyCapabilitiesOf(e.manifest)),

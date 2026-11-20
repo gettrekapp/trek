@@ -25,8 +25,13 @@ export const automationHandlers: Record<string, Handler> = {
   'automation.save': (p, ctx) => {
     const s = scheduler(ctx)
     const now = s.now()
-    const input = checkInput(p.automation, now, ctx.sessions.agentRegistry)
+    const agents = ctx.sessions.agentRegistry
+    const input = checkInput(p.automation, now, agents)
     return ctx.projects.apply(p.projectId, (d) => {
+      // An agent turned off in the project is refused only when the automation takes it now (plugins
+      // A1b): one that already had it stays editable (to disable it, say). Its runs fail meanwhile.
+      const before = input.id === undefined ? undefined : d.automations?.find((a) => a.id === input.id)
+      if (input.llm && input.llm.provider !== before?.llm?.provider) agents.checkOn(d.id, input.llm.provider)
       const { list, id } = saveAutomation(d.automations ?? [], input, now, ctx.projects.newId)
       d.automations = list
       return { id }

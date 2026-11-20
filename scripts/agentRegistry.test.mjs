@@ -94,3 +94,13 @@ test("agentLaunch: the agent's command and approval mode from its config; an unk
   const grok = agentLaunch({ llm: { provider: 'grok' }, sessionId: ID, resume: false, global: true, mcp: MCP, pluginPrompt: 'VOICE' }, {}, agents, 'linux')
   assert.doesNotMatch(grok.command, /mcp|VOICE/i)
 })
+
+test('isOn and checkOn (plugins A1b): by the agent\'s plugin in the project; an unknown agent resolves to the default one', () => {
+  const agents = builtinAgents({ enabled: (projectId, pluginId) => !(projectId === 'p1' && pluginId === 'codex') })
+  assert.equal(agents.isOn('p1', 'codex'), false)
+  assert.equal(agents.isOn('p2', 'codex'), true)
+  assert.equal(agents.isOn('p1', 'local'), true)
+  assert.equal(agents.isOn('p1', 'nope'), false)
+  assert.throws(() => agents.checkOn('p1', 'codex'), (e) => e.code === 'BAD_REQUEST' && e.message === 'Codex is turned off for this project')
+  assert.doesNotThrow(() => agents.checkOn('p1', 'nope'), 'an unknown id runs Claude, which is on')
+})

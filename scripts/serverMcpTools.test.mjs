@@ -105,7 +105,10 @@ async function toolSetup(t, opts = {}) {
   const jobs = []
   const schedule = (fn, ms) => { const job = { fn, ms, cancelled: false, fired: false }; jobs.push(job); return { cancel: () => { job.cancelled = true } } }
   // A POSIX server's launches on any OS (the fake agents are not on a Windows PATH).
-  const sessions = new SessionManager({ projects, store, hub, spawner, agents: builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) }), schedule, discover: async () => undefined, platform: 'linux' })
+  // The agents on in a project follow the plugin registry below, as server.ts wires them (plugins A1b).
+  let plugins
+  const enabled = (projectId, pluginId) => plugins?.enabled(projectId, pluginId) ?? true
+  const sessions = new SessionManager({ projects, store, hub, spawner, agents: builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }), schedule, discover: async () => undefined, platform: 'linux' })
   t.after(() => { sessions.stopAll(); poller.stop(); store.close() })
   // The tools' poll timers are unref'd (as in the server, where the listener holds the loop): hold it for the test.
   const keepAlive = setInterval(() => {}, 1000)
@@ -115,7 +118,7 @@ async function toolSetup(t, opts = {}) {
   // `extraPlugins` in opts: test plugins registered after the built-ins.
   const extraPlugins = opts.extraPlugins ?? []
   // The built-in plugins, as the server registers them: their project settings and ticket providers.
-  const plugins = createPluginRegistry({
+  plugins = createPluginRegistry({
     plugins: [...BUILTIN_SERVER_PLUGINS, ...extraPlugins],
     secretsFile: join(dir, 'secrets.json'),
     dataDir: join(dir, 'data'),
@@ -1366,4 +1369,19 @@ test('coreTools (plugins A1): the built-in agents give the enums and the unknown
   assert.deepEqual(schema('save_automation').properties.llm.properties.provider.enum, ['claude', 'codex', 'gemini', 'local'])
   const s = await toolSetup(t)
   await assert.rejects(s.call('start_session', { worktree: 'main', provider: 'nope' }), (e) => e.code === 'BAD_REQUEST' && e.message === 'Unknown provider "nope". Use one of: claude, codex, gemini, grok, local')
+})
+
+test('plugins A1b: start_session and save_automation refuse an agent turned off in the project; a run of an automation that has it fails with that message', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', { ...MORNING, llm: { provider: 'codex' } })
+  s.projects.apply(s.projectId, (d) => { d.settings.plugins = { codex: { enabled: false } } })
+  const refused = (e) => e.code === 'BAD_REQUEST' && e.message === 'Codex is turned off for this project'
+  await assert.rejects(s.call('start_session', { worktree: 'main', provider: 'codex' }), refused)
+  await assert.rejects(s.call('save_automation', { ...MORNING, name: 'Evening', llm: { provider: 'codex' } }), refused)
+  // Its own agent, unchanged: still editable (to disable it, say).
+  await s.call('save_automation', { automation: created.id, enabled: false })
+  await assert.rejects(s.call('run_automation', { automation: created.id }), refused)
+  const [listed] = await s.call('list_automations', {})
+  assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome, r.error]), [['manual', 'failed', 'Codex is turned off for this project']])
+  assert.equal(s.spawned.length, 0, 'nothing launched')
 })

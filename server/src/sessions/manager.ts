@@ -303,6 +303,9 @@ export class SessionManager {
     if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
     // null: the default for a new session of its kind, as start resolves it without a pick.
     const llm = p.llm === null ? this.defaultLlm(project, !found.worktree) : checkLlm(p.llm, this.deps.agents) ?? found.session.llm
+    // A run that names its agent (an automation's) needs it on (plugins A1b): a scheduled run records
+    // the refusal as its failure. Its own agent (no llm) runs as a restart would.
+    if (p.llm !== null && p.llm !== undefined) this.deps.agents.checkOn(project.id, llm.provider)
     // Checked before the running pty is killed: a killed pty holds its slot until it exits.
     this.assertCapacity()
     const sessionId = found.session.id
@@ -709,14 +712,22 @@ export class SessionManager {
     return worktree
   }
 
-  /** The agent a new session runs: the pick, else the project's Global agent or the session type's / project's default. */
+  /**
+   * The agent a new session runs: the pick, else the project's Global agent or the session type's /
+   * project's default. BAD_REQUEST when the agent it comes to is turned off in the project.
+   */
   private defaultLlm(project: Project, global: boolean, pick?: LlmSelection, typeLlm?: LlmSelection): LlmSelection {
     const settings = project.settings
     const agents = this.deps.agents
-    const serverDefault = this.deps.store.llmDefault(agents)
-    return global
-      ? pick ?? resolveGlobalAgent(settings.globalLlm, settings.llmDefault ?? serverDefault, agents)
-      : resolveNewSessionLlm({ pick, sessionType: typeLlm, projectDefault: settings.llmDefault, appDefault: serverDefault })
+    // A default naming an agent turned off in the project is passed over (plugins A1b), down to
+    // Claude, which is always on; a pick or a session type's agent is not: the start is refused.
+    const on = (s: LlmSelection | undefined): LlmSelection | undefined => (s && agents.isOn(project.id, agents.get(s.provider).id) ? s : undefined)
+    const serverDefault = on(this.deps.store.llmDefault(agents))
+    const llm = global
+      ? pick ?? resolveGlobalAgent(on(settings.globalLlm), on(settings.llmDefault) ?? serverDefault, agents)
+      : resolveNewSessionLlm({ pick, sessionType: typeLlm, projectDefault: on(settings.llmDefault), appDefault: serverDefault })
+    agents.checkOn(project.id, llm.provider)
+    return llm
   }
 
   private defaultTitle(label: string, existing: number, worktree: Worktree | undefined): string {
