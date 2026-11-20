@@ -26,6 +26,7 @@ export function AgentsTab(): React.JSX.Element {
 
   return (
     <>
+      <p className="settings-desc">An agent&apos;s own settings are under Settings → Plugins.</p>
       <LlmSettings />
       <h3>Session types</h3>
       <div className="settings-row">

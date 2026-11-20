@@ -405,7 +405,9 @@ test("the host (plugins A2): its plugin's project settings, read and written thr
   assert.equal(listeners.length, 0)
   host.setProjectSetting('claudePermissionMode', 'acceptEdits')
   host.setProjectSetting('titleBarColor', '#000')
-  assert.deepEqual(writes, [['claudePermissionMode', 'acceptEdits', 'Claude Code']], "a key its manifest doesn't declare is not written")
+  // A label names the setting in a conflict or failure dialog; without one, the plugin's name does.
+  host.setProjectSetting('claudePermissionMode', 'plan', 'Claude session mode')
+  assert.deepEqual(writes, [['claudePermissionMode', 'acceptEdits', 'Claude Code'], ['claudePermissionMode', 'plan', 'Claude session mode']], "a key its manifest doesn't declare is not written")
   assert.deepEqual(await host.agentModels('local'), [{ id: 'qwen', label: 'qwen' }])
   assert.deepEqual(asked, ['local'])
   // A server without agentInfo can't list an agent's models.

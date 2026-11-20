@@ -155,9 +155,9 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     components: deps.components ?? NO_COMPONENTS,
     projectSettings: () => deps.projectSettings?.(id, settingKeys) ?? NO_VALUES,
     onProjectSettingsChanged: (listener) => deps.onProjectSettingsChanged?.(listener) ?? (() => {}),
-    // The plugin's name labels the setting in a failure dialog.
-    setProjectSetting: (key, value) => {
-      if (settingKeys.includes(key)) deps.setProjectSetting?.(key, String(value), manifest.name)
+    // The label, else the plugin's name, names the setting in a conflict or failure dialog.
+    setProjectSetting: (key, value, label) => {
+      if (settingKeys.includes(key)) deps.setProjectSetting?.(key, String(value), typeof label === 'string' && label ? label : manifest.name)
     },
     agentModels: async (agentId) => {
       if (backend.plugins.welcome()?.capabilities?.includes(CAPABILITY.agentInfo) !== true) {

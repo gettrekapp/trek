@@ -173,8 +173,9 @@ export interface ClientPluginHost {
   /**
    * Sets one of this plugin's project settings ('' removes it): saved on the server as a
    * compare-and-set, shown at once while pending. A key its manifest doesn't declare is ignored.
+   * `label` names the setting in a conflict or failure dialog (default: the plugin's name).
    */
-  setProjectSetting(key: string, value: string): void
+  setProjectSetting(key: string, value: string, label?: string): void
   /**
    * An agent's models, asked on the window's server (`agents.models`, plugins A2): an endpoint's
    * (Local's) or the static list. Rejects on a server without `agentInfo`.

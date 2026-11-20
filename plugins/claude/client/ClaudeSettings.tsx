@@ -49,7 +49,7 @@ export function ClaudeSettings(): React.JSX.Element {
           className="settings-select"
           aria-label="Claude session mode"
           value={mode}
-          onChange={(e) => host.setProjectSetting('claudePermissionMode', e.target.value)}
+          onChange={(e) => host.setProjectSetting('claudePermissionMode', e.target.value, 'Claude session mode')}
         >
           <option value="">Server default</option>
           {CLAUDE_PERMISSION_MODES.map((m) => (
