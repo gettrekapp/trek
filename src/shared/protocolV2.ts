@@ -16,6 +16,7 @@ import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
 import type { PluginPresence, PluginSettingValues } from './plugins/manifest.ts'
+import type { AgentApprovalMode, AgentCapabilities, AgentModel } from './plugins/agents.ts'
 import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type { UiFocusEvent, UiReportParams } from './ui.ts'
@@ -212,6 +213,12 @@ export const CAPABILITY = {
   dequeue: 'dequeue',
   /** `server.agents` lists the agents the server can launch */
   agents: 'agents',
+  /**
+   * `server.agents` also says each agent's glyph, plugin, capabilities, models, efforts, approval
+   * modes and whether its models come from `agents.models`, and with a `projectId` whether it is on
+   * there; `agents.models` lists an agent's models (plugins A1b)
+   */
+  agentInfo: 'agentInfo',
   /** This is the machine's own local server (`trek-server start --local`): it takes any path the user picks */
   local: 'local',
   /** `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine */
@@ -592,6 +599,8 @@ export interface MethodParamsV2 {
   'server.removeRepo': { repoId: string }
   /** The agents the server can launch; with `projectId`, Claude's command is that project's `claudeCommand` when it has one */
   'server.agents': { projectId?: string }
+  /** An agent's models (capability `agentInfo`): its endpoint's (Local) or its static list; `projectId` reads that project's settings */
+  'agents.models': { provider: string; projectId?: string }
   /** The local server only, from its own `local` token: answers, then shuts down as SIGTERM would (`trek-server stop --local`) */
   'server.stop': Record<string, never>
   // Docker on the server's machine (capability `docker`)
@@ -663,6 +672,24 @@ export interface AgentInfo {
    * the server user's login shell (checked at most once a minute per program)
    */
   installed: boolean
+  /** With `agentInfo`: its two-letter tab glyph */
+  glyph?: string
+  /** With `agentInfo`: the plugin that offers it */
+  plugin?: string
+  /** With `agentInfo` */
+  capabilities?: AgentCapabilities
+  /** With `agentInfo`: its static models (Local's come from `agents.models`) */
+  models?: AgentModel[]
+  /** With `agentInfo`: effort levels for its default model and custom model ids */
+  efforts?: string[]
+  /** With `agentInfo` */
+  approvalModes?: AgentApprovalMode[]
+  /** With `agentInfo` */
+  defaultApprovalMode?: string
+  /** With `agentInfo`: its models come from `agents.models` (an endpoint's), not `models` */
+  listsModels?: boolean
+  /** With `agentInfo` and a `projectId`: its plugin is on in that project (an off agent is hidden for new sessions) */
+  on?: boolean
 }
 
 export interface ServerAgents {
@@ -768,6 +795,7 @@ export interface MethodResultsV2 {
   'server.addRepo': { repoId: string }
   'server.removeRepo': null
   'server.agents': ServerAgents
+  'agents.models': { models: AgentModel[] }
   'server.stop': null
   'docker.list': ContainerInfo[]
   'docker.container': null

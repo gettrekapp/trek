@@ -144,6 +144,8 @@ export interface AgentProvider {
   /** The command line's head the server runs (server.agents' installed check reads its program) */
   command(config: AgentConfig): string
   buildLaunch(opts: AgentLaunchOptions, config: AgentConfig): LaunchSpec
+  /** Its models from an endpoint (plugins A1b: Local's), for `agents.models`; absent: the static `models` */
+  listModels?(config: AgentConfig, signal?: AbortSignal): Promise<AgentModel[]>
   /** Its MCP file, when it reads Trek's MCP server from one of its own */
   mcpFile?: AgentMcpFile
   /** A Global session's role prompt, when it has the MCP tools; absent: core's globalAgentPrompt(label) */

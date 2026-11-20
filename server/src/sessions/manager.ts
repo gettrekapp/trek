@@ -7,7 +7,7 @@ import type { Project, Session, SessionContext, SessionStatus, Worktree } from '
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { resolveGlobalAgent, resolveNewSessionLlm, sanitizeAgentSelection, sessionLaunch, type AgentLookup } from '../../../src/shared/agents/selection.ts'
 import type { AgentRegistry } from '../agents/registry.ts'
-import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
+import { DEFAULT_AGENT_ID, type AgentModel } from '../../../src/shared/plugins/agents.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
@@ -39,6 +39,8 @@ export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
+/** A copy of a model fact (the agent's own objects never go out to be changed) */
+const copyModel = (m: AgentModel): AgentModel => ({ ...m, ...(m.efforts ? { efforts: [...m.efforts] } : {}) })
 
 export interface ScheduledJob {
   cancel(): void
@@ -491,10 +493,42 @@ export class SessionManager {
     const agents = await Promise.all(
       registry.all().map(async (agent) => {
         const binary = commandBinary(agent.command(registry.config(agent.id, settings)), this.deps.platform)
-        return { provider: agent.id, label: agent.label, installed: binary ? await this.probe.installed(binary) : false }
+        return {
+          provider: agent.id,
+          label: agent.label,
+          installed: binary ? await this.probe.installed(binary) : false,
+          // agentInfo (plugins A1b): what a client builds its pickers from.
+          glyph: agent.glyph,
+          plugin: registry.pluginOf(agent.id),
+          capabilities: { ...agent.capabilities },
+          models: agent.models.map(copyModel),
+          efforts: [...agent.efforts],
+          approvalModes: agent.approvalModes.map((m) => ({ ...m })),
+          ...(agent.defaultApprovalMode ? { defaultApprovalMode: agent.defaultApprovalMode } : {}),
+          listsModels: agent.listModels !== undefined,
+          ...(p.projectId !== undefined ? { on: registry.isOn(p.projectId, agent.id) } : {})
+        }
       })
     )
     return { llmDefault: this.deps.store.llmDefault(registry), agents }
+  }
+
+  /**
+   * An agent's models (agents.models, plugins A1b): its endpoint's (listModels: Local's, at the
+   * server config's URL only; the client names no URL), else its static list.
+   */
+  async agentModels(p: any): Promise<{ models: AgentModel[] }> {
+    const provider = requireString(p.provider, 'provider')
+    const registry = this.deps.agents
+    if (!registry.has(provider)) throw bad(`No agent "${provider}" on this server`)
+    const settings = p.projectId === undefined ? undefined : this.deps.projects.require(p.projectId).settings
+    const agent = registry.get(provider)
+    if (!agent.listModels) return { models: agent.models.map(copyModel) }
+    try {
+      return { models: await agent.listModels(registry.config(agent.id, settings)) }
+    } catch (err) {
+      throw codedError('TOOL_ERROR', `${agent.label}'s models could not be listed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   /** True once the session's current run has produced live output (cleared when its pty ends). */

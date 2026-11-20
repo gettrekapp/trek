@@ -71,7 +71,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linux', agents = (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) }) } = {}) {
+function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linux', enabled, agents = (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }) } = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
@@ -1158,16 +1158,14 @@ test('v2: server.agents lists every provider, whether it is installed, and the s
   const { call } = v2(s)
   const all = await call('server.agents', {})
   assert.equal(all.ok, true, JSON.stringify(all))
-  assert.deepEqual(all.result, {
-    llmDefault: { provider: 'codex', model: 'gpt-5' },
-    agents: [
-      { provider: 'claude', label: 'Claude', installed: true },
-      { provider: 'codex', label: 'Codex', installed: false },
-      { provider: 'gemini', label: 'Gemini', installed: false },
-      { provider: 'grok', label: 'Grok', installed: false },
-      { provider: 'local', label: 'Local', installed: true }
-    ]
-  })
+  assert.deepEqual(all.result.llmDefault, { provider: 'codex', model: 'gpt-5' })
+  assert.deepEqual(all.result.agents.map(({ provider, label, installed }) => ({ provider, label, installed })), [
+    { provider: 'claude', label: 'Claude', installed: true },
+    { provider: 'codex', label: 'Codex', installed: false },
+    { provider: 'gemini', label: 'Gemini', installed: false },
+    { provider: 'grok', label: 'Grok', installed: false },
+    { provider: 'local', label: 'Local', installed: true }
+  ])
   assert.equal(JSON.stringify(all.result).includes('secret'), false, 'command lines are not sent')
   assert.deepEqual(asked.sort(), ['claude', 'codex', 'gem', 'grok'], 'local runs claude: one check')
   s.projects.apply(s.projectId, (d) => { d.settings.claudeCommand = 'nope-claude --x' })
@@ -1516,4 +1514,57 @@ test('plugins A1b: renew (an automation run) naming an agent turned off is refus
   s.projects.apply(s.projectId, (d) => { d.settings.globalLlm = { provider: 'gemini' } })
   s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', llm: null, ...size })
   assert.match(cmd(s.spawned.at(-1)), /^claude /)
+})
+
+test("server.agents with agentInfo (plugins A1b): each agent's glyph, plugin, capabilities, models, efforts and approval modes; `on` for a project", async (t) => {
+  const s = setup(t, { enabled: (projectId, pluginId) => pluginId !== 'gemini' })
+  const { call } = v2(s)
+  const all = (await call('server.agents', {})).result.agents
+  const codex = all.find((a) => a.provider === 'codex')
+  assert.equal(codex.glyph, 'CX')
+  assert.equal(codex.plugin, 'codex')
+  assert.deepEqual(codex.capabilities, { presetSessionId: false, resume: true, mcp: true, appendSystemPrompt: true, effort: true, addDirs: true, sessionMigration: false })
+  assert.deepEqual(codex.models.map((m) => m.id), ['gpt-5-codex', 'gpt-5'])
+  assert.deepEqual(codex.efforts, ['minimal', 'low', 'medium', 'high'])
+  assert.equal(codex.defaultApprovalMode, 'full-auto')
+  assert.equal(codex.listsModels, false)
+  assert.equal(codex.on, undefined, 'no project, no on')
+  const local = all.find((a) => a.provider === 'local')
+  assert.equal(local.plugin, 'claude')
+  assert.equal(local.listsModels, true)
+  const scoped = (await call('server.agents', { projectId: s.projectId })).result.agents
+  assert.deepEqual(scoped.map((a) => [a.provider, a.on]), [['claude', true], ['codex', true], ['gemini', false], ['grok', true], ['local', true]])
+})
+
+test("agents.models (plugins A1b): a static list, or Local's from its endpoint on the server; an unknown agent is BAD_REQUEST, a failing endpoint TOOL_ERROR", async (t) => {
+  const { createServer } = await import('node:http')
+  const seen = []
+  let failing = false
+  const endpoint = createServer((req, res) => {
+    seen.push(req.url)
+    if (failing) {
+      res.statusCode = 500
+      res.end('down')
+      return
+    }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ models: [{ name: 'gemma4:31b' }, { name: 'qwen3' }] }))
+  })
+  await new Promise((resolve) => endpoint.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => { endpoint.closeAllConnections?.(); endpoint.close(resolve) }))
+  const s = setup(t, { llm: { providers: { local: { backend: 'ollama', baseUrl: `http://127.0.0.1:${endpoint.address().port}/` } } } })
+  const { call } = v2(s)
+  assert.deepEqual((await call('agents.models', { provider: 'codex' })).result.models.map((m) => m.id), ['gpt-5-codex', 'gpt-5'])
+  assert.deepEqual((await call('agents.models', { provider: 'local' })).result, { models: [{ id: 'gemma4:31b', label: 'gemma4:31b' }, { id: 'qwen3', label: 'qwen3' }] })
+  assert.deepEqual(seen, ['/api/tags'])
+  assert.equal((await call('agents.models', { provider: 'nope' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('agents.models', {})).error.code, 'BAD_REQUEST')
+  assert.equal((await call('agents.models', { provider: 'local', projectId: 'nope' })).error.code, 'NOT_FOUND')
+  // Only the server config's endpoint is asked: a client can't name a URL.
+  assert.deepEqual((await call('agents.models', { provider: 'local', projectId: s.projectId, baseUrl: 'http://198.51.100.1/' })).result.models.length, 2)
+  assert.deepEqual(seen, ['/api/tags', '/api/tags'])
+  failing = true
+  const down = await call('agents.models', { provider: 'local' })
+  assert.equal(down.error.code, 'TOOL_ERROR')
+  assert.match(down.error.message, /Local's models could not be listed: .*returned 500/)
 })

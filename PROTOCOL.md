@@ -111,6 +111,7 @@ new optional field needs no capability: its absence says enough.
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 | `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
+| `agentInfo` | `server.agents` also says each agent's `glyph`, `plugin`, `capabilities`, `models`, `efforts`, `approvalModes`, `defaultApprovalMode`, `listsModels` and, with a `projectId`, `on`; `agents.models` lists an agent's models (see Sessions) |
 | `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
 | `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output. Since plugins E2 they are the built-in `env` plugin's ("Colima environments", `plugins/colima`), with the same names, payloads and answers, and this is its legacy capability: listed while it is set up, so never on Windows, where `welcome.plugins` lists it `available: false` and `env.*` is no method (`NOT_FOUND`) |
 | `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
@@ -204,7 +205,7 @@ server restarts. A server without this field simply leaves it out.
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
-| Agents | `server.agents` |
+| Agents | `server.agents`, `agents.models` |
 | Stopping (local server only) | `server.stop` |
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
@@ -1769,6 +1770,30 @@ is checked on a later one. The command lines
 themselves are not sent: they may carry secrets. An unknown `projectId` is
 `NOT_FOUND`. A provider that is installed can still fail to start (a local
 model's backend may be down, say); `session.start` reports that as usual.
+
+**Agent facts (`agentInfo`).** A server with the `agentInfo` capability adds to each
+`server.agents` entry what a client builds its pickers from: `glyph` (two letters
+for a tab), `plugin` (the built-in plugin that offers the agent: `claude` offers
+Claude and Local), `capabilities` (`presetSessionId`, `resume`, `mcp`,
+`appendSystemPrompt`, `effort`, `addDirs`, `sessionMigration`), `models`
+(`{id, label, efforts?}`), `efforts`, `approvalModes` (`{value, label}`),
+`defaultApprovalMode`, and `listsModels` (its models come from `agents.models`,
+not `models`). With a `projectId`, `on` says whether the agent's plugin is on in
+that project. An agent that is off is hidden for new sessions: `session.start`,
+`start_session`, a session type's agent and an automation's agent are
+`BAD_REQUEST` "<label> is turned off for this project", and a default that names it
+is passed over. Running and saved sessions keep their agent: restart and resume
+are not refused. The `claude` plugin is always on (`required` in the welcome's
+`plugins`): Claude is the agent an unknown id runs. A client without `agentInfo`
+ignores the extra fields; the list's agents are the server's, not a fixed set.
+
+`agents.models {provider, projectId?}` returns `{models}`: an agent's static list,
+or, for one that lists its models from an endpoint (Local: Ollama's `/api/tags` or
+LM Studio's `/v1/models`, at the `llm` section's `baseUrl`, asked by the server
+with a 5 s limit), that endpoint's. The client names no URL: only the server
+config's is asked, and a redirect is refused. An agent the server lacks is
+`BAD_REQUEST`, an unknown `projectId` `NOT_FOUND`; an endpoint that fails is
+`TOOL_ERROR` with its reason (the URL without any user name or password).
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
 initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`

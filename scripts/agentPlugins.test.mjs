@@ -91,3 +91,25 @@ test("claude: its history file is Claude Code's, where the importer's projectDir
     for (const agent of agentsOf(BUILTIN_SERVER_PLUGINS.find((p) => p.manifest.id === plugin))) assert.equal(agent.history, undefined, agent.id)
   }
 })
+
+test("Local's model listing (plugins A1b): only the server config's URL, no redirects, a time limit, and no password in its errors", async () => {
+  const { listLocalModels, LOCAL_MODELS_TIMEOUT_MS } = await import('../plugins/claude/server/models.ts')
+  const asked = []
+  const reply = (status, body) => async (url, init) => { asked.push({ url: String(url), init }); return new Response(body, { status }) }
+  const lmstudio = { server: { backend: 'lmstudio', baseUrl: 'http://user:hunter2@127.0.0.1:1/' }, project: { baseUrl: 'http://198.51.100.1/' } }
+  assert.deepEqual(await listLocalModels(lmstudio, undefined, reply(200, JSON.stringify({ data: [{ id: 'qwen' }, { id: '' }, {}] }))), [{ id: 'qwen', label: 'qwen' }])
+  assert.equal(asked[0].url, 'http://user:hunter2@127.0.0.1:1/v1/models', "the server config's URL, never the project's")
+  assert.equal(asked[0].init.redirect, 'error')
+  assert.ok(asked[0].init.signal instanceof AbortSignal)
+  assert.equal(LOCAL_MODELS_TIMEOUT_MS, 5000)
+  const failed = (fetchFn, config = lmstudio) => listLocalModels(config, undefined, fetchFn).then(() => assert.fail('listed'), (e) => e.message)
+  const down = await failed(reply(500, 'secret detail'))
+  assert.equal(down, 'http://127.0.0.1:1/v1/models returned 500')
+  assert.match(await failed(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }) }), /^http:\/\/127\.0\.0\.1:1\/v1\/models could not be reached \(ECONNREFUSED\)$/)
+  assert.match(await failed(reply(200, 'not json')), /did not answer with JSON/)
+  assert.match(await failed(reply(200, '{}'), { server: { baseUrl: 'file:///etc' }, project: {} }), /not an http\(s\) URL/)
+  // Ollama with no baseUrl: its default URL.
+  asked.length = 0
+  await listLocalModels({ server: {}, project: {} }, undefined, reply(200, '{"models":[]}'))
+  assert.equal(asked[0].url, 'http://localhost:11434/api/tags')
+})

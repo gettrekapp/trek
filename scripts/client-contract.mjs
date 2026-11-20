@@ -19,7 +19,7 @@ const WAIT_MS = 5000
 // The welcome's capabilities: Windows (W1) serves no environments or dev stacks yet
 // (server/src/capabilities.ts), so there `env` and `stacks` must be absent.
 const WINDOWS_OFF = process.platform === 'win32' ? ['env', 'stacks'] : []
-const EXPECTED_CAPABILITIES = ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills']
+const EXPECTED_CAPABILITIES = ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'agentInfo']
   .filter((c) => !WINDOWS_OFF.includes(c))
 
 const token = randomBytes(16).toString('base64url')
