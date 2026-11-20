@@ -29,7 +29,8 @@ export interface ClientAgent {
   /**
    * Where its model list comes from: its static `models`; the server (`agents.models`: an
    * endpoint's, Local's); or typed by the user (an endpoint's that the server can't list for a
-   * client: a server before agentInfo). Not `static`: it has no default model.
+   * client: a server before agentInfo). Any value but `static` means it has no static models, so
+   * none is preselected.
    */
   modelsFrom: 'static' | 'server' | 'typed'
 }
@@ -49,7 +50,8 @@ export interface AgentCatalog extends AgentLookup {
   isOn(id: string): boolean
 }
 
-const NO_CAPABILITIES: AgentCapabilities = {
+/** A new object each time: a catalog hands out copies, never the snapshot's or the answer's own objects. */
+const noCapabilities = (): AgentCapabilities => ({
   presetSessionId: false,
   resume: false,
   mcp: false,
@@ -57,24 +59,29 @@ const NO_CAPABILITIES: AgentCapabilities = {
   effort: false,
   addDirs: false,
   sessionMigration: false
-}
+})
+
+const copyModels = (models: readonly AgentModel[] | undefined): AgentModel[] =>
+  (models ?? []).map((m) => ({ ...m, ...(m.efforts ? { efforts: [...m.efforts] } : {}) }))
+const copyModes = (modes: readonly AgentApprovalMode[] | undefined): AgentApprovalMode[] => (modes ?? []).map((m) => ({ ...m }))
 
 /** A glyph for an agent without one: the first two letters or digits of its id, upper-cased ("aider" → "AI"). */
 export function fallbackGlyph(id: string): string {
   return id.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?'
 }
 
-function fromLegacy(l: LegacyAgent, installed: boolean, label = l.label): ClientAgent {
+/** The snapshot's agent, copied; an old server's answer may say its label, installed, on and glyph. */
+function fromLegacy(l: LegacyAgent, said: { installed: boolean; label?: string; on?: boolean; glyph?: string }): ClientAgent {
   return {
     id: l.id,
-    label,
-    glyph: l.glyph,
-    installed,
-    on: true,
+    label: said.label ?? l.label,
+    glyph: said.glyph || l.glyph,
+    installed: said.installed,
+    on: said.on !== false,
     capabilities: { ...l.capabilities },
-    models: l.models,
-    efforts: l.efforts,
-    approvalModes: l.approvalModes,
+    models: copyModels(l.models),
+    efforts: [...l.efforts],
+    approvalModes: copyModes(l.approvalModes),
     ...(l.defaultApprovalMode ? { defaultApprovalMode: l.defaultApprovalMode } : {}),
     modelsFrom: l.listsModels ? 'typed' : 'static'
   }
@@ -90,25 +97,36 @@ function fromServer(a: AgentInfo): ClientAgent {
       installed: a.installed,
       on: a.on !== false,
       capabilities: { ...a.capabilities },
-      models: a.models ?? [],
-      efforts: a.efforts ?? [],
-      approvalModes: a.approvalModes ?? [],
+      models: copyModels(a.models),
+      efforts: [...(a.efforts ?? [])],
+      approvalModes: copyModes(a.approvalModes),
       ...(a.defaultApprovalMode ? { defaultApprovalMode: a.defaultApprovalMode } : {}),
       modelsFrom: a.listsModels ? 'server' : 'static'
     }
   }
-  // A server before agentInfo: its label and installed, the snapshot's facts.
+  // A server before agentInfo: its label, installed, and on and glyph where it says them; the snapshot's facts.
   const legacy = LEGACY_AGENTS.find((l) => l.id === a.provider)
-  if (legacy) return fromLegacy(legacy, a.installed, a.label)
-  return { id: a.provider, label: a.label, glyph: fallbackGlyph(a.provider), installed: a.installed, on: true, capabilities: NO_CAPABILITIES, models: [], efforts: [], approvalModes: [], modelsFrom: 'static' }
+  if (legacy) return fromLegacy(legacy, a)
+  return {
+    id: a.provider,
+    label: a.label,
+    glyph: a.glyph || fallbackGlyph(a.provider),
+    installed: a.installed,
+    on: a.on !== false,
+    capabilities: noCapabilities(),
+    models: [],
+    efforts: [],
+    approvalModes: [],
+    modelsFrom: 'static'
+  }
 }
 
 /** The catalog of a `server.agents` answer; null: no answer (the snapshot, all on and none checked). */
 export function agentCatalog(server: ServerAgents | null | undefined): AgentCatalog {
-  const agents = server ? server.agents.map(fromServer) : LEGACY_AGENTS.map((l) => fromLegacy(l, true))
+  const agents = server ? server.agents.map(fromServer) : LEGACY_AGENTS.map((l) => fromLegacy(l, { installed: true }))
   const byId = new Map(agents.map((a) => [a.id, a]))
   const get = (id: string | undefined): ClientAgent | undefined => (id === undefined ? undefined : byId.get(id))
-  const fallback: AgentFacts = get(DEFAULT_AGENT_ID) ?? { capabilities: NO_CAPABILITIES, models: [], efforts: [] }
+  const fallback: AgentFacts = get(DEFAULT_AGENT_ID) ?? { capabilities: noCapabilities(), models: [], efforts: [] }
   return {
     agents,
     offered: agents.filter((a) => a.on),

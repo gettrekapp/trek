@@ -123,3 +123,53 @@ test("agentNote: why a saved choice can't start a session now", () => {
   assert.equal(agentNote({ provider: 'codex' }, c), "Codex is turned off for this project: new sessions can't use it. Pick another agent, or turn it on in Settings → Plugins.")
   assert.equal(agentNote({ provider: 'mystery' }, c), 'mystery is not an agent this server has.')
 })
+
+test("a catalog hands out copies: changing one entry's arrays changes neither the snapshot, the answer, nor a later catalog", () => {
+  const first = agentCatalog(null)
+  first.get('claude').models[0].efforts.push('ludicrous')
+  first.get('claude').efforts.push('ludicrous')
+  first.get('claude').approvalModes.push({ value: 'x', label: 'X' })
+  first.get('claude').capabilities.mcp = false
+  first.facts('mystery').capabilities.resume = true
+  const second = agentCatalog(null)
+  assert.deepEqual(second.get('claude').models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(second.get('claude').efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.equal(second.get('claude').approvalModes.length, 6)
+  assert.equal(second.get('claude').capabilities.mcp, true)
+  assert.notEqual(second.get('codex').models[0].efforts, second.get('codex').models[1].efforts, 'the snapshot shares an efforts list between models; each copy has its own')
+
+  const answer = structuredClone(current)
+  const fromAnswer = agentCatalog(answer)
+  fromAnswer.get('claude').models[0].efforts.push('ludicrous')
+  fromAnswer.get('claude').models.push({ id: 'x', label: 'X' })
+  fromAnswer.get('claude').efforts.push('ludicrous')
+  fromAnswer.get('claude').approvalModes.push({ value: 'x', label: 'X' })
+  assert.deepEqual(answer, current, "the store's answer is untouched")
+
+  // An old-server agent the snapshot lacks, and the unknown-id fallback without a default agent: no shared capabilities object.
+  const lone = { llmDefault: { provider: 'newbie' }, agents: [{ provider: 'newbie', label: 'Newbie', installed: true }, { provider: 'other', label: 'Other', installed: true }] }
+  const a = agentCatalog(lone)
+  a.get('newbie').capabilities.mcp = true
+  a.facts('mystery').capabilities.mcp = true
+  const b = agentCatalog(lone)
+  assert.equal(b.get('newbie').capabilities.mcp, false)
+  assert.equal(b.get('other').capabilities.mcp, false)
+  assert.equal(b.facts('mystery').capabilities.mcp, false)
+})
+
+test("an old server's answer keeps an agent's `on: false` and its glyph where it sends them", () => {
+  const c = agentCatalog({
+    llmDefault: { provider: 'claude' },
+    agents: [
+      { provider: 'claude', label: 'Claude', installed: true },
+      { provider: 'codex', label: 'Codex', installed: true, on: false, glyph: 'OX' },
+      { provider: 'newbie', label: 'Newbie', installed: true, on: false, glyph: 'NB' }
+    ]
+  })
+  assert.deepEqual(c.agents.map((a) => [a.id, a.glyph, a.on]), [
+    ['claude', 'CL', true],
+    ['codex', 'OX', false],
+    ['newbie', 'NB', false]
+  ])
+  assert.deepEqual(c.offered.map((a) => a.id), ['claude'])
+})

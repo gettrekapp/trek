@@ -12,8 +12,8 @@
 // methods callers fire and forget (`sessions.start`, `restart`, `close`, `worktrees.load`,
 // `unload`, `unloadAll`) report a refusal in a dialog and resolve (`start` with null), never
 // reject; the v2 backend skips the dialog for NOT_CONNECTED, which the offline window already shows.
-import { NO_FEATURES, type BackendFeatures } from './backendFeatures'
-import { errorText } from './v2/errors'
+import { NO_FEATURES, type BackendFeatures } from './backendFeatures.ts'
+import { errorText } from './v2/errors.ts'
 import type { LlmSelection } from '../../shared/providers/types'
 import type { AgentModel } from '../../shared/plugins/agents'
 import type {
@@ -43,7 +43,7 @@ import type { PromoteAsked } from './v2/promoteFlow'
 /** What `review.add` takes: a comment before the server gives it an id and a time. */
 export type NewReviewComment = Omit<ReviewComment, 'id' | 'at'>
 
-export type { BackendFeatures, FeatureName } from './backendFeatures'
+export type { BackendFeatures, FeatureName } from './backendFeatures.ts'
 
 /**
  * Where a new session goes: a worktree instance by id (the primary's stored path

@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createV2Backend, tornDownNote, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
+import { idleBackend } from '../src/renderer/src/backend.ts'
 import { PROMPT_NOT_CONFIRMED, withPromptText } from '../src/renderer/src/v2/errors.ts'
 import { TEARDOWN_REQUEST_TIMEOUT_MS, defaultTeardown } from '../src/shared/teardown.ts'
 
@@ -298,6 +299,17 @@ test("an agent's models are asked of the window's server, for the window's proje
   const { backend, calls } = setup({ replies: { 'agents.models': { models: [{ id: 'qwen3-coder', label: 'qwen3-coder' }] } } })
   assert.deepEqual(await backend.agents.models('local'), [{ id: 'qwen3-coder', label: 'qwen3-coder' }])
   assert.deepEqual(calls, [['agents.models', { projectId: 'p1', provider: 'local' }]])
+})
+
+test("a refused agents.models rejects with the server's error, untouched (the picker shows it and offers Retry)", async () => {
+  const refusal = new CodedError('MODELS_UNAVAILABLE', 'Local could not be reached at its endpoint')
+  const { backend, ui, reports } = setup({ replies: { 'agents.models': refusal } })
+  await assert.rejects(backend.agents.models('local'), (err) => err === refusal)
+  assert.deepEqual([ui, reports], [[], []], 'no dialog and no report: the caller shows it')
+})
+
+test("an empty window's agents.models rejects", async () => {
+  await assert.rejects(idleBackend.agents.models('local'), /No project is open/)
 })
 
 test("the plugins' channel: the project, the welcome's plugins and capabilities, untyped <id>.* requests and events", async () => {
