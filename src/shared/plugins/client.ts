@@ -232,12 +232,14 @@ export interface ClientPlugin {
      * mark-complete click (absent while offline).
      */
     sessionIndicator?: FC<SessionIndicatorProps>
-    /** In each terminal pane's corner; the wrapper takes no clicks and dims while the user types or scrolls back */
+    /** In each terminal pane's corner; the wrapper takes no clicks and dims while the user types or scrolls back. No built-in plugin fills it now (campsite moved to terminalBarEnd). */
     terminalOverlay?: FC<{ terminalId: string }>
     /**
-     * At the right end of each terminal's quick button row, before the queue chip. The row is 24 px
-     * tall with 8 px of padding above it: a component may rise into that padding but must not make
-     * the row taller (the terminal would resize).
+     * At the right end of each terminal's quick button row, before the queue chip. Its wrapper is
+     * 24 px tall, bottom-aligned, under 8 px of row padding: taller content rises into that padding
+     * and the row keeps its height. The wrapper (`.quick-bar-end`) shrinks before the buttons do, to
+     * nothing unless the plugin's CSS gives it a floor (`.quick-bar-end:has(> .its-root) { min-width }`);
+     * what no longer fits is cut from the left.
      */
     terminalBarEnd?: FC<{ terminalId: string }>
     /** A strip along the bottom of the project window, above the Global bar; the plugin sets its height */

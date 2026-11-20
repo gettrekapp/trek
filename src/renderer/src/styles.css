@@ -1840,7 +1840,7 @@ button:disabled {
   flex-direction: column;
 }
 
-/* A plugin's corner of the terminal (campsite's hiker): over the output and the exited scrim; under the
+/* A plugin's corner of the terminal: over the output and the exited scrim; under the
    quick-button bar, its menus and the offline overlay (equal z-index, earlier in the DOM); takes no clicks */
 .plugin-terminal-overlay {
   position: absolute;
@@ -2161,6 +2161,25 @@ button:disabled {
 
 .quick-buttons-spacer {
   flex: 1 1 auto;
+}
+
+/* Plugins' end of the row (terminalBarEnd), before the queue chip. As tall as the buttons, so the
+   row never grows: taller content rises into the row's top padding (clipped sideways only). It
+   gives up its width long before the buttons do, down to nothing unless a plugin sets a floor
+   (`.quick-bar-end:has(> .its-root) { min-width }`); what no longer fits is cut from the left,
+   never drawn over the queue chip. Empty (no plugin fills it): no gap. */
+.quick-bar-end {
+  flex: 0 1000 auto;
+  min-width: 0;
+  height: 24px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow-x: clip;
+}
+.quick-bar-end:empty {
+  display: none;
 }
 
 /* ─── Prompt queue beside the terminal ─────────────────────────────────── */

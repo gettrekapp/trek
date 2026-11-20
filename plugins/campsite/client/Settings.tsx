@@ -7,7 +7,7 @@ import { usePrefs } from './hooks.ts'
 
 const ROWS: readonly { key: CampsitePrefKey; label: string; hint: string }[] = [
   { key: 'showCampsite', label: 'Show the campsite', hint: 'The strip along the bottom of the window.' },
-  { key: 'showTerminalHiker', label: "Show a hiker on each terminal's button row", hint: 'With what its session is doing.' }
+  { key: 'showTerminalHiker', label: "Show a hiker on each terminal's quick button row", hint: 'With what its session is doing.' }
 ]
 
 export function CampsiteSettings(): React.JSX.Element {

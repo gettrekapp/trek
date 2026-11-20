@@ -86,8 +86,9 @@
 .cs-tab-sign.decision {
   background: var(--decision, #b18cff);
 }
-/* On a terminal's quick button row. The row's items are 24 px tall under 8 px of padding: the 2×
-   hiker (32 px) stands on the row's bottom and rises into that padding, so the row keeps its height. */
+/* On a terminal's quick button row, in the core's 24 px wrapper: the 2× hiker (32 px) stands on
+   the row's bottom and rises into the row's padding. The text gives way first; the hiker (and a
+   waiting chip) never do, so nothing is squeezed onto the queue chip. */
 .cs-bar-hiker {
   flex: 0 1 auto;
   min-width: 0;
@@ -95,6 +96,21 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+/* The core's wrapper keeps room for the hiker and the gap before it (and a chip and its gap), however many buttons there are */
+.quick-bar-end:has(> .cs-bar-hiker) {
+  min-width: 32px;
+}
+.quick-bar-end:has(> .cs-bar-hiker > .cs-tab-sign) {
+  min-width: 52px;
+}
+.cs-bar-hiker .cs-tab-sign {
+  flex: none;
+  margin-left: 0;
+}
+/* A finished hiker's hop would cross into the terminal's last line: a 1 px bob here */
+.cs-bar-hiker .cs-hop {
+  animation-name: cs-bob;
 }
 .cs-bar-text {
   align-self: center;
@@ -104,7 +120,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: #9a9aa2;
+  color: var(--text-muted, #9a9aa2);
 }
 .cs-bar-text.attention {
   color: var(--attention, #e2a336);
