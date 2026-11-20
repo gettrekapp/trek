@@ -1,6 +1,7 @@
 // What an agent picker lists (plugins A2): the agents a new session can use that the caller offers,
 // and a saved choice that is not among them. Pure: LlmPicker renders it; scripts/agentPicker.test.mjs runs it.
-import type { AgentCatalog, ClientAgent } from '../../shared/agents/catalog.ts'
+import { expectedDefault, type AgentCatalog, type ClientAgent } from '../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../shared/plugins/agents.ts'
 import type { AgentSelection } from '../../shared/agents/selection.ts'
 
 export interface PickerAgent {
@@ -19,6 +20,14 @@ export function pickerAgents(value: AgentSelection, catalog: AgentCatalog, offer
   const agent = catalog.get(value.provider)
   const why = !agent ? 'not on this server' : !agent.on ? 'off for this project' : 'not offered here'
   return [...list, { id: value.provider, label: `${catalog.label(value.provider)} (${why})` }]
+}
+
+/**
+ * Whether a one-off pick can start a session: its agent is offered (on in the project; an id the
+ * server doesn't list is not, though `isOn` counts it on) and it has a model where it needs one.
+ */
+export function canStartPick(value: AgentSelection, catalog: AgentCatalog): boolean {
+  return catalog.offered.some((a) => a.id === value.provider) && !needsModel(value, catalog)
 }
 
 /** Whether a pick needs a model before it can start: an agent whose models come from an endpoint has no default one. */
@@ -42,4 +51,9 @@ export function firstModelPick(
   if (!when.pickedHere && !when.eager) return null
   if (current.provider !== agentId || current.model || !models[0]) return null
   return { provider: agentId, model: models[0].id, ...(current.effort ? { effort: current.effort } : {}) }
+}
+
+/** Where a session type's own agent starts when "Use the default agent" is unticked: the default its sessions get now (the project's, else the server's, past one that is off). */
+export function typeAgentStart(projectDefault: AgentSelection | undefined, serverDefault: AgentSelection | undefined, catalog: AgentCatalog): AgentSelection {
+  return expectedDefault({ llmDefault: projectDefault }, serverDefault ?? { provider: DEFAULT_AGENT_ID }, catalog, false)
 }

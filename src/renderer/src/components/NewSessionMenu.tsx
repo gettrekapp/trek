@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
 import { useAgentCatalog } from '../agents'
-import { needsModel } from '../agentPicker'
+import { canStartPick } from '../agentPicker'
 import { LlmPicker } from './LlmPicker'
 import { agentNote, describeAgent, expectedDefault } from '../../../shared/agents/catalog.ts'
 import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
@@ -140,7 +140,7 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
                   <LlmPicker value={pick} onChange={setPick} catalog={catalog} eagerModel />
                   <button
                     className="btn btn-accent"
-                    disabled={needsModel(pick, catalog) || !catalog.isOn(pick.provider)}
+                    disabled={!canStartPick(pick, catalog)}
                     onClick={() => {
                       if (serverEntryId) serverPicks.set(serverEntryId, pick)
                       start(undefined, pick)

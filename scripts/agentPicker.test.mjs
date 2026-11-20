@@ -2,7 +2,7 @@
 // project that the caller offers, and a saved choice that is not among them, kept and marked.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { firstModelPick, needsModel, pickerAgents } from '../src/renderer/src/agentPicker.ts'
+import { canStartPick, firstModelPick, typeAgentStart, needsModel, pickerAgents } from '../src/renderer/src/agentPicker.ts'
 import { agentCatalog } from '../src/shared/agents/catalog.ts'
 
 const caps = (mcp) => ({ presetSessionId: true, resume: true, mcp, appendSystemPrompt: true, effort: false, addDirs: true, sessionMigration: false })
@@ -46,4 +46,19 @@ test("firstModelPick: a listed agent's first model, only once the user picked th
   assert.equal(firstModelPick({ provider: 'local', model: 'llama' }, 'local', list, { pickedHere: true, eager: true }), null, 'a model is already chosen')
   assert.equal(firstModelPick({ provider: 'claude' }, 'local', list, { pickedHere: true, eager: true }), null, 'another agent is chosen now')
   assert.equal(firstModelPick({ provider: 'local' }, 'local', [], { pickedHere: true, eager: true }), null, 'nothing listed')
+})
+
+test('canStartPick: only an offered agent (on in the project), with a model where it needs one', () => {
+  assert.equal(canStartPick({ provider: 'claude' }, catalog), true)
+  assert.equal(canStartPick({ provider: 'codex' }, catalog), false, 'off for this project')
+  assert.equal(canStartPick({ provider: 'mystery' }, catalog), false, 'not on this server (isOn says true for it)')
+  assert.equal(canStartPick({ provider: 'local' }, catalog), false, 'no model yet')
+  assert.equal(canStartPick({ provider: 'local', model: 'qwen' }, catalog), true)
+})
+
+test("typeAgentStart: a session type's own agent starts from the default its sessions get now: the project's, else the server's, past an off one", () => {
+  assert.deepEqual(typeAgentStart({ provider: 'grok', model: 'g' }, { provider: 'claude' }, catalog), { provider: 'grok', model: 'g' })
+  assert.deepEqual(typeAgentStart(undefined, { provider: 'local' }, catalog), { provider: 'local' })
+  assert.deepEqual(typeAgentStart({ provider: 'codex' }, { provider: 'grok' }, catalog), { provider: 'grok' }, "the project's default is off")
+  assert.deepEqual(typeAgentStart(undefined, undefined, catalog), { provider: 'claude' })
 })

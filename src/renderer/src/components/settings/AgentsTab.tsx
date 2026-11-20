@@ -5,8 +5,7 @@ import { LlmSettings } from '../LlmSettings'
 import { LlmPicker } from '../LlmPicker'
 import { AgentNote } from '../AgentBits'
 import { useAgentCatalog } from '../../agents'
-import { expectedDefault } from '../../../../shared/agents/catalog.ts'
-import { DEFAULT_AGENT_ID } from '../../../../shared/plugins/agents.ts'
+import { typeAgentStart } from '../../agentPicker'
 import { SettingText } from '../SettingText'
 import type { SessionType } from '../../../../shared/types'
 
@@ -21,6 +20,7 @@ export function AgentsTab(): React.JSX.Element {
   // Default applied outside the selector — `?? []` inside it would return a
   // fresh array every snapshot and loop React's store re-render (error #185).
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
+  const projectDefault = useAppStore((s) => s.project?.llmDefault)
   const updateSessionTypes = useAppStore((s) => s.setSessionTypes)
   const patchSessionType = (id: string, patch: Partial<SessionType>): void => {
     updateSessionTypes(sessionTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -102,7 +102,7 @@ export function AgentsTab(): React.JSX.Element {
                 checked={!type.llm}
                 onChange={(e) =>
                   patchSessionType(type.id, {
-                    llm: e.target.checked ? undefined : expectedDefault({}, serverDefault ?? { provider: DEFAULT_AGENT_ID }, catalog, false)
+                    llm: e.target.checked ? undefined : typeAgentStart(projectDefault, serverDefault, catalog)
                   })
                 }
               />
