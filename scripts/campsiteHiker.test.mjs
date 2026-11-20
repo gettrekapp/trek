@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -208,4 +208,12 @@ test("indicatorState: the session's own; with none, the tab's status and no deci
   assert.deepEqual(indicatorState(undefined, 'done'), { status: 'done', decision: false })
   assert.deepEqual(indicatorState(undefined, null), { status: 'idle', decision: false })
   assert.equal(stanceFor(indicatorState(undefined, null), 'chop').pose, 'sleep')
+})
+
+test('hikerDoing: its chore while working, else its status; a pending decision or a bell wins', () => {
+  assert.equal(hikerDoing(session({ status: 'working' }), 'chop'), CHORE_NAMES.chop)
+  assert.equal(hikerDoing(session({ status: 'working', decision: true }), 'chop'), 'waiting on your decision')
+  assert.equal(hikerDoing(session({ status: 'attention' }), 'chop'), 'needs your attention')
+  assert.equal(hikerDoing(session({ status: 'done' }), 'chop'), 'finished')
+  assert.equal(hikerDoing(session({ status: 'someday' }), 'chop'), 'idle')
 })
