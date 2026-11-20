@@ -1,4 +1,4 @@
-// Claude Code's history (plugins A1; src/host/claudeSessionService.ts before): one
+// Claude Code's history (plugins A1; core's claudeSessionService before, now desktop main's only): one
 // ~/.claude/projects/<encoded cwd>/<session id>.jsonl per conversation, and a folder of the same
 // name for its subagents and tool results. The encoding replaces every non-alphanumeric character
 // with "-" (desktop main's importer keeps its own copy of projectDir: keep the two the same).

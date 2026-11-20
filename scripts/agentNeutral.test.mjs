@@ -103,8 +103,6 @@ function scanLines(text) {
  * code on the server. Never add one for code the server runs for an agent: that belongs in its plugin.
  */
 const ALLOWED = [
-  // Desktop main's .trekproj importer copies Claude history (spec: out of scope); the server never imports this file.
-  { file: 'src/host/claudeSessionService.ts', line: /^return join\(homedir\(\), '\.claude', 'projects', cwd\.replace/ },
   // The claude plugin's project settings keep the names core gave them (revision 2): core lists them as
   // plugin-owned so its own SETTINGS_KINDS no longer takes them; it never reads their values.
   { file: 'server/src/projects/settings.ts', line: /^export const PLUGIN_OWNED_SETTINGS = \[.*'claudeCommand', 'claudeArgs', 'claudePermissionMode'\] as const$/ },
@@ -154,7 +152,7 @@ test('the check sees the agent code it must catch, and passes what is not', () =
   assert.equal(hits("const root = join(homedir(), '.codex', 'sessions')").length, 1)
   assert.equal(hits("env: { ANTHROPIC_BASE_URL: url }").length, 1)
   assert.equal(hits("import { getProvider } from '../../../src/shared/providers/registry.ts'").length, 1)
-  assert.equal(hits("import { projectDir } from '../../../src/host/claudeSessionService.ts'").length, 1)
+  assert.equal(hits("import { projectDir } from '../../../src/main/claudeSessionService.ts'").length, 1)
   assert.equal(hits('// Claude Code keeps its history in ~/.claude').length, 0, 'comments may name them')
   assert.equal(hits('const value = settings.claudeCommand').length, 0, "the claude plugin's setting names are not agent code")
   assert.equal(hits("if (token === 'local') refuse()").length, 0, "the local server's token is not the Local agent")

@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 import { PLUGIN_OWNED_SETTINGS, applySettingsPatch, isSettingsKey } from '../server/src/projects/settings.ts'
 import { removeDir } from './testPlatform.mjs'
-import { projectDir } from '../src/host/claudeSessionService.ts'
+import { projectDir } from '../src/main/claudeSessionService.ts'
 
 const quiet = { info() {}, warn() {} }
 /** An agent plugin's agents, set up with a host that only logs (they use nothing else of it; the other built-ins do, so they are not set up here). */

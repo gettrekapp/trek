@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
-import { projectDir } from '../src/host/claudeSessionService.ts'
+import { projectDir } from '../src/main/claudeSessionService.ts'
 import { promoteChanging, promoteTestHooks, pruneRecoveryFiles } from '../server/src/promote/promoteHandlers.ts'
 import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixture.mjs'
 import { realPath } from '../src/host/pathContainment.ts'

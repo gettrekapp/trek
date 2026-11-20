@@ -15,7 +15,7 @@ import { importProjectFile, LOCAL_TARGET, type ImportedProject } from '../shared
 import { projectTopic } from '../shared/model/topics.ts'
 import type { Project } from '../shared/model/types'
 import type { ServerConfig } from '../shared/types'
-import { projectDir } from '../host/claudeSessionService'
+import { projectDir } from './claudeSessionService'
 import { addAppServer, adoptAppServerToken, getAppServer, getAppServerToken, savedAppServers, serverLink } from './appServers'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { LOCAL_ENTRY_ID, LOCAL_ENTRY_NAME } from './localServerRules'

@@ -1,15 +1,18 @@
 // Importing a .trekproj (phase 4d): where each piece of a split file goes, what
 // migrated.json records, and how recents and open-windows.json are rewritten. Pure.
+import { agentCatalog } from '../shared/agents/catalog.ts'
 import { isLocalEntryId, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_TARGET, normalizePath } from '../shared/model/importProject.ts'
 import { worktreeOrderKey } from '../shared/model/keys.ts'
 import { pathBaseName } from '../shared/pathName.ts'
 import type { Project, Session } from '../shared/model/types.ts'
-import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
 import { serverKey } from './appServersRules.ts'
 import { MAX_RECENTS, type RecentEntry } from './recentsRules.ts'
 import { isTargetId, sameTarget, type OpenWindowEntry, type ServerTarget, type WindowTarget } from './windowRules.ts'
+
+/** A .trekproj file's sessions run the old servers' agents: the old-server snapshot says whose history follows its folder. */
+const V1_AGENTS = agentCatalog(null)
 
 // ---- Where a piece goes -----------------------------------------------------------------------
 
@@ -371,9 +374,11 @@ export interface MovedSessions {
   agentSessionIds: string[]
 }
 
-/** Sessions whose history follows the cwd (Claude's kind: sessionMigration), with a usable id. */
+/** Sessions whose history follows the cwd (the agents whose history follows the folder: sessionMigration), with a usable id. */
 function resumable(sessions: readonly Session[]): string[] {
-  return sessions.filter((s) => sessionMigrates(s) && isAgentSessionId(s.agentSessionId)).map((s) => s.agentSessionId as string)
+  return sessions
+    .filter((s) => V1_AGENTS.facts(s.llm?.provider).capabilities.sessionMigration && isAgentSessionId(s.agentSessionId))
+    .map((s) => s.agentSessionId as string)
 }
 
 /**

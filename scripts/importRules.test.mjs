@@ -274,6 +274,27 @@ test("movedSessions: the sessions whose worktree the server stores at another pa
   assert.deepEqual(movedSessions(sent, sent), [])
 })
 
+test("movedSessions: whose history follows is the old agents' rule (Claude's and Local's; a missing or unknown agent counts as the default, Claude)", () => {
+  const sent = project({ repo: '/var/t/app', x: '/var/t/app-x' })
+  sent.repositories[0].worktrees[1].sessions = [
+    session('a', UUID1, 'local'),
+    session('b', UUID2, 'gemini'),
+    session('c', UUID3, 'grok'),
+    { ...session('d', '44444444-4444-4444-8444-444444444444'), llm: undefined },
+    session('e', '55555555-5555-4555-8555-555555555555', 'aider'),
+    session('f', '66666666-6666-4666-8666-666666666666', 'codex')
+  ]
+  const stored = project({ repo: '/var/t/app', x: '/private/var/t/app-x' })
+  assert.deepEqual(movedSessions(sent, stored), [
+    {
+      worktree: 'x',
+      from: '/var/t/app-x',
+      to: '/private/var/t/app-x',
+      agentSessionIds: [UUID1, '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555']
+    }
+  ])
+})
+
 test("movedSessions: the Global panel's sessions run in the first repository's main worktree", () => {
   const sent = project({ repo: '/var/t/app', x: '/l/app-x' }, { global: [session('g', UUID3)] })
   const stored = project({ repo: '/private/var/t/app', x: '/l/app-x' }, { global: [session('g', UUID3)] })
