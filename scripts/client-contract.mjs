@@ -122,6 +122,11 @@ else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}
 // The server lists the plugins it set up in registration order (plugins/builtin.server.ts), then
 // those not for its platform, `available: false` (server/src/plugins/registry.ts presence()).
 const BUILTIN_PLUGINS = [
+  // The agents (plugins A1): Claude (with Local), Codex, Gemini and Grok, first in registration order.
+  { id: 'claude', version: '1.0.0', defaultEnabled: true },
+  { id: 'codex', version: '1.0.0', defaultEnabled: true },
+  { id: 'gemini', version: '1.0.0', defaultEnabled: true },
+  { id: 'grok', version: '1.0.0', defaultEnabled: true },
   { id: 'voice', version: '1.0.0', defaultEnabled: true },
   { id: 'linear', version: '1.0.0', defaultEnabled: true },
   { id: 'azure-devops', version: '1.0.0', defaultEnabled: true },
