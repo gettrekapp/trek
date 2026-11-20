@@ -545,7 +545,8 @@ try {
   await addInput.press('Enter')
   await addInput.press('Enter')
   await modal.locator('.worktree-branch', { hasText: 'beta' }).waitFor({ timeout: 5000 })
-  check('the added repo is ticked', await modal.locator('li', { hasText: 'beta' }).locator('input[type=checkbox]').isChecked(), true)
+  // The row can show before its box is ticked: wait for the tick.
+  check('the added repo is ticked', await until(() => modal.locator('li', { hasText: 'beta' }).locator('input[type=checkbox]').isChecked(), true, 5000), true)
   check('a double Enter adds it once', await modal.locator('.worktree-branch').allTextContents(), ['Alpha', 'beta'])
   check('it shows the server path', await modal.locator('li', { hasText: 'beta' }).locator('.worktree-path').textContent(), repoB)
   await modal.locator('li', { hasText: 'Alpha' }).locator('input[type=checkbox]').check()
