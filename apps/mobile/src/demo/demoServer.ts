@@ -18,7 +18,8 @@ export const DEMO_CAPABILITIES: string[] = [
   CAPABILITY.decisions,
   CAPABILITY.dequeue,
   CAPABILITY.agents,
-  // Its agents carry their facts and whether they are on (plugins A2), as a current server's do.
+  // Its agents carry their facts and whether they are on (plugins A2), as a current server's do. It has no
+  // agents.models handler: the phone never asks for it (only the desktop's agent plugin settings do).
   CAPABILITY.agentInfo,
   CAPABILITY.prWatch,
   CAPABILITY.review,
