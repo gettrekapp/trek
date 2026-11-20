@@ -52,7 +52,7 @@ export interface V2ServerAgentChoices {
   /** The Default entry's description: the agent the server would run (the project's default, else its own, past one that is off) */
   defaultLabel: string
   /** The agents a new session can use (on in the project), in the server's order: a one-off pick each, with its default model */
-  agents: { llm: LlmSelection; label: string; glyph: string; installed: boolean }[]
+  agents: { llm: LlmSelection; label: string; installed: boolean }[]
   /** The agents "Choose…" offers */
   providers: LlmProviderId[]
 }
@@ -61,7 +61,7 @@ export interface V2ServerAgentChoices {
 export function v2ServerAgents(settings: Pick<V2ProjectLlms, 'llmDefault'>, server: ServerAgents, catalog: AgentCatalog = agentCatalog(server)): V2ServerAgentChoices {
   return {
     defaultLabel: describeAgent(expectedDefault(settings, server.llmDefault, catalog, false), catalog),
-    agents: catalog.offered.map((a) => ({ llm: { provider: a.id }, label: a.label, glyph: a.glyph, installed: a.installed })),
+    agents: catalog.offered.map((a) => ({ llm: { provider: a.id }, label: a.label, installed: a.installed })),
     providers: catalog.offered.map((a) => a.id)
   }
 }

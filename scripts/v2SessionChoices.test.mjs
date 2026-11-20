@@ -62,9 +62,9 @@ test("with the server's list: Default is the project's default, else the server'
   const choices = v2ServerAgents({}, listed)
   assert.equal(choices.defaultLabel, 'Codex')
   assert.deepEqual(choices.agents, [
-    { llm: { provider: 'claude' }, label: 'Claude', glyph: 'CL', installed: true },
-    { llm: { provider: 'codex' }, label: 'Codex', glyph: 'CX', installed: true },
-    { llm: { provider: 'gemini' }, label: 'Gemini', glyph: 'GM', installed: false }
+    { llm: { provider: 'claude' }, label: 'Claude', installed: true },
+    { llm: { provider: 'codex' }, label: 'Codex', installed: true },
+    { llm: { provider: 'gemini' }, label: 'Gemini', installed: false }
   ])
   assert.deepEqual(choices.providers, ['claude', 'codex', 'gemini'])
   assert.equal(v2ServerAgents({ llmDefault: { provider: 'claude', model: 'opus' } }, listed).defaultLabel, 'Claude · opus')
