@@ -534,6 +534,47 @@
   outline: 1px solid #ffe680;
   outline-offset: 2px;
 }
+/* The camp dog: runs between sits (the run's length is set inline), behind the hikers */
+.cs-dog {
+  position: absolute;
+  left: 0;
+  bottom: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+  transition: transform 0s linear;
+}
+.cs-dog.left .cs-facing {
+  transform: scaleX(-1);
+}
+.cs-dog svg {
+  display: block;
+  overflow: visible;
+}
+.cs-dog.run .cs-frame-0,
+.cs-dog.run .cs-frame-1 { animation-duration: 0.3s; }
+/* Petted: the tail goes faster */
+.cs-dog.happy .cs-frame-0,
+.cs-dog.happy .cs-frame-1 { animation-duration: 0.24s; }
+.cs-dog:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 2px;
+}
+.cs-heart {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  margin-left: -7px;
+  pointer-events: none;
+  animation: cs-heart 1s ease-out forwards;
+}
+@keyframes cs-heart {
+  0% { transform: translateY(4px) scale(0.6); opacity: 0; }
+  20% { transform: translateY(-2px) scale(1); opacity: 1; }
+  100% { transform: translateY(-22px) scale(1); opacity: 0; }
+}
 .cs-more,
 .cs-empty {
   position: absolute;

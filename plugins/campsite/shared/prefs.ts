@@ -5,10 +5,11 @@ export interface CampsitePrefs {
   showCampsite: boolean
   campsiteCollapsed: boolean
   showTerminalHiker: boolean
+  showDog: boolean
 }
 export type CampsitePrefKey = keyof CampsitePrefs
 
-export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true }
+export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true }
 
 export function readPrefs(raw: Readonly<Record<string, PluginPrefValue>>): CampsitePrefs {
   const out = { ...DEFAULT_PREFS }

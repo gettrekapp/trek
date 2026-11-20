@@ -27,7 +27,7 @@ test('campsite: built in last, after Colima', () => {
 })
 
 test('readPrefs: booleans only, defaults for the rest', () => {
-  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true })
+  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true })
   assert.deepEqual(readPrefs({}), DEFAULT_PREFS)
   assert.deepEqual(readPrefs({ showCampsite: false, campsiteCollapsed: 'yes', other: 1 }), { ...DEFAULT_PREFS, showCampsite: false })
 })

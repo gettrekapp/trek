@@ -1,5 +1,5 @@
 // The campsite strip along the bottom of the window: a night scene with the fire in the middle, a
-// tent per worktree with sessions, Global on a log, and every session's hiker. Click a hiker to
+// tent per worktree with sessions, Global on a log, every session's hiker, and the camp dog. Click a hiker to
 // show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -7,6 +7,7 @@ import { campLayout, campSummary, collapsedRow, type CampHikerSpot, type FireSid
 import { choreFor, hikerLabel, isWaiting } from '../shared/pose.ts'
 import { CampHiker, offstage, WALK_MS } from './CampHiker.tsx'
 import { CampScene } from './CampScene.tsx'
+import { Dog } from './Dog.tsx'
 import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -135,6 +136,8 @@ export function Campsite(): React.JSX.Element | null {
               onToggle={(el) => toggleCamp(t.worktreeId, el, t.x < layout.fireX ? 'left' : 'right')}
             />
           ))}
+          {/* Before the hikers: they stand in front of it, and a click on one is never the dog's */}
+          {prefs.showDog && <Dog width={width} fireX={sessions.length > 0 ? layout.fireX : undefined} paused={hidden} />}
           {layout.hikers.map((h) => {
             const s = byId.get(h.terminalId)
             if (!s) return null
