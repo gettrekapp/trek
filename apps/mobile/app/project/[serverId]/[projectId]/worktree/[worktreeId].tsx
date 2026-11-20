@@ -113,13 +113,19 @@ export default function WorktreeScreen(): React.JSX.Element {
   const pluginsKey = topic.state === 'ready' ? JSON.stringify(topic.snapshot.settings.plugins ?? {}) : ''
   useEffect(() => {
     if (!server || !server.connection.welcome?.capabilities.includes(CAPABILITY.agents)) return
-    void server.connection
+    let cancelled = false
+    server.connection
       .request('server.agents', { projectId })
       .then((a) => {
+        // A plugin switch flipped again before this answer came: the newer request's answer wins.
+        if (cancelled) return
         setServerAgents(a)
         setAgents(startableAgents(a.agents))
       })
       .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [server, projectId, pluginsKey])
 
   const project = topic.state === 'ready' ? topic.snapshot : null

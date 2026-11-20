@@ -42,6 +42,8 @@ export default function AutomationsScreen(): React.JSX.Element {
   }, [])
   // The server's labels for the agents the automations name.
   const [agents, setAgents] = useState<AgentInfo[]>([])
+  // Asked again when the project's plugin switches change: a card says when its agent is off.
+  const pluginsKey = topic.state === 'ready' ? JSON.stringify(topic.snapshot.settings.plugins ?? {}) : ''
   useEffect(() => {
     if (!server || !server.connection.welcome?.capabilities.includes(CAPABILITY.agents)) return
     let cancelled = false
@@ -54,7 +56,7 @@ export default function AutomationsScreen(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [server, projectId])
+  }, [server, projectId, pluginsKey])
 
   // The missed-runs card: the choices so far (Skip until Run is chosen), its request, the request's
   // failure, and the runs the answer said did not start.
