@@ -9,9 +9,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { copyFile, chmod, lstat, mkdir, open, rm, rmdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
-import { projectDir } from '../../../src/host/claudeSessionService.ts'
 import type { BranchData, Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import {
   MAX_MOVE_CHUNK_BYTES,
@@ -32,8 +31,8 @@ import {
   type MoveSession,
   type MoveSessionInfo
 } from '../../../src/shared/move.ts'
-import { isProviderId } from '../../../src/shared/providers/registry.ts'
-import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
+import { sanitizeAgentSelection } from '../../../src/shared/agents/selection.ts'
+import type { AgentRegistry } from '../agents/registry.ts'
 import { MAX_HISTORY_PER_BRANCH, sanitizeHistoryEvent, type HistoryEvent } from '../../../src/shared/model/history.ts'
 import { pluginSettingsShapeProblem, type PluginSettingValues } from '../../../src/shared/plugins/manifest.ts'
 import { LEGACY_ENV_PLUGIN, migrateBranchEnv } from '../projects/legacyEnv.ts'
@@ -157,10 +156,21 @@ export const moveReceiving: Set<string> = receiving
 /** For the tests: awaited by move.unreceive once it holds the worktree, before anything else. */
 export const moveTestHooks: { beforeUnreceive?: (path: string) => Promise<void> } = {}
 
-/** A Claude session's history file under the worktree's path, if it has one, and its size. */
-async function historyOf(worktree: Worktree, session: Session): Promise<{ file: string; size: number } | null> {
-  if (session.llm.provider !== 'claude' || !session.agentSessionId || !SESSION_ID.test(session.agentSessionId)) return null
-  const file = join(projectDir(worktree.path), `${session.agentSessionId}.jsonl`)
+/** Whether a move carries the agent's sessions (plugins A1: its history has one file to carry; Claude's). */
+const carries = (agents: AgentRegistry, provider: string): boolean => agents.has(provider) && agents.get(provider).history?.file !== undefined
+
+/** The labels of the agents whose sessions a move carries ("Claude"), for the reasons a move gives. */
+const carriedLabels = (agents: AgentRegistry): string =>
+  agents
+    .all()
+    .filter((a) => a.history?.file)
+    .map((a) => a.label)
+    .join(', ')
+
+/** A session's history file under the worktree's path, if its agent's history moves (plugins A1), and its size. */
+async function historyOf(worktree: Worktree, session: Session, agents: AgentRegistry): Promise<{ file: string; size: number } | null> {
+  if (!carries(agents, session.llm.provider) || !session.agentSessionId || !SESSION_ID.test(session.agentSessionId)) return null
+  const file = agents.get(session.llm.provider).history!.file!(worktree.path, session.agentSessionId)
   try {
     const info = await stat(file)
     return info.isFile() ? { file, size: info.size } : null
@@ -169,18 +179,18 @@ async function historyOf(worktree: Worktree, session: Session): Promise<{ file: 
   }
 }
 
-/** Which of the worktree's sessions are carried: Claude ones with a history, within the limits. */
-async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number }[] }> {
+/** Which of the worktree's sessions are carried: those of an agent whose history moves (Claude's) with a history, within the limits. */
+async function carriedSessions(worktree: Worktree, agents: AgentRegistry): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number }[] }> {
   const info: MoveSessionInfo[] = []
   const carried: { session: Session; file: string; size: number }[] = []
   for (const session of worktree.sessions) {
     const same = carried.find((c) => c.session.agentSessionId === session.agentSessionId)
     const base = { title: session.title, provider: session.llm.provider }
-    if (session.llm.provider !== 'claude') {
-      info.push({ ...base, carried: false, reason: 'only Claude sessions move; this one stays behind and is closed' })
+    if (!carries(agents, session.llm.provider)) {
+      info.push({ ...base, carried: false, reason: `only ${carriedLabels(agents)} sessions move; this one stays behind and is closed` })
       continue
     }
-    const history = await historyOf(worktree, session)
+    const history = await historyOf(worktree, session, agents)
     if (!history) {
       info.push({ ...base, carried: false, reason: 'it has no saved conversation yet' })
       continue
@@ -204,8 +214,8 @@ async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionI
 }
 
 /** The carried sessions with each history's sha256 (null: it could not be read, so it is not carried). */
-async function hashedSessions(worktree: Worktree): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number; sha256: string | null }[] }> {
-  const { info, carried } = await carriedSessions(worktree)
+async function hashedSessions(worktree: Worktree, agents: AgentRegistry): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number; sha256: string | null }[] }> {
+  const { info, carried } = await carriedSessions(worktree, agents)
   const hashed = []
   for (const c of carried) hashed.push({ ...c, sha256: await sha256File(c.file).catch(() => null) })
   return { info, carried: hashed }
@@ -259,7 +269,7 @@ async function blockedReason(ctx: V2Context, repo: Repository, branch: string, p
   return undefined
 }
 
-function checkSessions(value: unknown): MoveSession[] {
+function checkSessions(value: unknown, agents: AgentRegistry): MoveSession[] {
   if (value === undefined) return []
   if (!Array.isArray(value)) throw bad('sessions must be an array')
   if (value.length > MAX_MOVE_SESSIONS) throw bad(`sessions must hold at most ${MAX_MOVE_SESSIONS} entries`)
@@ -267,9 +277,9 @@ function checkSessions(value: unknown): MoveSession[] {
   return value.map((raw: unknown, i) => {
     if (!isRecord(raw)) throw bad(`sessions[${i}] must be an object`)
     const title = checkTitle(requireString(raw.title, `sessions[${i}].title`), `sessions[${i}].title`)
-    if (!isRecord(raw.llm) || !isProviderId(raw.llm.provider)) throw bad(`sessions[${i}].llm.provider must be a known provider`)
-    if (raw.llm.provider !== 'claude') throw bad(`sessions[${i}]: only Claude sessions are carried`)
-    const llm = sanitizeLlmSelection(raw.llm)
+    if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string' || !agents.has(raw.llm.provider)) throw bad(`sessions[${i}].llm.provider must be a known provider`)
+    if (!carries(agents, raw.llm.provider)) throw bad(`sessions[${i}]: only ${carriedLabels(agents)} sessions are carried`)
+    const llm = sanitizeAgentSelection(raw.llm, (id) => agents.has(id))
     if (!llm) throw bad(`sessions[${i}].llm must be an LLM selection`)
     const agentSessionId = requireString(raw.agentSessionId, `sessions[${i}].agentSessionId`)
     if (!SESSION_ID.test(agentSessionId)) throw bad(`sessions[${i}].agentSessionId must be a session id`)
@@ -378,7 +388,7 @@ export const moveHandlers: Record<string, Handler> = {
   /** What would move, read only: the branch, its origin, which sessions are carried. */
   'move.prepare': async (p, ctx): Promise<MovePlan> => {
     const { repo, worktree, branch } = await source(ctx, p)
-    const { info } = await carriedSessions(worktree)
+    const { info } = await carriedSessions(worktree, ctx.sessions.agentRegistry)
     const left = await viaGit(() => gitService.leftBehind(worktree.path, repo.linkedDirs ?? [], MAX_MOVE_LISTED_PATHS, repo.path))
     return {
       branch,
@@ -403,7 +413,7 @@ export const moveHandlers: Record<string, Handler> = {
     if (size > MAX_MOVE_PATCH_BYTES) {
       throw bad(`the uncommitted changes make a ${MB(size)} patch; a move carries at most ${MB(MAX_MOVE_PATCH_BYTES)}. Commit or remove the large files first`)
     }
-    const { info, carried } = await hashedSessions(worktree)
+    const { info, carried } = await hashedSessions(worktree, ctx.sessions.agentRegistry)
     const sessions: MoveSession[] = []
     const notCarried = info.filter((s) => !s.carried).map((s) => `${s.title}: ${s.reason}`)
     for (const { session, size, sha256: historySha256 } of carried) {
@@ -444,7 +454,7 @@ export const moveHandlers: Record<string, Handler> = {
     const { worktree } = await source(ctx, p)
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} has running sessions; unload it first`)
     const session = worktree.sessions.find((s) => s.agentSessionId === agentSessionId)
-    const history = session ? await historyOf(worktree, session) : null
+    const history = session ? await historyOf(worktree, session, ctx.sessions.agentRegistry) : null
     if (!history) throw codedError('NOT_FOUND', `No carried history ${agentSessionId} in ${worktree.path}`)
     if (history.size > MAX_MOVE_HISTORY_SESSION_BYTES) throw bad(`that history is over ${MB(MAX_MOVE_HISTORY_SESSION_BYTES)}`)
     if (p.offset > history.size) throw bad(`offset is past the history's ${history.size} bytes`)
@@ -511,7 +521,7 @@ export const moveHandlers: Record<string, Handler> = {
         const { patch, headSha } = await dirtyPatch(worktree.path, repo).catch((err: Error) => {
           throw codedError('CONFLICT', `${worktree.path} changed after it was copied (${err.message}); it is kept`)
         })
-        if (fingerprint(headSha, patch, fingerprinted((await hashedSessions(worktree)).carried)) !== expected) {
+        if (fingerprint(headSha, patch, fingerprinted((await hashedSessions(worktree, ctx.sessions.agentRegistry)).carried)) !== expected) {
           throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
         }
         if (p.verifyOnly === true) return true
@@ -596,7 +606,7 @@ export const moveHandlers: Record<string, Handler> = {
     if (p.patch !== undefined && typeof p.patch !== 'string') throw bad('patch must be a string')
     const patch: string = p.patch ?? ''
     if (Buffer.byteLength(patch) > MAX_MOVE_PATCH_BYTES) throw bad(`patch must be at most ${MB(MAX_MOVE_PATCH_BYTES)}`)
-    const sessions = checkSessions(p.sessions)
+    const sessions = checkSessions(p.sessions, ctx.sessions.agentRegistry)
     const incoming = checkBranchData(p.branchData)
     const carried = checkHistory(p.history)
     const fromServer = optionalServerName(p.fromServer, 'fromServer')
@@ -836,8 +846,11 @@ async function build(
     } finally {
       unblock()
     }
-    const dir = projectDir(target)
-    if (sessions.length > 0 && !existsSync(dir)) {
+    // Each carried session's history file here, as its agent names it (plugins A1: Claude's, all in one folder).
+    const agents = ctx.sessions.agentRegistry
+    const fileOf = (s: MoveSession): string => agents.get(s.llm.provider).history!.file!(target, s.agentSessionId)
+    const dir = sessions.length > 0 ? dirname(fileOf(sessions[0])) : null
+    if (dir !== null && !existsSync(dir)) {
       await mkdir(dir, { recursive: true })
       createdDir = dir
       undo.push(() => rmdir(dir))
@@ -847,10 +860,10 @@ async function build(
       if (!from || staged!.size(s.agentSessionId) !== s.historyBytes || (await sha256File(from)) !== s.historySha256) {
         throw bad(`the history of “${s.title}” did not arrive whole (${staged?.size(s.agentSessionId) ?? 0} of ${s.historyBytes} bytes, or another hash)`)
       }
-      const file = join(dir, `${s.agentSessionId}.jsonl`)
+      const file = fileOf(s)
       const backup = existsSync(file) ? `${file}.trek-move-${randomUUID()}` : null
       if (backup) await copyFile(file, backup)
-      await mkdir(dir, { recursive: true })
+      await mkdir(dirname(file), { recursive: true })
       await copyFile(from, file)
       await chmod(file, 0o600)
       if (backup) {

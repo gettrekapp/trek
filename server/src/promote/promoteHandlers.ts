@@ -6,7 +6,7 @@
 //   worktree's uncommitted work (5d's config-proof patch) is applied there and checked by digest,
 //   and the worktree's own work checked again: that is the point of commitment. The worktree is
 //   removed after it (a removal that fails is a note: the main checkout has the work). Its
-//   sessions that can follow (sessionMigrates: Claude and Local) move to the main checkout with
+//   sessions that can follow (their agents' history: Claude and Local) move to the main checkout with
 //   their histories and resume there; the main checkout's own sessions keep running, on the new
 //   branch.
 // - `worktree.demote` ("Promote branch to worktree"): the main checkout's branch gets a new
@@ -29,11 +29,8 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
-import { migrateSession } from '../../../src/host/claudeSessionService.ts'
 import type { HistoryValue } from '../../../src/shared/model/history.ts'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
-import { sessionMigrates } from '../../../src/shared/providers/selection.ts'
-import { getProvider } from '../../../src/shared/providers/registry.ts'
 import {
   MAX_PROMOTE_LISTED_PATHS,
   MAX_PROMOTE_PATCH_BYTES,
@@ -43,6 +40,7 @@ import {
   type PromoteSessionInfo,
   type PromoteWindowAnswer
 } from '../../../src/shared/promote.ts'
+import type { AgentRegistry } from '../agents/registry.ts'
 import { codedError } from '../errors.ts'
 import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
@@ -117,17 +115,23 @@ function assertNotLoadedElsewhere(ctx: V2Context, projectId: string, path: strin
   if (running.length > 0) throw codedError('IN_USE', `${path} has running sessions in ${running.join(', ')}; unload it there first`)
 }
 
-/** The sessions that follow (sessionMigrates) and what the plan says of each. */
-function splitSessions(sessions: readonly Session[], stays: string): { info: PromoteSessionInfo[]; moving: Session[] } {
+/** Whether a session's history can follow its worktree (plugins A1: its agent says so and can move it; Claude's and Local's). */
+function migrates(agents: AgentRegistry, s: Session): boolean {
+  const agent = agents.get(s.llm.provider)
+  return agent.capabilities.sessionMigration && agent.history !== undefined
+}
+
+/** The sessions that follow and what the plan says of each. */
+function splitSessions(sessions: readonly Session[], stays: string, agents: AgentRegistry): { info: PromoteSessionInfo[]; moving: Session[] } {
   const info: PromoteSessionInfo[] = []
   const moving: Session[] = []
   for (const s of sessions) {
     const base = { title: s.title, provider: s.llm.provider }
-    if (sessionMigrates(s)) {
+    if (migrates(agents, s)) {
       moving.push(s)
       info.push({ ...base, carried: true })
     } else {
-      info.push({ ...base, carried: false, reason: `${getProvider(s.llm.provider).label} keeps its history by folder, so it can't follow; ${stays}` })
+      info.push({ ...base, carried: false, reason: `${agents.get(s.llm.provider).label} keeps its history by folder, so it can't follow; ${stays}` })
     }
   }
   return { info, moving }
@@ -147,13 +151,13 @@ function linkedApplyMessage(stderr: string, repo: Repository): string | null {
   return `the uncommitted work has ${m[1]}, inside a folder the new worktree links from ${repo.path} (the repository's linked folders); nothing was changed. Commit or move it first`
 }
 
-/** Moves the sessions' histories between the checkouts' Claude folders; what could not move. */
-async function moveHistories(sessions: readonly Session[], from: string, to: string): Promise<string[]> {
+/** Moves the sessions' histories between the checkouts' folders, through each one's agent; what could not move. */
+async function moveHistories(sessions: readonly Session[], from: string, to: string, agents: AgentRegistry): Promise<string[]> {
   const notes: string[] = []
   for (const s of sessions) {
     if (!s.agentSessionId) continue
     try {
-      const { folderKept } = await migrateSession(s.agentSessionId, from, to)
+      const { folderKept } = await agents.get(s.llm.provider).history!.migrate(s.agentSessionId, from, to)
       if (folderKept) {
         notes.push(`The subagent transcripts and tool results of “${s.title}” were left at ${folderKept}: its new folder already had a folder of that name`)
       }
@@ -357,7 +361,7 @@ async function checkPromote(ctx: V2Context, p: any, blocked = true): Promise<Pro
     throw codedError('CONFLICT', `the main checkout ${main.path} has uncommitted changes; commit or stash them there first`)
   }
   const dirty = await isDirty(worktree.path)
-  const { info } = splitSessions(worktree.sessions, 'it is closed')
+  const { info } = splitSessions(worktree.sessions, 'it is closed', ctx.sessions.agentRegistry)
   const left = await viaGit(() => gitService.leftBehind(worktree.path, repo.linkedDirs ?? [], MAX_PROMOTE_LISTED_PATHS, repo.path))
   if (left.nestedRepos.length > 0) {
     throw bad(`${left.nestedRepos.join(', ')} ${left.nestedRepos.length === 1 ? 'is a git repository' : 'are git repositories'} of its own inside the worktree, which a promote can't carry; commit it as a submodule, or move it out, first`)
@@ -469,9 +473,9 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
   await ctx.poller.refresh(repo.path).catch(() => false)
   // The sessions as they are now (stopped, none added: the path was blocked).
   const from = repoIn(ctx.projects.require(project.id), repo.id).worktrees.find((w) => w.id === worktree.id)?.sessions ?? before.sessions
-  const { moving } = splitSessions(from, 'it is closed')
-  notes.push(...(await moveHistories(moving, worktree.path, main.path)))
-  for (const s of from) if (!sessionMigrates(s)) notes.push(`“${s.title}” was closed: ${getProvider(s.llm.provider).label} can't follow a worktree to another folder`)
+  const { moving } = splitSessions(from, 'it is closed', ctx.sessions.agentRegistry)
+  notes.push(...(await moveHistories(moving, worktree.path, main.path, ctx.sessions.agentRegistry)))
+  for (const s of from) if (!migrates(ctx.sessions.agentRegistry, s)) notes.push(`“${s.title}” was closed: ${ctx.sessions.agentRegistry.get(s.llm.provider).label} can't follow a worktree to another folder`)
   let movedIds = moving.map((s) => s.id)
   let mainLoaded = false
   // After the commitment nothing throws: records that can't be updated are a note.
@@ -550,7 +554,7 @@ async function checkDemote(ctx: V2Context, p: any, blocked = true): Promise<Demo
   if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
     throw bad(`${requested} is inside an existing checkout`)
   }
-  const { info } = splitSessions(main.sessions, 'it stays in the main checkout')
+  const { info } = splitSessions(main.sessions, 'it stays in the main checkout', ctx.sessions.agentRegistry)
   const reviewComments = main.review?.comments.length ?? 0
   const plan: PromotePlan = {
     branch,
@@ -577,7 +581,7 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
   const { project, repo, main, branch, defaultBranch, target } = c
   // Read after the paths were blocked: no session can start in the main checkout now.
   const before = locate(ctx.projects.require(project.id), main.id).worktree
-  const { moving } = splitSessions(before.sessions, 'it stays in the main checkout')
+  const { moving } = splitSessions(before.sessions, 'it stays in the main checkout', ctx.sessions.agentRegistry)
   const movingIds = moving.map((s) => s.id)
   const wasLoaded = before.loaded
   const undo: (() => Promise<unknown>)[] = []
@@ -683,7 +687,7 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
     if (recovery) await rm(recovery, { force: true }).catch(() => {})
     return { worktreeId: main.id, moved: [], notes }
   }
-  notes.push(...(await moveHistories(moving, main.path, target)))
+  notes.push(...(await moveHistories(moving, main.path, target, ctx.sessions.agentRegistry)))
   const worktreeId = created.id
   let moved = movingIds
   let tagged: HistoryValue | undefined

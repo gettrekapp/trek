@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 import { PLUGIN_OWNED_SETTINGS, applySettingsPatch, isSettingsKey } from '../server/src/projects/settings.ts'
 import { removeDir } from './testPlatform.mjs'
+import { projectDir } from '../src/host/claudeSessionService.ts'
 
 const quiet = { info() {}, warn() {} }
 /** An agent plugin's agents, set up with a host that only logs (they use nothing else of it; the other built-ins do, so they are not set up here). */
@@ -74,4 +75,19 @@ test("codex: discoverSessionId finds the rollout its launch made under $CODEX_HO
   assert.equal(await codex.discoverSessionId({ cwd, ageMs: 5000, exclude: ['taken'] }), 'fresh-id')
   const others = agentPlugins.flatMap(agentsOf).filter((a) => a.discoverSessionId).map((a) => a.id)
   assert.deepEqual(others, ['codex'], 'only Codex picks its own ids')
+})
+
+test("claude: its history file is Claude Code's, where the importer's projectDir says; Local's history follows a promote but has no file to carry", () => {
+  const [claude, local] = agentsOf(BUILTIN_SERVER_PLUGINS.find((p) => p.manifest.id === 'claude'))
+  const id = '11111111-2222-4333-8444-555555555555'
+  assert.equal(claude.history.file('/r/app-x', id), join(projectDir('/r/app-x'), `${id}.jsonl`))
+  assert.throws(() => claude.history.file('/r/app-x', '../x'), /Invalid session id/)
+  assert.equal(typeof claude.history.migrate, 'function')
+  assert.equal(local.history.file, undefined)
+  assert.equal(local.history.migrate, claude.history.migrate)
+  // promote moves a session's history where its agent has sessionMigration and a history: Claude's and Local's, as before A1
+  assert.equal(claude.capabilities.sessionMigration && local.capabilities.sessionMigration, true)
+  for (const plugin of ['codex', 'gemini', 'grok']) {
+    for (const agent of agentsOf(BUILTIN_SERVER_PLUGINS.find((p) => p.manifest.id === plugin))) assert.equal(agent.history, undefined, agent.id)
+  }
 })

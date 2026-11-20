@@ -24,6 +24,7 @@ import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/h
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDir } from './testPlatform.mjs'
+import { builtinAgents } from './agentsHarness.mjs'
 import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
@@ -50,6 +51,7 @@ async function server(t, dir, name, clone, prWatchable = true, providers = [crea
   // A block that records: which paths are blocked now (blockPath nests, as the manager's does).
   const blocked = new Map()
   const sessions = {
+    agentRegistry: builtinAgents(),
     blockPath: (path) => {
       blocked.set(path, (blocked.get(path) ?? 0) + 1)
       let released = false
