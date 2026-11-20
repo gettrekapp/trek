@@ -8,6 +8,7 @@ import type { Project, Session, SessionContext, SessionStatus, Worktree } from '
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { resolveGlobalAgent, resolveNewSessionLlm, sanitizeAgentSelection, sessionLaunch, type AgentLookup } from '../../../src/shared/agents/selection.ts'
 import type { AgentRegistry } from '../agents/registry.ts'
+import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
@@ -868,13 +869,19 @@ export class SessionManager {
 
   // ---- live status ----
 
+  /** The agent's status markers; none when the server has neither it nor the default agent (pty output must never throw). */
+  private statusMarkers(agentId: string): readonly string[] {
+    const registry = this.deps.agents
+    return registry.has(agentId) || registry.has(DEFAULT_AGENT_ID) ? registry.get(agentId).statusMarkers : []
+  }
+
   private onPtyOutput(ptyId: string, data: string, changed: boolean): void {
     if (this.stopped) return
     const owner = this.owners.get(ptyId)
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
     this.outputSeen.add(owner.sessionId)
-    const markers = this.deps.agents.get(session.llm.provider).statusMarkers
+    const markers = this.statusMarkers(session.llm.provider)
     const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
     const r = onOutput(session.status, entry.activity, data, markers, changed)
     entry.activity = r.activity

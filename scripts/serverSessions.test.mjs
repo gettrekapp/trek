@@ -1256,15 +1256,37 @@ test("the manager launches for its platform: a win32 manager's Codex gets Window
   const mcpAccess = (projectId) => ({ url: 'http://127.0.0.1:9/mcp', token: 'tok', files: { '.codex.json': `/m/${projectId}.codex.json` } })
   for (const platform of ['win32', 'darwin']) {
     const s = setup(t, { platform, agents, mcpAccess })
-    try {
-      s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
-    } catch (err) {
-      assert.equal(err.code, 'BAD_REQUEST', err.message)
-    }
+    const start = () => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+    if (platform === 'win32') {
+      try {
+        start()
+      } catch (err) {
+        assert.equal(err.code, 'BAD_REQUEST', err.message)
+      }
+    } else start()
     const { spec } = launched.at(-1)
     assert.equal(launched.at(-1).platform, platform)
     assert.match(spec.command, platform === 'win32' ? /http_headers_helper="type \\"\/m\/\S+\.codex\.json/ : /http_headers_helper="\/bin\/cat /)
   }
+})
+
+test("a session's output never throws when the server has no agent for it, not even the default one", async (t) => {
+  // A registry that loses every agent after the launch: the output goes through the marker scan with none.
+  let current
+  const agents = (store) => {
+    current = builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) })
+    const pick = (name) => (...args) => current[name](...args)
+    return { all: pick('all'), has: pick('has'), get: pick('get'), facts: pick('facts'), pluginOf: pick('pluginOf'), config: pick('config'), mcpFiles: pick('mcpFiles') }
+  }
+  const s = setup(t, { agents })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  current = createAgentRegistry({ agents: [], serverConfig: () => ({}) })
+  assert.throws(() => current.get('claude'), (e) => e.code === 'TOOL_ERROR')
+  // The terminal host logs a throwing output hook ('terminal host hook failed') and drops that chunk's status.
+  const errors = t.mock.method(console, 'error', () => {})
+  s.spawned[0].emit('esc to interrupt')
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual(errors.mock.calls.map((c) => String(c.arguments[0])).filter((m) => m.includes('hook failed')), [])
 })
 
 test('without MCP access sessions launch as before', (t) => {

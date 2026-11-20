@@ -42,6 +42,7 @@ import { projectTopic } from '../../src/shared/model/topics.ts'
 import { legacyCapabilitiesOf, type PluginPresence } from '../../src/shared/plugins/manifest.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
 import { createAgentRegistry, type AgentRegistry } from './agents/registry.ts'
+import { DEFAULT_AGENT_ID } from '../../src/shared/plugins/agents.ts'
 import { pluginPathChecks } from './plugins/coreChecks.ts'
 import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
 import { installedIdReserved } from './plugins/reserved.ts'
@@ -205,6 +206,7 @@ export function startServer(
     : undefined
   // The agents this server can launch (plugins A1): those its set-up plugins offer; none without plugins.
   const agents: AgentRegistry = createAgentRegistry({ agents: plugins?.agentProviders() ?? [], serverConfig: (id) => store.agentServerConfig(id) })
+  if (!agents.has(DEFAULT_AGENT_ID)) console.warn(`[agents] no ${DEFAULT_AGENT_ID} agent: its plugin is not set up, so sessions cannot start`)
   let mcpAccess: McpAccessStore | undefined
   if (options.mcpDir !== undefined) {
     try {
