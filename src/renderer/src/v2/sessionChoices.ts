@@ -1,15 +1,17 @@
 // What a server window's New session menu offers. This machine's agents are no
-// guide: the server runs the session with its own. A server
-// with `agents` lists them (`server.agents`, fetched by installV2), and the menu
-// offers Default (labelled with the project's llmDefault, else the server's),
-// every agent the server knows, greyed out where it is not installed, "Choose…"
-// over those, and the session types. Until that answer, and for an older
-// server, the 3c-2 interim:
+// guide: the server runs the session with its own. A server with `agents` lists
+// them (`server.agents`, fetched by installV2), and the menu (v2ServerAgents)
+// offers Default (the agent the server would run: the project's llmDefault,
+// else the server's, past one that is off), the agents that are on in the
+// project (one not installed is marked, and may still start), "Choose…" over
+// those, and the session types, greyed out and not started where their agent
+// is off or not on the server. Until that answer, and for a server without
+// `agents` (v2SessionChoices):
 // - Default: no `llm`, the server resolves it (the project's llmDefault, else
 //   the server's own default);
 // - each other agent the project's settings on the server already name
-//   (llmDefault, globalLlm, the session types' agents), known to be wanted;
-// - the project's session types, which are the server's.
+//   (globalLlm, the session types' agents), known to be wanted;
+// - the project's session types, which are the server's, none greyed out.
 // Pure.
 import { agentCatalog, describeAgent, expectedDefault, type AgentCatalog } from '../../../shared/agents/catalog.ts'
 import { CAPABILITY, type ServerAgents } from '../../../shared/protocolV2.ts'
