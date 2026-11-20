@@ -6,7 +6,6 @@ import { StartScreen, type StartView } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { runningMoveDetail } from './v2/moveFlow'
-import { loadLlmSettings, watchLlmSettings } from './llm'
 import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
 import { ThemeHost } from './plugins/ThemeHost'
 import { titleBarForeground } from '../../shared/appearance'
@@ -27,11 +26,6 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (serverWindow) setStartRequest(undefined)
   }, [serverWindow])
-
-  useEffect(() => {
-    void loadLlmSettings()
-    return watchLlmSettings()
-  }, [])
 
   useEffect(() => {
     const unsubscribes = [

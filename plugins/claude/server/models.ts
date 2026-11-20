@@ -1,6 +1,6 @@
 // Local's models from its endpoint (plugins A1b): Ollama's GET /api/tags or LM Studio's GET
-// /v1/models, asked by the server on its own machine for `agents.models`. (The desktop's
-// llm:fetchModels does the same for its own settings until plugins A2.) Only the server config's
+// /v1/models, asked by the server on its own machine for `agents.models`, every client's only
+// source of Local's models since plugins A2a. Only the server config's
 // `baseUrl` is asked: a client names no URL, a redirect is refused, and the request has a limit.
 import { MAX_JSON_BYTES, readBodyCapped } from '../../../src/shared/plugins/server.ts'
 import type { AgentConfig, AgentModel } from '../../../src/shared/plugins/agents.ts'

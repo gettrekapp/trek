@@ -1,5 +1,5 @@
-// What a server window's New session menu offers. This machine's agents and
-// llmSettings are no guide: the server runs the session with its own. A server
+// What a server window's New session menu offers. This machine's agents are no
+// guide: the server runs the session with its own. A server
 // with `agents` lists them (`server.agents`, fetched by installV2), and the menu
 // offers Default (labelled with the project's llmDefault, else the server's),
 // every agent the server knows, greyed out where it is not installed, "Choose…"

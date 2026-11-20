@@ -3,7 +3,7 @@ import { pathBaseName } from '../../shared/pathName'
 import { OFF_VIEW, type BotEvent, type BotView } from '../../shared/bot'
 import type { BotSettings } from '../../shared/types'
 import { hostKey, sameWorktree } from '../../shared/types'
-import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
+import type { LlmSelection } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
 import type { SessionContext } from '../../shared/model/types'
@@ -223,8 +223,6 @@ export interface AppState {
   botEvents: BotEvent[]
   /** Open decision requests by terminal id, at most one per terminal. Not persisted. */
   decisions: Record<string, PendingDecision>
-  llmSettings: LlmSettings | null
-  setLlmSettings: (settings: LlmSettings | null) => void
   setProjectLlmDefault: (llm: LlmSelection | undefined) => void
   setGlobalLlm: (llm: LlmSelection | undefined) => void
   setActiveWorktree: (id: string) => void
@@ -366,7 +364,6 @@ export const useAppStore = create<AppState>((set) => ({
   botView: OFF_VIEW,
   botEvents: [],
   decisions: {},
-  llmSettings: null,
 
   setActiveWorktree: (id) =>
     set((state) => {
@@ -421,7 +418,6 @@ export const useAppStore = create<AppState>((set) => ({
   setBotSettings: (bot) =>
     set((state) => (state.project ? { project: { ...state.project, bot } } : state)),
 
-  setLlmSettings: (llmSettings) => set({ llmSettings }),
 
 
   // The project setters call the server window's (projectSetters.ts), each by its own name.

@@ -7,7 +7,6 @@ import { useAppStore } from '../renderer/src/store'
 import { ServerProjectWindow } from '../renderer/src/v2/ServerProjectWindow'
 import { connectServerEntry } from '../renderer/src/v2/serverClients'
 import { requestSessionSelect, watchAttention } from '../renderer/src/attentionSelect'
-import { loadLlmSettings } from '../renderer/src/llm'
 import { PluginRuntimes, PluginSlot } from '../renderer/src/plugins/PluginHost'
 import { ThemeHost } from '../renderer/src/plugins/ThemeHost'
 import { titleBarForeground } from '../shared/appearance'
@@ -47,7 +46,6 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
 
 
   useEffect(() => {
-    void loadLlmSettings()
     return watchAttention()
   }, [])
 

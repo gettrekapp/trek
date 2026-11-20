@@ -14,8 +14,6 @@
 import { createAttention, type AttentionSource } from '../main/attention.ts'
 import { dismissRequest } from '../main/attentionRules.ts'
 import { DEFAULT_APP_SETTINGS, parseAppSettings, type AppSettings, type AppSettingsPatch } from '../shared/appSettings.ts'
-import { mergeLlmSettings } from '../shared/providers/settings.ts'
-import { DEFAULT_LLM_SETTINGS, type LlmSettings } from '../shared/providers/types.ts'
 import type { AppServerLink, AppServersChanged, AttentionChanged, AttentionItem } from '../shared/types.ts'
 import type { RendererApi } from '../preload/index'
 import { browserRelay, socketUrl, type BrowserSocketClass } from './browserRelay.ts'
@@ -113,8 +111,6 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
   let appSettings = readAppSettings()
   const appSettingsListeners = new Set<(s: AppSettings) => void>()
 
-  let llm: LlmSettings = DEFAULT_LLM_SETTINGS
-
   const api: RendererApi = {
     openProjectPath: refuse,
     importTrekproj: refuse,
@@ -137,10 +133,6 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     revealInFinder: refuse,
     getAlertSound: async () => null,
     secretStorage: async () => 'encrypted',
-    llmGetSettings: async () => llm,
-    llmUpdateSettings: async (patch) => (llm = mergeLlmSettings(llm, patch)),
-    onLlmSettingsChanged: none,
-    llmFetchModels: refuse,
     appServers: {
       list: async () => [{ id: WEB_ENTRY_ID, name: entry().name, url: '', hasToken: true }],
       save: refuse,

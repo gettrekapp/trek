@@ -13,7 +13,6 @@ import type {
   RecentEntry,
 } from '../shared/types'
 import type { PhoneAccess } from '../shared/protocolV2'
-import type { LlmSettings, LlmSettingsPatch, LocalBackend, ModelInfo } from '../shared/providers/types'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => callback(payload)
@@ -60,16 +59,6 @@ const api = {
   getAlertSound: (): Promise<Uint8Array | null> => ipcRenderer.invoke('app:getAlertSound'),
   /** How saved server tokens are kept on this computer: 'unencrypted' on Linux without a keyring. */
   secretStorage: (): Promise<'encrypted' | 'unencrypted'> => ipcRenderer.invoke('app:secretStorage'),
-
-
-  // Agent CLIs — app-wide defaults and local model lists
-  llmGetSettings: (): Promise<LlmSettings> => ipcRenderer.invoke('llm:getSettings'),
-  llmUpdateSettings: (patch: LlmSettingsPatch): Promise<LlmSettings> =>
-    ipcRenderer.invoke('llm:updateSettings', patch),
-  onLlmSettingsChanged: (callback: (settings: LlmSettings) => void): (() => void) =>
-    subscribe('llm:changed', callback),
-  llmFetchModels: (backend: LocalBackend, baseUrl: string): Promise<ModelInfo[]> =>
-    ipcRenderer.invoke('llm:fetchModels', backend, baseUrl),
 
 
   // App-wide trek-servers (protocol v2). Tokens can be set, never read.

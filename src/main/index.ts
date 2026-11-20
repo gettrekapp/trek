@@ -31,7 +31,6 @@ import {
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
 import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandlers } from './importUi'
-import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
 import { appUpdatesEnabled, requestAppUpdateCheck, startAppUpdates } from './appUpdate'
@@ -270,7 +269,6 @@ app.whenReady().then(async () => {
   registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
   registerV2Relay()
   registerLocalServerHandlers()
-  registerLlmHandlers()
   startAppUpdates({ prepareQuit })
   buildMenu()
   onLocalServerChanged(buildMenu)
