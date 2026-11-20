@@ -68,7 +68,7 @@ async function exchange(rpc: Rpc, clientVersion: string): Promise<McpToolInfo[]>
 /** The server's tools. Rejects with a message fit to show when it cannot be asked. */
 export async function listServerTools(spec: ServerSpec, options: ListOptions = {}): Promise<McpToolInfo[]> {
   if (spec.invalid) throw new Error(spec.invalid)
-  if (spec.unapproved) throw new Error('not approved in Claude Code for this project, so Trek does not start it')
+  if (spec.unapproved) throw new Error(`not approved in ${spec.configuredBy} for this project, so Trek does not start it`)
   if (spec.transport === 'sse') throw new Error('uses the legacy SSE transport, which Trek does not speak')
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const controller = new AbortController()
@@ -211,7 +211,7 @@ function httpRpc(spec: ServerSpec, signal: AbortSignal, fetchFn: typeof fetch): 
     })
     if (res.status === 401 || res.status === 403) {
       await res.body?.cancel().catch(() => {})
-      throw new Error('needs a sign-in (Claude Code signs in with OAuth; Trek cannot)')
+      throw new Error(`needs a sign-in (${spec.configuredBy} signs in with OAuth; Trek cannot)`)
     }
     if (!res.ok) {
       await res.body?.cancel().catch(() => {})

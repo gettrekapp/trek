@@ -113,11 +113,7 @@ const ALLOWED = [
   // MCP prose: promote_to_primary's description says which sessions follow the branch (the agents with history.migrate).
   { file: 'server/src/mcp/tools.ts', line: /^"Ask the user to promote a worktree to the primary checkout: .*Its Claude and local-model sessions move to the main checkout and resume; others are closed\./ },
   // MCP prose: the queued prompt a promoted session reads afterwards, in the same words as the description.
-  { file: 'server/src/mcp/tools.ts', line: /^\? `The promote you asked for \(promote_to_primary\) went through: .*the worktree's Claude and local-model sessions/ },
-  // The external MCP client starts the servers Claude Code's config names (the claude plugin lists them, Task 13);
-  // its errors tell the user where the approval and the sign-in live. It runs no agent and reads no agent folder.
-  { file: 'server/src/mcp/externalClient.ts', line: /^if \(spec\.unapproved\) throw new Error\('not approved in Claude Code for this project, so Trek does not start it'\)$/ },
-  { file: 'server/src/mcp/externalClient.ts', line: /^throw new Error\('needs a sign-in \(Claude Code signs in with OAuth; Trek cannot\)'\)$/ }
+  { file: 'server/src/mcp/tools.ts', line: /^\? `The promote you asked for \(promote_to_primary\) went through: .*the worktree's Claude and local-model sessions/ }
 ]
 
 /**

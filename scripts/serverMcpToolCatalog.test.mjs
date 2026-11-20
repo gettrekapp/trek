@@ -109,7 +109,7 @@ test('readConfigSources: missing or broken files read as none', async (t) => {
   assert.deepEqual(configuredServers(sources), [])
 })
 
-const fakeSpec = (mode, extra = {}) => ({ name: 'fake', scope: 'user', transport: 'stdio', command: process.execPath, args: [FAKE, mode], ...extra })
+const fakeSpec = (mode, extra = {}) => ({ name: 'fake', scope: 'user', transport: 'stdio', configuredBy: 'Claude Code', command: process.execPath, args: [FAKE, mode], ...extra })
 
 test('stdio: initialize then every page of tools/list; log lines and notifications skipped; cwd and env passed', async (t) => {
   const cwd = tempDir(t)
@@ -128,7 +128,8 @@ test('stdio: a server that exits says so with its stderr; an RPC error and a han
 })
 
 test('not started: an unapproved, malformed or legacy SSE server', async () => {
-  await assert.rejects(listServerTools({ ...fakeSpec('ok'), unapproved: true }), /not approved/)
+  await assert.rejects(listServerTools({ ...fakeSpec('ok'), unapproved: true }), { message: 'not approved in Claude Code for this project, so Trek does not start it' })
+  await assert.rejects(listServerTools({ ...fakeSpec('ok'), configuredBy: 'Other Agent', unapproved: true }), { message: 'not approved in Other Agent for this project, so Trek does not start it' }, 'the agent that configured it, by its label')
   await assert.rejects(listServerTools({ name: 'x', scope: 'user', transport: 'stdio', invalid: 'its config has no command' }), /no command/)
   await assert.rejects(listServerTools({ name: 'x', scope: 'user', transport: 'sse', url: 'http://127.0.0.1:1' }), /legacy SSE/)
 })
@@ -178,7 +179,8 @@ test('http: JSON and SSE replies, the session id and negotiated version sent bac
 
 test('http: a server that wants a sign-in says so; another failure names its status', async (t) => {
   const signIn = await httpServer(t, { status: 401 })
-  await assert.rejects(listServerTools({ name: 'h', scope: 'user', transport: 'http', url: signIn.url }), /needs a sign-in/)
+  await assert.rejects(listServerTools({ name: 'h', scope: 'user', transport: 'http', url: signIn.url, configuredBy: 'Claude Code' }), { message: 'needs a sign-in (Claude Code signs in with OAuth; Trek cannot)' })
+  await assert.rejects(listServerTools({ name: 'h', scope: 'user', transport: 'http', url: signIn.url, configuredBy: 'Other Agent' }), { message: 'needs a sign-in (Other Agent signs in with OAuth; Trek cannot)' })
   const broken = await httpServer(t, { status: 500 })
   await assert.rejects(listServerTools({ name: 'h', scope: 'user', transport: 'http', url: broken.url }), /HTTP 500/)
 })

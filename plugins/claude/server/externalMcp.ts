@@ -13,7 +13,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ExternalMcpServer, McpServerScope } from '../../../src/shared/plugins/agents.ts'
 
-export type ServerSpec = ExternalMcpServer
+/** A server as Claude Code's config names it; the plugin adds `configuredBy` (index.ts). */
+export type ServerSpec = Omit<ExternalMcpServer, 'configuredBy'>
 
 /** The most servers taken from the config, and the largest config file read */
 export const MAX_SERVERS = 50

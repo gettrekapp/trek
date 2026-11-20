@@ -141,6 +141,11 @@ export interface ExternalMcpServer {
   headers?: Record<string, string>
   /** The project path whose config named it (local and project scopes): a stdio server runs there */
   cwd?: string
+  /**
+   * Who configured it, as the user knows them (the claude plugin's: 'Claude Code'): core's errors
+   * name it where the approval and the sign-in live
+   */
+  configuredBy: string
   /** A project server the agent was never told to run: listed, not started */
   unapproved?: boolean
   /** The entry is malformed: listed with this error, not started */

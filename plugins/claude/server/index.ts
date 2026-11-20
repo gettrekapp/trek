@@ -18,7 +18,9 @@ export const claudeServerPlugin = defineServerPlugin({
         ...claudeAgent,
         history: claudeHistory,
         skills: (worktreePath) => listSkills(worktreePath),
-        externalMcpServers: async (projectPaths) => configuredServers(await readConfigSources(projectPaths))
+        // Claude Code's config names them, so core's errors send the user there.
+        externalMcpServers: async (projectPaths) =>
+          configuredServers(await readConfigSources(projectPaths)).map((spec) => ({ ...spec, configuredBy: 'Claude Code' }))
       },
       { ...localAgent, history: localHistory, listModels: (config, signal) => listLocalModels(config, signal) }
     ]
