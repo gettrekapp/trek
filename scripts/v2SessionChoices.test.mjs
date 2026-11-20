@@ -5,6 +5,7 @@ import {
   SERVER_DEFAULT_LABEL,
   agentsFetchKey,
   agentsRetryDelay,
+  agentsSettingsKey,
   agentsStale,
   createPickMemory,
   serverFirstPick,
@@ -12,6 +13,7 @@ import {
   v2ServerAgents,
   v2SessionChoices
 } from '../src/renderer/src/v2/sessionChoices.ts'
+import { agentCatalog } from '../src/shared/agents/catalog.ts'
 
 const type = (id, llm) => ({ id, name: id, systemPrompt: '', ...(llm ? { llm } : {}) })
 
@@ -50,9 +52,9 @@ test("with the server's list: Default is the project's default, else the server'
   const choices = v2ServerAgents({}, listed)
   assert.equal(choices.defaultLabel, 'Codex')
   assert.deepEqual(choices.agents, [
-    { llm: { provider: 'claude' }, label: 'Claude', installed: true },
-    { llm: { provider: 'codex' }, label: 'Codex', installed: true },
-    { llm: { provider: 'gemini' }, label: 'Gemini', installed: false }
+    { llm: { provider: 'claude' }, label: 'Claude', glyph: 'CL', installed: true },
+    { llm: { provider: 'codex' }, label: 'Codex', glyph: 'CX', installed: true },
+    { llm: { provider: 'gemini' }, label: 'Gemini', glyph: 'GM', installed: false }
   ])
   assert.deepEqual(choices.providers, ['claude', 'codex', 'gemini'])
   assert.equal(v2ServerAgents({ llmDefault: { provider: 'claude', model: 'opus' } }, listed).defaultLabel, 'Claude · opus')
@@ -66,14 +68,41 @@ test("the Global bar with the server's default resolves as the server does: past
   assert.equal(v2GlobalLabel({ globalLlm: { provider: 'grok' } }, { provider: 'grok' }), 'Claude')
 })
 
-test('server.agents is asked once the link is up, with the capability, and again when claudeCommand changes', () => {
+test("server.agents is asked once the link is up, with the capability, and again when the project's plugins or their settings change", () => {
   const up = { link: 'connected', hasProject: true, capabilities: ['agents'] }
   assert.equal(agentsFetchKey(up), '')
-  assert.equal(agentsFetchKey({ ...up, claudeCommand: ' my-claude ' }), 'my-claude')
+  assert.equal(agentsFetchKey({ ...up, settingsKey: 'k1' }), 'k1')
   assert.equal(agentsFetchKey({ ...up, link: 'disconnected' }), null)
   assert.equal(agentsFetchKey({ ...up, hasProject: false }), null)
   assert.equal(agentsFetchKey({ ...up, capabilities: ['mcp'] }), null)
   assert.equal(agentsFetchKey({ ...up, capabilities: undefined }), null)
+})
+
+test("agentsSettingsKey: the project's plugin switches and the plugins' own settings, nothing else", () => {
+  const keys = ['claudeCommand', 'linearWorkspace']
+  const base = { name: 'p', claudeCommand: ' my-claude ', titleBarColor: '#111', plugins: { codex: { enabled: false }, voice: { enabled: true } } }
+  const key = agentsSettingsKey(base, keys)
+  assert.equal(agentsSettingsKey({ ...base, titleBarColor: '#222' }, keys), key, 'a core setting is not part of it')
+  assert.equal(agentsSettingsKey({ ...base, plugins: { voice: { enabled: true }, codex: { enabled: false } } }, keys), key, 'order does not matter')
+  assert.notEqual(agentsSettingsKey({ ...base, plugins: { ...base.plugins, codex: { enabled: true } } }, keys), key, 'an agent plugin switched on')
+  assert.notEqual(agentsSettingsKey({ ...base, claudeCommand: 'other' }, keys), key, "a plugin's project setting")
+  assert.equal(agentsSettingsKey({ ...base, claudeCommand: 'my-claude' }, keys), key, 'trimmed')
+  assert.equal(agentsSettingsKey(null, keys), '')
+})
+
+test('with agentInfo: only the agents on in the project are offered, and Default passes over an off one as the server does', () => {
+  const server = {
+    llmDefault: { provider: 'codex' },
+    agents: [
+      { provider: 'claude', label: 'Claude', installed: true, glyph: 'CL', plugin: 'claude', capabilities: { presetSessionId: true, resume: true, mcp: true, appendSystemPrompt: true, effort: true, addDirs: true, sessionMigration: true }, models: [], efforts: [], approvalModes: [], listsModels: false, on: true },
+      { provider: 'codex', label: 'Codex', installed: true, glyph: 'CX', plugin: 'codex', capabilities: { presetSessionId: false, resume: true, mcp: true, appendSystemPrompt: true, effort: true, addDirs: true, sessionMigration: false }, models: [], efforts: [], approvalModes: [], listsModels: false, on: false }
+    ]
+  }
+  const choices = v2ServerAgents({}, server)
+  assert.deepEqual(choices.agents.map((a) => a.label), ['Claude'])
+  assert.deepEqual(choices.providers, ['claude'])
+  assert.equal(choices.defaultLabel, 'Claude', "the server's default (codex) is off: it passes it over")
+  assert.equal(v2GlobalLabel({ globalLlm: { provider: 'codex' } }, server.llmDefault, agentCatalog(server)), 'Claude')
 })
 
 test("server.agents goes stale once the link is up with a server that has no agents", () => {

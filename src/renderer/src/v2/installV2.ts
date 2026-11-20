@@ -18,7 +18,8 @@ import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { cancelTeardown, requestTeardown } from './teardownPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { requestSessionSelect } from '../attentionSelect'
-import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
+import { agentsFetchKey, agentsRetryDelay, agentsSettingsKey, agentsStale } from './sessionChoices'
+import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
 import { v2SettingsOverrides, type SettingsRequests } from './settingsOverrides'
@@ -30,6 +31,9 @@ import { subscribeBackend, type WindowBackend } from '../backend'
 import { LEGACY_ENV_PLUGIN } from '../../../shared/legacyEnvFields.ts'
 import type { AppState } from '../store'
 import type { Project } from '../../../shared/model/types'
+
+/** Every built-in plugin's project setting keys: the agents' (an agent's command) among them (plugins A2) */
+const PLUGIN_PROJECT_KEYS = BUILTIN_CLIENT_PLUGINS.flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
 
 export interface V2Window {
   entryId: string
@@ -261,7 +265,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
 
   // server.agents, for the New session menu and the Global bar: slow the first time (a login
   // shell per program on the server), so asked when the link comes up rather than when a menu
-  // opens, and again on each reconnect and claudeCommand edit (agentsFetchKey). The last answer
+  // opens, and again on each reconnect and each change of the project's plugin switches or plugin settings (agentsFetchKey). The last answer
   // stays meanwhile, unless the server came back without `agents` (agentsStale). A failed one is
   // asked again after a short back-off (agentsRetryDelay), then not until the key changes.
   let agentsKey: string | null = null
@@ -291,7 +295,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       link: state.serverLink,
       hasProject: state.project !== null,
       capabilities,
-      claudeCommand: state.project?.claudeCommand
+      settingsKey: agentsSettingsKey(state.project, PLUGIN_PROJECT_KEYS)
     })
     if (key === agentsKey) return
     agentsKey = key

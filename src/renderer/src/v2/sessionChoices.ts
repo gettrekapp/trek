@@ -11,7 +11,7 @@
 //   (llmDefault, globalLlm, the session types' agents), known to be wanted;
 // - the project's session types, which are the server's.
 // Pure.
-import { describeLlm, resolveGlobalLlm } from '../../../shared/providers/selection.ts'
+import { agentCatalog, describeAgent, expectedDefault, type AgentCatalog } from '../../../shared/agents/catalog.ts'
 import { CAPABILITY, type ServerAgents } from '../../../shared/protocolV2.ts'
 import type { ConnectionStatus } from '../../../shared/client/connection'
 import type { LlmProviderId, LlmSelection } from '../../../shared/providers/types'
@@ -32,13 +32,13 @@ export interface V2SessionChoices {
 
 export const SERVER_DEFAULT_LABEL = "The server's default agent"
 
-export function v2SessionChoices(settings: V2ProjectLlms): V2SessionChoices {
-  const defaultLabel = settings.llmDefault ? describeLlm(settings.llmDefault) : SERVER_DEFAULT_LABEL
+export function v2SessionChoices(settings: V2ProjectLlms, catalog: AgentCatalog = agentCatalog(null)): V2SessionChoices {
+  const defaultLabel = settings.llmDefault ? describeAgent(settings.llmDefault, catalog) : SERVER_DEFAULT_LABEL
   const seen = new Set([defaultLabel])
   const picks: LlmSelection[] = []
   for (const llm of [settings.globalLlm, ...(settings.sessionTypes ?? []).map((t) => t.llm)]) {
     if (!llm) continue
-    const label = describeLlm(llm)
+    const label = describeAgent(llm, catalog)
     if (seen.has(label)) continue
     seen.add(label)
     picks.push(llm)
@@ -47,33 +47,33 @@ export function v2SessionChoices(settings: V2ProjectLlms): V2SessionChoices {
 }
 
 export interface V2ServerAgentChoices {
-  /** The Default entry's description: the project's llmDefault, else the server's */
+  /** The Default entry's description: the agent the server would run (the project's default, else its own, past one that is off) */
   defaultLabel: string
-  /** Every agent the server knows, in its order: a one-off pick each, with its default model */
-  agents: { llm: LlmSelection; label: string; installed: boolean }[]
-  /** The providers "Choose…" offers */
+  /** The agents a new session can use (on in the project), in the server's order: a one-off pick each, with its default model */
+  agents: { llm: LlmSelection; label: string; glyph: string; installed: boolean }[]
+  /** The agents "Choose…" offers */
   providers: LlmProviderId[]
 }
 
 /** The menu over the server's list (`server.agents`). `installed` is a hint: an agent it misses may still start. */
-export function v2ServerAgents(settings: Pick<V2ProjectLlms, 'llmDefault'>, server: ServerAgents): V2ServerAgentChoices {
+export function v2ServerAgents(settings: Pick<V2ProjectLlms, 'llmDefault'>, server: ServerAgents, catalog: AgentCatalog = agentCatalog(server)): V2ServerAgentChoices {
   return {
-    defaultLabel: describeLlm(settings.llmDefault ?? server.llmDefault),
-    agents: server.agents.map((a) => ({ llm: { provider: a.provider }, label: a.label, installed: a.installed })),
-    providers: server.agents.map((a) => a.provider)
+    defaultLabel: describeAgent(expectedDefault(settings, server.llmDefault, catalog, false), catalog),
+    agents: catalog.offered.map((a) => ({ llm: { provider: a.id }, label: a.label, glyph: a.glyph, installed: a.installed })),
+    providers: catalog.offered.map((a) => a.id)
   }
 }
 
 /**
  * The Global panel's agent, for its bar. With the server's default
  * (`server.agents`), as the server resolves it: the project's globalLlm, else
- * its llmDefault, else the server's, past any without MCP tools. Without it:
- * the project's globalLlm, else its default, else "server default".
+ * its llmDefault, else the server's, past any without MCP tools or turned off.
+ * Without it: the project's globalLlm, else its default, else "server default".
  */
-export function v2GlobalLabel(settings: V2ProjectLlms, serverDefault?: LlmSelection): string {
-  if (serverDefault) return describeLlm(resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault))
+export function v2GlobalLabel(settings: V2ProjectLlms, serverDefault?: LlmSelection, catalog: AgentCatalog = agentCatalog(null)): string {
+  if (serverDefault) return describeAgent(expectedDefault(settings, serverDefault, catalog, true), catalog)
   const llm = settings.globalLlm ?? settings.llmDefault
-  return llm ? describeLlm(llm) : 'server default'
+  return llm ? describeAgent(llm, catalog) : 'server default'
 }
 
 export interface AgentsFetchState {
@@ -81,18 +81,33 @@ export interface AgentsFetchState {
   hasProject: boolean
   /** The welcome's; undefined before the first one */
   capabilities: readonly string[] | undefined
-  claudeCommand?: string
+  /** agentsSettingsKey of the project: what the answer depends on in its settings */
+  settingsKey?: string
 }
 
 /**
  * What the window's `server.agents` answer depends on, or null while it cannot
  * ask: the link is down, no project has arrived, or the server has no `agents`.
- * A new key asks again: a reconnect, or an edit of the project's claudeCommand
- * (Claude's command on the server, the one `installed` checks).
+ * A new key asks again: a reconnect, or an edit of the project's settings the
+ * answer reads (agentsSettingsKey).
  */
 export function agentsFetchKey(state: AgentsFetchState): string | null {
   if (state.link !== 'connected' || !state.hasProject || !state.capabilities?.includes(CAPABILITY.agents)) return null
-  return state.claudeCommand?.trim() ?? ''
+  return state.settingsKey ?? ''
+}
+
+/**
+ * The project's settings `server.agents` reads, as one string (plugins A2): its `plugins` switches
+ * (each agent's `on`) and the values of the keys the plugins own (`pluginKeys`: an agent's command,
+ * which `installed` checks), trimmed. Nothing else, so a core edit never asks again.
+ */
+export function agentsSettingsKey(project: object | null | undefined, pluginKeys: readonly string[]): string {
+  if (!project) return ''
+  const fields = project as Record<string, unknown>
+  const plugins = fields.plugins && typeof fields.plugins === 'object' ? (fields.plugins as Record<string, { enabled?: unknown }>) : {}
+  const switches = Object.keys(plugins).sort().map((id) => [id, plugins[id]?.enabled ?? null])
+  const values = [...pluginKeys].sort().map((key) => [key, typeof fields[key] === 'string' ? (fields[key] as string).trim() : null])
+  return JSON.stringify([switches, values])
 }
 
 /**
