@@ -2,8 +2,12 @@
 // the project settings the claude plugin owns, their MCP files and Claude's Global role.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 import { PLUGIN_OWNED_SETTINGS, applySettingsPatch, isSettingsKey } from '../server/src/projects/settings.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const quiet = { info() {}, warn() {} }
 /** An agent plugin's agents, set up with a host that only logs (they use nothing else of it; the other built-ins do, so they are not set up here). */
@@ -47,4 +51,27 @@ test("Claude has its own Global role; the others get core's", () => {
   const agents = agentPlugins.flatMap(agentsOf)
   assert.match(agents.find((a) => a.id === 'claude').globalPrompt(), /^You are the global Claude session of Trek Dev/)
   for (const id of ['local', 'codex', 'gemini', 'grok']) assert.equal(agents.find((a) => a.id === id).globalPrompt, undefined, id)
+})
+
+test("codex: discoverSessionId finds the rollout its launch made under $CODEX_HOME/sessions, not an excluded one", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'trek-codex-home-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'trek-codex-cwd-'))
+  const before = process.env.CODEX_HOME
+  process.env.CODEX_HOME = home
+  t.after(() => {
+    if (before === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = before
+    removeDir(home)
+    removeDir(cwd)
+  })
+  const now = new Date()
+  const day = join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'))
+  mkdirSync(day, { recursive: true })
+  const meta = (id) => `${JSON.stringify({ type: 'session_meta', payload: { id, cwd, timestamp: now.toISOString() } })}\n`
+  writeFileSync(join(day, 'rollout-a.jsonl'), meta('taken'))
+  writeFileSync(join(day, 'rollout-b.jsonl'), meta('fresh-id'))
+  const codex = agentsOf(BUILTIN_SERVER_PLUGINS.find((p) => p.manifest.id === 'codex'))[0]
+  assert.equal(await codex.discoverSessionId({ cwd, ageMs: 5000, exclude: ['taken'] }), 'fresh-id')
+  const others = agentPlugins.flatMap(agentsOf).filter((a) => a.discoverSessionId).map((a) => a.id)
+  assert.deepEqual(others, ['codex'], 'only Codex picks its own ids')
 })

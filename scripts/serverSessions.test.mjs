@@ -99,8 +99,8 @@ function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linu
   const sessions = new SessionManager({
     projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists, platform,
     agents: agents(store),
-    discover: async (cwd, ageMs, exclude) => {
-      discoveries.push({ cwd, ageMs, exclude })
+    discover: async (cwd, ageMs, exclude, agentId) => {
+      discoveries.push({ cwd, ageMs, exclude, agentId })
       const next = sessions.__nextDiscovery
       return typeof next === 'function' ? next() : next
     },
@@ -1460,4 +1460,12 @@ test('the automation scheduler against a real SessionManager: the first run open
   assert.equal(s.spawned[0].killed, true)
   assert.doesNotMatch(cmd(s.spawned[1]), /--resume/)
   assert.match(cmd(s.spawned[1]), /'p'$/)
+})
+
+test("discovery (plugins A1) polls with the session's agent", async (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+  const poll = s.scheduled.filter((job) => !job.cancelled).at(-1)
+  await poll.fn()
+  assert.equal(s.discoveries.at(-1).agentId, 'codex')
 })

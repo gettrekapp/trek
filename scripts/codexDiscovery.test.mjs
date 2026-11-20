@@ -8,7 +8,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { commandExists, discoverCodexSession } from '../src/host/agentService.ts'
+import { commandExists } from '../src/host/agentService.ts'
+import { discoverCodexSession } from '../plugins/codex/server/discovery.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const pad = (n) => String(n).padStart(2, '0')

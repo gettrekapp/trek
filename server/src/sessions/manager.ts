@@ -2,7 +2,6 @@
 // ProjectState.apply); their ptys live in a TerminalHost. Every agent command
 // line is built here, never by a client.
 import { randomUUID } from 'node:crypto'
-import { discoverCodexSession } from '../../../src/host/agentService.ts'
 import type { AttentionTopic } from '../../../src/shared/model/topics'
 import type { Project, Session, SessionContext, SessionStatus, Worktree } from '../../../src/shared/model/types'
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
@@ -53,7 +52,8 @@ export interface SessionManagerDeps {
   /** Where the `attention` topic is published; without it the topic is not published */
   hub?: TopicHub
   spawner?: PtySpawner
-  discover?: (cwd: string, ageMs: number, exclude: string[]) => Promise<string | undefined>
+  /** Tests: stands in for the session's agent's discoverSessionId (plugins A1) */
+  discover?: (cwd: string, ageMs: number, exclude: string[], agentId: string) => Promise<string | undefined>
   schedule?: (fn: () => void | Promise<void>, ms: number) => ScheduledJob
   newId?: () => string
   now?: () => number
@@ -103,6 +103,8 @@ function requireSize(p: any): { cols: number; rows: number } {
 interface PendingDiscovery {
   projectId: string
   sessionId: string
+  /** The agent whose discoverSessionId finds its id */
+  agentId: string
   /** Unset for a Global session */
   repoId?: string
   cwd: string
@@ -154,7 +156,9 @@ export class SessionManager {
     this.agentRegistry = deps.agents
     this.newId = deps.newId ?? randomUUID
     this.now = deps.now ?? Date.now
-    this.discover = deps.discover ?? discoverCodexSession
+    this.discover =
+      deps.discover ??
+      ((cwd, ageMs, exclude, agentId) => this.deps.agents.get(agentId).discoverSessionId?.({ cwd, ageMs, exclude }) ?? Promise.resolve(undefined))
     const platform = deps.platform ?? process.platform
     this.probe = new CommandProbe(deps.commandExists ?? ((binary) => platformCommandExists(binary, platform)), this.now)
     this.schedule =
@@ -811,7 +815,7 @@ export class SessionManager {
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
     // not excluded. restart has the same race; automation runs are minutes apart.
     if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume) {
-      this.startDiscovery({ projectId, sessionId, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
+      this.startDiscovery({ projectId, sessionId, agentId: provider.id, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
     }
     return ptyId
   }
@@ -1097,9 +1101,9 @@ export class SessionManager {
     }
     let found: string | undefined
     try {
-      found = await this.discover(claimant.cwd, this.now() - claimant.startedAt, [...this.claimedIds()])
+      found = await this.discover(claimant.cwd, this.now() - claimant.startedAt, [...this.claimedIds()], claimant.agentId)
     } catch (err) {
-      console.warn(`codex session discovery in ${claimant.cwd} failed`, err)
+      console.warn(`session id discovery in ${claimant.cwd} failed`, err)
     }
     if (!current()) return
     // A throw below must not end the loop: the folder's other sessions still wait for ids.
@@ -1116,7 +1120,7 @@ export class SessionManager {
         }
       }
     } catch (err) {
-      console.warn(`codex session discovery in ${claimant.cwd}: applying the result failed`, err)
+      console.warn(`session id discovery in ${claimant.cwd}: applying the result failed`, err)
     } finally {
       if (current()) this.scheduleLoop(folder)
     }
