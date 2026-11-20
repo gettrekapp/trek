@@ -8,6 +8,7 @@ import {
   agentsSettingsKey,
   agentsStale,
   windowAgentsKey,
+  pluginProjectKeys,
   createPickMemory,
   serverFirstPick,
   v2GlobalLabel,
@@ -15,6 +16,12 @@ import {
   v2SessionChoices
 } from '../src/renderer/src/v2/sessionChoices.ts'
 import { agentCatalog } from '../src/shared/agents/catalog.ts'
+import { readFileSync } from 'node:fs'
+// builtin.client.ts pulls in .tsx client halves, which plain Node can't load: the agent halves alone.
+import { claudeClientPlugin } from '../plugins/claude/client/index.ts'
+import { codexClientPlugin } from '../plugins/codex/client/index.ts'
+import { geminiClientPlugin } from '../plugins/gemini/client/index.ts'
+import { grokClientPlugin } from '../plugins/grok/client/index.ts'
 
 const type = (id, llm) => ({ id, name: id, systemPrompt: '', ...(llm ? { llm } : {}) })
 
@@ -105,6 +112,21 @@ test("the window's key reads the server-held project, not the store's: a pending
   assert.notEqual(windowAgentsKey(up, confirmed, keys), before)
   assert.equal(windowAgentsKey({ ...up, link: 'disconnected' }, confirmed, keys), null)
   assert.equal(windowAgentsKey(up, undefined, keys), '', 'no server-held project yet: the bare key')
+})
+
+test("the claude half's project settings are in the window's key: a confirmed claudeCommand edit asks server.agents again (plugins A2)", () => {
+  const builtin = readFileSync(new URL('../plugins/builtin.client.ts', import.meta.url), 'utf8')
+  for (const name of ['claudeClientPlugin', 'codexClientPlugin', 'geminiClientPlugin', 'grokClientPlugin']) {
+    assert.match(builtin, new RegExp(`BUILTIN_CLIENT_PLUGINS[^=]*=[^\\]]*\\b${name}\\b`), `${name} is registered`)
+  }
+  const keys = pluginProjectKeys([claudeClientPlugin, codexClientPlugin, geminiClientPlugin, grokClientPlugin])
+  for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(keys.includes(key), key)
+  const up = { link: 'connected', hasProject: true, capabilities: ['agents'] }
+  const held = { id: 'p1', name: 'p', settings: { claudeCommand: 'claude' }, repositories: [], globalSessions: [] }
+  const before = windowAgentsKey(up, held, keys)
+  const confirmed = { ...held, settings: { ...held.settings, claudeCommand: 'my-claude' } }
+  assert.notEqual(windowAgentsKey(up, confirmed, keys), before, 'the confirmed edit changes the key')
+  assert.equal(windowAgentsKey(up, { ...held, settings: { ...held.settings, titleBarColor: '#222' } }, keys), before, 'a core edit does not')
 })
 
 test('with agentInfo: only the agents on in the project are offered, and Default passes over an off one as the server does', () => {

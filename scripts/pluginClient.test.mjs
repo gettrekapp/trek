@@ -4,7 +4,7 @@
 // older server), per-app prefs and whether it still serves the window.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { changedFor, forProject, pluginActive, pluginStatus, withPluginEnabled } from '../src/renderer/src/plugins/presence.ts'
+import { changedFor, forProject, pluginActive, pluginRequired, pluginStatus, withPluginEnabled } from '../src/renderer/src/plugins/presence.ts'
 import { COLIMA_MANIFEST } from '../plugins/colima/manifest.ts'
 import { GITHUB_MANIFEST } from '../plugins/github/manifest.ts'
 import { createClientHost } from '../src/renderer/src/plugins/host.ts'
@@ -354,4 +354,25 @@ test('pluginStatus (plugins A1b): a plugin the server lists as required is on wh
   const welcome = { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: false, required: true }], capabilities: [] }
   assert.equal(pluginStatus(quiet, welcome, { quiet: { enabled: false } }), 'on')
   assert.equal(pluginStatus(quiet, { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: false }], capabilities: [] }, { quiet: { enabled: false } }), 'off', 'not listed so: the setting holds')
+})
+
+const agentPlugin = { id: 'codex', version: '1.0.0', name: 'Codex', description: '', defaultEnabled: true, coreBefore: 'agentInfo' }
+
+test('pluginStatus (plugins A2): a plugin core used to be is legacy on a server that says neither it nor the capability that came with it', () => {
+  // 0.12.0: it lists plugins, and runs the agents in core.
+  assert.equal(pluginStatus(agentPlugin, { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }], capabilities: ['agents'] }, {}), 'legacy')
+  // A server older than plugins.
+  assert.equal(pluginStatus(agentPlugin, { capabilities: ['agents'] }, {}), 'legacy')
+  // From A1b: listed, so on or off by the project.
+  assert.equal(pluginStatus(agentPlugin, { plugins: [{ id: 'codex', version: '1.0.0', defaultEnabled: true }], capabilities: ['agents', 'agentInfo'] }, { codex: { enabled: false } }), 'off')
+  // From A1b, where its setup failed: the server says the capability without the plugin.
+  assert.equal(pluginStatus(agentPlugin, { plugins: [], capabilities: ['agents', 'agentInfo'] }, {}), 'missing')
+})
+
+test('pluginRequired (plugins A2): only from the built-in entry the server lists as required', () => {
+  const welcome = { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: true, required: true }, { id: 'voice', version: '1.0.0', defaultEnabled: true }], capabilities: [] }
+  assert.equal(pluginRequired(quiet, welcome), true)
+  assert.equal(pluginRequired(voice, welcome), false)
+  assert.equal(pluginRequired(quiet, { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: true, required: true, type: 'theme' }], capabilities: [] }), false, "an installed plugin's entry is not the built-in's")
+  assert.equal(pluginRequired(quiet, undefined), false)
 })

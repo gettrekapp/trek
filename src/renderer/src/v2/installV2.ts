@@ -18,7 +18,7 @@ import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { cancelTeardown, requestTeardown } from './teardownPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { requestSessionSelect } from '../attentionSelect'
-import { agentsRetryDelay, agentsStale, windowAgentsKey } from './sessionChoices'
+import { agentsRetryDelay, agentsStale, pluginProjectKeys, windowAgentsKey } from './sessionChoices'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
@@ -32,8 +32,8 @@ import { LEGACY_ENV_PLUGIN } from '../../../shared/legacyEnvFields.ts'
 import type { AppState } from '../store'
 import type { Project } from '../../../shared/model/types'
 
-/** Every built-in plugin's project setting keys: the agents' (an agent's command) among them (plugins A2) */
-const PLUGIN_PROJECT_KEYS = BUILTIN_CLIENT_PLUGINS.flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
+/** Every built-in plugin's project setting keys: the claude half's (claudeCommand, claudeArgs, claudePermissionMode) among them (plugins A2) */
+const PLUGIN_PROJECT_KEYS = pluginProjectKeys(BUILTIN_CLIENT_PLUGINS)
 
 export interface V2Window {
   entryId: string

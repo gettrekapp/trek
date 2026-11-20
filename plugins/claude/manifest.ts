@@ -11,5 +11,7 @@ export const CLAUDE_MANIFEST: PluginManifest = {
   defaultEnabled: true,
   // Claude is every server's fallback agent: the plugin is on in every project (plugins A1b).
   required: true,
-  projectSettings: { claudeCommand: 'string', claudeArgs: 'string', claudePermissionMode: 'string' }
+  projectSettings: { claudeCommand: 'string', claudeArgs: 'string', claudePermissionMode: 'string' },
+  // A server before the agent plugins (0.12.0 and older) ran its agents in core: a client counts it on there (plugins A2).
+  coreBefore: 'agentInfo'
 }

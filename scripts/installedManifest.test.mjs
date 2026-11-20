@@ -174,3 +174,8 @@ test('required (plugins A1b): built-in only; a welcome entry keeps it', () => {
   assert.deepEqual(parsePluginPresence([{ id: 'claude', version: '1.0.0', defaultEnabled: true, required: true }]), [{ id: 'claude', version: '1.0.0', defaultEnabled: true, required: true }])
   assert.deepEqual(parsePluginPresence([{ id: 'x', version: '1.0.0', defaultEnabled: true, required: 'yes' }]), [{ id: 'x', version: '1.0.0', defaultEnabled: true }])
 })
+
+test('coreBefore (plugins A2): built-in only', () => {
+  const pkg = { manifest: { id: 'skin', version: '1.0.0', name: 'Skin', description: 'A skin', defaultEnabled: false, type: 'theme', contract: 1, coreBefore: 'agentInfo' }, client: 'x' }
+  assert.match(checkPluginPackage(pkg).problem, /cannot declare coreBefore/)
+})

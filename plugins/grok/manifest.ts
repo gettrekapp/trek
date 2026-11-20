@@ -7,5 +7,7 @@ export const GROK_MANIFEST: PluginManifest = {
   version: '1.0.0',
   name: 'Grok',
   description: "Run xAI's grok CLI in agent sessions (no resume or MCP tools yet).",
-  defaultEnabled: true
+  defaultEnabled: true,
+  // A server before the agent plugins (0.12.0 and older) ran its agents in core: a client counts it on there (plugins A2).
+  coreBefore: 'agentInfo'
 }

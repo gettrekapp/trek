@@ -44,6 +44,12 @@ export interface PluginManifest {
    * tickets): a client counts it `legacy` (on) there.
    */
   legacyBuiltIn?: true
+  /**
+   * A capability that came with this plugin's extraction from core (plugins A2: the agent plugins'
+   * `agentInfo`). A server that says neither it nor the plugin ran the plugin in core: a client
+   * counts it `legacy` there (on, no switch). Built-in only; a server ignores it.
+   */
+  coreBefore?: string
   /** `theme`: restyles a project window; at most one is active in a window (theme plugins). Absent: a feature plugin. */
   type?: 'theme'
   /** The plugin contract's version its bundle was built for (PLUGIN_CONTRACT_VERSION); required of an installed plugin */
@@ -227,7 +233,7 @@ export interface PluginPackage {
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const MAX_VERSION_CHARS = 64
 /** What only a built-in plugin may declare. */
-const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms', 'required'] as const
+const BUILT_IN_ONLY = ['secrets', 'projectSettings', 'legacyCapability', 'legacyBuiltIn', 'repoSettings', 'branchSettings', 'platforms', 'required', 'coreBefore'] as const
 /** Control characters, and the format ones: bidi overrides, zero-width characters. */
 const UNSEEN_RE = /[\p{Cc}\p{Cf}]/u
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length

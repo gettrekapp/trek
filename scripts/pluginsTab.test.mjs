@@ -80,3 +80,16 @@ test('pluginSwitchLabel: the detail\'s switch names its scope', () => {
   assert.equal(pluginSwitchLabel('missing', 'Towbook'), 'Not available')
   assert.equal(pluginSwitchLabel('legacy', 'Towbook'), 'Always on')
 })
+
+test('a required plugin (plugins A1b): on, its switch locked, its line and words say always on', () => {
+  const [group] = pluginGroups([{ id: 'claude', name: 'Claude Code', status: 'on', required: true }, linear], 'Towbook', false)
+  assert.deepEqual(group.rows.map((r) => [r.id, r.control, r.line]), [['claude', 'disabled', 'Always on'], ['linear', 'switch', null]])
+  assert.equal(pluginSwitchLabel('on', 'Towbook', true), 'Always on')
+  assert.equal(pluginDetailNote('on', { required: true }), "Always on: sessions fall back to its agent, so it can't be turned off.")
+  assert.equal(pluginDetailNote('on'), null)
+})
+
+test('an agent plugin switched off (plugins A2): its agents are hidden for new sessions; running ones keep going', () => {
+  assert.equal(pluginDetailNote('off', { offersAgents: true }), 'Its agents are hidden for new sessions in this project. Sessions already running keep going and can restart. Turn it on to use them again.')
+  assert.equal(pluginDetailNote('off'), 'Turn it on to set it up for this project.')
+})

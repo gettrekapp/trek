@@ -111,6 +111,15 @@ export function agentsSettingsKey(project: object | null | undefined, pluginKeys
 }
 
 /**
+ * Every given plugin's project setting keys (`projectSettings`): what `agentsSettingsKey` reads
+ * besides the switches. Over the built-in client halves, the agents' own keys (the claude half's
+ * `claudeCommand`, which `installed` checks) are among them (plugins A2).
+ */
+export function pluginProjectKeys(plugins: readonly { manifest: { projectSettings?: Readonly<Record<string, unknown>> } }[]): string[] {
+  return plugins.flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
+}
+
+/**
  * The window's `server.agents` key, from the project as the server holds it (the mirror's
  * snapshot), never the store's: the store shows the settings writer's pending edits, and an
  * answer asked for one comes back with the old `on`/`installed`, and nothing would ask again once

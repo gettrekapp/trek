@@ -17,6 +17,7 @@ export interface PluginWelcome {
  *   without: one with legacy capabilities (Colima's `env`) where the server says one of them (core
  *   served it there: before plugins E2, P3 or not); one without (GitHub) where the server predates
  *   plugins P3 (no `prResolve`): GitHub was core in releases 0.3–0.10;
+ *   also a plugin core used to be (its manifest's `coreBefore`, plugins A2: the agents) where the server says neither it nor that capability;
  * - `missing`: the server lists plugins but not this one (too old for it, or its setup failed there:
  *   a P3+ server leaves out a built-in whose setup failed, so a `legacyBuiltIn` one is missing only there);
  * - `unknown`: no welcome yet (or no project).
@@ -35,11 +36,13 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
   if (!welcome) return 'unknown'
   if (!welcome.plugins) {
     const capability = legacyCapabilitiesOf(manifest).some((c) => welcome.capabilities?.includes(c) === true)
-    return capability || manifest.legacyBuiltIn === true ? 'legacy' : 'missing'
+    return capability || manifest.legacyBuiltIn === true || manifest.coreBefore !== undefined ? 'legacy' : 'missing'
   }
   // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
   const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
   if (!listed) {
+    // Core ran it before its extraction (plugins A2: the agents): a server without the capability that came with it.
+    if (manifest.coreBefore !== undefined && welcome.capabilities?.includes(manifest.coreBefore) !== true) return 'legacy'
     if (manifest.legacyBuiltIn !== true) return 'missing'
     // A built-in with legacy capabilities (Colima's `env`, plugins E3): core served it on a server
     // that says one of them without listing it, P3 or not. From E2 on a server says it only through
@@ -58,6 +61,11 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
 
 /** The window mounts the plugin's Runtime and slots. */
 export const pluginActive = (status: PluginStatus): boolean => status === 'on' || status === 'legacy'
+
+/** Whether the server lists the built-in as `required` (plugins A1b): on in every project, its switch locked. */
+export function pluginRequired(manifest: PluginManifest, welcome: PluginWelcome | undefined): boolean {
+  return welcome?.plugins?.some((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined && p.required === true) === true
+}
 
 /** A project's `plugins` setting with one plugin turned on or off (the others kept). */
 export function withPluginEnabled(settings: ProjectPluginSettings | undefined, id: string, enabled: boolean): ProjectPluginSettings {

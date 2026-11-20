@@ -11,13 +11,15 @@ import { SettingNumber, SettingText } from '../components/SettingText'
 import type { ProjectFile, WorktreeInstance } from '../../../shared/types'
 import { createClientHost, type HostDeps } from './host'
 import { cachedRepos } from './projectView'
-import { pluginActive, pluginStatus, type PluginStatus } from './presence'
+import { pluginActive, pluginRequired, pluginStatus, type PluginStatus } from './presence'
 import { sessionsSource, type SessionsSource } from './sessions.ts'
 import { activeSlotEntries } from './slots.ts'
 
 export interface PluginEntry {
   plugin: ClientPlugin
   status: PluginStatus
+  /** The server lists it as required (plugins A1b): its switch is locked on */
+  required: boolean
   host: ClientPluginHost
   /** The React key of the plugin's components: its id and its backend's generation */
   key: string
@@ -153,7 +155,7 @@ export function themeEntry(backend: WindowBackend, plugin: ClientPlugin): Plugin
     }
     byId.set(plugin.manifest.id, host)
   }
-  return { plugin, status: 'on', host, key: `theme:${plugin.manifest.id}:${generationOf(backend)}` }
+  return { plugin, status: 'on', required: false, host, key: `theme:${plugin.manifest.id}:${generationOf(backend)}` }
 }
 
 /** The window's project's linked ticket ids, once each, sorted. */
@@ -176,7 +178,13 @@ export function usePluginEntries(plugins: readonly ClientPlugin[] = BUILTIN_CLIE
   return useMemo(() => {
     // Before the project's settings are in, its on/off is not known: nothing mounts yet.
     const welcome = backend.plugins.projectId && hasProject ? backend.plugins.welcome() : undefined
-    return plugins.map((plugin) => ({ plugin, status: pluginStatus(plugin.manifest, welcome, settings), host: hostFor(backend, plugin), key: `${plugin.manifest.id}:${generationOf(backend)}` }))
+    return plugins.map((plugin) => ({
+      plugin,
+      status: pluginStatus(plugin.manifest, welcome, settings),
+      required: pluginRequired(plugin.manifest, welcome),
+      host: hostFor(backend, plugin),
+      key: `${plugin.manifest.id}:${generationOf(backend)}`
+    }))
     // `key` stands for the welcome, which the backend holds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend, key, hasProject, settings, plugins])
@@ -189,6 +197,7 @@ export function pluginEntriesNow(backend: WindowBackend = getBackend(), plugins:
   return plugins.map((plugin) => ({
     plugin,
     status: pluginStatus(plugin.manifest, welcome, state.project?.plugins),
+    required: pluginRequired(plugin.manifest, welcome),
     host: hostFor(backend, plugin),
     key: `${plugin.manifest.id}:${generationOf(backend)}`
   }))

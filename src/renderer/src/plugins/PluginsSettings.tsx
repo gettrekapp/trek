@@ -5,6 +5,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { useListDetail } from '../components/useListDetail'
 import { getBackend } from '../backend'
+import { useAgentCatalog } from '../agents'
 import { useAppStore } from '../store'
 import { PluginScope, usePluginEntries, type PluginEntry } from './PluginHost'
 import { pluginActive, type PluginStatus } from './presence'
@@ -51,6 +52,9 @@ function PluginIcon({ name, large }: { name: string; large?: true }): React.JSX.
 
 export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element | null {
   const entries = usePluginEntries()
+  // The plugins that offer agents (the server's agentInfo): off, they hide those agents for new sessions.
+  const catalog = useAgentCatalog()
+  const agentPlugins = new Set(catalog.agents.flatMap((a) => (a.plugin ? [a.plugin] : [])))
   const setPluginEnabled = useAppStore((s) => s.setPluginEnabled)
   const projectName = useAppStore((s) => s.project?.name ?? '')
   const pane = useListDetail({ hasSelection: chosen !== null, scroller: '.settings-scroll', selectedRow: '.plugins-row.selected .plugins-row-main' })
@@ -78,7 +82,7 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
   // A server older than plugins: no switches (its plugins are always on), only their sections.
   const legacyServer = getBackend().plugins.welcome()?.plugins === undefined
   const groups = pluginGroups(
-    entries.map((e) => ({ id: e.plugin.manifest.id, name: e.plugin.manifest.name, status: e.status })),
+    entries.map((e) => ({ id: e.plugin.manifest.id, name: e.plugin.manifest.name, status: e.status, required: e.required })),
     projectName,
     legacyServer
   )
@@ -96,8 +100,8 @@ export function PluginsSettings({ chosen, onChoose }: Props): React.JSX.Element 
   }
 
   const Settings = selectedEntry && pluginActive(selectedEntry.status) ? selectedEntry.plugin.slots?.settings : undefined
-  const note = selectedEntry ? pluginDetailNote(selectedEntry.status) : null
-  const switchLabel = selectedRow ? pluginSwitchLabel(selectedRow.status, projectName) : ''
+  const note = selectedEntry ? pluginDetailNote(selectedEntry.status, { required: selectedEntry.required, offersAgents: agentPlugins.has(selectedEntry.plugin.manifest.id) }) : null
+  const switchLabel = selectedRow ? pluginSwitchLabel(selectedRow.status, projectName, selectedEntry?.required === true) : ''
   // A label only around a switch that works: with none, or a disabled one, the words are not a control's.
   const working = selectedRow?.control === 'switch'
   const SwitchWrap = working ? 'label' : 'div'
