@@ -2,7 +2,7 @@
 // and a saved choice that is not among them. Pure: LlmPicker renders it; scripts/agentPicker.test.mjs runs it.
 import { expectedDefault, type AgentCatalog, type ClientAgent } from '../../shared/agents/catalog.ts'
 import { DEFAULT_AGENT_ID } from '../../shared/plugins/agents.ts'
-import type { AgentSelection } from '../../shared/agents/selection.ts'
+import { effortsOf, type AgentSelection } from '../../shared/agents/selection.ts'
 
 export interface PickerAgent {
   id: string
@@ -20,6 +20,14 @@ export function pickerAgents(value: AgentSelection, catalog: AgentCatalog, offer
   const agent = catalog.get(value.provider)
   const why = !agent ? 'not on this server' : !agent.on ? 'off for this project' : 'not offered here'
   return [...list, { id: value.provider, label: `${catalog.label(value.provider)} (${why})` }]
+}
+
+/**
+ * The efforts the picker offers for the chosen agent: none for an agent the server doesn't list
+ * (effortsOf would fall back to the default agent's, shown beside "<id> (not on this server)").
+ */
+export function pickerEfforts(value: AgentSelection, catalog: AgentCatalog): readonly string[] {
+  return catalog.get(value.provider) ? effortsOf(value, catalog) : []
 }
 
 /**

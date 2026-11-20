@@ -2,7 +2,7 @@
 // project that the caller offers, and a saved choice that is not among them, kept and marked.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { canStartPick, firstModelPick, typeAgentStart, needsModel, pickerAgents } from '../src/renderer/src/agentPicker.ts'
+import { canStartPick, firstModelPick, typeAgentStart, needsModel, pickerAgents, pickerEfforts } from '../src/renderer/src/agentPicker.ts'
 import { agentCatalog } from '../src/shared/agents/catalog.ts'
 
 const caps = (mcp) => ({ presetSessionId: true, resume: true, mcp, appendSystemPrompt: true, effort: false, addDirs: true, sessionMigration: false })
@@ -63,4 +63,13 @@ test("typeAgentStart: a session type's own agent starts from the default its ses
   assert.deepEqual(typeAgentStart(undefined, { provider: 'local' }, catalog), { provider: 'local' })
   assert.deepEqual(typeAgentStart({ provider: 'codex' }, { provider: 'grok' }, catalog), { provider: 'grok' }, "the project's default is off")
   assert.deepEqual(typeAgentStart(undefined, undefined, catalog), { provider: 'claude' })
+})
+
+test("pickerEfforts: the chosen agent's efforts; none for an agent the server doesn't list, not the default agent's", () => {
+  const withEffort = agentCatalog({
+    llmDefault: { provider: 'claude' },
+    agents: [agent('claude', 'Claude', { capabilities: { ...caps(true), effort: true }, efforts: ['low', 'high'] })]
+  })
+  assert.deepEqual(pickerEfforts({ provider: 'claude' }, withEffort), ['low', 'high'])
+  assert.deepEqual(pickerEfforts({ provider: 'aider' }, withEffort), [])
 })

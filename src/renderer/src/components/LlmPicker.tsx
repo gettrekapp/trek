@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBackend } from '../backend'
-import { firstModelPick, pickerAgents } from '../agentPicker'
-import { effortsOf } from '../../../shared/agents/selection.ts'
+import { firstModelPick, pickerAgents, pickerEfforts } from '../agentPicker'
 import type { AgentCatalog, ClientAgent } from '../../../shared/agents/catalog.ts'
 import type { AgentModel } from '../../../shared/plugins/agents.ts'
 import type { LlmSelection } from '../../../shared/providers/types'
@@ -98,7 +97,7 @@ export function LlmPicker({ value, onChange, catalog, offer, eagerModel = false,
   const models: readonly AgentModel[] = agent?.modelsFrom === 'server' ? (listed.models ?? []) : (agent?.models ?? [])
   const known = models.some((m) => m.id === value.model)
   const showCustom = customOpen || (!!value.model && !known && !loading) || (noDefault && !loading && !value.model && models.length === 0)
-  const efforts = effortsOf(value, catalog)
+  const efforts = pickerEfforts(value, catalog)
 
   const setModel = (model: string | undefined): void =>
     onChange({ provider: value.provider, ...(model ? { model } : {}), ...(value.effort ? { effort: value.effort } : {}) })
