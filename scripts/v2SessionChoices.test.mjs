@@ -22,6 +22,8 @@ import { claudeClientPlugin } from '../plugins/claude/client/index.ts'
 import { codexClientPlugin } from '../plugins/codex/client/index.ts'
 import { geminiClientPlugin } from '../plugins/gemini/client/index.ts'
 import { grokClientPlugin } from '../plugins/grok/client/index.ts'
+import { LINEAR_MANIFEST } from '../plugins/linear/manifest.ts'
+import { AZURE_DEVOPS_MANIFEST } from '../plugins/azure-devops/manifest.ts'
 
 const type = (id, llm) => ({ id, name: id, systemPrompt: '', ...(llm ? { llm } : {}) })
 
@@ -125,6 +127,10 @@ test("the claude half's project settings are in the window's key: a confirmed cl
   }
   const keys = pluginProjectKeys([claudeClientPlugin, codexClientPlugin, geminiClientPlugin, grokClientPlugin])
   for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(keys.includes(key), key)
+  // A ticket plugin's settings are not what server.agents reads: editing one asks nothing (that answer is slow, a login shell per agent).
+  const withTickets = pluginProjectKeys([claudeClientPlugin, { manifest: LINEAR_MANIFEST }, { manifest: AZURE_DEVOPS_MANIFEST }])
+  for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(withTickets.includes(key), key)
+  for (const key of ['linearWorkspace', 'azureDevOpsBaseUrl']) assert.ok(!withTickets.includes(key), key)
   const up = { link: 'connected', hasProject: true, capabilities: ['agents'] }
   const held = { id: 'p1', name: 'p', settings: { claudeCommand: 'claude' }, repositories: [], globalSessions: [] }
   const before = windowAgentsKey(up, held, keys)

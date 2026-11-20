@@ -111,12 +111,13 @@ export function agentsSettingsKey(project: object | null | undefined, pluginKeys
 }
 
 /**
- * Every given plugin's project setting keys (`projectSettings`): what `agentsSettingsKey` reads
- * besides the switches. Over the built-in client halves, the agents' own keys (the claude half's
- * `claudeCommand`, which `installed` checks) are among them (plugins A2).
+ * The agent plugins' project setting keys (`projectSettings` of a plugin whose manifest has
+ * `coreBefore`): what `agentsSettingsKey` reads besides the switches (the claude half's
+ * `claudeCommand`, which `installed` checks). Other plugins' keys (a ticket plugin's) are left
+ * out: `server.agents` doesn't read them, and asking it again is slow (a login shell per agent).
  */
-export function pluginProjectKeys(plugins: readonly { manifest: { projectSettings?: Readonly<Record<string, unknown>> } }[]): string[] {
-  return plugins.flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
+export function pluginProjectKeys(plugins: readonly { manifest: { coreBefore?: string; projectSettings?: Readonly<Record<string, unknown>> } }[]): string[] {
+  return plugins.filter((p) => p.manifest.coreBefore).flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
 }
 
 /**
