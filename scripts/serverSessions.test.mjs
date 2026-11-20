@@ -1557,6 +1557,7 @@ test("agents.models (plugins A1b): a static list, or Local's from its endpoint o
   assert.deepEqual((await call('agents.models', { provider: 'codex' })).result.models.map((m) => m.id), ['gpt-5-codex', 'gpt-5'])
   assert.deepEqual((await call('agents.models', { provider: 'local' })).result, { models: [{ id: 'gemma4:31b', label: 'gemma4:31b' }, { id: 'qwen3', label: 'qwen3' }] })
   assert.deepEqual(seen, ['/api/tags'])
+  s.clock.t += 10_000 // past the short cache (its own test below)
   assert.equal((await call('agents.models', { provider: 'nope' })).error.code, 'BAD_REQUEST')
   assert.equal((await call('agents.models', {})).error.code, 'BAD_REQUEST')
   assert.equal((await call('agents.models', { provider: 'local', projectId: 'nope' })).error.code, 'NOT_FOUND')
@@ -1564,9 +1565,57 @@ test("agents.models (plugins A1b): a static list, or Local's from its endpoint o
   assert.deepEqual((await call('agents.models', { provider: 'local', projectId: s.projectId, baseUrl: 'http://198.51.100.1/' })).result.models.length, 2)
   assert.deepEqual(seen, ['/api/tags', '/api/tags'])
   failing = true
+  s.clock.t += 10_000
   const down = await call('agents.models', { provider: 'local' })
   assert.equal(down.error.code, 'TOOL_ERROR')
   assert.match(down.error.message, /Local's models could not be listed: .*returned 500/)
+})
+
+test('agents.models (plugins A1b): callers share one ask in flight, its answer is kept 10 s, a failure is not kept', async (t) => {
+  let calls = 0
+  let fail = false
+  let release
+  const s = setup(t, {
+    agents: (store) => {
+      const registry = builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) })
+      registry.get('local').listModels = async () => {
+        calls++
+        await new Promise((resolve) => { release = resolve })
+        if (fail) throw new Error('backend down')
+        return [{ id: `m${calls}`, label: `m${calls}` }]
+      }
+      return registry
+    }
+  })
+  const { call } = v2(s)
+  const ask = () => call('agents.models', { provider: 'local' })
+  const first = [ask(), ask()]
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls, 1, 'two callers, one ask')
+  release()
+  for (const r of await Promise.all(first)) assert.deepEqual(r.result, { models: [{ id: 'm1', label: 'm1' }] })
+  s.clock.t += 9_999
+  assert.deepEqual((await ask()).result, { models: [{ id: 'm1', label: 'm1' }] }, 'kept')
+  assert.equal(calls, 1)
+  s.clock.t += 1
+  const fresh = ask()
+  await new Promise((resolve) => setImmediate(resolve))
+  release()
+  assert.deepEqual((await fresh).result, { models: [{ id: 'm2', label: 'm2' }] }, 'asked again once 10 s have passed')
+  assert.equal(calls, 2)
+  s.clock.t += 10_000
+  fail = true
+  const failed = [ask(), ask()]
+  await new Promise((resolve) => setImmediate(resolve))
+  release()
+  for (const r of await Promise.all(failed)) assert.match(r.error?.message ?? '', /Local's models could not be listed: backend down/)
+  assert.equal(calls, 3, 'callers share a failing ask too')
+  fail = false
+  const retry = ask()
+  await new Promise((resolve) => setImmediate(resolve))
+  release()
+  assert.deepEqual((await retry).result, { models: [{ id: 'm4', label: 'm4' }] }, 'a failure is not kept')
+  assert.equal(calls, 4)
 })
 
 test('agents.models (plugins A1b): core passes listModels no signal, only the agent config', async (t) => {

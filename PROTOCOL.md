@@ -1804,7 +1804,8 @@ ignores the extra fields; the list's agents are the server's, not a fixed set.
 `agents.models {provider, projectId?}` returns `{models}`: an agent's static list,
 or, for one that lists its models from an endpoint (Local: Ollama's `/api/tags` or
 LM Studio's `/v1/models`, at the `llm` section's `baseUrl`, asked by the server
-with a 5 s limit), that endpoint's. The client names no URL: only the server
+with a 5 s limit), that endpoint's; callers at the same time share one ask, and its
+answer is reused for 10 s (a failure is not). The client names no URL: only the server
 config's is asked, and a redirect is refused. An agent the server lacks is
 `BAD_REQUEST`, an unknown `projectId` `NOT_FOUND`; an endpoint that fails is
 `TOOL_ERROR` with its reason (the URL without its user name, password, query or

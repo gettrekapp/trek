@@ -41,6 +41,8 @@ export const LOAD_ROWS = 32
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 /** A copy of a model fact (the agent's own objects never go out to be changed) */
 const copyModel = (m: AgentModel): AgentModel => ({ ...m, ...(m.efforts ? { efforts: [...m.efforts] } : {}) })
+/** How long agents.models keeps an endpoint's answer (a picker opened twice asks once). */
+const MODELS_TTL_MS = 10_000
 
 export interface ScheduledJob {
   cancel(): void
@@ -151,6 +153,8 @@ export class SessionManager {
   /** sessionId → when it entered attention or done */
   private readonly since = new Map<string, number>()
   private readonly probe: CommandProbe
+  /** agents.models' asks by agent and config: one in flight is shared; an answer is kept until `until`, a failure dropped. */
+  private readonly modelAsks = new Map<string, { models: Promise<AgentModel[]>; until: number }>()
   private stopped = false
 
   constructor(deps: SessionManagerDeps) {
@@ -515,7 +519,8 @@ export class SessionManager {
 
   /**
    * An agent's models (agents.models, plugins A1b): its endpoint's (listModels: Local's, at the
-   * server config's URL only; the client names no URL), else its static list.
+   * server config's URL only; the client names no URL), else its static list. Concurrent callers
+   * share one ask, and its answer serves MODELS_TTL_MS; a failure is not kept.
    */
   async agentModels(p: any): Promise<{ models: AgentModel[] }> {
     const provider = requireString(p.provider, 'provider')
@@ -524,8 +529,21 @@ export class SessionManager {
     const settings = p.projectId === undefined ? undefined : this.deps.projects.require(p.projectId).settings
     const agent = registry.get(provider)
     if (!agent.listModels) return { models: agent.models.map(copyModel) }
+    const config = registry.config(agent.id, settings)
+    const key = `${agent.id}\n${JSON.stringify(config)}`
+    let ask = this.modelAsks.get(key)
+    if (!ask || ask.until <= this.now()) {
+      const listModels = agent.listModels
+      const entry = { models: (async () => listModels(config))(), until: Infinity }
+      entry.models.then(
+        () => { if (this.modelAsks.get(key) === entry) entry.until = this.now() + MODELS_TTL_MS },
+        () => { if (this.modelAsks.get(key) === entry) this.modelAsks.delete(key) }
+      )
+      this.modelAsks.set(key, entry)
+      ask = entry
+    }
     try {
-      return { models: await agent.listModels(registry.config(agent.id, settings)) }
+      return { models: (await ask.models).map(copyModel) }
     } catch (err) {
       throw codedError('TOOL_ERROR', `${agent.label}'s models could not be listed: ${err instanceof Error ? err.message : String(err)}`)
     }
