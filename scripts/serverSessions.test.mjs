@@ -1236,7 +1236,8 @@ test("a real McpAccessStore's token reaches only its 0600 files: never a spawned
   }
   // Each agent got its own file: Claude and Local the --mcp-config, Gemini its settings, Codex its helper.
   assert.match(cmd(s.spawned[0]), /--mcp-config /)
-  assert.ok(cmd(s.spawned[1]).includes(files['.codex.json']))
+  // The helper sits inside a TOML string (`-c key="…"`), so the path is there escaped: on Windows its backslashes are doubled.
+  assert.ok(cmd(s.spawned[1]).includes(JSON.stringify(files['.codex.json']).slice(1, -1)), cmd(s.spawned[1]))
   assert.equal(s.spawned[2].opts.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH, files['.gemini.json'])
   assert.match(cmd(s.spawned[3]), /--mcp-config /)
 })
