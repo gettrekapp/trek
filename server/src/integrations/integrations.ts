@@ -1,7 +1,9 @@
-// The server's integrations (phase 5b): the skills its agents offer (plugins A1b: Claude Code's, from the claude plugin). Made once per server
-// (index.ts) and handed to the handlers through V2Context. (ElevenLabs is the voice plugin's since
-// plugin system phase 1, Linear the Linear plugin's since phase 2.) Also the plugins' key slots in
-// the secrets file and their loopback-only test endpoints.
+// The server's integrations (phase 5b): since plugins A1b only `skills.list`, the skills the server's
+// agents offer (each agent's `skills`, today only the claude plugin's). agentIntegrations makes them
+// from the agent registry when the server starts (server.ts) and V2Context hands them to the
+// handlers. (ElevenLabs is the voice plugin's since plugin system phase 1, Linear the Linear plugin's
+// since phase 2.) Also the plugins' key slots in the secrets file and their loopback-only test
+// endpoints, which the plugin registry hands each plugin's host.
 import type { AgentProvider, SkillInfo } from '../../../src/shared/plugins/agents.ts'
 import type { KeySlot } from '../../../src/shared/plugins/server.ts'
 import type { SecretFile } from '../secrets.ts'
