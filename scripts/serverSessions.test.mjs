@@ -1568,3 +1568,19 @@ test("agents.models (plugins A1b): a static list, or Local's from its endpoint o
   assert.equal(down.error.code, 'TOOL_ERROR')
   assert.match(down.error.message, /Local's models could not be listed: .*returned 500/)
 })
+
+test('agents.models (plugins A1b): core passes listModels no signal, only the agent config', async (t) => {
+  const calls = []
+  const s = setup(t, {
+    agents: (store) => {
+      const registry = builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) })
+      registry.get('local').listModels = async (...args) => { calls.push(args); return [{ id: 'm', label: 'm' }] }
+      return registry
+    }
+  })
+  const { call } = v2(s)
+  assert.deepEqual((await call('agents.models', { provider: 'local' })).result, { models: [{ id: 'm', label: 'm' }] })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].length, 1, 'the config alone: no AbortSignal in A1b')
+  assert.deepEqual(Object.keys(calls[0][0]).sort(), ['project', 'server'])
+})

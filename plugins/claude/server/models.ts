@@ -8,15 +8,23 @@ import { localEndpoint, parseLocalModels } from '../shared/local.ts'
 
 export const LOCAL_MODELS_TIMEOUT_MS = 5000
 
-/** The URL as an error may say it: no user name or password */
+/** The URL as an error may say it: no user name or password, and no query or fragment (a key may sit there) */
 function shown(url: URL): string {
   const copy = new URL(url.href)
   copy.username = ''
   copy.password = ''
+  copy.search = ''
+  copy.hash = ''
   return copy.href
 }
 
-export async function listLocalModels(config: AgentConfig, signal?: AbortSignal, fetchFn: typeof fetch = fetch): Promise<AgentModel[]> {
+/** `timeoutMs`: the limit on the whole request, reply body included (tests shorten it). */
+export async function listLocalModels(
+  config: AgentConfig,
+  signal?: AbortSignal,
+  fetchFn: typeof fetch = fetch,
+  timeoutMs: number = LOCAL_MODELS_TIMEOUT_MS
+): Promise<AgentModel[]> {
   const { backend, baseUrl } = localEndpoint(config)
   let url: URL
   try {
@@ -25,20 +33,28 @@ export async function listLocalModels(config: AgentConfig, signal?: AbortSignal,
     throw new Error("the server config's local baseUrl is not a URL")
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error("the server config's local baseUrl is not an http(s) URL")
-  const timeout = AbortSignal.timeout(LOCAL_MODELS_TIMEOUT_MS)
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const tooSlow = (): Error => new Error(`${shown(url)} did not answer within ${timeoutMs / 1000} s`)
   let res: Response
   try {
     res = await fetchFn(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, redirect: 'error' })
   } catch (err) {
-    const timedOut = timeout.aborted
+    if (timeout.aborted) throw tooSlow()
     const cause = (err as { cause?: { code?: unknown } } | undefined)?.cause?.code
-    throw new Error(`${shown(url)} ${timedOut ? `did not answer within ${LOCAL_MODELS_TIMEOUT_MS / 1000} s` : `could not be reached${typeof cause === 'string' ? ` (${cause})` : ''}`}`)
+    throw new Error(`${shown(url)} could not be reached${typeof cause === 'string' ? ` (${cause})` : ''}`)
   }
   if (!res.ok) {
     await res.body?.cancel().catch(() => {})
     throw new Error(`${shown(url)} returned ${res.status}`)
   }
-  const body = await readBodyCapped(res, MAX_JSON_BYTES, "the local model server's reply")
+  let body: Buffer
+  try {
+    body = await readBodyCapped(res, MAX_JSON_BYTES, "the local model server's reply")
+  } catch (err) {
+    // The limit covers the body too: a reply that stalls part-way reads as the same timeout.
+    if (timeout.aborted) throw tooSlow()
+    throw err
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(body.toString('utf8'))

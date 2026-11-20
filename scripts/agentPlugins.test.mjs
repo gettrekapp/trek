@@ -114,6 +114,35 @@ test("Local's model listing (plugins A1b): only the server config's URL, no redi
   assert.equal(asked[0].url, 'http://localhost:11434/api/tags')
 })
 
+test("Local's model listing (plugins A1b): a reply body that stalls past the limit reads as the timeout; errors drop the URL's query and fragment", async (t) => {
+  const { listLocalModels } = await import('../plugins/claude/server/models.ts')
+  const lmstudio = { server: { backend: 'lmstudio', baseUrl: 'http://127.0.0.1:1' }, project: {} }
+  // Headers arrive at once; the body sends one byte and then stalls until the request's signal ends it, as fetch's does.
+  const stalling = async (_url, init) => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{'))
+        init.signal.addEventListener('abort', () => controller.error(init.signal.reason), { once: true })
+      }
+    })
+    return new Response(body, { status: 200 })
+  }
+  // AbortSignal.timeout's timer doesn't hold the event loop open; this does, while the test waits on it.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const message = await listLocalModels(lmstudio, undefined, stalling, 50).then(() => assert.fail('listed'), (e) => e.message)
+  assert.equal(message, 'http://127.0.0.1:1/v1/models did not answer within 0.05 s')
+  // A caller's own abort during the body is not called a timeout.
+  const caller = new AbortController()
+  const aborted = listLocalModels(lmstudio, caller.signal, stalling, 10_000).then(() => assert.fail('listed'), (e) => e)
+  caller.abort(new Error('client went away'))
+  assert.equal((await aborted).message, 'client went away')
+  const keyed = { server: { backend: 'ollama', baseUrl: 'http://127.0.0.1:1/?key=hunter2#frag' }, project: {} }
+  const down = await listLocalModels(keyed, undefined, async () => new Response('x', { status: 503 })).then(() => assert.fail('listed'), (e) => e.message)
+  assert.ok(!down.includes('hunter2') && !down.includes('frag'), down)
+  assert.match(down, /^http:\/\/127\.0\.0\.1:1\/ returned 503$/)
+})
+
 test("claude: its agent lists Claude Code's skills and the MCP servers Claude Code's config names; no other agent does", async () => {
   const agents = agentPlugins.flatMap(agentsOf)
   const claude = agents.find((a) => a.id === 'claude')
