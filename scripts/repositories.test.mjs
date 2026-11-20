@@ -32,7 +32,7 @@ test('the first repository cannot be removed while global sessions are saved', (
     repositories: [repo('a'), repo('b')],
     globalSessions: [{ sessionId: 's', title: 'Claude' }]
   }
-  assert.match(repositoryRemovalBlock(project, project.repositories[0], false), /Global Claude/)
+  assert.match(repositoryRemovalBlock(project, project.repositories[0], false), /The Global sessions' conversations/)
   assert.equal(repositoryRemovalBlock(project, project.repositories[1], false), null)
 })
 
@@ -42,7 +42,7 @@ test("removal is blocked by a plugin's reason (a running environment, its legacy
   const reason = 'It has a running environment. Stop it in the Env tab first.'
   assert.equal(repositoryRemovalBlock(project, a, false, reason), reason)
   assert.equal(repositoryRemovalBlock(project, a, false, null), null)
-  assert.match(repositoryRemovalBlock(project, a, true, reason), /live Claude sessions/)
+  assert.match(repositoryRemovalBlock(project, a, true, reason), /live agent sessions/)
 })
 
 test('removal is blocked by a saved remote session, on the primary or a worktree', () => {

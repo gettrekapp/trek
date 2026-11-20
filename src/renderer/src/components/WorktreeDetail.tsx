@@ -781,7 +781,7 @@ export function WorktreeDetail({
               >
                 <div
                   className="detail-menu-name"
-                  title="Push the branch and carry the uncommitted work and Claude sessions to a clone on another server"
+                  title="Push the branch and carry the uncommitted work and the sessions that can move to a clone on another server"
                 >
                   Move to another server…
                 </div>

@@ -176,7 +176,7 @@ const api = {
       | 'open-on-server'
       | 'new-terminal'
       | 'close-tab'
-      | 'toggle-global-claude'
+      | 'toggle-global-panel'
       | 'toggle-sidebar',
     callback: () => void
   ): (() => void) =>

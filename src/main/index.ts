@@ -195,9 +195,9 @@ function buildMenu(): void {
           click: () => sendToFocused('menu:close-tab')
         },
         {
-          label: 'Toggle Global Claude',
+          label: 'Toggle Global Panel',
           accelerator: 'CmdOrCtrl+J',
-          click: () => sendToFocused('menu:toggle-global-claude')
+          click: () => sendToFocused('menu:toggle-global-panel')
         },
         ...(isMac
           ? []

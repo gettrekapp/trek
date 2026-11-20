@@ -353,7 +353,7 @@ try {
   const summary = () => modal.locator('.move-summary li').allTextContents()
   const lines = await until(async () => (await summary()).length >= 4, true).then(summary)
   check('the dialog says what moves and what does not', [
-    lines.some((l) => l.includes('1 Claude session(s) move')),
+    lines.some((l) => l.includes('1 session history moves')),
     lines.some((l) => l.includes('1 queued prompt(s) are not moved')),
     lines.some((l) => l.includes('running sessions are stopped first'))
   ], [true, true, true])

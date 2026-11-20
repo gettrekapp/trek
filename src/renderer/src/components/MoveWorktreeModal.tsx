@@ -377,7 +377,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
           <>
             <p className="muted">
               The branch is pushed to origin and checked out on the other server, the uncommitted work goes with it as a patch
-              (all of it unstaged), and its Claude sessions' histories are copied so they resume there. This worktree is removed
+              (all of it unstaged), and the histories of its sessions that can move are copied so they resume there. This worktree is removed
               only once the new one is in place, and only if nothing changed here meanwhile.
             </p>
             {servers.length === 0 ? (
@@ -422,7 +422,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
             )}
             {chosen && <p className="muted move-path">New worktree: {chosen.path}</p>}
             <ul className="move-summary">
-              <li>{carried.length === 0 ? 'No session history moves.' : `${carried.length} Claude session(s) move and can resume there.`}</li>
+              <li>{carried.length === 0 ? 'No session history moves.' : `${carried.length} session histor${carried.length === 1 ? 'y moves' : 'ies move'} and can resume there.`}</li>
               {left.map((s, i) => (
                 <li key={i} className="warn">
                   “{s.title}” is not moved: {s.reason}.

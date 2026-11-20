@@ -1,7 +1,7 @@
 // scripts/pluginBoundaries.test.mjs — the plugin boundary (plugin system phase 1). A plugin's code
 // (plugins/<id>/) imports only the plugin contract (src/shared/plugins/), its own folder and npm
 // packages: not the rest of src/shared (the protocol's or the model's internals), never server/src, src/main, src/renderer, src/host, src/web or another
-// plugin. Core imports a plugin only through plugins/builtin.*.ts (CORE_IMPORT_EXCEPTIONS: the static agent table's re-exports, plugins A1 to A2).
+// plugin. Core imports a plugin only through plugins/builtin.*.ts (CORE_IMPORT_EXCEPTIONS, none since plugins A2).
 // That is what lets a plugin
 // become a package later with only the loader changing.
 import test from 'node:test'
@@ -58,12 +58,7 @@ test("a plugin's code imports only the contract and its own folder", () => {
  * phase that moves their importers into the plugin. Never add one for new code.
  */
 const CORE_IMPORT_EXCEPTIONS = [
-  // Plugins A1: the static agent table the renderer, the web client, the phone and desktop main read until plugins A2.
-  { from: 'src/shared/providers/claude.ts', to: 'plugins/claude/shared/claude.ts' },
-  { from: 'src/shared/providers/local.ts', to: 'plugins/claude/shared/local.ts' },
-  { from: 'src/shared/providers/codex.ts', to: 'plugins/codex/shared/codex.ts' },
-  { from: 'src/shared/providers/gemini.ts', to: 'plugins/gemini/shared/gemini.ts' },
-  { from: 'src/shared/providers/grok.ts', to: 'plugins/grok/shared/grok.ts' }
+  // None since plugins A2: the static agent table's five re-exports went with the table.
 ]
 
 test('core imports a plugin only through plugins/builtin.*.ts (and the listed exceptions)', () => {

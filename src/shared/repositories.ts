@@ -22,14 +22,14 @@ export function repositoryRemovalBlock(
   pluginBlock: string | null = null
 ): string | null {
   if (project.repositories.length === 1) return 'It is the only repository in this project.'
-  if (hasLiveSessions) return 'It has live Claude sessions. Unload them first.'
+  if (hasLiveSessions) return 'It has live agent sessions. Unload them first.'
   if (pluginBlock) return pluginBlock
   const saved = [repo.primaryTerminals ?? [], ...repo.worktrees.map((w) => w.terminals ?? [])].flat()
   if (saved.some((t) => t.ptyId)) {
     return 'It has a remote session still running on a server. Load the worktree, then close that session.'
   }
   if (project.repositories[0].id === repo.id && (project.globalSessions?.length ?? 0) > 0) {
-    return 'Global Claude conversations are stored against the first repository.'
+    return "The Global sessions' conversations are stored against the first repository."
   }
   return null
 }

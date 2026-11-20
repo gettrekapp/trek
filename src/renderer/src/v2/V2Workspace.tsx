@@ -7,7 +7,7 @@ import { Sidebar } from '../components/Sidebar'
 import { toggleSidebar } from '../sidebarToggle'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
-import { GlobalClaude } from '../components/GlobalClaude'
+import { GlobalSessions } from '../components/GlobalSessions'
 import { MissedRunsModal } from '../components/MissedRunsModal'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { AllNotesPanel } from '../components/AllNotesPanel'
@@ -100,7 +100,7 @@ export function V2Workspace(): React.JSX.Element {
         <TeardownPrompt />
       </div>
       <PluginSlot name="bottomBar" />
-      {globalMode !== 'hidden' && <GlobalClaude readOnly={globalMode === 'readOnly'} />}
+      {globalMode !== 'hidden' && <GlobalSessions readOnly={globalMode === 'readOnly'} />}
       {features.automations && <MissedRunsModal />}
     </>
   )

@@ -86,9 +86,9 @@ export type PluginSessionStatus = 'starting' | 'working' | 'attention' | 'done' 
 /** One of the window's project's sessions, as a plugin sees it (read-only) */
 export interface PluginSession {
   terminalId: string
-  /** The tab's title ("Claude 2") */
+  /** The tab's title ("Review 2") */
   label: string
-  /** The agent: 'claude' | 'codex' | 'gemini' | 'grok' | 'local' */
+  /** The agent's id, one the server's plugins offer */
   provider: string
   status: PluginSessionStatus
   /** It asked the user to make a call (request_decision) and is waiting */

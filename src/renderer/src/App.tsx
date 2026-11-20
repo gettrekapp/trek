@@ -54,7 +54,7 @@ export default function App(): React.JSX.Element {
           if (id) void getBackend().sessions.close(id)
         }
       }),
-      window.api.onMenu('toggle-global-claude', () => {
+      window.api.onMenu('toggle-global-panel', () => {
         const state = useAppStore.getState()
         if (state.project) state.setGlobalPanelOpen(!state.globalPanelOpen)
       }),

@@ -128,7 +128,9 @@ sends every action to its server, and every other window on that project sees it
 - **Agents**: each session runs one agent CLI: **Claude** (`claude`), **Codex**
   (`codex`), **Gemini** (`gemini`), **Grok** (`grok`) or **Local** (Claude Code pointed at
   Ollama or LM Studio). The server's config (`llm`) sets each agent's command and the
-  default; a project can override the default and pick the Global panel's agent.
+  default; a project can override the default and pick the Global panel's agent. Each
+  agent comes from a built-in plugin, which a project can switch off in **Settings →
+  Plugins** to hide its agents for new sessions; Claude's is always on.
   Session types can name their own agent, and `▾ → Choose…` next to `+` picks one for a
   single session. A session always resumes with the agent it started with.
 - **Global panel** (⌘J, or click the status bar at the bottom of the window): a

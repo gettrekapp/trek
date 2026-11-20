@@ -350,7 +350,7 @@ export interface BotSettings {
 export interface ProjectFile {
   version: 3
   name: string
-  /** At least one entry. The first holds Global Claude's working directory. */
+  /** At least one entry. The first holds the Global sessions' working directory. */
   repositories: Repository[]
   /** Command launched in each terminal (defaults to "claude") */
   claudeCommand?: string

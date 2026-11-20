@@ -12,6 +12,7 @@ import { SessionIndicator } from '../plugins/SessionIndicator'
 import { DecisionIcon } from './DecisionIcon'
 import { TerminalPane } from './TerminalPane'
 
+// The key from when this was the Global Claude panel: a user's height survives the rename.
 const HEIGHT_KEY = 'globalClaudeHeight'
 const DEFAULT_HEIGHT = 320
 const MIN_HEIGHT = 140
@@ -45,9 +46,9 @@ interface Props {
  * Project-wide agent sessions, as tabs in a collapsible panel docked to the
  * bottom of the window. They run in the repository root with the app's MCP
  * server, so they can drive the worktree sessions. Started on first open,
- * then kept alive while collapsed. (Named from when every session was Claude.)
+ * then kept alive while collapsed.
  */
-export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
+export function GlobalSessions({ readOnly = false }: Props): React.JSX.Element {
   const open = useAppStore((s) => s.globalPanelOpen)
   const view = useAppStore((s) => s.globalView)
   const order = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID] ?? NO_TABS)
@@ -185,7 +186,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   }
 
   return (
-    <div className="global-claude">
+    <div className="global-sessions">
       <div className="global-panel" style={{ height, display: open ? 'flex' : 'none' }}>
         <div className="global-resize" onMouseDown={startResize} />
         <div className="global-tabs">

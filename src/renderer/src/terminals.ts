@@ -270,7 +270,7 @@ export function onTerminalScroll(id: string, listener: (scrolledUp: boolean) => 
 export function focusInGlobalPanel(): boolean {
   return (
     useAppStore.getState().globalPanelOpen &&
-    !!document.activeElement?.closest('.global-claude')
+    !!document.activeElement?.closest('.global-sessions')
   )
 }
 

@@ -32,7 +32,7 @@ import { LEGACY_ENV_PLUGIN } from '../../../shared/legacyEnvFields.ts'
 import type { AppState } from '../store'
 import type { Project } from '../../../shared/model/types'
 
-/** The built-in agent plugins' project setting keys: the claude half's (claudeCommand, claudeArgs, claudePermissionMode) (plugins A2) */
+/** The built-in agent plugins' project setting keys, from each manifest's own `projectSettings` (plugins A2) */
 const PLUGIN_PROJECT_KEYS = pluginProjectKeys(BUILTIN_CLIENT_PLUGINS)
 
 export interface V2Window {

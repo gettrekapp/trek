@@ -37,7 +37,7 @@ export const BUILTINS: readonly BuiltinDef[] = [
   { name: 'session_title', description: 'Session tab title', group: 'Session' },
   { name: 'session_id', description: "Agent's session id", group: 'Session' },
   { name: 'terminal_id', description: 'Trek terminal id', group: 'Session' },
-  { name: 'agent', description: 'Agent name, e.g. Claude', group: 'Session' },
+  { name: 'agent', description: 'Agent name, as the server labels it', group: 'Session' },
   { name: 'date', description: 'Today, YYYY-MM-DD', group: 'Time' },
   { name: 'time', description: 'Now, HH:MM', group: 'Time' }
 ]

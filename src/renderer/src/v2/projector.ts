@@ -1,5 +1,5 @@
 // A v2 `project:<id>` snapshot as the legacy store slice the desktop UI already
-// renders (Sidebar, WorktreeDetail, GlobalClaude), plus the ids that lead from
+// renders (Sidebar, WorktreeDetail, GlobalSessions), plus the ids that lead from
 // that slice back to v2. Pure: no store, React or Electron at runtime, so
 // `node --test` imports it. The `import type` from '../store' is erased.
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
