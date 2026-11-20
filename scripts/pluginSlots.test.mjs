@@ -17,6 +17,12 @@ test('activeSlotEntries: on or legacy plugins that fill the slot, in order', () 
   assert.deepEqual(activeSlotEntries(entries, 'bottomBar').map((e) => e.plugin.manifest.id), ['a', 'c'])
 })
 
+test("activeSlotEntries: a terminal's bar end is its own slot, apart from the overlay", () => {
+  const entries = [entry('a', 'on', { terminalBarEnd: Comp }), entry('b', 'on', { terminalOverlay: Comp }), entry('c', 'off', { terminalBarEnd: Comp })]
+  assert.deepEqual(activeSlotEntries(entries, 'terminalBarEnd').map((e) => e.plugin.manifest.id), ['a'])
+  assert.deepEqual(activeSlotEntries(entries, 'terminalOverlay').map((e) => e.plugin.manifest.id), ['b'])
+})
+
 test('firstActiveSlot: the first active one, or undefined', () => {
   const entries = [entry('a', 'missing', { sessionIndicator: Comp }), entry('b', 'on', { sessionIndicator: Comp }), entry('c', 'on', { sessionIndicator: Comp })]
   assert.equal(firstActiveSlot(entries, 'sessionIndicator')?.plugin.manifest.id, 'b')

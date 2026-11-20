@@ -343,6 +343,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
               {buttons.length === 0 ? 'Add a quick button' : '+'}
             </button>
             <span className="quick-buttons-spacer" />
+            <PluginSlot name="terminalBarEnd" props={{ terminalId }} />
             {!exited && <QueueChip terminalId={terminalId} global={global} />}
           </div>
         </div>
