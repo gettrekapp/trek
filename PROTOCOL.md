@@ -1739,28 +1739,32 @@ A promote that answers promote_to_primary is the asking MCP call's.
 
 ## Sessions
 
-A session is one agent (Claude, Codex, Gemini, Grok or a local model) running in a
-pty on the server. The server builds every agent command line; a client never
-sends one.
+A session is one agent running in a pty on the server. The agents are the ones
+the server's built-in agent plugins offer (`server.agents`; today Claude and Local
+from the `claude` plugin, Codex, Gemini and Grok), not a fixed list. The server
+builds every agent command line, through the agent's plugin; a client never sends one.
 
-**Agent settings.** Provider settings come from the `llm` section of the server's
-config file (see `server/README.md`), which has the shape of the desktop's
-`LlmSettings`: `llmDefault` and per-provider `command`, `approvalMode` and, for
-the local provider, `backend` and `baseUrl`. The file reloads live. A project's
-settings override it: `llmDefault`, `globalLlm`, `claudePermissionMode`,
-`claudeCommand`, `claudeArgs`, `sessionTypes`, `sessionSystemPrompt` and
-`globalSystemPrompt`. No method edits the `llm` section; edit the file.
+**Agent settings.** An agent's server-wide settings come from the `llm` section of
+the server's config file (see `server/README.md`): `llmDefault`, and per agent id
+in `providers.<id>` the settings its plugin reads (`command`, `approvalMode`; Local's
+`backend` and `baseUrl`). The file reloads live. A project's settings override
+them: `llmDefault`, `globalLlm`, `sessionTypes`, `sessionSystemPrompt` and
+`globalSystemPrompt`, and the `claude` plugin's `claudePermissionMode`,
+`claudeCommand` and `claudeArgs` (the same names as before plugins A1). No method
+edits the `llm` section; edit the file. An unknown agent id (an old file's, or a
+newer Trek's) runs Claude.
 
 **Which agents.** `server.agents {projectId?}` returns `{llmDefault, agents:
 [{provider, label, installed}]}`: the `llm` section's default (Claude when it
-names none), and every provider the server knows, in its order. `llmDefault` is
+names none), and every agent the server's plugins offer, in its order. `llmDefault` is
 always the server's, even with a `projectId`: a project's `settings.llmDefault`
 overrides it, as it does for `session.start`, so a client labels its Default
 choice with `settings.llmDefault ?? llmDefault` (`settings.globalLlm` for a
 Global session). `installed`
-says whether the program of the command the server would run for that provider
-(the project's `claudeCommand` for Claude when `projectId` names a project that
-has one, else the `llm` section's `command`, else the provider's default; the
+says whether the program of the command the server would run for that agent
+(the command the agent's plugin would run: for Claude the project's `claudeCommand`
+when `projectId` names a project that has one, else the `llm` section's `command`,
+else the agent's default; the
 program is the first word after any `NAME=value` assignments, a best-effort
 hint: `env FOO=1 claude` checks `env`) is found by
 `command -v` in the server user's login shell. Each program's answer is reused
@@ -1768,7 +1772,7 @@ for a minute, so the first call can take a few seconds. At most 8 checks run at
 once; a program asked for beyond that reads as not installed for that call and
 is checked on a later one. The command lines
 themselves are not sent: they may carry secrets. An unknown `projectId` is
-`NOT_FOUND`. A provider that is installed can still fail to start (a local
+`NOT_FOUND`. An agent that is installed can still fail to start (a local
 model's backend may be down, say); `session.start` reports that as usual.
 
 **Agent facts (`agentInfo`).** A server with the `agentInfo` capability adds to each
@@ -1817,9 +1821,9 @@ and shell aliases work as they do when typed into a terminal. On Windows it is
 `%COMSPEC% /d /s /c <command>`. When the process ends, the session becomes
 `exited` with `exitCode` set and loses its `ptyId`.
 
-**Environment.** The pty gets the provider's env plus `TREK_SESSION_ID` and
+**Environment.** The pty gets the agent's env (from its plugin) plus `TREK_SESSION_ID` and
 `TREK_TERMINAL_ID` (both the session id). A worktree session also gets
-`TREK_WORKTREE_ID` and `TREK_WORKTREE_PATH`. Provider env cannot override these.
+`TREK_WORKTREE_ID` and `TREK_WORKTREE_PATH`. An agent's env cannot override these.
 
 **Global sessions** run in the first repository's main worktree, with the other
 repositories as additional directories, and get the project's `globalSystemPrompt`.
@@ -2090,18 +2094,21 @@ one of its sessions launches. Tokens live in memory only: every server start
 makes new ones and a new port. The files go in `<dataDir>/mcp`, a directory with
 mode 0700:
 
-- `<projectId>.json`, the Claude `--mcp-config` file;
-- `<projectId>.gemini.json`, the Gemini settings file.
+- one file per agent that reads the server from a file of its own, named by its
+  plugin: `<projectId>.json` (Claude's `--mcp-config`, which Local reads too),
+  `<projectId>.gemini.json` (Gemini's settings), `<projectId>.codex.json` (the
+  headers Codex's helper command prints).
 
-Both are written atomically with mode 0600, and again whenever the token or the
+They are written atomically with mode 0600, and again whenever the token or the
 port changes, and again when a session launches and finds them deleted (an accidental
-second `trek-server start` on the same data dir sweeps them). Codex gets the URL on its command line and the token in
-`TREK_MCP_TOKEN`, as the provider adapter does. When the store starts, it deletes
+second `trek-server start` on the same data dir sweeps them). The token is in no
+agent's argv or environment: Codex gets the URL on its command line and runs a
+helper (`/bin/cat`, or `type` on Windows) that prints its headers file. When the store starts, it deletes
 every `.json` and `.tmp` file in the directory (the tokens of an earlier start are
 dead anyway), and it refuses a directory that is a symlink, is not a directory, or
 is owned by another user. A project id must match `^[A-Za-z0-9][A-Za-z0-9-]*$`
 to get a token. `project.delete` revokes the project's token and deletes its
-two files.
+files.
 
 If the directory is refused, or the listener does not start, the server logs a
 warning, runs without MCP and carries on. A session whose access cannot be made
@@ -2109,9 +2116,9 @@ launches without MCP (the error is logged). The same holds for a session started
 before the listener is up: it launches without MCP.
 
 **Which sessions.** Every session, worktree and Global, launches with the
-project's MCP access (for providers that support MCP; Grok does not). A Global
-session also gets the built-in Global role prompt (Claude's own wording for
-Claude, a generic one for other agents), ahead of the project's `globalSystemPrompt`.
+project's MCP access (for agents that support MCP; Grok does not). A Global
+session also gets the built-in Global role prompt (the agent plugin's own wording,
+Claude's; a generic one for an agent whose plugin has none), ahead of the project's `globalSystemPrompt`.
 
 **Ids.** The parameter keeps the desktop's name `terminalId`; its value is the
 session id, which is `TREK_TERMINAL_ID` / `TREK_SESSION_ID` in the agent's env. A

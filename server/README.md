@@ -106,7 +106,11 @@ clients).
 ## Agent settings
 
 Which agent CLI each session runs, and how, comes from an optional `llm`
-section in the same config file. It has the shape of the desktop's LLM settings:
+section in the same config file. It has the shape of the desktop's LLM settings.
+The agents are the ones the server's built-in agent plugins offer (today `claude`
+and `local` from the claude plugin, `codex`, `gemini` and `grok`), and
+`providers.<id>` holds the settings that agent's plugin reads (`command`,
+`approvalMode`; Local's `backend` and `baseUrl`):
 
 ```json
 {
@@ -121,8 +125,8 @@ section in the same config file. It has the shape of the desktop's LLM settings:
 ```
 
 The server reloads the file live, so edits apply to the next session you start
-or resume. A project's own settings (default LLM, Claude command and permission
-mode, system prompts, session types) override it. There is no command or API to
+or resume. A project's own settings (default LLM, the claude plugin's command and
+permission mode, system prompts, session types) override it. There is no command or API to
 edit this section; edit the file. Agents run as `$SHELL -ilc '<command>'`, so the
 command is found the way it is in your terminal; set `SHELL` for the server if it
 runs without one.

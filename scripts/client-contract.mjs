@@ -123,7 +123,8 @@ else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}
 // those not for its platform, `available: false` (server/src/plugins/registry.ts presence()).
 const BUILTIN_PLUGINS = [
   // The agents (plugins A1): Claude (with Local), Codex, Gemini and Grok, first in registration order.
-  { id: 'claude', version: '1.0.0', defaultEnabled: true },
+  // Claude is the fallback agent, so its plugin can't be switched off (A1b: required).
+  { id: 'claude', version: '1.0.0', defaultEnabled: true, required: true },
   { id: 'codex', version: '1.0.0', defaultEnabled: true },
   { id: 'gemini', version: '1.0.0', defaultEnabled: true },
   { id: 'grok', version: '1.0.0', defaultEnabled: true },
