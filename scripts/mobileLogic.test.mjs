@@ -3097,7 +3097,8 @@ test('agents (plugins A2): a New session list offers the installed ones that are
   ]
   assert.deepEqual(startableAgents(agents).map((a) => a.provider), ['claude', 'gemini'])
   const server = { llmDefault: { provider: 'claude' }, agents }
-  assert.equal(sessionTypeNote({ llm: { provider: 'codex' } }, server), "Codex is turned off for this project: new sessions can't use it. Pick another agent, or turn it on in Settings → Plugins.")
+  assert.equal(sessionTypeNote({ llm: { provider: 'codex' } }, server), "Codex is turned off for this project. Turn it on in the desktop app's Settings → Plugins.", 'the phone has no Plugins screen and no agent to pick instead')
+  assert.equal(sessionTypeNote({ llm: { provider: 'aider' } }, server), 'aider is not an agent this server has.')
   assert.equal(sessionTypeNote({ llm: { provider: 'gemini' } }, server), null)
   assert.equal(sessionTypeNote({}, server), null)
   assert.equal(sessionTypeNote({ llm: { provider: 'codex' } }, null), null, "before the server's list: nothing to say")
