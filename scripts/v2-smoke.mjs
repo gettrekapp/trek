@@ -1064,7 +1064,10 @@ try {
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
-    [['Plugins'], ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite'], ['Voice summaries']],
+    [['Plugins'], SERVER_HAS_ENVS
+      ? ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite']
+      // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
+      : ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Voice summaries']],
     ['Appearance', 'Notifications', 'Local server']
   ])
   await openSettingsTab(settings, 'Agents')
