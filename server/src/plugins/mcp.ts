@@ -1,13 +1,14 @@
 // One project's trek-dev MCP with its plugins (plugin system phase 1).
-import { MCP_INSTRUCTIONS, MCP_TOOLS, type ToolCall } from '../mcp/tools.ts'
+import { MCP_INSTRUCTIONS, type ToolCall } from '../mcp/tools.ts'
 import type { ToolDefinition } from '../mcp/protocol.ts'
 import type { PluginRegistry } from './registry.ts'
 
 /**
  * One project's trek-dev MCP: the core tools, then those of the plugins on in it, read at each
- * request (a plugin turned on or off shows at the agent's next tools/list).
+ * request (a plugin turned on or off shows at the agent's next tools/list). `tools`: the core tools,
+ * server.ts's coreTools(...) with the server's agents in the enums.
  */
-export function mcpContext(projectId: string, core: ToolCall, plugins?: PluginRegistry, tools: ToolDefinition[] = MCP_TOOLS): { instructions: string; tools: ToolDefinition[]; call: ToolCall } {
+export function mcpContext(projectId: string, core: ToolCall, plugins: PluginRegistry | undefined, tools: ToolDefinition[]): { instructions: string; tools: ToolDefinition[]; call: ToolCall } {
   const own = plugins?.tools(projectId) ?? []
   const extra = plugins?.instructions(projectId)
   if (own.length === 0 && !extra) return { instructions: MCP_INSTRUCTIONS, tools, call: core }

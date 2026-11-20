@@ -41,6 +41,7 @@ import {
   type PromoteWindowAnswer
 } from '../../../src/shared/promote.ts'
 import type { AgentRegistry } from '../agents/registry.ts'
+import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { codedError } from '../errors.ts'
 import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
@@ -117,8 +118,19 @@ function assertNotLoadedElsewhere(ctx: V2Context, projectId: string, path: strin
 
 /** Whether a session's history can follow its worktree (plugins A1: its agent says so and can move it; Claude's and Local's). */
 function migrates(agents: AgentRegistry, s: Session): boolean {
+  if (!resolves(agents, s.llm.provider)) return false
   const agent = agents.get(s.llm.provider)
   return agent.capabilities.sessionMigration && agent.history !== undefined
+}
+
+/** Whether agents.get(id) finds an agent (the session's own, or the default one), so it can't throw. */
+function resolves(agents: AgentRegistry, id: string): boolean {
+  return agents.has(id) || agents.has(DEFAULT_AGENT_ID)
+}
+
+/** The label of the agent a session runs; its id when the server has neither it nor the default agent (never throws). */
+function labelOf(agents: AgentRegistry, id: string): string {
+  return resolves(agents, id) ? agents.get(id).label : id
 }
 
 /** The sessions that follow and what the plan says of each. */
@@ -131,7 +143,7 @@ function splitSessions(sessions: readonly Session[], stays: string, agents: Agen
       moving.push(s)
       info.push({ ...base, carried: true })
     } else {
-      info.push({ ...base, carried: false, reason: `${agents.get(s.llm.provider).label} keeps its history by folder, so it can't follow; ${stays}` })
+      info.push({ ...base, carried: false, reason: `${labelOf(agents, s.llm.provider)} keeps its history by folder, so it can't follow; ${stays}` })
     }
   }
   return { info, moving }
@@ -475,7 +487,7 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
   const from = repoIn(ctx.projects.require(project.id), repo.id).worktrees.find((w) => w.id === worktree.id)?.sessions ?? before.sessions
   const { moving } = splitSessions(from, 'it is closed', ctx.sessions.agentRegistry)
   notes.push(...(await moveHistories(moving, worktree.path, main.path, ctx.sessions.agentRegistry)))
-  for (const s of from) if (!migrates(ctx.sessions.agentRegistry, s)) notes.push(`“${s.title}” was closed: ${ctx.sessions.agentRegistry.get(s.llm.provider).label} can't follow a worktree to another folder`)
+  for (const s of from) if (!migrates(ctx.sessions.agentRegistry, s)) notes.push(`“${s.title}” was closed: ${labelOf(ctx.sessions.agentRegistry, s.llm.provider)} can't follow a worktree to another folder`)
   let movedIds = moving.map((s) => s.id)
   let mainLoaded = false
   // After the commitment nothing throws: records that can't be updated are a note.

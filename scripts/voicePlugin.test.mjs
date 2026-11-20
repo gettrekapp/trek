@@ -344,7 +344,7 @@ async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessi
   const projectId = projects.create('P', [{ registered, name: undefined }])
   await poller.refresh(a)
   const core = createToolCaller({ store, hub, projects, poller, sessions, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 } })(projectId)
-  const mcp = () => mcpContext(projectId, core, registry)
+  const mcp = () => mcpContext(projectId, core, registry, MCP_TOOLS)
   const { terminalId } = await mcp().call('start_session', { worktree: 'main' })
   const setEnabled = (enabled) => dispatchV2('project.updateSettings', { projectId, settings: { plugins: { voice: { enabled } } } }, { projects, sessions })
   return { mcp, hub, projects, projectId, terminalId, voiceStub, spawned, setEnabled, sessions }

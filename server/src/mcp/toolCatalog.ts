@@ -19,7 +19,7 @@ export interface ExternalServers {
 }
 
 export interface ToolCatalogDeps {
-  /** trek-dev's core tools (MCP_TOOLS, handed in: tools.ts imports v2.ts, which imports this) */
+  /** trek-dev's core tools: server.ts's coreTools(...), with the server's agents in the enums (handed in: tools.ts imports v2.ts, which imports this) */
   coreTools?: readonly ToolDefinition[]
   /** The configured servers for these project paths */
   configured?: (paths: readonly string[]) => Promise<ServerSpec[]>

@@ -185,17 +185,17 @@ test('enablement: the project setting, else the default; a project that is not t
 test("MCP: a plugin's tools and instructions only in projects where it is on; its calls; core tools unchanged", async (t) => {
   const { registry } = setup(t, [echoPlugin().plugin])
   const core = async (name) => `core ${name}`
-  const on = mcpContext('p1', core, registry)
+  const on = mcpContext('p1', core, registry, MCP_TOOLS)
   assert.equal(on.tools.length, MCP_TOOLS.length + 1)
   assert.equal(on.tools.at(-1).name, 'echo_tool')
   assert.equal(on.instructions, `${MCP_INSTRUCTIONS} echo_tool echoes.`)
   assert.deepEqual(await on.call('echo_tool', { a: 1 }), { args: { a: 1 }, projectId: 'p1' })
   assert.equal(await on.call('list_worktrees', {}), 'core list_worktrees')
-  const off = mcpContext('p2', core, registry)
+  const off = mcpContext('p2', core, registry, MCP_TOOLS)
   assert.equal(off.tools, MCP_TOOLS)
   assert.equal(off.instructions, MCP_INSTRUCTIONS)
   assert.equal(await off.call('echo_tool', {}), 'core echo_tool', 'not the plugin: the core caller refuses it as unknown')
-  assert.equal(mcpContext('p1', core, undefined).tools, MCP_TOOLS)
+  assert.equal(mcpContext('p1', core, undefined, MCP_TOOLS).tools, MCP_TOOLS)
 })
 
 test("session prompts: those of the plugins on in the project, joined; one that throws is left out", (t) => {

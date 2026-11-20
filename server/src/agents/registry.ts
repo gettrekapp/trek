@@ -36,7 +36,14 @@ export function createAgentRegistry(options: AgentRegistryOptions): AgentRegistr
   const byId = new Map(entries.map((e) => [e.agent.id, e]))
   const get = (id: string | undefined): AgentProvider => {
     const found = (id === undefined ? undefined : byId.get(id)) ?? byId.get(DEFAULT_AGENT_ID)
-    if (!found) throw codedError('TOOL_ERROR', 'This server has no agents: its agent plugins are not set up')
+    if (!found) {
+      throw codedError(
+        'TOOL_ERROR',
+        byId.size === 0
+          ? 'This server has no agents: its agent plugins are not set up'
+          : `This server has no ${DEFAULT_AGENT_ID} agent (its plugin is not set up), which an unknown or default agent runs`
+      )
+    }
     return found.agent
   }
   return {

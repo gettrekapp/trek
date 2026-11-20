@@ -20,7 +20,8 @@ import { projectDir } from '../src/host/claudeSessionService.ts'
 import { PromoteRequests } from '../server/src/promote/requests.ts'
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDirWhenFree } from './testPlatform.mjs'
-import { builtinAgents } from './agentsHarness.mjs'
+import { builtinAgentEntries, AGENT_PLUGINS } from './agentsHarness.mjs'
+import { createAgentRegistry } from '../server/src/agents/registry.ts'
 
 export const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -47,6 +48,7 @@ function fakeSpawner() {
  * in progress (changed, staged, untracked), a Claude session with a history, a Codex session, a
  * review draft and branch data; the main checkout has a Claude session of its own.
  */
+/** options.agentPlugins: the agent plugins the server has (default all four) */
 export async function setup(t, options = {}) {
   // realPath: on Windows the OS's (long names, as the server resolves a repo, not RUNNER~1).
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-promote-')))
@@ -77,7 +79,7 @@ export async function setup(t, options = {}) {
   const { spawned, spawner } = fakeSpawner()
   // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns
   // (winLaunch.ts, checked in serverWinLaunch.test.mjs), and the fake agents are not there.
-  const sessions = new SessionManager({ projects, store, hub, spawner, agents: builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) }), schedule: () => ({ cancel() {} }), discover: async () => undefined, platform: 'linux' })
+  const sessions = new SessionManager({ projects, store, hub, spawner, agents: createAgentRegistry({ agents: builtinAgentEntries(options.agentPlugins ?? AGENT_PLUGINS), serverConfig: (id) => store.agentServerConfig(id) }), schedule: () => ({ cancel() {} }), discover: async () => undefined, platform: 'linux' })
   const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20, ...(options.requests ?? {}) })
   // In this order, in one hook: the directory goes once what runs over it is stopped.
   t.after(async () => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close(); await removeDirWhenFree(dir) })

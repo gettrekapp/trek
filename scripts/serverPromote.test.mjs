@@ -12,6 +12,7 @@ import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixtu
 import { realPath } from '../src/host/pathContainment.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { AGENT_PLUGINS } from './agentsHarness.mjs'
 
 test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
   const s = await setup(t)
@@ -59,6 +60,27 @@ test('worktree.promote: the main checkout has the branch and its work, the workt
   // The copy of the work saved before the switch is gone once all went well.
   assert.deepEqual(existsSync(s.recoveryDir) ? readdirSync(s.recoveryDir) : [], [])
   assert.equal(r.result.recoveryFile, undefined)
+})
+
+test('worktree.promote on a server without claude: sessions of agents it lacks stay behind with their ids as labels; the promote goes through', async (t) => {
+  const s = await setup(t, { agentPlugins: AGENT_PLUGINS.filter((p) => p.manifest.id !== 'claude') })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.id === s.worktreeId).sessions.push({ id: 'm-1', title: 'Mystery 1', llm: { provider: 'mystery' }, queue: [], status: 'idle' })
+  })
+  const dry = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun: true })
+  assert.equal(dry.ok, true, JSON.stringify(dry))
+  assert.deepEqual(dry.result.sessions.map((x) => [x.title, x.carried, x.reason]), [
+    ['Claude 1', false, "claude keeps its history by folder, so it can't follow; it is closed"],
+    ['Codex 1', false, "Codex keeps its history by folder, so it can't follow; it is closed"],
+    ['Mystery 1', false, "mystery keeps its history by folder, so it can't follow; it is closed"]
+  ])
+  const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.deepEqual(r.result.moved, [])
+  assert.ok(r.result.notes.some((n) => n === "“Claude 1” was closed: claude can't follow a worktree to another folder"), JSON.stringify(r.result.notes))
+  assert.ok(r.result.notes.some((n) => n === "“Mystery 1” was closed: mystery can't follow a worktree to another folder"), JSON.stringify(r.result.notes))
+  assert.equal(branchOf(s.app), 'feat')
+  assert.ok(!existsSync(s.path))
 })
 
 test('worktree.promote: a loaded worktree is stopped and its sessions resume in the main checkout', async (t) => {

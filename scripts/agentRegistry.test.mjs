@@ -24,7 +24,15 @@ test('get: an unknown or missing id is Claude; has tells them apart; a server wi
   assert.equal(agents.pluginOf('nope'), undefined)
   const none = createAgentRegistry({ agents: [], serverConfig: () => ({}) })
   assert.deepEqual(none.all(), [])
-  assert.throws(() => none.get('claude'), (e) => e.code === 'TOOL_ERROR' && /no agents/.test(e.message))
+  assert.throws(() => none.get('claude'), (e) => e.code === 'TOOL_ERROR' && e.message === 'This server has no agents: its agent plugins are not set up')
+})
+
+test('get: a server with agents but no claude names claude in its error, for an unknown or default id', () => {
+  const noClaude = createAgentRegistry({ agents: builtinAgentEntries().filter((e) => e.pluginId !== 'claude'), serverConfig: () => ({}) })
+  assert.equal(noClaude.get('codex').id, 'codex')
+  const message = 'This server has no claude agent (its plugin is not set up), which an unknown or default agent runs'
+  assert.throws(() => noClaude.get('nope'), (e) => e.code === 'TOOL_ERROR' && e.message === message)
+  assert.throws(() => noClaude.get(undefined), (e) => e.code === 'TOOL_ERROR' && e.message === message)
 })
 
 test("config: the agent's server config, and only its own plugin's project settings", () => {
