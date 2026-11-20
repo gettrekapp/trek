@@ -1062,8 +1062,16 @@ try {
     await openSettingsTab(settings, 'Plugins')
     return [await settings.locator('.plugins-list h3').allTextContents(), await settings.locator('.plugins-row-name').allTextContents(), await settings.locator('.plugin-settings h3').allTextContents()]
   }
+  // The General tab asks main how tokens are stored after it opens, so "Saved tokens" (a Linux
+  // runner without a keyring) comes a moment later: wait for it before reading the headings.
+  const tokensUnencrypted = (await w1.evaluate(() => window.api.secretStorage())) === 'unencrypted'
+  const generalHeadings = async () => {
+    await openSettingsTab(settings, 'General')
+    if (tokensUnencrypted) await settings.locator('h3', { hasText: 'Saved tokens' }).waitFor({ timeout: 5000 })
+    return settings.locator('h3').allTextContents()
+  }
   if (!SERVER_HAS_ENVS) console.log(`SKIP the Environments tab has its section (${NO_ENVS})`)
-  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await pluginsTabHeadings(), await tabHeadings('General')], [
+  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), ...(SERVER_HAS_ENVS ? [await tabHeadings('Environments')] : []), await pluginsTabHeadings(), await generalHeadings()], [
     ['Agents', 'Session types'],
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
@@ -1074,7 +1082,7 @@ try {
       // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
       : ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Claude Code']],
     // "Saved tokens" is there only when tokens are stored unencrypted (a Linux runner without a keyring).
-    ['Appearance', 'Notifications', 'Local server', ...((await w1.evaluate(() => window.api.secretStorage())) === 'unencrypted' ? ['Saved tokens'] : [])]
+    ['Appearance', 'Notifications', 'Local server', ...(tokensUnencrypted ? ['Saved tokens'] : [])]
   ])
   // Plugins A2: the server lists Claude Code as required, so its switch is locked on, and its
   // detail (the first row's, shown) says why; Codex's is a working switch.
