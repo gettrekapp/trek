@@ -15,6 +15,7 @@
 import { NO_FEATURES, type BackendFeatures } from './backendFeatures'
 import { errorText } from './v2/errors'
 import type { LlmSelection } from '../../shared/providers/types'
+import type { AgentModel } from '../../shared/plugins/agents'
 import type {
   ChangesSource,
   CommitInfo,
@@ -163,6 +164,10 @@ export interface WindowBackend {
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
     list(loc: WorktreeLocator): Promise<SkillInfo[]>
+  }
+  /** The agents' model lists, asked on the window's server (`agents.models`, capability `agentInfo`, plugins A2): an endpoint's (Local's) or the static list */
+  readonly agents: {
+    models(provider: string): Promise<AgentModel[]>
   }
   /**
    * The Changes tab's draft review of the worktree at `path` (feature `review`, 5c-2). The draft
@@ -315,6 +320,7 @@ export const idleBackend: WindowBackend = {
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
   skills: { list: noProject },
+  agents: { models: noProject },
   review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
   branch: {
     setTag: noProject,

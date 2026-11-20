@@ -874,6 +874,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     skills: {
       list: async (loc) => request('skills.list', { projectId, worktreeId: worktreeAt(loc.path) })
     },
+    agents: {
+      models: async (provider) => (await request('agents.models', { projectId, provider })).models
+    },
     // The draft is the worktree's `review` in the project topic: the patch is the answer.
     review: {
       add: async (path, comment) => (await request('review.add', { projectId, worktreeId: worktreeAt(path), ...comment })).commentId,

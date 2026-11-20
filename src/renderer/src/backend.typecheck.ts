@@ -1,6 +1,7 @@
 // Type-level checks for the window backend, run by `npm run typecheck`. Never executed or imported.
 import type { CreateWorktreeRequest, SessionTarget, WindowBackend } from './backend'
 import type { BackendFeatures } from './backendFeatures'
+import type { AgentModel } from '../../shared/plugins/agents'
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 function assertType<T extends true>(): T | void {}
@@ -49,4 +50,6 @@ export function checks(backend: WindowBackend): void {
   assertType<Returns<typeof worktrees.create, Promise<{ path: string; worktreeId?: string }>>>()
   void worktrees.create(fromPr)
   assertType<Returns<typeof backend.git.diff, Promise<Record<string, string>>>>()
+  // An agent's models come back as the server lists them (plugins A2).
+  assertType<Returns<typeof backend.agents.models, Promise<AgentModel[]>>>()
 }

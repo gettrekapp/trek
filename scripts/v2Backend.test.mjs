@@ -294,6 +294,12 @@ test("skills go to the window's server", async () => {
   assert.deepEqual(calls, [['skills.list', { projectId: 'p1', worktreeId: 'w2' }]])
 })
 
+test("an agent's models are asked of the window's server, for the window's project (plugins A2)", async () => {
+  const { backend, calls } = setup({ replies: { 'agents.models': { models: [{ id: 'qwen3-coder', label: 'qwen3-coder' }] } } })
+  assert.deepEqual(await backend.agents.models('local'), [{ id: 'qwen3-coder', label: 'qwen3-coder' }])
+  assert.deepEqual(calls, [['agents.models', { projectId: 'p1', provider: 'local' }]])
+})
+
 test("the plugins' channel: the project, the welcome's plugins and capabilities, untyped <id>.* requests and events", async () => {
   let plugins
   let caps
