@@ -2,15 +2,14 @@
 // and grok on the server's side: no agent id, CLI folder, CLI env variable, Claude history or
 // adapter import in the server's code (server/src) or the host services (src/host). Comments may
 // name agents; code may not. The desktop bot (src/host/bot) is Claude's and stays core (spec, out of
-// scope). The client half (the renderer, the web client, src/shared and the phone) follows in A2,
-// with this check widened to them.
+// scope). The clients have their own check since plugins A2
+// (agentClientNeutral.test.mjs), sharing this scan (agentScan.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LanguageVariant, SyntaxKind as K } from 'typescript/unstable/ast'
-import { createScanner } from 'typescript/unstable/ast/scanner'
+import { hits, isAgentCode, scanLines, walk } from './agentScan.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIRS = ['server/src', 'src/host']
@@ -19,85 +18,6 @@ const SKIP_DIRS = [
   // The desktop bot runs Claude Code itself, from desktop main; it stays core (plugins A1 spec, out of scope).
   'src/host/bot'
 ]
-const SKIP = new Set(['node_modules', 'dist', 'out'])
-
-function* walk(dir) {
-  if (!existsSync(dir)) return
-  for (const name of readdirSync(dir)) {
-    if (SKIP.has(name)) continue
-    const path = join(dir, name)
-    const rel = relative(root, path).split(sep).join('/')
-    if (SKIP_DIRS.includes(rel)) continue
-    if (statSync(path).isDirectory()) yield* walk(path)
-    else if (/\.(ts|tsx)$/.test(name) && !name.endsWith('.generated.ts')) yield path
-  }
-}
-
-/** Trivia: never code. Comments are blanked out (their newlines kept, so line numbers hold). */
-const TRIVIA = new Set([K.WhitespaceTrivia, K.NewLineTrivia, K.ConflictMarkerTrivia, K.NonTextFileMarkerTrivia, K.ShebangTrivia])
-const COMMENTS = new Set([K.SingleLineCommentTrivia, K.MultiLineCommentTrivia])
-/** Tokens whose text is a string's: quotes, and every part of a template literal. */
-const STRINGS = new Set([K.StringLiteral, K.NoSubstitutionTemplateLiteral, K.TemplateHead, K.TemplateMiddle, K.TemplateTail])
-/** A `/` after one of these divides; anywhere else it starts a regular expression (scanned whole). */
-const ENDS_EXPRESSION = new Set([
-  K.Identifier, K.NumericLiteral, K.BigIntLiteral, K.StringLiteral, K.NoSubstitutionTemplateLiteral, K.TemplateTail,
-  K.RegularExpressionLiteral, K.CloseParenToken, K.CloseBracketToken, K.CloseBraceToken, K.ThisKeyword,
-  K.SuperKeyword, K.TrueKeyword, K.FalseKeyword, K.NullKeyword, K.PlusPlusToken, K.MinusMinusToken
-])
-
-/**
- * The file as lines, scanned with TypeScript's scanner: `code` is each line with its comments blanked
- * (strings, templates and identifiers kept as written), `strings` the parts of string and template
- * tokens on that line (a multi-line template gives each of its lines its own part). Without a parser,
- * a `}` closes a template's `${` when no `{` of its own is open, and a `/` is a regular expression
- * unless it follows an operand. JSX text is not told apart: the scanned folders hold no .tsx today.
- */
-function scanLines(text) {
-  const starts = [0]
-  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1)
-  const lineOf = (pos) => {
-    let lo = 0
-    let hi = starts.length - 1
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1
-      if (starts[mid] <= pos) lo = mid
-      else hi = mid - 1
-    }
-    return lo
-  }
-  const strings = starts.map(() => [])
-  let code = ''
-  let copied = 0
-  const scanner = createScanner(false, LanguageVariant.Standard, text)
-  const templates = [] // per open `${`: how many of its own `{` are open
-  let prev = K.Unknown
-  for (let kind = scanner.scan(); kind !== K.EndOfFile; kind = scanner.scan()) {
-    if (kind === K.OpenBraceToken && templates.length) templates[templates.length - 1]++
-    else if (kind === K.CloseBraceToken && templates.length) {
-      if (templates[templates.length - 1] === 0) {
-        kind = scanner.reScanTemplateToken(false)
-        if (kind === K.TemplateTail) templates.pop()
-      } else templates[templates.length - 1]--
-    } else if ((kind === K.SlashToken || kind === K.SlashEqualsToken) && !ENDS_EXPRESSION.has(prev)) kind = scanner.reScanSlashToken()
-    if (kind === K.TemplateHead) templates.push(0)
-    const start = scanner.getTokenStart()
-    const end = scanner.getTokenEnd()
-    if (COMMENTS.has(kind)) {
-      code += text.slice(copied, start) + text.slice(start, end).replace(/[^\r\n]/g, ' ')
-      copied = end
-      continue
-    }
-    if (TRIVIA.has(kind)) continue
-    prev = kind
-    if (!STRINGS.has(kind)) continue
-    for (let line = lineOf(start); line <= lineOf(Math.max(start, end - 1)); line++) {
-      strings[line].push(text.slice(Math.max(start, starts[line]), Math.min(end, starts[line + 1] ?? end)))
-    }
-  }
-  code += text.slice(copied)
-  return code.split('\n').map((line, i) => ({ line: i + 1, code: line.replace(/\r$/, ''), strings: strings[i] }))
-}
-
 /**
  * The exceptions, each tied to one file and a narrow line pattern, with the reason it is not agent
  * code on the server. Never add one for code the server runs for an agent: that belongs in its plugin.
@@ -114,25 +34,11 @@ const ALLOWED = [
   { file: 'server/src/mcp/tools.ts', line: /^\? `The promote you asked for \(promote_to_primary\) went through: .*the worktree's Claude and local-model sessions/ }
 ]
 
-/**
- * An agent's id as a string, its CLI's folders, files and env variables, the static adapter table and
- * the adapters, and the Claude history and skills modules that moved into the claude plugin.
- */
-const AGENT_CODE =
-  /['"`](claude|codex|gemini|grok)['"`]|\.claude\b|\.codex\b|\.gemini\b|\.claude\.json|CODEX_HOME|CLAUDE_CONFIG_DIR|ANTHROPIC_|GEMINI_CLI|shared\/providers\/(registry|selection|settings|claude|codex|gemini|grok|local)\b|claudeSessionService|skillService|externalConfig|discoverCodexSession|plugins\/(claude|codex|gemini|grok)\/|\bPROVIDER_IDS\b|\bgetProvider\b|\bisProviderId\b|provider\s*[!=]==\s*['"`]local/
-
-/** An agent's name anywhere inside a string: a key, a message, a path or prose that names it. */
-const AGENT_NAME = /claude|codex|gemini|grok|anthropic/i
-
-const isAgentCode = ({ code, strings }) => AGENT_CODE.test(code) || strings.some((s) => AGENT_NAME.test(s))
-/** The lines of `text` the check flags, as `line: code`. */
-const hits = (text) => scanLines(text).filter(isAgentCode).map((l) => `${l.line}: ${l.code.trim()}`)
-
 test('no agent code in the server or the host services outside the agent plugins', () => {
   const problems = []
   const used = new Set()
   for (const dir of DIRS) {
-    for (const file of walk(join(root, dir))) {
+    for (const file of walk(join(root, dir), root, SKIP_DIRS)) {
       const rel = relative(root, file).split(sep).join('/')
       for (const line of scanLines(readFileSync(file, 'utf8'))) {
         if (!isAgentCode(line)) continue
