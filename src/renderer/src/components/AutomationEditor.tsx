@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import type { Automation, AutomationInput } from '../../../shared/model/types'
-import type { LlmProvider } from '../../../shared/providers/types'
 import {
   HOUR_STEPS,
   MINUTE_STEPS,
@@ -16,7 +15,10 @@ import {
 import { getBackend } from '../backend'
 import { chooseScheduleKind, cronOnly } from '../automations'
 import { useAppStore } from '../store'
-import { LlmPicker, useServerPicker } from './LlmPicker'
+import { LlmPicker } from './LlmPicker'
+import { AgentNote } from './AgentBits'
+import { useAgentCatalog } from '../agents'
+import { globalStart } from '../../../shared/agents/catalog.ts'
 
 interface Props {
   /** Absent: a new automation */
@@ -62,8 +64,9 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const offline = useAppStore((s) => s.serverOffline)
-  const serverPicker = useServerPicker()
-  const mcpOnly = (p: LlmProvider): boolean => p.capabilities.mcp && (!serverPicker.filter || serverPicker.filter(p))
+  // An automation runs in a Global session: only agents with Trek's tools.
+  const catalog = useAgentCatalog()
+  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
 
   const effectiveCron = advanced ? cron : cronFromPicker(picker)
   const preview = useMemo(() => {
@@ -211,10 +214,11 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
       <div className="settings-row">
         <span className="settings-name">Agent</span>
         <label className="llm-inline-check">
-          <input type="checkbox" checked={!llm} onChange={(e) => setLlm(e.target.checked ? undefined : { provider: 'claude' })} />
+          <input type="checkbox" checked={!llm} onChange={(e) => setLlm(e.target.checked ? undefined : globalStart(serverDefault, catalog))} />
           The project&apos;s Global agent
         </label>
-        {llm && <LlmPicker value={llm} onChange={setLlm} {...serverPicker} filter={mcpOnly} />}
+        {llm && <LlmPicker value={llm} onChange={setLlm} catalog={catalog} offer={(a) => a.capabilities.mcp} />}
+        <AgentNote llm={llm} />
       </div>
       <div className="modal-footer automation-footer">
         {automation &&

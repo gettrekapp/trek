@@ -1,97 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAppStore } from '../store'
-import { getProvider, PROVIDER_LIST } from '../../../shared/providers/registry'
-import { effortsFor } from '../../../shared/providers/selection'
-import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
-import type { LlmProvider, LlmProviderId, LlmSelection, ModelInfo } from '../../../shared/providers/types'
+import { useEffect, useRef, useState } from 'react'
+import { getBackend } from '../backend'
+import { pickerAgents } from '../agentPicker'
+import { effortsOf } from '../../../shared/agents/selection.ts'
+import type { AgentCatalog, ClientAgent } from '../../../shared/agents/catalog.ts'
+import type { AgentModel } from '../../../shared/plugins/agents.ts'
+import type { LlmSelection } from '../../../shared/providers/types'
 
 const CUSTOM = '__custom__'
 
 interface Props {
   value: LlmSelection
   onChange: (value: LlmSelection) => void
-  /** Restrict the providers offered (e.g. MCP-capable for the Global panel) */
-  filter?: (provider: LlmProvider) => boolean
-  /**
-   * The agent runs on a v2 server (a server window): `installed` is what the
-   * server reported (`server.agents`). Nothing is checked or listed on this
-   * machine, so Local's model is typed rather than fetched from this machine.
-   */
-  remote?: { installed: Partial<Record<LlmProviderId, boolean>> }
+  /** The window's agents (useAgentCatalog) */
+  catalog: AgentCatalog
+  /** Which of the offered agents to list (the Global panel's and automations': those with Trek's tools) */
+  offer?: (agent: ClientAgent) => boolean
+}
+
+interface ListedModels {
+  models: AgentModel[] | null
+  error: string | null
+  loading: boolean
+  retry: () => void
 }
 
 /**
- * What an LlmPicker needs to offer the server's agents: the providers
- * `server.agents` listed and what it said is installed (until it answers, or
- * without `agents`: every provider, with no check on this machine).
+ * An agent's models from the window's server (`agents.models`), for an agent whose models come
+ * from an endpoint (Local's): asked when it is picked, again on Retry. Picks the first model when
+ * none is chosen: such an agent has no default model.
  */
-export function useServerPicker(): Pick<Props, 'filter' | 'remote'> {
-  const agents = useAppStore((s) => s.serverAgents)
-  return useMemo(() => {
-    if (!agents) return { remote: { installed: {} } }
-    const listed = new Set(agents.agents.map((a) => a.provider))
-    return {
-      filter: (p: LlmProvider) => listed.has(p.id),
-      remote: { installed: Object.fromEntries(agents.agents.map((a) => [a.provider, a.installed])) }
-    }
-  }, [agents])
-}
-
-/** Provider → Model → Effort. Changing provider resets model and effort. */
-export function LlmPicker({ value, onChange, filter, remote }: Props): React.JSX.Element {
-  const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
-  const providers = PROVIDER_LIST.filter((p) => !filter || filter(p))
-  const provider = getProvider(value.provider)
-  const isLocal = provider.id === 'local'
-  const localConfig = settings.providers.local
-  const backend = localConfig?.backend ?? 'ollama'
-  const baseUrl = localConfig?.baseUrl?.trim() || DEFAULT_LOCAL_URLS[backend]
-
-  const [localModels, setLocalModels] = useState<ModelInfo[] | null>(null)
-  const [localError, setLocalError] = useState<string | null>(null)
+function useListedModels(agentId: string | null, value: LlmSelection, onChange: (value: LlmSelection) => void): ListedModels {
+  const [models, setModels] = useState<AgentModel[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [customOpen, setCustomOpen] = useState(false)
-
-  // Latest props for the async fetch below, so it never acts on a stale selection.
+  // Latest props for the async answer, so it never acts on a stale selection.
   const latest = useRef({ value, onChange })
   latest.current = { value, onChange }
-  const loadToken = useRef(0)
-
-  const loadLocal = (): void => {
-    const token = ++loadToken.current
+  const token = useRef(0)
+  const load = (): void => {
+    if (agentId === null) return
+    const mine = ++token.current
     setLoading(true)
-    setLocalError(null)
-    window.api
-      .llmFetchModels(backend, baseUrl)
-      .then((models) => {
-        if (token !== loadToken.current) return
-        setLocalModels(models)
-        // Local has no "default" model: pick the first one if none is chosen. Only while
-        // Local is still the selected provider, and only once (a model is then set).
+    setError(null)
+    getBackend()
+      .agents.models(agentId)
+      .then((list) => {
+        if (mine !== token.current) return
+        setModels(list)
         const { value: current, onChange: change } = latest.current
-        if (current.provider === 'local' && !current.model && models[0]) {
-          change({ provider: 'local', model: models[0].id, ...(current.effort ? { effort: current.effort } : {}) })
+        if (current.provider === agentId && !current.model && list[0]) {
+          change({ provider: agentId, model: list[0].id, ...(current.effort ? { effort: current.effort } : {}) })
         }
       })
-      .catch((err) => token === loadToken.current && setLocalError(String(err)))
-      .finally(() => token === loadToken.current && setLoading(false))
+      .catch((err) => mine === token.current && setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => mine === token.current && setLoading(false))
   }
-
   useEffect(() => {
-    if (isLocal && !remote) loadLocal()
+    setModels(null)
+    load()
     return () => {
-      loadToken.current++
+      token.current++
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocal, backend, baseUrl, !remote])
+  }, [agentId])
+  return { models, error, loading, retry: load }
+}
 
-  const models = isLocal ? (localModels ?? []) : provider.models
+/** Agent → Model → Effort, over the server's agents. Changing the agent resets model and effort. */
+export function LlmPicker({ value, onChange, catalog, offer }: Props): React.JSX.Element {
+  const agent = catalog.get(value.provider)
+  const agents = pickerAgents(value, catalog, offer)
+  const listed = useListedModels(agent?.modelsFrom === 'server' ? agent.id : null, value, onChange)
+  const [customOpen, setCustomOpen] = useState(false)
+  /** No default model: the server lists the models (an endpoint's), or they are typed (an old server) */
+  const noDefault = agent?.modelsFrom === 'server' || agent?.modelsFrom === 'typed'
+  const loading = agent?.modelsFrom === 'server' && listed.loading
+  const models: readonly AgentModel[] = agent?.modelsFrom === 'server' ? (listed.models ?? []) : (agent?.models ?? [])
   const known = models.some((m) => m.id === value.model)
-  const showCustom =
-    customOpen ||
-    (!!value.model && !known && !(isLocal && loading)) ||
-    (isLocal && !loading && !value.model && models.length === 0)
-  const efforts = effortsFor(value)
+  const showCustom = customOpen || (!!value.model && !known && !loading) || (noDefault && !loading && !value.model && models.length === 0)
+  const efforts = effortsOf(value, catalog)
 
   const setModel = (model: string | undefined): void =>
     onChange({ provider: value.provider, ...(model ? { model } : {}), ...(value.effort ? { effort: value.effort } : {}) })
@@ -103,12 +90,12 @@ export function LlmPicker({ value, onChange, filter, remote }: Props): React.JSX
         value={value.provider}
         onChange={(e) => {
           setCustomOpen(false)
-          onChange({ provider: e.target.value as LlmSelection['provider'] })
+          onChange({ provider: e.target.value })
         }}
       >
-        {providers.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.label}
+        {agents.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.label}
           </option>
         ))}
       </select>
@@ -124,19 +111,19 @@ export function LlmPicker({ value, onChange, filter, remote }: Props): React.JSX
           setModel(e.target.value || undefined)
         }}
       >
-        {!isLocal && <option value="">Default model</option>}
-        {isLocal && !value.model && (
+        {!noDefault && <option value="">Default model</option>}
+        {noDefault && !value.model && (
           <option value="" disabled>
             {loading
               ? 'Loading models…'
               : models.length > 0
                 ? 'Choose a model'
-                : remote
-                  ? 'Type a model id' // the server's models are not fetched from here
+                : agent?.modelsFrom === 'typed'
+                  ? 'Type a model id' // an old server can't list them for us
                   : 'No models found'}
           </option>
         )}
-        {isLocal && loading && value.model && <option value={value.model}>Loading models…</option>}
+        {loading && value.model && <option value={value.model}>Loading models…</option>}
         {models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}
@@ -174,15 +161,15 @@ export function LlmPicker({ value, onChange, filter, remote }: Props): React.JSX
           ))}
         </select>
       )}
-      {remote && remote.installed[provider.id] === false && (
+      {agent?.installed === false && (
         <span className="settings-desc settings-warn">
-          {provider.label} isn&apos;t installed on the server — its command is set in the server&apos;s config.
+          {agent.label} isn&apos;t installed on the server — its command is set in the server&apos;s config.
         </span>
       )}
-      {isLocal && localError && (
+      {agent?.modelsFrom === 'server' && listed.error && (
         <span className="settings-desc settings-warn">
-          Could not list models at {baseUrl}: {localError}{' '}
-          <button className="btn btn-ghost llm-small-btn" onClick={loadLocal}>
+          Could not list {agent.label}&apos;s models: {listed.error}{' '}
+          <button className="btn btn-ghost llm-small-btn" onClick={listed.retry}>
             Retry
           </button>
         </span>

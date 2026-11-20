@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
-import { defaultSessionLlm } from '../llm'
+import { useAgentCatalog } from '../agents'
+import { needsModel } from '../agentPicker'
 import { LlmPicker } from './LlmPicker'
-import { describeLlm } from '../../../shared/providers/selection'
+import { agentNote, describeAgent, expectedDefault } from '../../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
 import { createPickMemory, serverFirstPick, v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
 import type { LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
 const MENU_WIDTH = 300
 
-/** The last "Choose…" pick in this window, offered again next time; a server window's per server (its agents are the server's). */
-let lastPick: LlmSelection | undefined
+/** The last "Choose…" pick of each server, for as long as the window lives (its agents are the server's). */
 const serverPicks = createPickMemory()
 
 interface Props {
@@ -22,35 +23,36 @@ interface Props {
 }
 
 /**
- * The + button on the session row starts a default session straight away; the ▾ beside it
- * opens a menu with the default, a one-off "Choose…" picker and the session types.
+ * The + button on the session row starts a default session straight away; the ▾ beside it opens a
+ * menu with the default, the server's agents that are on in the project (server.agents), a one-off
+ * "Choose…" picker and the session types. Until the server answers, or from a server without
+ * `agents`, it offers the agents the project's settings already name. A session type whose agent is
+ * off in the project, or not on the server, is shown greyed out with the reason: the server would
+ * refuse it.
  */
 export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [choosing, setChoosing] = useState(false)
-  const [pick, setPick] = useState<LlmSelection>(lastPick ?? defaultSessionLlm())
+  const [pick, setPick] = useState<LlmSelection>({ provider: DEFAULT_AGENT_ID })
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
-  // Re-render when the defaults change so the Default entry stays accurate.
-  useAppStore((s) => s.llmSettings)
   const llmDefault = useAppStore((s) => s.project?.llmDefault)
   const globalLlm = useAppStore((s) => s.project?.globalLlm)
-  // A server window runs the session with the server's agents, not this machine's: the ones it
-  // listed (server.agents), or the interim from the project's settings until it has.
   const serverEntryId = useAppStore((s) => s.serverWindow?.serverEntryId ?? null)
-  const serverWindow = serverEntryId !== null
   const serverAgents = useAppStore((s) => s.serverAgents)
-  const listed = serverWindow && serverAgents ? v2ServerAgents({ llmDefault }, serverAgents) : null
-  const v2 = serverWindow && !listed ? v2SessionChoices({ llmDefault, globalLlm, sessionTypes }) : null
-  const fallback = defaultSessionLlm()
-  const fallbackLabel = listed ? listed.defaultLabel : v2 ? v2.defaultLabel : describeLlm(fallback)
-  /** What "Choose…" starts from: the last pick, else the default the session would get. */
+  const catalog = useAgentCatalog()
+  const listed = serverAgents ? v2ServerAgents({ llmDefault }, serverAgents, catalog) : null
+  const interim = listed ? null : v2SessionChoices({ llmDefault, globalLlm, sessionTypes }, catalog)
+  const defaultLabel = listed?.defaultLabel ?? interim?.defaultLabel ?? ''
+  /** What "Choose…" starts from: the last pick on this server while it offers its agent, else the default the session would get. */
   const firstPick = (): LlmSelection =>
-    listed
-      ? serverFirstPick(serverEntryId ? serverPicks.get(serverEntryId) : undefined, listed.providers, llmDefault ?? serverAgents?.llmDefault, fallback)
-      : (lastPick ?? fallback)
-  const installed = listed ? Object.fromEntries(listed.agents.map((a) => [a.llm.provider, a.installed])) : null
+    serverFirstPick(
+      serverEntryId ? serverPicks.get(serverEntryId) : undefined,
+      listed?.providers ?? [],
+      serverAgents ? expectedDefault({ llmDefault }, serverAgents.llmDefault, catalog, false) : llmDefault,
+      { provider: DEFAULT_AGENT_ID }
+    )
 
   // Disabled while open (a server window going offline): close it, its picks would do nothing.
   useEffect(() => {
@@ -130,20 +132,15 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
           >
             <button className="skill-menu-item" onClick={() => start()}>
               <span className="skill-menu-name">Default</span>
-              <span className="skill-menu-desc">{fallbackLabel}</span>
+              <span className="skill-menu-desc">{defaultLabel}</span>
             </button>
-            {listed && installed ? (
+            {listed ? (
               choosing ? (
                 <div className="new-session-choose">
-                  <LlmPicker
-                    value={pick}
-                    onChange={setPick}
-                    filter={(p) => listed.providers.includes(p.id)}
-                    remote={{ installed }}
-                  />
+                  <LlmPicker value={pick} onChange={setPick} catalog={catalog} />
                   <button
                     className="btn btn-accent"
-                    disabled={pick.provider === 'local' && !pick.model}
+                    disabled={needsModel(pick, catalog) || !catalog.isOn(pick.provider)}
                     onClick={() => {
                       if (serverEntryId) serverPicks.set(serverEntryId, pick)
                       start(undefined, pick)
@@ -171,55 +168,43 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
                   </button>
                 </>
               )
-            ) : v2 ? (
-              v2.picks.map((llm) => (
-                <button key={describeLlm(llm)} className="skill-menu-item" onClick={() => start(undefined, llm)}>
-                  <span className="skill-menu-name">{describeLlm(llm)}</span>
+            ) : (
+              interim?.picks.map((llm) => (
+                <button key={describeAgent(llm, catalog)} className="skill-menu-item" onClick={() => start(undefined, llm)}>
+                  <span className="skill-menu-name">{describeAgent(llm, catalog)}</span>
                   <span className="skill-menu-desc">An agent this project&apos;s settings use</span>
                 </button>
               ))
-            ) : choosing ? (
-              <div className="new-session-choose">
-                <LlmPicker value={pick} onChange={setPick} />
-                <button
-                  className="btn btn-accent"
-                  disabled={pick.provider === 'local' && !pick.model}
-                  onClick={() => {
-                    lastPick = pick
-                    start(undefined, pick)
-                  }}
-                >
-                  Start
-                </button>
-              </div>
-            ) : (
-              <button className="skill-menu-item" onClick={() => setChoosing(true)}>
-                <span className="skill-menu-name">Choose…</span>
-                <span className="skill-menu-desc">Pick an agent, model and effort for one session</span>
-              </button>
             )}
             {sessionTypes.length > 0 && <div className="skill-menu-group">Session types</div>}
-            {sessionTypes.map((type) => (
-              <button
-                key={type.id}
-                className="skill-menu-item session-type-menu-item"
-                title={type.systemPrompt}
-                onClick={() => start(type)}
-              >
-                {type.icon && <img className="session-type-menu-icon" src={type.icon} alt="" />}
-                <span className="session-type-menu-text">
-                  <span className="skill-menu-name">
-                    {type.name.trim() || 'Untitled'}
-                    {type.llm && describeLlm(type.llm) !== fallbackLabel && (
-                      <span className="session-type-llm-chip">{describeLlm(type.llm)}</span>
+            {sessionTypes.map((type) => {
+              // Only once the server listed its agents: before, every agent counts as on.
+              const note = listed ? agentNote(type.llm, catalog) : null
+              return (
+                <button
+                  key={type.id}
+                  className={`skill-menu-item session-type-menu-item${note ? ' not-installed' : ''}`}
+                  title={note ?? type.systemPrompt}
+                  disabled={note !== null}
+                  onClick={() => start(type)}
+                >
+                  {type.icon && <img className="session-type-menu-icon" src={type.icon} alt="" />}
+                  <span className="session-type-menu-text">
+                    <span className="skill-menu-name">
+                      {type.name.trim() || 'Untitled'}
+                      {type.llm && describeAgent(type.llm, catalog) !== defaultLabel && (
+                        <span className="session-type-llm-chip">{describeAgent(type.llm, catalog)}</span>
+                      )}
+                    </span>
+                    {note ? (
+                      <span className="skill-menu-desc">{note}</span>
+                    ) : (
+                      type.systemPrompt.trim() && <span className="skill-menu-desc">{type.systemPrompt.trim()}</span>
                     )}
                   </span>
-                  {type.systemPrompt.trim() && (
-                    <span className="skill-menu-desc">{type.systemPrompt.trim()}</span>
-                  )}
-                </span>
-              </button>
-            ))}
+                </button>
+              )
+            })}
           </div>,
           document.body
         )}

@@ -1,156 +1,56 @@
-import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
-import { defaultSessionLlm, updateLlmSettings } from '../llm'
-import { LlmPicker, useServerPicker } from './LlmPicker'
-import { PROVIDER_LIST } from '../../../shared/providers/registry'
-import { serverGlobalStart } from '../../../shared/providers/selection'
-import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
-import type {
-  LlmProvider,
-  LlmProviderId,
-  LlmSelection,
-  LlmSettingsPatch,
-  LocalBackend,
-  LocalProviderConfig
-} from '../../../shared/providers/types'
+import { useAgentCatalog } from '../agents'
+import { LlmPicker } from './LlmPicker'
+import { AgentNote } from './AgentBits'
+import { expectedDefault, globalStart, type ClientAgent } from '../../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
+import type { LlmSelection } from '../../../shared/providers/types'
+
+/** The Global panel's agents need Trek's tools (MCP). */
+const withTools = (agent: ClientAgent): boolean => agent.capabilities.mcp
 
 /**
- * Text input with a local draft: typing never touches the store, and the value is committed
- * on blur or Enter. The draft follows outside changes whenever the field isn't being edited.
+ * The project's agents, over its server's (plugins A2: the window's catalog): its default for new
+ * sessions and its Global panel's agent. The server's own default and each agent's command and
+ * settings are its config file's, which the protocol does not edit.
  */
-function DraftInput({
-  value,
-  onCommit,
-  ...rest
-}: {
-  value: string
-  onCommit: (value: string) => void
-} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>): React.JSX.Element {
-  const [draft, setDraft] = useState(value)
-  const [editing, setEditing] = useState(false)
-  const cancelled = useRef(false)
-  useEffect(() => {
-    if (!editing) setDraft(value)
-  }, [value, editing])
-  const commit = (): void => {
-    setEditing(false)
-    if (cancelled.current) {
-      cancelled.current = false
-      setDraft(value)
-      return
-    }
-    if (draft.trim() !== value) onCommit(draft.trim())
-  }
-  return (
-    <input
-      {...rest}
-      type="text"
-      value={draft}
-      onFocus={() => {
-        cancelled.current = false
-        setEditing(true)
-      }}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur()
-        else if (e.key === 'Escape') {
-          cancelled.current = true
-          e.currentTarget.blur()
-        }
-      }}
-    />
-  )
-}
-
-/**
- * App-wide agent defaults, per-provider commands, and this project's overrides.
- * `projectOnly` (a server window): only the project's overrides, over the
- * server's agents; the server's default and its commands are its config file's.
- */
-export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }): React.JSX.Element {
-  const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
+export function LlmSettings(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
-  const serverAgents = useAppStore((s) => s.serverAgents)
-  const serverDefault = serverAgents?.llmDefault
-  const picker = useServerPicker()
-  /** What an override starts from: this machine's default, or the server's. */
-  const startFrom = (): LlmSelection => (projectOnly ? (serverDefault ?? { provider: 'claude' }) : defaultSessionLlm())
-  /** The Global panel's agents need MCP tools, among the ones this window may pick. */
-  const mcpOnly = (p: LlmProvider): boolean => p.capabilities.mcp && (!picker.filter || picker.filter(p))
-  /** What a Global panel override starts from: Claude, or on a server one of its MCP-capable agents. */
-  const globalStart = (): LlmSelection =>
-    projectOnly ? serverGlobalStart(serverDefault, serverAgents?.agents.map((a) => a.provider)) : { provider: 'claude' }
+  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
+  const catalog = useAgentCatalog()
   const setProjectLlmDefault = useAppStore((s) => s.setProjectLlmDefault)
   const setGlobalLlm = useAppStore((s) => s.setGlobalLlm)
-  const [testResult, setTestResult] = useState<string | null>(null)
-
-  // Patches, not whole objects: the main process merges them into the file, so two windows
-  // (or two quick edits) never overwrite each other. A field set to undefined is removed.
-  const save = (patch: LlmSettingsPatch): void => {
-    updateLlmSettings(patch).catch(
-      (err) => void window.api.showError('Could not save LLM settings', String(err))
-    )
-  }
-  const patchProvider = (id: LlmProviderId, patch: Partial<LocalProviderConfig>): void =>
-    save({ providers: { [id]: patch } })
-  const setProjectDefault = (llm: LlmSelection | undefined): void => {
-    setProjectLlmDefault(llm)
-  }
-  const setGlobal = (llm: LlmSelection | undefined): void => {
-    setGlobalLlm(llm)
-  }
-
-  const local = settings.providers.local ?? {}
-  const backend: LocalBackend = local.backend ?? 'ollama'
-  const testLocal = (): void => {
-    setTestResult('Testing…')
-    window.api
-      .llmFetchModels(backend, local.baseUrl?.trim() || DEFAULT_LOCAL_URLS[backend])
-      .then((models) => setTestResult(`Connected — ${models.length} model(s)`))
-      .catch((err) => setTestResult(String(err)))
-  }
+  /** What an override starts from: the agent the server would run now. */
+  const startFrom = (): LlmSelection => expectedDefault({}, serverDefault ?? { provider: DEFAULT_AGENT_ID }, catalog, false)
 
   return (
     <>
       <h3>Agents</h3>
-      {projectOnly ? (
-        <div className="settings-row">
-          <span className="settings-label">
-            <span className="settings-desc">
-              The server&apos;s default agent and each agent&apos;s command are set in the server&apos;s config
-              file. This project can override the default below.
-            </span>
+      <div className="settings-row">
+        <span className="settings-label">
+          <span className="settings-desc">
+            The server&apos;s default agent and each agent&apos;s command are set in the server&apos;s config
+            file. This project can override the default below.
           </span>
-        </div>
-      ) : (
-        <div className="settings-row">
-          <span className="settings-label">
-            <span className="settings-name">Default for new sessions</span>
-            <span className="settings-desc">
-              Used by ⌘T and + on every project, unless the project overrides it below. Applies to
-              new sessions; existing ones keep their agent.
-            </span>
-          </span>
-          <LlmPicker value={settings.llmDefault} onChange={(llmDefault) => save({ llmDefault })} />
-        </div>
-      )}
+        </span>
+      </div>
       {project && (
         <>
           <label className="settings-row">
             <input
               type="checkbox"
               checked={!!project.llmDefault}
-              onChange={(e) => setProjectDefault(e.target.checked ? startFrom() : undefined)}
+              onChange={(e) => setProjectLlmDefault(e.target.checked ? startFrom() : undefined)}
             />
             <span className="settings-label">
               <span className="settings-name">Override the default for this project</span>
-              <span className="settings-desc">{projectOnly ? 'Saved on the server.' : 'Saved in the project file.'}</span>
+              <span className="settings-desc">Saved on the server.</span>
             </span>
           </label>
           {project.llmDefault && (
             <div className="settings-row">
-              <LlmPicker value={project.llmDefault} onChange={setProjectDefault} {...picker} />
+              <LlmPicker value={project.llmDefault} onChange={setProjectLlmDefault} catalog={catalog} />
+              <AgentNote llm={project.llmDefault} />
             </div>
           )}
           <div className="settings-row">
@@ -165,75 +65,19 @@ export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }):
               <input
                 type="checkbox"
                 checked={!project.globalLlm}
-                onChange={(e) => setGlobal(e.target.checked ? undefined : globalStart())}
+                onChange={(e) => setGlobalLlm(e.target.checked ? undefined : globalStart(serverDefault, catalog))}
               />
               Same as the session default
             </label>
             {project.globalLlm && (
-              <LlmPicker value={project.globalLlm} onChange={setGlobal} {...picker} filter={mcpOnly} />
+              <>
+                <LlmPicker value={project.globalLlm} onChange={setGlobalLlm} catalog={catalog} offer={withTools} />
+                <AgentNote llm={project.globalLlm} />
+              </>
             )}
           </div>
         </>
       )}
-      {!projectOnly && PROVIDER_LIST.map((provider) => {
-        const config = settings.providers[provider.id] ?? {}
-        return (
-          <div key={provider.id} className="settings-row llm-provider-card">
-            <span className="settings-label">
-              <span className="settings-name">{provider.label}</span>
-              {provider.id === 'claude' && (
-                <span className="settings-desc">
-                  A project&apos;s claudeCommand, claudeArgs and session mode take precedence.
-                </span>
-              )}
-            </span>
-            <DraftInput
-              className="quick-btn-label-input llm-command-input"
-              placeholder={provider.defaultCommand}
-              value={config.command ?? ''}
-              onCommit={(command) => patchProvider(provider.id, { command: command || undefined })}
-              title="Command"
-            />
-            {provider.approvalModes.length > 0 && (
-              <select
-                className="settings-select"
-                value={config.approvalMode ?? provider.defaultApprovalMode ?? ''}
-                onChange={(e) => patchProvider(provider.id, { approvalMode: e.target.value })}
-                title="Approval mode"
-              >
-                {provider.approvalModes.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            )}
-            {provider.id === 'local' && (
-              <>
-                <select
-                  className="settings-select"
-                  value={backend}
-                  onChange={(e) => patchProvider('local', { backend: e.target.value as LocalBackend })}
-                >
-                  <option value="ollama">Ollama</option>
-                  <option value="lmstudio">LM Studio</option>
-                </select>
-                <DraftInput
-                  className="quick-btn-label-input llm-command-input"
-                  placeholder={DEFAULT_LOCAL_URLS[backend]}
-                  value={local.baseUrl ?? ''}
-                  onCommit={(baseUrl) => patchProvider('local', { baseUrl: baseUrl || undefined })}
-                  title="Base URL"
-                />
-                <button className="btn btn-ghost" onClick={testLocal}>
-                  Test
-                </button>
-                {testResult && <span className="settings-desc">{testResult}</span>}
-              </>
-            )}
-          </div>
-        )
-      })}
     </>
   )
 }

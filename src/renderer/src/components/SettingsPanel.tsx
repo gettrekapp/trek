@@ -4,8 +4,6 @@ import { PluginsSettings, hasPluginSettings } from '../plugins/PluginsSettings'
 import { usePluginEntries } from '../plugins/PluginHost'
 import type { PluginSelection } from '../plugins/pluginsTab'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
-import { settingsSections } from '../backendFeatures'
-import { useFeatures } from '../useFeatures'
 import { nextSettingsTab, resolveSettingsTab, visibleSettingsTabs, type SettingsTabId } from '../settingsTabs'
 import { GeneralTab } from './settings/GeneralTab'
 import { AgentsTab } from './settings/AgentsTab'
@@ -25,8 +23,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // request, and leaving a tab blurs), a plugin's repository settings show as its own tab where it is
   // on (WorktreeSlots), the plugins where it has them (PluginsSettings), and a conflict's
   // Reload remounts the tab on screen.
-  const features = useFeatures()
-  const sections = settingsSections(features)
   const reload = useAppStore((s) => s.settingsReload)
   const pluginEntries = usePluginEntries()
   const pluginTabs = usePluginSettingsTabs()
@@ -93,7 +89,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           key={`${active} ${reload}`}
         >
           {active === 'general' && <GeneralTab />}
-          {active === 'agents' && <AgentsTab projectOnly={sections.agents === 'project'} />}
+          {active === 'agents' && <AgentsTab />}
           {active === 'sessions' && <SessionsTab />}
           {active === 'worktrees' && <WorktreesTab repo={settingsRepo} repoSelector={repoSelector} />}
           {active === 'plugins' && <PluginsSettings chosen={pluginSelection} onChoose={(selection) => setPluginPick({ backend, selection })} />}

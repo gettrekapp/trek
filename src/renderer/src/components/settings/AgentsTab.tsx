@@ -2,14 +2,18 @@ import { CLAUDE_PERMISSION_MODES } from '../../../../shared/providers/claude'
 import { useAppStore } from '../../store'
 import { ImagePicker, SESSION_ICON_LIMITS } from '../ImagePicker'
 import { LlmSettings } from '../LlmSettings'
-import { LlmPicker, useServerPicker } from '../LlmPicker'
+import { LlmPicker } from '../LlmPicker'
+import { AgentNote } from '../AgentBits'
+import { useAgentCatalog } from '../../agents'
+import { expectedDefault } from '../../../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../../../shared/plugins/agents.ts'
 import { SettingText } from '../SettingText'
 import type { SessionType } from '../../../../shared/types'
 
 /** Settings → Agents: the Claude session mode, the agents, and the session types. */
-export function AgentsTab({ projectOnly }: { projectOnly: boolean }): React.JSX.Element {
+export function AgentsTab(): React.JSX.Element {
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
-  const picker = useServerPicker()
+  const catalog = useAgentCatalog()
   // '' is "Server default": the project leaves the mode to the server's Claude setting.
   const permissionMode = useAppStore((s) => s.project?.claudePermissionMode ?? '')
   const setClaudePermissionMode = useAppStore((s) => s.setClaudePermissionMode)
@@ -52,7 +56,7 @@ export function AgentsTab({ projectOnly }: { projectOnly: boolean }): React.JSX.
           ))}
         </select>
       </div>
-      <LlmSettings projectOnly={projectOnly} />
+      <LlmSettings />
       <h3>Session types</h3>
       <div className="settings-row">
         <span className="settings-label">
@@ -98,14 +102,17 @@ export function AgentsTab({ projectOnly }: { projectOnly: boolean }): React.JSX.
                 checked={!type.llm}
                 onChange={(e) =>
                   patchSessionType(type.id, {
-                    llm: e.target.checked ? undefined : (serverDefault ?? { provider: 'claude' })
+                    llm: e.target.checked ? undefined : expectedDefault({}, serverDefault ?? { provider: DEFAULT_AGENT_ID }, catalog, false)
                   })
                 }
               />
               Use the default agent
             </label>
             {type.llm && (
-              <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} {...picker} />
+              <>
+                <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} catalog={catalog} />
+                <AgentNote llm={type.llm} />
+              </>
             )}
           </div>
           <button
