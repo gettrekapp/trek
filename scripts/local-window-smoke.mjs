@@ -324,19 +324,20 @@ try {
   const campsiteEnabled = async () => (await project()).settings.plugins?.campsite?.enabled ?? true
   const tabHiker = detail.locator('.session-tab .cs-indicator')
   check('the campsite draws a hiker on the tab, in place of the badge', [await until(() => tabHiker.count(), 1), await detail.locator('.session-tab .badge').count()], [1, 0])
-  // Its hiker stands on the shown terminal's quick button row; the row and the terminal are as tall with it as without.
+  // Its hiker stands on the shown terminal's quick button row, and the row is as tall with it as without (the terminal never resizes for it).
   const barHikers = () => win.locator('.quick-buttons .cs-bar-hiker').count()
-  const barHeights = () =>
+  const rowHeight = () =>
     win.evaluate(() => {
       const pane = [...document.querySelectorAll('.terminal-pane')].find((p) => p.style.display !== 'none')
-      return pane ? [pane.querySelector('.quick-buttons').getBoundingClientRect().height, pane.querySelector('.terminal-host').getBoundingClientRect().height] : null
+      return pane ? pane.querySelector('.quick-buttons').getBoundingClientRect().height : null
     })
   check("and its hiker stands on the terminal's quick button row", await until(async () => (await barHikers()) > 0, true), true)
-  const heightsWithHiker = await barHeights()
+  const heightWithHiker = await rowHeight()
   await win.evaluate(() => window.__store.getState().setPluginEnabled('campsite', false))
   check('the campsite turned off for the project, on the server', await until(campsiteEnabled, false), false)
   check('and the tab shows the core badge again', [await until(() => detail.locator('.session-tab .badge-done').count(), 1), await tabHiker.count()], [1, 0])
-  check('off, the hiker leaves the row, and the row and the terminal keep their heights', [await until(barHikers, 0), JSON.stringify(await barHeights()) === JSON.stringify(heightsWithHiker), heightsWithHiker?.[0]], [0, true, 32])
+  // (The terminal itself grows when the plugin goes off: its strip leaves the window's bottom. The row is what must not move.)
+  check('off, the hiker leaves the row, and the row is as tall as with it', [await until(barHikers, 0), (await rowHeight()), heightWithHiker], [0, 32, 32])
   await detail.locator('.session-tab .badge-done').click()
   check('a click on the badge marks it complete, on the server', [await until(status, 'complete'), await until(serverStatus, 'complete'), await until(() => detail.locator('.session-tab .badge-complete').count(), 1)], ['complete', 'complete', 1])
   await detail.locator('.session-tab .badge-complete').click()
