@@ -282,7 +282,10 @@ test("movedSessions: whose history follows is the old agents' rule (Claude's and
     session('c', UUID3, 'grok'),
     { ...session('d', '44444444-4444-4444-8444-444444444444'), llm: undefined },
     session('e', '55555555-5555-4555-8555-555555555555', 'aider'),
-    session('f', '66666666-6666-4666-8666-666666666666', 'codex')
+    session('f', '66666666-6666-4666-8666-666666666666', 'codex'),
+    // A malformed old session's llm counts as the default agent too.
+    { ...session('g', '77777777-7777-4777-8777-777777777777'), llm: { provider: 5 } },
+    { ...session('h', '88888888-8888-4888-8888-888888888888'), llm: 'codex' }
   ]
   const stored = project({ repo: '/var/t/app', x: '/private/var/t/app-x' })
   assert.deepEqual(movedSessions(sent, stored), [
@@ -290,7 +293,13 @@ test("movedSessions: whose history follows is the old agents' rule (Claude's and
       worktree: 'x',
       from: '/var/t/app-x',
       to: '/private/var/t/app-x',
-      agentSessionIds: [UUID1, '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555']
+      agentSessionIds: [
+        UUID1,
+        '44444444-4444-4444-8444-444444444444',
+        '55555555-5555-4555-8555-555555555555',
+        '77777777-7777-4777-8777-777777777777',
+        '88888888-8888-4888-8888-888888888888'
+      ]
     }
   ])
 })

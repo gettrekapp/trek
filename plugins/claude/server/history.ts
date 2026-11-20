@@ -1,8 +1,9 @@
-// Claude Code's history (plugins A1; core's claudeSessionService before, now desktop main's only): one
-// ~/.claude/projects/<encoded cwd>/<session id>.jsonl per conversation, and a folder of the same
-// name for its subagents and tool results. The encoding replaces every non-alphanumeric character
-// with "-" (desktop main's importer keeps its own copy of projectDir: keep the two the same).
-// Resuming a session from another cwd (after a promote) works only once its history is moved.
+// Claude Code's history (plugins A1; core's `src/host/claudeSessionService.ts` before, now
+// `src/main`'s, for the importer only): one ~/.claude/projects/<encoded cwd>/<session id>.jsonl per
+// conversation, and a folder of the same name for its subagents and tool results. The encoding
+// replaces every non-alphanumeric character with "-" (desktop main's importer keeps its own copy of
+// projectDir: keep the two the same). Resuming a session from another cwd (after a promote) works
+// only once its history is moved.
 import { access, mkdir, rename, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'

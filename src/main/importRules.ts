@@ -374,7 +374,7 @@ export interface MovedSessions {
   agentSessionIds: string[]
 }
 
-/** Sessions whose history follows the cwd (the agents whose history follows the folder: sessionMigration), with a usable id. */
+/** Sessions whose history follows the cwd (their agent's `sessionMigration`, per the old-server snapshot), with a usable id. */
 function resumable(sessions: readonly Session[]): string[] {
   return sessions
     .filter((s) => V1_AGENTS.facts(s.llm?.provider).capabilities.sessionMigration && isAgentSessionId(s.agentSessionId))
