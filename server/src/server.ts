@@ -36,7 +36,7 @@ import { McpAccessStore } from './mcp/access.ts'
 import { startMcpListener, type McpListener } from './mcp/listener.ts'
 import { coreTools, createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools.ts'
 import { createEventSink, type Machine } from './integrations/machineHandlers.ts'
-import type { Integrations } from './integrations/integrations'
+import { agentIntegrations, type Integrations } from './integrations/integrations.ts'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
 import { legacyCapabilitiesOf, type PluginPresence } from '../../src/shared/plugins/manifest.ts'
@@ -52,7 +52,7 @@ import { AutomationScheduler } from './automations/scheduler.ts'
 import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests.ts'
 import { UiSelections } from './ui/selections.ts'
-import { ToolCatalog } from './mcp/toolCatalog.ts'
+import { ToolCatalog, agentMcpServers } from './mcp/toolCatalog.ts'
 import type { UiClientKind } from '../../src/shared/ui.ts'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth.ts'
 import { createWebHandler } from './web/http.ts'
@@ -104,7 +104,7 @@ export interface ServerOptions {
   local?: boolean
   /** Docker, the environments and the dev stacks on this machine, with their files in the data dir (machine.ts) */
   machine?: Machine
-  /** Linear with the server's own key (its secrets file), and the skills on its disk (integrations.ts) */
+  /** Tests: stands in for the agents' skills (default: agentIntegrations of the server's agents) */
   integrations?: Integrations
   /** The pull request watch (5c-1): how often it polls through the plugins' PR providers; without it (or without `plugins`) no PR is watched */
   prWatch?: { pollMs?: number; recheckMs?: number }
@@ -267,7 +267,7 @@ export function startServer(
   const promoteRequests = new PromoteRequests(hub)
   // What each client shows (`ui.report`), for get_selected_worktree and focus_session.
   const selections = new UiSelections(hub)
-  const toolCatalog = new ToolCatalog({ coreTools: trekTools })
+  const toolCatalog = new ToolCatalog({ coreTools: trekTools, configured: (paths) => agentMcpServers(agents, paths) })
 
   // Background push (6b). A token counts as connected while one of its phone sockets (hello
   // `client: 'trek-mobile'`) is open: the phone already shows what would be pushed. A desktop window
@@ -721,7 +721,7 @@ export function startServer(
         events,
         caller,
         machine: options.machine,
-        integrations: options.integrations,
+        integrations: options.integrations ?? agentIntegrations(agents),
         integrationsChanged,
         prWatch,
         automations,

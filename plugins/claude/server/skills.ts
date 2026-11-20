@@ -1,12 +1,12 @@
-// The Claude Code skills and slash commands a worktree's sessions can run (phase 5b; main's
-// skills.ts before it): the worktree's own `.claude/` and the user's `~/.claude/`, read on the
-// server's machine. Electron-free.
+// Claude Code's skills and slash commands a worktree's sessions can run (plugins A1b;
+// src/host/skillService.ts before): the worktree's own `.claude/` and the user's `~/.claude/`,
+// read on the server's machine. Electron-free.
 import { constants } from 'node:fs'
 import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { SkillInfo } from '../shared/types'
-import { isInside } from './pathContainment.ts'
+import type { SkillInfo } from '../../../src/shared/plugins/agents.ts'
+import { isInside } from '../../../src/shared/plugins/server.ts'
 
 const MAX_DESCRIPTION = 120
 /** The most read of one SKILL.md or command: the frontmatter is at its head. */

@@ -113,3 +113,32 @@ test("Local's model listing (plugins A1b): only the server config's URL, no redi
   await listLocalModels({ server: {}, project: {} }, undefined, reply(200, '{"models":[]}'))
   assert.equal(asked[0].url, 'http://localhost:11434/api/tags')
 })
+
+test("claude: its agent lists Claude Code's skills and the MCP servers Claude Code's config names; no other agent does", async () => {
+  const agents = agentPlugins.flatMap(agentsOf)
+  const claude = agents.find((a) => a.id === 'claude')
+  assert.equal(typeof claude.skills, 'function')
+  assert.equal(typeof claude.externalMcpServers, 'function')
+  for (const a of agents.filter((x) => x.id !== 'claude')) assert.equal(a.skills ?? a.externalMcpServers, undefined, a.id)
+  const dir = mkdtempSync(join(tmpdir(), 'trek-claude-skills-'))
+  // A temp home, so the user's own ~/.claude and ~/.claude.json are never read.
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }
+  const home = join(dir, 'home')
+  const project = join(dir, 'project')
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+  delete process.env.CLAUDE_CONFIG_DIR
+  try {
+    mkdirSync(join(project, '.claude', 'commands'), { recursive: true })
+    writeFileSync(join(project, '.claude', 'commands', 'ship.md'), '---\ndescription: Ship it\n---\n')
+    mkdirSync(join(home, '.claude', 'commands'), { recursive: true })
+    writeFileSync(join(home, '.claude', 'commands', 'todo.md'), '---\ndescription: List todos\n---\n')
+    assert.deepEqual((await claude.skills(project)).map((s) => [s.name, s.source]), [['ship', 'project'], ['todo', 'user']])
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { docs: { command: 'docs-mcp' } }, projects: { [project]: { mcpServers: { db: { url: 'http://127.0.0.1:1/mcp' } } } } }))
+    assert.deepEqual((await claude.externalMcpServers([project])).map((s) => [s.name, s.scope]), [['db', 'local'], ['docs', 'user']])
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+    removeDir(dir)
+  }
+})

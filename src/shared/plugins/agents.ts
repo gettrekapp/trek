@@ -4,6 +4,10 @@
 // (its MCP file, its Global role, its session id, its history). Pure: imported by core and by the
 // agent plugins (plugins/claude, codex, gemini, grok); a plugin imports nothing else of core's.
 export { launchSpec, quoted, raw, shellQuote, word } from '../providers/shell.ts'
+import type { SkillInfo } from '../types.ts'
+import type { McpServerScope, McpTransport } from '../mcpTools.ts'
+export type { SkillInfo } from '../types.ts'
+export type { McpServerScope, McpTransport } from '../mcpTools.ts'
 
 /** The agent every server has (the `claude` plugin's), and the one an unknown id resolves to. */
 export const DEFAULT_AGENT_ID = 'claude'
@@ -123,6 +127,26 @@ export interface AgentHistory {
   migrate(agentSessionId: string, fromCwd: string, toCwd: string): Promise<{ moved: boolean; folderKept?: string }>
 }
 
+/** An MCP server an agent's own config names (plugins A1b: Claude Code's), for `mcpTools.list`. */
+export interface ExternalMcpServer {
+  name: string
+  scope: McpServerScope
+  transport: McpTransport
+  /** stdio */
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  /** http and sse */
+  url?: string
+  headers?: Record<string, string>
+  /** The project path whose config named it (local and project scopes): a stdio server runs there */
+  cwd?: string
+  /** A project server the agent was never told to run: listed, not started */
+  unapproved?: boolean
+  /** The entry is malformed: listed with this error, not started */
+  invalid?: string
+}
+
 export interface AgentProvider {
   /** AGENT_ID_RE; unique across the server's plugins; what `Session.llm.provider` holds */
   id: string
@@ -156,6 +180,10 @@ export interface AgentProvider {
    */
   discoverSessionId?(query: { cwd: string; ageMs: number; exclude: readonly string[] }): Promise<string | undefined>
   history?: AgentHistory
+  /** The skills and slash commands its sessions can run in a worktree (plugins A1b: Claude Code's `.claude/`), then the server user's */
+  skills?(worktreePath: string): Promise<SkillInfo[]>
+  /** The other MCP servers its own config names for these project paths (plugins A1b: Claude Code's) */
+  externalMcpServers?(projectPaths: readonly string[]): Promise<ExternalMcpServer[]>
 }
 
 const CAPABILITY_KEYS = ['presetSessionId', 'resume', 'mcp', 'appendSystemPrompt', 'effort', 'addDirs', 'sessionMigration'] as const

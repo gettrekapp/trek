@@ -1,20 +1,14 @@
-// The server's integrations (phase 5b): the Claude Code skills on its disk. Made once per server
+// The server's integrations (phase 5b): the skills its agents offer (plugins A1b: Claude Code's, from the claude plugin). Made once per server
 // (index.ts) and handed to the handlers through V2Context. (ElevenLabs is the voice plugin's since
 // plugin system phase 1, Linear the Linear plugin's since phase 2.) Also the plugins' key slots in
 // the secrets file and their loopback-only test endpoints.
-import { listSkills } from '../../../src/host/skillService.ts'
+import type { AgentProvider, SkillInfo } from '../../../src/shared/plugins/agents.ts'
 import type { KeySlot } from '../../../src/shared/plugins/server.ts'
-import type { SkillInfo } from '../../../src/shared/types'
 import type { SecretFile } from '../secrets.ts'
 
 export interface Integrations {
   /** A worktree's skills and commands, then the server user's */
   skills: { list(worktreePath: string): Promise<SkillInfo[]> }
-}
-
-export interface IntegrationOptions {
-  /** Whose `~/.claude` the skills come from (default: the server user's home) */
-  home?: string
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])
@@ -46,8 +40,16 @@ export function keySlot(file: SecretFile, name: string): KeySlot {
   }
 }
 
-export function createIntegrations(options: IntegrationOptions): Integrations {
+/** The skills the server's agents offer (plugins A1b: the claude plugin's), as `skills.list` answers them: in the agents' order, the first of a name kept. */
+export function agentIntegrations(agents: { all(): readonly Pick<AgentProvider, 'skills'>[] }): Integrations {
   return {
-    skills: { list: (worktreePath) => listSkills(worktreePath, options.home) }
+    skills: {
+      list: async (worktreePath) => {
+        const lists = await Promise.all(agents.all().map((a) => a.skills?.(worktreePath) ?? Promise.resolve([])))
+        const byName = new Map<string, SkillInfo>()
+        for (const skill of lists.flat()) if (!byName.has(skill.name)) byName.set(skill.name, skill)
+        return [...byName.values()]
+      }
+    }
   }
 }

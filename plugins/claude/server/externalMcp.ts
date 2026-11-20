@@ -1,5 +1,6 @@
-// The MCP servers configured for Claude Code on this machine, for `mcpTools.list`: the user's
-// (`mcpServers` of ~/.claude.json), each project path's local ones (its `projects[path].mcpServers`)
+// The MCP servers configured for Claude Code on this machine (plugins A1b;
+// server/src/mcp/externalConfig.ts before), for `mcpTools.list`: the user's (`mcpServers` of
+// ~/.claude.json), each project path's local ones (its `projects[path].mcpServers`)
 // and the project's own `.mcp.json`. A `.mcp.json` comes with the repository, so its servers are
 // run only once the user approved them for Claude Code (enabledMcpjsonServers, or
 // enableAllProjectMcpServers, in ~/.claude.json's project entry, ~/.claude/settings.json or the
@@ -10,26 +11,9 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { McpServerScope, McpTransport } from '../../../src/shared/mcpTools.ts'
+import type { ExternalMcpServer, McpServerScope } from '../../../src/shared/plugins/agents.ts'
 
-export interface ServerSpec {
-  name: string
-  scope: McpServerScope
-  transport: McpTransport
-  /** stdio */
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  /** http and sse */
-  url?: string
-  headers?: Record<string, string>
-  /** The project path whose config named it (local and project scopes): a stdio server runs there */
-  cwd?: string
-  /** A project server Claude Code was never told to run: listed, not started */
-  unapproved?: boolean
-  /** The entry is malformed: listed with this error, not started */
-  invalid?: string
-}
+export type ServerSpec = ExternalMcpServer
 
 /** The most servers taken from the config, and the largest config file read */
 export const MAX_SERVERS = 50

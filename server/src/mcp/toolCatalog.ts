@@ -7,7 +7,7 @@ import { buildInfo } from '../buildInfo.ts'
 import { codedError } from '../errors.ts'
 import type { V2Context } from '../v2.ts'
 import { sortByName, type McpServerTools, type McpToolCatalog, type McpToolInfo } from '../../../src/shared/mcpTools.ts'
-import { configuredServers, readConfigSources, type ServerSpec } from './externalConfig.ts'
+import type { AgentProvider, ExternalMcpServer as ServerSpec } from '../../../src/shared/plugins/agents.ts'
 import { listServerTools } from './externalClient.ts'
 import type { ToolDefinition } from './protocol.ts'
 
@@ -21,7 +21,7 @@ export interface ExternalServers {
 export interface ToolCatalogDeps {
   /** trek-dev's core tools: server.ts's coreTools(...), with the server's agents in the enums (handed in: tools.ts imports v2.ts, which imports this) */
   coreTools?: readonly ToolDefinition[]
-  /** The configured servers for these project paths */
+  /** The configured servers for these project paths (the server's agents': agentMcpServers); default none */
   configured?: (paths: readonly string[]) => Promise<ServerSpec[]>
   list?: (spec: ServerSpec) => Promise<McpToolInfo[]>
   now?: () => number
@@ -40,7 +40,7 @@ export class ToolCatalog {
 
   constructor(deps: ToolCatalogDeps = {}) {
     this.coreTools = deps.coreTools ?? []
-    this.configured = deps.configured ?? (async (paths) => configuredServers(await readConfigSources(paths)))
+    this.configured = deps.configured ?? (async () => [])
     this.list = deps.list ?? ((spec) => listServerTools(spec, { clientVersion: buildInfo().version }))
     this.now = deps.now ?? Date.now
   }
@@ -110,4 +110,10 @@ export const toolCatalogHandlers: Record<string, Handler> = {
     )
     return { trek, ...external }
   }
+}
+
+/** The other MCP servers the agents' own configs name for these project paths (plugins A1b: Claude Code's), in the agents' order. */
+export async function agentMcpServers(agents: { all(): readonly Pick<AgentProvider, 'externalMcpServers'>[] }, paths: readonly string[]): Promise<ServerSpec[]> {
+  const lists = await Promise.all(agents.all().map((a) => a.externalMcpServers?.(paths) ?? Promise.resolve([])))
+  return lists.flat()
 }

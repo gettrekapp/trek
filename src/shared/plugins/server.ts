@@ -10,6 +10,7 @@ export type { TeardownItem, WorktreeOp } from '../teardown.ts'
 
 export { readBodyCapped, MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES } from '../../host/httpBody.ts'
 export { writeFileAtomic } from '../../host/atomicWrite.ts'
+export { isInside } from '../../host/pathContainment.ts'
 
 /** Where a key lives (a name in the server's secrets file); it never leaves the server. */
 export interface KeySlot {

@@ -8,7 +8,7 @@ import { commandPath } from '../../../src/host/commandPath.ts'
 import { readBodyCapped } from '../../../src/host/httpBody.ts'
 import { killTree } from '../../../src/host/processTree.ts'
 import { MAX_SERVER_TOOLS, MAX_TOOL_DESCRIPTION, type McpToolInfo } from '../../../src/shared/mcpTools.ts'
-import type { ServerSpec } from './externalConfig.ts'
+import type { ExternalMcpServer as ServerSpec } from '../../../src/shared/plugins/agents.ts'
 
 export const PROTOCOL_VERSION = '2025-06-18'
 /** How long one server gets for the whole exchange */

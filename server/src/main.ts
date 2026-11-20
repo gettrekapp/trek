@@ -24,7 +24,6 @@ import { tailscaleAddress, testPhoneAddress } from './tailscale'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
 import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
-import { createIntegrations } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedStacksFromApp } from './integrations/stackSeed'
 import { loadWebBundle, type WebBundle } from './web/bundle'
@@ -351,7 +350,6 @@ const server = startServer(
     historyDir: resolve(serverDataDir, 'history'),
     local: local !== undefined,
     machine: createMachine(serverDataDir),
-    integrations: createIntegrations({}),
     prWatch: {
       // The smokes' knob: the time between polls, and between sign-in checks.
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),

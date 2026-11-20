@@ -91,11 +91,11 @@ test('an exception stays a bare re-export: no code of its own, so nothing new gr
   }
 })
 
-test('the plugin contract (src/shared/plugins) imports no core code beyond src/shared and its two host helpers', () => {
+test('the plugin contract (src/shared/plugins) imports no core code beyond src/shared and its three host helpers', () => {
   const problems = []
   for (const file of walk(join(root, 'src/shared/plugins'))) {
     for (const target of relativeImports(file)) {
-      if (!target.startsWith('src/shared/') && target !== 'src/host/httpBody.ts' && target !== 'src/host/atomicWrite.ts') {
+      if (!target.startsWith('src/shared/') && target !== 'src/host/httpBody.ts' && target !== 'src/host/atomicWrite.ts' && target !== 'src/host/pathContainment.ts') {
         problems.push(`${relative(root, file)} imports ${target}`)
       }
     }

@@ -9,7 +9,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile, secretsPathFor } from '../server/src/secrets.ts'
-import { createIntegrations, testEndpoint } from '../server/src/integrations/integrations.ts'
+import { agentIntegrations, testEndpoint } from '../server/src/integrations/integrations.ts'
+import { listSkills } from '../plugins/claude/server/skills.ts'
 import { readBodyCapped } from '../src/host/httpBody.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -105,7 +106,7 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
     poller.stop()
     store.close()
   })
-  const integrations = createIntegrations({ home })
+  const integrations = { skills: { list: (path) => listSkills(path, home) } }
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, integrations }
   const call = (method, params) => dispatchV2(method, params, ctx)
   const projectId = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result.projectId
@@ -145,7 +146,7 @@ async function skillsSetup(t) {
   execFileSync('git', ['init', '-q', '-b', 'main', a])
   const home = join(dir, 'home')
   mkdirSync(home, { recursive: true })
-  const integrations = createIntegrations({ home })
+  const integrations = { skills: { list: (path) => listSkills(path, home) } }
   return { dir, a, home, list: () => integrations.skills.list(a) }
 }
 
@@ -215,4 +216,16 @@ test('the test endpoints (TREK_SERVER_LINEAR_URL, TREK_SERVER_ELEVENLABS_URL) ar
   }
   assert.equal(warned.length, 6)
   assert.match(warned[0], /X/)
+})
+
+test("agentIntegrations (plugins A1b): the agents' skills in the agents' order, the first of a name kept", async () => {
+  const skill = (name, source) => ({ name, source, kind: 'skill' })
+  const agents = {
+    all: () => [
+      { id: 'a', skills: async () => [skill('review', 'project'), skill('ship', 'user')] },
+      { id: 'b' },
+      { id: 'c', skills: async () => [skill('review', 'user'), skill('lint', 'user')] }
+    ]
+  }
+  assert.deepEqual((await agentIntegrations(agents).skills.list('/w')).map((s) => [s.name, s.source]), [['review', 'project'], ['ship', 'user'], ['lint', 'user']])
 })
