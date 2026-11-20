@@ -1075,8 +1075,8 @@ commands do (registered repository, not missing, inside the allowlist).
 
 A plugin (plugin system phase 1) is a feature with its own methods, events, MCP tools, session
 prompt and client UI, built into trek-server and the Trek app (`plugins/<id>/`). The welcome lists
-the server's (`plugins: [{id, version, defaultEnabled}]`: a client goes by the server's default, not its
-own); a server older than plugins sends no `plugins`, and a
+the server's (`plugins: [{id, version, defaultEnabled, available?, required?}]`: a client goes by the
+server's default, not its own); a server older than plugins sends no `plugins`, and a
 client then knows a plugin only by its legacy capability (`voice`), if it has one.
 
 A built-in plugin may run only on some server platforms (plugins E1). Elsewhere the server doesn't set it up, its methods are unknown, and the welcome lists it with `available: false` (a client shows it as missing there).
@@ -1094,6 +1094,14 @@ are left out, and it sends that project no events. A change shows at an agent's 
 and in the prompt of the sessions started after it (the server sends no MCP `listChanged`: an agent
 that listed a tool before it was switched off gets an unknown-tool error if it calls it). A server
 older than plugins has no per-project setting: its voice (the legacy capability) is on in every project.
+
+<a id="required-plugins"></a>**Required plugins** (plugins A1b). A plugin the welcome lists with
+`required: true` (the `claude` plugin) is always on, whatever its default or a project's setting; a
+client shows it on and offers no switch. `project.updateSettings` refuses switching it off:
+`{<id>: {enabled: false}}` is `BAD_REQUEST` "settings.plugins.<id>: it is always on and can't be
+turned off". A `false` that arrives in an import, or one the project already stores and a client
+sends back unchanged (an older client sends the whole map), is kept and ignored: the plugin stays on.
+A server older than A1b sends no `required`.
 
 **Server-wide changes.** A plugin's key or config set by any client sends `plugins.changed {id}` to
 every authenticated connection; one with a legacy capability sends `integrations.changed
@@ -1784,11 +1792,13 @@ Claude and Local), `capabilities` (`presetSessionId`, `resume`, `mcp`,
 `defaultApprovalMode`, and `listsModels` (its models come from `agents.models`,
 not `models`). With a `projectId`, `on` says whether the agent's plugin is on in
 that project. An agent that is off is hidden for new sessions: `session.start`,
-`start_session`, a session type's agent and an automation's agent are
-`BAD_REQUEST` "<label> is turned off for this project", and a default that names it
-is passed over. Running and saved sessions keep their agent: restart and resume
-are not refused. The `claude` plugin is always on (`required` in the welcome's
-`plugins`): Claude is the agent an unknown id runs. A client without `agentInfo`
+`start_session` and saving a session type or an automation that newly takes it
+(a new one, or one whose agent changes to it) are `BAD_REQUEST` "<label> is turned
+off for this project"; a session type or automation that already had that agent
+stays editable. A run of an automation whose agent is off fails with that message.
+A default that names it is passed over. Running and saved sessions keep their
+agent: restart and resume are not refused. The `claude` plugin is always on
+([required](#required-plugins) in the welcome's `plugins`): Claude is the agent an unknown id runs. A client without `agentInfo`
 ignores the extra fields; the list's agents are the server's, not a fixed set.
 
 `agents.models {provider, projectId?}` returns `{models}`: an agent's static list,
@@ -1797,7 +1807,8 @@ LM Studio's `/v1/models`, at the `llm` section's `baseUrl`, asked by the server
 with a 5 s limit), that endpoint's. The client names no URL: only the server
 config's is asked, and a redirect is refused. An agent the server lacks is
 `BAD_REQUEST`, an unknown `projectId` `NOT_FOUND`; an endpoint that fails is
-`TOOL_ERROR` with its reason (the URL without any user name or password).
+`TOOL_ERROR` with its reason (the URL without its user name, password, query or
+fragment).
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
 initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
