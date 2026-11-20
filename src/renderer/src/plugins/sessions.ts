@@ -2,6 +2,7 @@
 // order, the selected one, and a cached feed for useSyncExternalStore (the same array until
 // something changes). Pure: the window passes in its store's state (tests pass a literal).
 import type { PluginSession, PluginSessionStatus } from '../../../shared/plugins/client.ts'
+import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
 
 export interface SessionInput {
   /** The project's worktrees in sidebar order */
@@ -25,7 +26,7 @@ export function pluginSessions(input: SessionInput): PluginSession[] {
       out.push({
         terminalId: id,
         label: meta.title,
-        provider: meta.llm?.provider ?? 'claude',
+        provider: meta.llm?.provider ?? DEFAULT_AGENT_ID,
         status: meta.status as PluginSessionStatus,
         decision: Object.hasOwn(input.decisions, id),
         worktreeId: worktree ? worktree.id : null,

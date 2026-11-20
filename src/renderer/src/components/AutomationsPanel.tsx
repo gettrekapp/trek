@@ -19,6 +19,9 @@ import {
   type AutomationState
 } from '../automations'
 import { AutomationEditor } from './AutomationEditor'
+import { useAgentCatalog } from '../agents'
+import { AgentNote } from './AgentBits'
+import { describeAgent } from '../../../shared/agents/catalog.ts'
 import { useListDetail } from './useListDetail'
 
 interface Props {
@@ -77,6 +80,7 @@ interface DetailProps {
 /** One automation in full: when it runs, how the last run went, its prompt and its history. */
 function AutomationDetail({ a, state, now, offline, terminals, onRun, onEdit }: DetailProps): React.JSX.Element {
   const next = nextRunFact(a, now)
+  const catalog = useAgentCatalog()
   const openable = openableRun(a, terminals)
   const running = state === 'running'
   return (
@@ -115,7 +119,8 @@ function AutomationDetail({ a, state, now, offline, terminals, onRun, onEdit }: 
         </div>
         <div className="automation-fact">
           <span className="muted">Agent</span>
-          <strong>{a.llm ? a.llm.provider : "The project's Global agent"}</strong>
+          <strong>{a.llm ? describeAgent(a.llm, catalog) : "The project's Global agent"}</strong>
+          <AgentNote llm={a.llm} />
         </div>
       </div>
       <section className="automation-section" aria-label="Prompt">

@@ -39,8 +39,10 @@ import { MoveWorktreeModal } from './MoveWorktreeModal'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { moveTargets } from '../v2/moveFlow'
 import { isPromoting, subscribePromoting } from '../v2/promoteFlow'
-import { getProvider } from '../../../shared/providers/registry'
-import { describeLlm } from '../../../shared/providers/selection'
+import { describeAgent } from '../../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
+import { useAgentCatalog } from '../agents'
+import { AgentGlyph } from './AgentBits'
 import type { GitWorktreeInfo, Repository, StackStatus } from '../../../shared/types'
 
 interface Props {
@@ -109,6 +111,7 @@ export function WorktreeDetail({
   const setBranchTag = useAppStore((s) => s.setBranchTag)
   const setBranchCustomTag = useAppStore((s) => s.setBranchCustomTag)
   const ticketViewOf = useTicketViews()
+  const catalog = useAgentCatalog()
 
   const [panel, setPanel] = useState<Panel>('sessions')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -264,7 +267,7 @@ export function WorktreeDetail({
     ? [...order].reverse().flatMap((id) => {
         const t = terminals[id]
         if (!t || t.status === 'exited') return []
-        return [{ terminalId: id, title: t.title, detail: `${describeLlm(t.llm ?? { provider: 'claude' })} · ${t.status}` }]
+        return [{ terminalId: id, title: t.title, detail: `${describeAgent(t.llm ?? { provider: DEFAULT_AGENT_ID }, catalog)} · ${t.status}` }]
       })
     : []
   // Through the project's trackers (their plugins'): its label, link and looked-up issue.
@@ -830,11 +833,7 @@ export function WorktreeDetail({
                 />
                 <DecisionIcon terminalId={id} />
                 {icon && <img className="session-tab-icon" src={icon} alt="" />}
-                {meta.llm && meta.llm.provider !== 'claude' && (
-                  <span className="session-llm-glyph" title={describeLlm(meta.llm)}>
-                    {getProvider(meta.llm.provider).glyph}
-                  </span>
-                )}
+                <AgentGlyph llm={meta.llm} />
                 {editingId === id ? (
                   <input
                     className="tab-title-input"

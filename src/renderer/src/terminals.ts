@@ -1,7 +1,8 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { allWorktrees, repoOfWorktreeId, BOT_DECISION_ID, GLOBAL_WORKTREE_ID, useAppStore } from './store'
-import { getProvider } from '../../shared/providers/registry'
+import { DEFAULT_AGENT_ID } from '../../shared/plugins/agents.ts'
+import { agentCatalogNow } from './agents'
 import type { LlmSelection } from '../../shared/providers/types'
 import type { PtyStream } from '../../shared/client/index.ts'
 import type { PtyInfo } from '../../shared/protocolV2'
@@ -69,14 +70,14 @@ interface Entry {
 
 const entries = new Map<string, Entry>()
 
-/** The agent a terminal runs: its meta's selection, or Claude for older sessions. */
+/** The agent a terminal runs: its meta's selection, or the default agent for older sessions. */
 function terminalLlm(id: string): LlmSelection {
-  return useAppStore.getState().terminals[id]?.llm ?? { provider: 'claude' }
+  return useAppStore.getState().terminals[id]?.llm ?? { provider: DEFAULT_AGENT_ID }
 }
 
-/** "Claude", "Codex", … for notifications and buttons. */
+/** The session's agent's label, as the server names it, for notifications and buttons. */
 export function agentLabel(id: string): string {
-  return getProvider(terminalLlm(id).provider).label
+  return agentCatalogNow().label(terminalLlm(id).provider)
 }
 
 const THEME = {

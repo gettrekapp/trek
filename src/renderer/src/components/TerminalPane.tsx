@@ -13,6 +13,7 @@ import { quickButtonContext } from '../quickButtonContext'
 import { QuickButtonModal } from './QuickButtonModal'
 import { QuickButtonRunModal } from './QuickButtonRunModal'
 import { useAppStore } from '../store'
+import { useAgentCatalog } from '../agents'
 import {
   agentLabel,
   attachTerminal,
@@ -62,6 +63,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
   // Subscribed so the restart label follows the session's agent.
   const llm = useAppStore((s) => s.terminals[terminalId]?.llm)
+  const catalog = useAgentCatalog()
   const quickButtons = useAppStore((s) =>
     global ? s.project?.globalTerminalButtons : s.project?.terminalButtons
   )
@@ -369,7 +371,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
             >
               Restart {agentLabel(terminalId)}
             </button>
-            {llm && llm.provider !== 'claude' && (
+            {llm && catalog.get(llm.provider)?.installed === false && (
               <span className="exited-hint">
                 {`If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`}
               </span>

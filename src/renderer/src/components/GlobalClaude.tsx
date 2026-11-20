@@ -4,9 +4,9 @@ import { focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { cycleInView, tabView, tabsInView, viewFlags, viewTab, type GlobalTabView } from '../globalTabs'
 import { useFeatures } from '../useFeatures'
 import { getBackend } from '../backend'
-import { getProvider } from '../../../shared/providers/registry'
+import { useAgentCatalog } from '../agents'
+import { AgentGlyph } from './AgentBits'
 import { v2GlobalLabel } from '../v2/sessionChoices'
-import { describeLlm } from '../../../shared/providers/selection'
 import { StatusBadge } from './StatusBadge'
 import { SessionIndicator } from '../plugins/SessionIndicator'
 import { DecisionIcon } from './DecisionIcon'
@@ -62,6 +62,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   const llmDefault = useAppStore((s) => s.project?.llmDefault)
   // The server picks the agent, and while its link is down nothing can start or close.
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
+  const catalog = useAgentCatalog()
   const offline = useAppStore((s) => s.serverOffline)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
@@ -225,11 +226,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
                   />
                 ) : (
                   <>
-                    {meta.llm && meta.llm.provider !== 'claude' && (
-                      <span className="session-llm-glyph" title={describeLlm(meta.llm)}>
-                        {getProvider(meta.llm.provider).glyph}
-                      </span>
-                    )}
+                    <AgentGlyph llm={meta.llm} />
                     <span className="global-tab-title">{meta.title}</span>
                   </>
                 )}
@@ -297,7 +294,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
         <span className="global-title">
           Global ·{' '}
-          {v2GlobalLabel({ globalLlm, llmDefault }, serverDefault)}
+          {v2GlobalLabel({ globalLlm, llmDefault }, serverDefault, catalog)}
         </span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (
