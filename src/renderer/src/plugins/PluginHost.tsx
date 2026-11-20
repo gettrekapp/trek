@@ -10,7 +10,7 @@ import { revealTerminal, terminalLabel } from '../terminals'
 import { SettingNumber, SettingText } from '../components/SettingText'
 import type { ProjectFile, WorktreeInstance } from '../../../shared/types'
 import { createClientHost, type HostDeps } from './host'
-import { cachedRepos } from './projectView'
+import { cachedProjectSettings, cachedRepos } from './projectView'
 import { pluginActive, pluginRequired, pluginStatus, type PluginStatus } from './presence'
 import { sessionsSource, type SessionsSource } from './sessions.ts'
 import { activeSlotEntries } from './slots.ts'
@@ -74,6 +74,9 @@ const windowRepos = cachedRepos(
   (path) => getBackend().plugins.worktreeId(path)
 )
 
+/** The window's project's values of each plugin's project settings (plugins A2) */
+const windowProjectSettings = cachedProjectSettings(() => useAppStore.getState().project)
+
 /** What every plugin host in this window is built with. */
 const hostDeps = (): HostDeps => ({
   appSettings: window.api.appSettings,
@@ -111,7 +114,13 @@ const hostDeps = (): HostDeps => ({
   setBranchSettings: (pluginId, repoId, branch, values, label) => useAppStore.getState().setPluginBranchSettings(pluginId, repoId, branch, values, label),
   confirm: (prompt) => window.api.confirm(prompt),
   showError: (title, message) => window.api.showError(title, message),
-  components: { SettingText, SettingNumber }
+  components: { SettingText, SettingNumber },
+  projectSettings: windowProjectSettings,
+  onProjectSettingsChanged: (listener) =>
+    useAppStore.subscribe((state, previous) => {
+      if (state.project !== previous.project) listener()
+    }),
+  setProjectSetting: (key, value, label) => useAppStore.getState().setPluginSetting(key, value, label)
 })
 
 function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost {
@@ -130,6 +139,8 @@ const themeHosts = new WeakMap<WindowBackend, Map<string, ClientPluginHost>>()
 
 /** A theme's repos(): none, one array so it is a stable snapshot. */
 const THEME_REPOS: readonly PluginRepo[] = []
+/** A theme's projectSettings(): none, one object so it is a stable snapshot. */
+const THEME_VALUES: Readonly<Record<string, string>> = Object.freeze({})
 
 /**
  * The window's active theme as an entry for PluginScope (theme plugins). Its host has no server
@@ -151,7 +162,11 @@ export function themeEntry(backend: WindowBackend, plugin: ClientPlugin): Plugin
       setRepoSettings: () => {},
       setBranchSettings: () => {},
       confirm: () => Promise.resolve(false),
-      showError: () => Promise.resolve()
+      showError: () => Promise.resolve(),
+      projectSettings: () => THEME_VALUES,
+      onProjectSettingsChanged: () => () => {},
+      setProjectSetting: () => {},
+      agentModels: () => Promise.reject(new Error('A theme has no server half to ask'))
     }
     byId.set(plugin.manifest.id, host)
   }

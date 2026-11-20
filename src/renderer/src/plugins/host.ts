@@ -6,6 +6,7 @@ import type { ClientPluginHost, PluginConfirmPrompt, PluginRepo, PluginSession }
 import type { PluginManifest, PluginPrefValue, PluginSettingValues } from '../../../shared/plugins/manifest.ts'
 import type { AppSettings, AppSettingsPatch } from '../../../shared/appSettings.ts'
 import type { WindowBackend } from '../backend'
+import { CAPABILITY } from '../../../shared/protocolV2.ts'
 import { changedFor, forProject } from './presence.ts'
 import { ticketInfoStore, type TicketInfoStore } from './ticketInfo.ts'
 
@@ -42,6 +43,11 @@ export interface HostDeps {
   showError?: (title: string, message: string) => Promise<void>
   /** Core's Settings fields (plugins E3; default: ones that render nothing) */
   components?: ClientPluginHost['components']
+  /** The project's values of a plugin's project setting keys (plugins A2; default: none) */
+  projectSettings?: (pluginId: string, keys: readonly string[]) => Readonly<Record<string, string>>
+  onProjectSettingsChanged?: (listener: () => void) => () => void
+  /** The store's plugin project setting setter (plugins A2; default: nothing is written) */
+  setProjectSetting?: (key: string, value: string, label: string) => void
 }
 
 const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefValue> =>
@@ -55,6 +61,8 @@ const NO_SESSIONS: readonly PluginSession[] = []
 /** A host without the window's project (a test's): one array, so it is a stable snapshot. */
 const NO_REPOS: readonly PluginRepo[] = []
 const NO_COMPONENTS: ClientPluginHost['components'] = { SettingText: () => null, SettingNumber: () => null }
+/** A host without the window's project (a test's): one object, so it is a stable snapshot. */
+const NO_VALUES: Readonly<Record<string, string>> = Object.freeze({})
 
 /** The longest a plugin's request may wait (plugins E3): an hour. */
 export const MAX_PLUGIN_TIMEOUT_MS = 60 * 60_000
@@ -76,6 +84,8 @@ const confirmFields = (prompt: PluginConfirmPrompt): PluginConfirmPrompt => ({
 export function createClientHost(manifest: PluginManifest, backend: WindowBackend, deps: HostDeps): ClientPluginHost {
   const { id } = manifest
   const projectId = backend.plugins.projectId ?? ''
+  /** The project settings the plugin's manifest declares: the only ones its host reads or writes */
+  const settingKeys = Object.keys(manifest.projectSettings ?? {})
   return {
     id,
     projectId,
@@ -142,6 +152,18 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     // Async, so a prompt whose fields can't be read rejects rather than throws.
     confirm: async (prompt) => (deps.confirm ? deps.confirm(confirmFields(prompt)) : false),
     showError: (title, message) => deps.showError?.(title, message) ?? Promise.resolve(),
-    components: deps.components ?? NO_COMPONENTS
+    components: deps.components ?? NO_COMPONENTS,
+    projectSettings: () => deps.projectSettings?.(id, settingKeys) ?? NO_VALUES,
+    onProjectSettingsChanged: (listener) => deps.onProjectSettingsChanged?.(listener) ?? (() => {}),
+    // The plugin's name labels the setting in a failure dialog.
+    setProjectSetting: (key, value) => {
+      if (settingKeys.includes(key)) deps.setProjectSetting?.(key, String(value), manifest.name)
+    },
+    agentModels: async (agentId) => {
+      if (backend.plugins.welcome()?.capabilities?.includes(CAPABILITY.agentInfo) !== true) {
+        throw new Error("This server can't list an agent's models: update it")
+      }
+      return backend.agents.models(String(agentId))
+    }
   }
 }

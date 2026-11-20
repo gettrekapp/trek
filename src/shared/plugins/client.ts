@@ -8,6 +8,7 @@
 // window (globalThis.__trekPlugin, set by the renderer's pluginGlobals.ts); it must never bundle
 // its own.
 import { createContext, useContext, useSyncExternalStore, type FC } from 'react'
+import type { AgentModel } from './agents.ts'
 import type { PluginManifest, PluginPrefValue, PluginSettingValues } from './manifest.ts'
 import type { PrProvider } from './pullRequests.ts'
 import type { TicketInfo, TicketProvider } from './tickets.ts'
@@ -161,6 +162,24 @@ export interface ClientPluginHost {
   showError(title: string, message: string): Promise<void>
   /** Core's Settings fields (plugins E3) */
   readonly components: { SettingText: FC<PluginSettingTextProps>; SettingNumber: FC<PluginSettingNumberProps> }
+  /**
+   * The window's project's values of this plugin's `projectSettings` keys (plugins A2: the claude
+   * plugin's claudePermissionMode), a pending edit of this window included; a key without a string
+   * value is left out. The same object until the project changes.
+   */
+  projectSettings(): Readonly<Record<string, string>>
+  /** Called when projectSettings() may have changed; returns the unsubscribe */
+  onProjectSettingsChanged(listener: () => void): () => void
+  /**
+   * Sets one of this plugin's project settings ('' removes it): saved on the server as a
+   * compare-and-set, shown at once while pending. A key its manifest doesn't declare is ignored.
+   */
+  setProjectSetting(key: string, value: string): void
+  /**
+   * An agent's models, asked on the window's server (`agents.models`, plugins A2): an endpoint's
+   * (Local's) or the static list. Rejects on a server without `agentInfo`.
+   */
+  agentModels(agentId: string): Promise<AgentModel[]>
 }
 
 export interface SessionIndicatorProps {
@@ -292,4 +311,10 @@ export function usePluginHost(): ClientPluginHost {
 export function usePluginRepos(): readonly PluginRepo[] {
   const host = usePluginHost()
   return useSyncExternalStore(host.onReposChanged, host.repos)
+}
+
+/** The host's projectSettings(), kept current (plugins A2). */
+export function useProjectSettings(): Readonly<Record<string, string>> {
+  const host = usePluginHost()
+  return useSyncExternalStore(host.onProjectSettingsChanged, host.projectSettings)
 }

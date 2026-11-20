@@ -8,6 +8,7 @@ import { changedFor, forProject, pluginActive, pluginRequired, pluginStatus, wit
 import { COLIMA_MANIFEST } from '../plugins/colima/manifest.ts'
 import { GITHUB_MANIFEST } from '../plugins/github/manifest.ts'
 import { createClientHost } from '../src/renderer/src/plugins/host.ts'
+import { cachedProjectSettings } from '../src/renderer/src/plugins/projectView.ts'
 import { parseAppSettings, DEFAULT_APP_SETTINGS } from '../src/shared/appSettings.ts'
 
 const voice = { id: 'voice', version: '1.0.0', name: 'Voice', description: '', defaultEnabled: true, legacyCapability: 'voice' }
@@ -375,4 +376,54 @@ test('pluginRequired (plugins A2): only from the built-in entry the server lists
   assert.equal(pluginRequired(voice, welcome), false)
   assert.equal(pluginRequired(quiet, { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: true, required: true, type: 'theme' }], capabilities: [] }), false, "an installed plugin's entry is not the built-in's")
   assert.equal(pluginRequired(quiet, undefined), false)
+})
+
+test("the host (plugins A2): its plugin's project settings, read and written through the window; an agent's models from the server", async () => {
+  const projectFile = { name: 'p', claudePermissionMode: 'plan', claudeArgs: '', titleBarColor: '#111' }
+  const writes = []
+  const listeners = []
+  const asked = []
+  const backend = {
+    plugins: { projectId: 'p1', welcome: () => ({ plugins: [], capabilities: ['agents', 'agentInfo'] }), request: async () => null, onEvent: () => () => {}, onConnected: () => () => {} },
+    agents: { models: async (provider) => (asked.push(provider), [{ id: 'qwen', label: 'qwen' }]) }
+  }
+  const manifest = { id: 'claude', version: '1.0.0', name: 'Claude Code', description: '', defaultEnabled: true, projectSettings: { claudePermissionMode: 'string', claudeArgs: 'string' } }
+  const host = createClientHost(manifest, backend, {
+    appSettings: fakeAppSettings(),
+    terminalLabel: String,
+    currentBackend: () => backend,
+    projectSettings: cachedProjectSettings(() => projectFile),
+    onProjectSettingsChanged: (l) => (listeners.push(l), () => listeners.splice(listeners.indexOf(l), 1)),
+    setProjectSetting: (...args) => void writes.push(args)
+  })
+  // Its own keys that have a value: never another plugin's or core's.
+  assert.deepEqual(host.projectSettings(), { claudePermissionMode: 'plan' })
+  assert.equal(host.projectSettings(), host.projectSettings(), 'the same object while the project is the same')
+  const off = host.onProjectSettingsChanged(() => {})
+  assert.equal(listeners.length, 1)
+  off()
+  assert.equal(listeners.length, 0)
+  host.setProjectSetting('claudePermissionMode', 'acceptEdits')
+  host.setProjectSetting('titleBarColor', '#000')
+  assert.deepEqual(writes, [['claudePermissionMode', 'acceptEdits', 'Claude Code']], "a key its manifest doesn't declare is not written")
+  assert.deepEqual(await host.agentModels('local'), [{ id: 'qwen', label: 'qwen' }])
+  assert.deepEqual(asked, ['local'])
+  // A server without agentInfo can't list an agent's models.
+  const old = { ...backend, plugins: { ...backend.plugins, welcome: () => ({ plugins: [], capabilities: ['agents'] }) } }
+  await assert.rejects(createClientHost(manifest, old, { appSettings: fakeAppSettings(), terminalLabel: String, currentBackend: () => old }).agentModels('local'), /update it/)
+  // Without the window's deps (a test's host): no values (one stable object), nothing written.
+  const bare = createClientHost(manifest, backend, { appSettings: fakeAppSettings(), terminalLabel: String, currentBackend: () => backend })
+  assert.deepEqual([bare.projectSettings(), bare.projectSettings() === bare.projectSettings()], [{}, true])
+  bare.setProjectSetting('claudePermissionMode', 'plan')
+})
+
+test('cachedProjectSettings (plugins A2): a plugin\'s string values, made again only when the project changes', () => {
+  let project = { claudePermissionMode: 'plan', claudeArgs: 7 }
+  const read = cachedProjectSettings(() => project)
+  const first = read('claude', ['claudePermissionMode', 'claudeArgs'])
+  assert.deepEqual(first, { claudePermissionMode: 'plan' })
+  assert.equal(read('claude', ['claudePermissionMode', 'claudeArgs']), first)
+  project = { claudePermissionMode: 'auto' }
+  assert.deepEqual(read('claude', ['claudePermissionMode', 'claudeArgs']), { claudePermissionMode: 'auto' })
+  assert.deepEqual(cachedProjectSettings(() => null)('claude', ['claudePermissionMode']), {})
 })

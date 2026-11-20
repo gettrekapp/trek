@@ -69,3 +69,26 @@ export function cachedRepos(read: () => ReposSource, worktreeId: (path: string) 
     return repos
   }
 }
+
+/**
+ * A plugin's project settings as its host gives them (plugins A2): the string values of its keys,
+ * empty ones left out. Made again only when the project changes: the same object otherwise, so
+ * useSyncExternalStore can hand it to React as a stable snapshot.
+ */
+export function cachedProjectSettings(read: () => ProjectFile | null): (pluginId: string, keys: readonly string[]) => Readonly<Record<string, string>> {
+  const cache = new Map<string, { project: ProjectFile | null; values: Readonly<Record<string, string>> }>()
+  return (pluginId, keys) => {
+    const project = read()
+    const hit = cache.get(pluginId)
+    if (hit && hit.project === project) return hit.values
+    const fields = (project ?? {}) as Record<string, unknown>
+    const values: Record<string, string> = {}
+    for (const key of keys) {
+      const value = Object.hasOwn(fields, key) ? fields[key] : undefined
+      if (typeof value === 'string' && value !== '') values[key] = value
+    }
+    const frozen = Object.freeze(values)
+    cache.set(pluginId, { project, values: frozen })
+    return frozen
+  }
+}
