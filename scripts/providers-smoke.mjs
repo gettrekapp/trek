@@ -18,6 +18,9 @@
 //     helper, never a bearer_token_env_var; the token is in neither its argv nor its environment
 //     (ps -E, whose control is its own TREK_TERMINAL_ID); the helper prints the Authorization
 //     header, and those headers reach the server's MCP endpoint;
+//   - the window's Codex tab shows the server's glyph; Choose… → Local lists the models the server read from a loopback Ollama stub;
+//   - opening Settings → Agents with a saved Local default and session type that have no model
+//     sends no project.updateSettings: showing a saved choice saves nothing;
 //   - no error dialogs (main's dialogs are stubbed), no console or page errors.
 //
 // Prints PROVIDERS SMOKE PASS (n checks) or PROVIDERS SMOKE FAIL and exits 0 or 1.
@@ -33,6 +36,8 @@ import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeSh
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
+import { openSettingsTab } from './smokeSettings.mjs'
+import { createServer } from 'node:http'
 
 const WATCHDOG_MS = 180_000
 
@@ -90,9 +95,23 @@ for (const [name, marker] of [['fake-codex', 'esc to interrupt'], ['fake-gemini'
     ].join('\n')
   )
 }
+// Local's endpoint (plugins A2): a loopback stub answering Ollama's model list, so the window's
+// picker shows Local's models as its server lists them. Never a real model server; Local is never
+// started (its command is a fake agent anyway).
+const modelStub = createServer((req, res) => {
+  if (req.url === '/api/tags') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ models: [{ name: 'stub-coder:7b' }, { name: 'stub-chat:1b' }] }))
+  } else {
+    res.writeHead(404)
+    res.end()
+  }
+})
+await new Promise((resolve) => modelStub.listen(0, '127.0.0.1', resolve))
+const stubUrl = `http://127.0.0.1:${modelStub.address().port}`
 writeFileSync(
   join(profile, 'config.json'),
-  JSON.stringify({ repos: [], llm: { llmDefault: { provider: 'claude' }, providers: { codex: { command: agents['fake-codex'] }, gemini: { command: agents['fake-gemini'] } } } })
+  JSON.stringify({ repos: [], llm: { llmDefault: { provider: 'claude' }, providers: { codex: { command: agents['fake-codex'] }, gemini: { command: agents['fake-gemini'] }, local: { command: agents['fake-codex'], backend: 'ollama', baseUrl: stubUrl } } } })
 )
 
 let app = null
@@ -122,7 +141,10 @@ dialog.showMessageBox = async (...args) => {
 let exitCode = 1
 const finish = makeFinish({
   getApp: () => app,
-  beforeClose: () => sdk?.close(),
+  beforeClose: () => {
+    sdk?.close()
+    modelStub.close()
+  },
   teardown: () => teardown(),
   report: (reason) => {
     const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -141,6 +163,10 @@ const filesUnder = (dir) =>
  * A process's argv then its environment, space-separated, as any process of this user can read
  * them: macOS's `ps -E` (BSD only: procps has no -E); on Linux, /proc/<pid>/cmdline and environ.
  */
+/** How many requests the windows have sent so far; the params of those of `method` since such a count. */
+const sentCount = () => app.evaluate(() => globalThis.__v2Sent.length)
+const sentByWindow = (since, method) => app.evaluate((_electron, [since, method]) => globalThis.__v2Sent.slice(since).filter((f) => f.method === method).map((f) => f.params), [since, method])
+
 const argvAndEnvironment = (pid) => {
   if (process.platform === 'darwin') return execSync(`ps -E -ww -p ${pid} -o command=`, { encoding: 'utf8' })
   const words = (file) => readFileSync(`/proc/${pid}/${file}`, 'utf8').split('\0').filter(Boolean)
@@ -155,6 +181,17 @@ try {
   delete env.ELECTRON_RENDERER_URL
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)
+  // Records each request a window sends through main's relay (its method and params; hello frames
+  // carry the token and are not requests): what the window asked the server, and what it saved.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.__v2Sent = []
+    ipcMain.on('v2socket:send', (_event, _socketId, text) => {
+      try {
+        const frame = JSON.parse(text)
+        if (frame.type === 'req') globalThis.__v2Sent.push({ method: frame.method, params: frame.params })
+      } catch {}
+    })
+  })
   const win = await app.firstWindow()
   watch(win)
   await win.waitForLoadState('domcontentloaded')
@@ -280,6 +317,8 @@ try {
       const args = argLines(await launched(id))
       check('window codex: the fake codex saw the pick in its argv', ['ARG[--full-auto]', 'ARG[--model=gpt-5-codex]'].every((a) => args.includes(a)) && args.some((l) => l.includes('model_reasoning_effort="low"')) && !args.includes('ARG[--]'), args.join(' | '))
       check('window codex: the window lists it with its provider', await until(() => win.evaluate((id) => window.__store.getState().terminals[id]?.llm?.provider ?? null, id).then((p) => p === 'codex')))
+      check("window codex: the server's answer describes Codex, with its glyph", (await win.evaluate(() => window.__store.getState().serverAgents?.agents.find((a) => a.provider === 'codex')?.glyph ?? null)) === 'CX')
+      check("window codex: its tab shows the server's glyph for Codex", await until(() => win.locator('.server-window .detail .session-llm-glyph').allTextContents().then((t) => t.includes('CX'))))
     }
   }
 
@@ -332,6 +371,55 @@ try {
       check("codex global: those headers reach the server's MCP", res.status === 200, String(res.status))
     }
     check('codex global: the window lists it', await until(() => win.evaluate((id) => !!window.__store.getState().terminals[id], id)))
+  }
+
+  // Local's models in the window's picker come from the server (agents.models), which asked the stub.
+  {
+    const detail = win.locator('.server-window .detail')
+    await detail.locator('.session-add-more').click()
+    const menu = win.locator('.skill-menu')
+    await menu.locator('.skill-menu-item', { hasText: 'Choose…' }).click()
+    const selects = menu.locator('.llm-picker select')
+    await selects.nth(0).selectOption('local')
+    const models = await until(async () => {
+      const options = await selects.nth(1).locator('option').allTextContents()
+      return options.includes('stub-coder:7b') ? options : null
+    })
+    check("window local: the picker lists the endpoint's models, through the server", !!models && models.includes('stub-chat:1b'), JSON.stringify(models))
+    check('window local: the first is picked, as Local has no default model', (await until(async () => ((await selects.nth(1).inputValue()) === 'stub-coder:7b' ? 'ok' : null))) === 'ok')
+    check('window local: asked with agents.models, never a URL of its own', (await sentByWindow(0, 'agents.models')).some((p) => p.provider === 'local'), JSON.stringify(await sentByWindow(0, 'agents.models')))
+    // Not started: Escape closes the menu.
+    await win.keyboard.press('Escape')
+    await menu.waitFor({ state: 'detached', timeout: 5000 })
+  }
+
+  // Opening Settings → Agents saves nothing by itself: a saved Local default and a session type's
+  // Local agent with no model are shown as they are, though Local's models are listed there and an
+  // agent picked in a picker gets the first one.
+  {
+    const saved = { llmDefault: { provider: 'local' }, sessionTypes: [{ id: 'smoke-local-type', name: 'Local review', systemPrompt: '', llm: { provider: 'local' } }] }
+    await sdk.request('project.updateSettings', { projectId, settings: saved })
+    check('settings: the window has the saved Local default and session type', await until(() => win.evaluate(() => {
+      const p = window.__store.getState().project
+      return p?.llmDefault?.provider === 'local' && p?.sessionTypes?.[0]?.llm?.provider === 'local'
+    })))
+    const sentAt = await sentCount()
+    await win.locator('.server-window .sidebar button[title="App settings"]').click()
+    const settings = win.locator('.server-window .settings-panel')
+    await settings.waitFor({ timeout: 5000 })
+    await openSettingsTab(settings, 'Agents')
+    const pickers = settings.locator('.llm-picker')
+    const listedIn = (n) => pickers.nth(n).locator('select').nth(1).locator('option').allTextContents().then((t) => t.includes('stub-coder:7b'))
+    check("settings: both pickers list Local's models (the default's and the session type's)", [await until(() => listedIn(0)), await until(() => listedIn(1))].every(Boolean), String(await pickers.count()))
+    // Past the models' answer: a write would have gone by now.
+    await sleep(1500)
+    check('settings: neither picker picked a model', JSON.stringify([await pickers.nth(0).locator('select').nth(1).inputValue(), await pickers.nth(1).locator('select').nth(1).inputValue()]) === JSON.stringify(['', '']))
+    check('settings: the window sent no project.updateSettings', (await sentByWindow(sentAt, 'project.updateSettings')).length === 0, JSON.stringify(await sentByWindow(sentAt, 'project.updateSettings')))
+    check('settings: the window asked agents.models for them (the recorder sees its requests)', (await sentByWindow(sentAt, 'agents.models')).length > 0)
+    const after = (await project()).settings
+    check("settings: the server's default and session type still have no model", JSON.stringify([after.llmDefault, after.sessionTypes?.[0]?.llm]) === JSON.stringify([{ provider: 'local' }, { provider: 'local' }]), JSON.stringify([after.llmDefault, after.sessionTypes?.[0]?.llm]))
+    await win.locator('.server-window .sidebar button[title="App settings"]').click()
+    await settings.waitFor({ state: 'hidden', timeout: 5000 })
   }
 
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')

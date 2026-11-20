@@ -38,6 +38,9 @@
 //     blurred is saved with project.updateSettings and its expected value; a session type added
 //     and named at once builds on the pending add; a CONFLICT (another client's edit the window
 //     has not seen yet, its patches held in main) asks, and Reload shows the server's value.
+//   - Plugins A2: the Plugins list starts with the agent plugins; Claude Code's switch is locked
+//     on (required); Codex switched off with the window's switch leaves the New session menu and
+//     Choose… once the server's own server.agents answer says it is off, and returns switched on.
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
 //     with the reconnecting overlay and disables the commands; restarting clears all three. A note
 //     typed as the link drops is kept with no dialog and saved once it is back.
@@ -65,7 +68,7 @@
 // first falls back to the view alone, the others fail the run with a message.
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { openSettingsTab, settingsTabNames } from './smokeSettings.mjs'
+import { openPlugin, openSettingsTab, pluginSwitch, settingsTabNames } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -1065,13 +1068,57 @@ try {
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
+    // The agent plugins first (plugins A2); the selected first row, Claude Code, has no section of its own until A2b.
     [['Plugins'], SERVER_HAS_ENVS
-      ? ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite']
+      ? ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite']
       // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
-      : ['Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Voice summaries']],
+      : ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], []],
     // "Saved tokens" is there only when tokens are stored unencrypted (a Linux runner without a keyring).
     ['Appearance', 'Notifications', 'Local server', ...((await w1.evaluate(() => window.api.secretStorage())) === 'unencrypted' ? ['Saved tokens'] : [])]
   ])
+  // Plugins A2: the server lists Claude Code as required, so its switch is locked on, and its
+  // detail (the first row's, shown) says why; Codex's is a working switch.
+  await openSettingsTab(settings, 'Plugins')
+  const rowState = (id) =>
+    settings.locator(`.plugins-list [data-plugin="${id}"]`).evaluate((row) => {
+      const sw = row.querySelector('input.plugin-switch')
+      return [sw?.checked ?? null, sw?.disabled ?? null, row.querySelector('.plugins-row-line')?.textContent ?? null]
+    })
+  check("Claude Code's switch is locked on: required by the server", await rowState('claude'), [true, true, 'Always on'])
+  check('and its detail says why', [await settings.locator('.plugins-detail-switch span').first().textContent(), await settings.locator('.plugins-note').textContent()], ['Always on', "Always on: sessions fall back to its agent, so it can't be turned off."])
+  check("Codex's switch works", await rowState('codex'), [true, false, null])
+  // An agent plugin switched off with the window's own switch: once the server has the edit, the
+  // window asks server.agents again, whose answer says Codex is off, and the New session menu
+  // drops it. The menu goes by the server's answer, never the window's pending edit.
+  const codexOnInAnswer = () => w1.evaluate(() => window.__store.getState().serverAgents?.agents.find((a) => a.provider === 'codex')?.on ?? null)
+  const menuOffers = async () => {
+    await detail.locator('.session-add-more').click()
+    await menu.waitFor({ timeout: 5000 })
+    const names = await menu.locator('.server-agent-item .skill-menu-name').allTextContents()
+    await menu.locator('.skill-menu-item', { hasText: 'Choose…' }).click()
+    const choose = await menu.locator('.new-session-choose select').first().locator('option').allTextContents()
+    await w1.keyboard.press('Escape')
+    await menu.waitFor({ state: 'detached', timeout: 5000 })
+    return [names.includes('Codex'), choose.includes('Codex')]
+  }
+  const flipCodex = async (enabled) => {
+    const at = await sentCount()
+    await (await pluginSwitch(settings, 'codex')).click()
+    check(`Codex switched ${enabled ? 'on' : 'off'} is saved on the server`, await until(async () => (await projectNow()).settings.plugins?.codex?.enabled ?? null, enabled), enabled)
+    check(`server.agents says Codex is ${enabled ? 'on' : 'off'}`, (await live.request('server.agents', { projectId: target.projectId })).agents.find((a) => a.provider === 'codex')?.on, enabled)
+    check("and the window's own answer says so, asked again once the server had the edit", [await until(codexOnInAnswer, enabled), (await sentBy(at, 'server.agents')).length > 0], [enabled, true])
+    await settingsRow.click()
+    await settings.waitFor({ state: 'hidden', timeout: 5000 })
+    const offers = await until(menuOffers, [enabled, enabled])
+    await settingsRow.click()
+    await settings.waitFor({ timeout: 5000 })
+    await openSettingsTab(settings, 'Plugins')
+    return offers
+  }
+  check('switched off, the New session menu and Choose… no longer offer Codex', await flipCodex(false), [false, false])
+  await openPlugin(settings, 'codex')
+  check('its row says it is off, and its detail what off means for agents', [await rowState('codex'), await settings.locator('.plugins-note').textContent()], [[false, false, 'Off in this project'], 'Its agents are hidden for new sessions in this project. Sessions already running keep going and can restart. Turn it on to use them again.'])
+  check('switched back on, the menu offers it again', await flipCodex(true), [true, true])
   await openSettingsTab(settings, 'Agents')
   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
   await openSettingsTab(settings, 'General')

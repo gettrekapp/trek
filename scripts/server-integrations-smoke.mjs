@@ -321,7 +321,8 @@ try {
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   await openSettingsTab(settings, 'Plugins')
-  // The tab lists the plugins; the first, Voice, is selected, so the detail's heading is its name.
+  // The tab lists the plugins (the agent plugins first, plugins A2); Voice selected, the detail's heading is its name.
+  await openPlugin(settings, 'voice')
   const pluginRowNames = settings.locator('.plugins-row-name')
   check('Settings show Linear, Plugins and Voice summaries', [await pluginRowNames.filter({ hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await pluginRowNames.filter({ hasText: /^Voice summaries$/ }).count(), await settings.locator('.plugins-detail-head h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1, 1])
   check('the voice plugin is on for the project (its default)', await (await pluginSwitch(settings, 'voice')).isChecked(), true)

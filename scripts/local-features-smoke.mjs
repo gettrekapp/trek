@@ -34,7 +34,7 @@
 //
 // Prints LOCAL FEATURES SMOKE PASS (n checks) or LOCAL FEATURES SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { openSettingsTab } from './smokeSettings.mjs'
+import { openPlugin, openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -476,7 +476,9 @@ try {
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   await openSettingsTab(settings, 'Plugins')
-  // The Plugins tab lists the plugins by name; only the selected one (Voice, the first) has its section.
+  // The Plugins tab lists the plugins by name (the agent plugins first, plugins A2); only the selected
+  // one has its section: Voice's, picked.
+  await openPlugin(settings, 'voice')
   const headings = await settings.locator('h3').allTextContents()
   const pluginNames = await settings.locator('.plugins-row-name').allTextContents()
   const tabNames = await settings.locator('.settings-tab').allTextContents()
