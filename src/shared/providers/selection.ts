@@ -1,5 +1,8 @@
 import { getProvider, isProviderId } from './registry.ts'
-import type { LlmSelection, ProviderCapabilities } from './types'
+import type { LlmSelection } from './types'
+
+// The neutral rules are src/shared/agents/selection.ts's since plugins A1; the clients keep these names.
+export { resolveNewSessionLlm, sessionLaunch, type NewSessionSources } from '../agents/selection.ts'
 
 const CLAUDE: LlmSelection = { provider: 'claude' }
 
@@ -28,20 +31,6 @@ export function sanitizeLlmSelection(value: unknown): LlmSelection | undefined {
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {})
   }
-}
-
-export interface NewSessionSources {
-  pick?: LlmSelection
-  sessionType?: LlmSelection
-  projectDefault?: LlmSelection
-  appDefault?: LlmSelection
-}
-
-/** The first selection that is set wins as a whole — fields never mix across sources. */
-export function resolveNewSessionLlm(sources: NewSessionSources): LlmSelection {
-  return (
-    sources.pick ?? sources.sessionType ?? sources.projectDefault ?? sources.appDefault ?? { ...CLAUDE }
-  )
 }
 
 /** The Global panel needs Trek's MCP tools: fall back past providers without them. */
@@ -99,25 +88,6 @@ export function describeLlm(selection: LlmSelection): string {
 export function persistedLlm(llm: LlmSelection | undefined): LlmSelection | undefined {
   if (!llm) return undefined
   return llm.provider === 'claude' && !llm.model && !llm.effort ? undefined : llm
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/**
- * The session id a launch uses and whether it resumes. An agent whose id Trek presets
- * (Claude, Local, Gemini) gets it on the command line unquoted, so a saved id that isn't
- * a UUID is never used: that session starts over with a fresh id. Codex's own ids are
- * quoted; an agent without resume always starts fresh.
- */
-export function sessionLaunch(
-  capabilities: Pick<ProviderCapabilities, 'presetSessionId' | 'resume'>,
-  saved: string | undefined,
-  freshId: () => string
-): { sessionId: string; resume: boolean } {
-  if (!saved || (capabilities.presetSessionId && !UUID.test(saved))) {
-    return { sessionId: freshId(), resume: false }
-  }
-  return { sessionId: saved, resume: capabilities.resume }
 }
 
 /** Whether a saved session's history can follow its worktree to a new path. */

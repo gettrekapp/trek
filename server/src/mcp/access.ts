@@ -1,19 +1,17 @@
-// One MCP bearer token per project, plus the config files agents are launched
-// with. Tokens live in memory: a server start makes new ones (and a new port).
+// One MCP bearer token per project, plus the files agents read it from (plugins A1: each agent's
+// `mcpFile`, written here). Tokens live in memory: a server start makes new ones (and a new port).
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { codexHeadersHelper } from '../../../src/shared/providers/codex.ts'
-import type { McpAccess } from '../../../src/shared/providers/types'
+import type { AgentMcpFile } from '../../../src/shared/plugins/agents.ts'
 import { writeFileAtomic } from '../../../src/host/atomicWrite.ts'
 
-/** The files written for each project: Claude's config, Gemini's settings, Codex's headers. */
-const filesOf = (access: McpAccess, dir: string, projectId: string): string[] => [
-  access.configPath,
-  access.geminiSettingsPath,
-  codexHeadersPath(dir, projectId)
-]
-const codexHeadersPath = (dir: string, projectId: string): string => join(dir, `${projectId}.codex.json`)
+/** A project's MCP access: the endpoint, its token, and each agent's file (`<dir>/<projectId><suffix>`) by its suffix. */
+export interface McpAccess {
+  url: string
+  token: string
+  files: Record<string, string>
+}
 
 const PROJECT_ID = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 
@@ -25,9 +23,12 @@ export class McpAccessStore {
   private readonly dir: string
   private port?: number
   private readonly byProject = new Map<string, McpAccess>()
+  private readonly agentFiles: () => readonly AgentMcpFile[]
 
-  constructor(dir: string) {
+  /** `agentFiles`: the files the server's agents read (the agent registry's mcpFiles), asked at each write */
+  constructor(dir: string, agentFiles: () => readonly AgentMcpFile[]) {
     this.dir = dir
+    this.agentFiles = agentFiles
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const stat = lstatSync(dir)
     if (stat.isSymbolicLink()) throw new Error(`Refusing to use ${dir}: it is a symbolic link`)
@@ -57,32 +58,27 @@ export class McpAccessStore {
     const existing = this.byProject.get(projectId)
     if (existing) {
       // A second start on the same data dir sweeps this directory; put the files back.
-      if (filesOf(existing, this.dir, projectId).some((path) => !existsSync(path))) this.writeFiles(existing, projectId)
+      if (Object.values(existing.files).some((path) => !existsSync(path))) this.writeFiles(existing)
       return existing
     }
     const token = randomBytes(32).toString('hex')
     const url = `http://127.0.0.1:${this.port}/mcp`
-    const access: McpAccess = {
-      configPath: join(this.dir, `${projectId}.json`),
-      url,
-      token,
-      geminiSettingsPath: join(this.dir, `${projectId}.gemini.json`),
-      codexHeadersHelper: codexHeadersHelper(codexHeadersPath(this.dir, projectId), process.platform)
-    }
-    this.writeFiles(access, projectId)
+    const files = Object.fromEntries(this.agentFiles().map((f) => [f.suffix, join(this.dir, `${projectId}${f.suffix}`)]))
+    const access: McpAccess = { url, token, files }
+    this.writeFiles(access)
     this.byProject.set(projectId, access)
     return access
   }
 
-  private writeFiles(access: McpAccess, projectId: string): void {
-    const { configPath, geminiSettingsPath, url, token } = access
-    const headers = { Authorization: `Bearer ${token}` }
+  private writeFiles(access: McpAccess): void {
+    const endpoint = { url: access.url, token: access.token }
     try {
-      writeFileAtomic(configPath, JSON.stringify({ mcpServers: { 'trek-dev': { type: 'http', url, headers } } }, null, 2), 0o600)
-      writeFileAtomic(geminiSettingsPath, JSON.stringify({ mcpServers: { 'trek-dev': { httpUrl: url, headers, trust: true } } }, null, 2), 0o600)
-      writeFileAtomic(codexHeadersPath(this.dir, projectId), JSON.stringify(headers), 0o600)
+      for (const file of this.agentFiles()) {
+        const path = Object.hasOwn(access.files, file.suffix) ? access.files[file.suffix] : undefined
+        if (path) writeFileAtomic(path, file.content(endpoint), 0o600)
+      }
     } catch (err) {
-      for (const path of filesOf(access, this.dir, projectId)) {
+      for (const path of Object.values(access.files)) {
         try {
           if (lstatSync(path).isFile()) rmSync(path, { force: true })
         } catch {
@@ -111,6 +107,6 @@ export class McpAccessStore {
     const access = this.byProject.get(projectId)
     this.byProject.delete(projectId)
     if (!access) return
-    for (const path of filesOf(access, this.dir, projectId)) rmSync(path, { force: true })
+    for (const path of Object.values(access.files)) rmSync(path, { force: true })
   }
 }

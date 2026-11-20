@@ -5,8 +5,6 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocolV2'
-import { sanitizeLlmSettings } from '../../src/shared/providers/settings.ts'
-import type { LlmSettings } from '../../src/shared/providers/types'
 import { isRecord } from './validate.ts'
 import { sanitizeAgentSelection, type AgentSelection } from '../../src/shared/agents/selection.ts'
 import { DEFAULT_AGENT_ID } from '../../src/shared/plugins/agents.ts'
@@ -97,11 +95,6 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   /** Treat as read-only; change it through update(). */
   get config(): TrekServerConfig {
     return this.current
-  }
-
-  /** The agent CLI settings, sanitized (unknown providers and fields dropped). */
-  llmSettings(): LlmSettings {
-    return sanitizeLlmSettings(this.current.llm)
   }
 
   /** The server's default agent (`llm.llmDefault`, plugins A1), against the agents it has: the default agent when unset or unknown. */

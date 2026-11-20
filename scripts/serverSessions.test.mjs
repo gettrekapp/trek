@@ -2,15 +2,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { findSession, findWorktree } from '../server/src/sessions/locate.ts'
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { McpAccessStore } from '../server/src/mcp/access.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { builtinAgentEntries, builtinAgents } from './agentsHarness.mjs'
+import { createAgentRegistry } from '../server/src/agents/registry.ts'
 
 // The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
 // which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
@@ -68,7 +71,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
+function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linux', agents = (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) }) } = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
@@ -94,7 +97,8 @@ function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
   // A POSIX server's launches (a login shell's -c, which `cmd` reads) on any OS: winLaunch.ts's
   // Windows launches are checked in serverWinLaunch.test.mjs.
   const sessions = new SessionManager({
-    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists, platform: 'linux',
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists, platform,
+    agents: agents(store),
     discover: async (cwd, ageMs, exclude) => {
       discoveries.push({ cwd, ageMs, exclude })
       const next = sessions.__nextDiscovery
@@ -1201,7 +1205,7 @@ test('terminal sizes are capped at 500 columns and 200 rows', (t) => {
 })
 
 test('sessions launch with the project\'s MCP access; Global sessions get the role prompt', (t) => {
-  const s = setup(t, { mcpAccess: (projectId) => ({ configPath: `/m/${projectId}.json`, url: 'http://127.0.0.1:9/mcp', token: 'tok', geminiSettingsPath: `/m/${projectId}-g.json`, codexHeadersHelper: `/bin/cat '/m/${projectId}.codex.json'` }) })
+  const s = setup(t, { mcpAccess: (projectId) => ({ url: 'http://127.0.0.1:9/mcp', token: 'tok', files: { '.json': `/m/${projectId}.json`, '.gemini.json': `/m/${projectId}-g.json`, '.codex.json': `/m/${projectId}.codex.json` } }) })
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   assert.match(cmd(s.spawned[0]), new RegExp(`--mcp-config '/m/${s.projectId}.json' --allowedTools mcp__trek-dev`))
   s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
@@ -1211,6 +1215,56 @@ test('sessions launch with the project\'s MCP access; Global sessions get the ro
   assert.match(cmd(s.spawned[2]), new RegExp(`http_headers_helper="/bin/cat .*/m/${s.projectId}\\.codex\\.json`))
   assert.ok(!JSON.stringify(s.spawned[2].opts.env).includes('tok'))
   assert.ok(!cmd(s.spawned[2]).includes('tok'))
+})
+
+test("a real McpAccessStore's token reaches only its 0600 files: never a spawned agent's file, argv or env (plugins A1)", (t) => {
+  const mcpDir = join(real(mkdtempSync(join(tmpdir(), 'trek-sessions-mcp-'))), 'mcp')
+  t.after(() => removeDir(dirname(mcpDir)))
+  const access = new McpAccessStore(mcpDir, () => builtinAgents().mcpFiles())
+  access.setPort(9)
+  const s = setup(t, { mcpAccess: (projectId) => access.accessFor(projectId) })
+  const { token, files } = access.accessFor(s.projectId)
+  assert.deepEqual(Object.keys(files).sort(), ['.codex.json', '.gemini.json', '.json'])
+  for (const path of Object.values(files)) {
+    assert.ok(readFileSync(path, 'utf8').includes(token), path)
+    if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600, path)
+  }
+  for (const provider of ['claude', 'codex', 'gemini', 'local']) s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider }, ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  assert.equal(s.spawned.length, 5)
+  for (const proc of s.spawned) {
+    const { file, args, env } = proc.opts
+    assert.ok(!JSON.stringify({ file, args, env }).includes(token), cmd(proc))
+  }
+  // Each agent got its own file: Claude and Local the --mcp-config, Gemini its settings, Codex its helper.
+  assert.match(cmd(s.spawned[0]), /--mcp-config /)
+  assert.ok(cmd(s.spawned[1]).includes(files['.codex.json']))
+  assert.equal(s.spawned[2].opts.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH, files['.gemini.json'])
+  assert.match(cmd(s.spawned[3]), /--mcp-config /)
+})
+
+test("the manager launches for its platform: a win32 manager's Codex gets Windows' `type` headers helper (plugins A1)", (t) => {
+  // The real codex agent, its launches recorded: a win32 launch then looks codex up on PATH, which this host may not have.
+  const launched = []
+  const agents = (store) => createAgentRegistry({
+    serverConfig: (id) => store.agentServerConfig(id),
+    agents: builtinAgentEntries().map((e) => e.agent.id !== 'codex' ? e : {
+      ...e,
+      agent: { ...e.agent, buildLaunch: (opts, config) => { const spec = e.agent.buildLaunch(opts, config); launched.push({ platform: opts.platform, spec }); return spec } }
+    })
+  })
+  const mcpAccess = (projectId) => ({ url: 'http://127.0.0.1:9/mcp', token: 'tok', files: { '.codex.json': `/m/${projectId}.codex.json` } })
+  for (const platform of ['win32', 'darwin']) {
+    const s = setup(t, { platform, agents, mcpAccess })
+    try {
+      s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+    } catch (err) {
+      assert.equal(err.code, 'BAD_REQUEST', err.message)
+    }
+    const { spec } = launched.at(-1)
+    assert.equal(launched.at(-1).platform, platform)
+    assert.match(spec.command, platform === 'win32' ? /http_headers_helper="type \\"\/m\/\S+\.codex\.json/ : /http_headers_helper="\/bin\/cat /)
+  }
 })
 
 test('without MCP access sessions launch as before', (t) => {

@@ -1,8 +1,8 @@
 // scripts/serverAgents.test.mjs — server.agents: each provider's command, its program, and the cached installed check.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { agentCommands, commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, platformCommandExists, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
-import { DEFAULT_LLM_SETTINGS } from '../src/shared/providers/types.ts'
+import { commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, platformCommandExists, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
+import { builtinAgents } from './agentsHarness.mjs'
 
 test('commandBinary skips leading env assignments and blanks', () => {
   // A POSIX command line (on Windows it is read as one: no env assignments there).
@@ -14,17 +14,13 @@ test('commandBinary skips leading env assignments and blanks', () => {
   assert.equal(commandBinary('"C:\\Program Files\\x\\codex.cmd" --full-auto', 'win32'), 'C:\\Program Files\\x\\codex.cmd')
 })
 
-test('agentCommands: every provider, the server config command, else the default; Claude takes the project\'s claudeCommand', () => {
-  const llm = { ...DEFAULT_LLM_SETTINGS, providers: { claude: { command: 'server-claude' }, codex: { command: '  ' }, gemini: { command: 'gem --x' } } }
-  assert.deepEqual(agentCommands(llm, undefined), [
-    { provider: 'claude', label: 'Claude', command: 'server-claude' },
-    { provider: 'codex', label: 'Codex', command: 'codex' },
-    { provider: 'gemini', label: 'Gemini', command: 'gem --x' },
-    { provider: 'grok', label: 'Grok', command: 'grok' },
-    { provider: 'local', label: 'Local', command: 'claude' }
-  ])
-  assert.equal(agentCommands(llm, { claudeCommand: ' my-claude ' })[0].command, 'my-claude')
-  assert.equal(agentCommands(llm, { claudeCommand: '  ' })[0].command, 'server-claude')
+test("each agent's command: the server config's, else its default; Claude takes the project's claudeCommand", () => {
+  const server = { claude: { command: 'server-claude' }, codex: { command: '  ' }, gemini: { command: 'gem --x' } }
+  const agents = builtinAgents({ serverConfig: (id) => server[id] ?? {} })
+  const commands = (settings) => agents.all().map((a) => [a.id, a.command(agents.config(a.id, settings))])
+  assert.deepEqual(commands(undefined), [['claude', 'server-claude'], ['codex', 'codex'], ['gemini', 'gem --x'], ['grok', 'grok'], ['local', 'claude']])
+  assert.equal(commands({ claudeCommand: ' my-claude ' })[0][1], 'my-claude')
+  assert.equal(commands({ claudeCommand: '  ' })[0][1], 'server-claude')
 })
 
 test('CommandProbe shares a check in flight, reuses it for a minute, and reads a failed check as not installed', async () => {

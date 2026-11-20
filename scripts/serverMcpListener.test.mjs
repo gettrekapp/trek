@@ -9,10 +9,11 @@ import { connect } from 'node:net'
 import { McpAccessStore } from '../server/src/mcp/access.ts'
 import { startMcpListener } from '../server/src/mcp/listener.ts'
 import { removeDir } from './testPlatform.mjs'
+import { builtinAgents } from './agentsHarness.mjs'
 
 async function setup(t, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-mcp-listener-'))
-  const access = new McpAccessStore(join(dir, 'mcp'))
+  const access = new McpAccessStore(join(dir, 'mcp'), () => builtinAgents().mcpFiles())
   const calls = []
   const listener = await startMcpListener({
     access,

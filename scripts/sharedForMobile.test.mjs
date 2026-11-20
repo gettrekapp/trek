@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { builtinModules } from 'node:module'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // fileURLToPath, not .pathname: on Windows that is /D:/… , which resolve() reads as a path on the current drive.
@@ -50,6 +50,18 @@ export const MOBILE_ENTRIES = [
   'plugins/github/manifest.ts',
   'plugins/github/shared/pr.ts'
 ]
+/**
+ * Files outside src/shared that src/shared may import, walked like the rest: the agent plugins'
+ * shared halves the static agent table re-exports (plugins A1 to A2, as pluginBoundaries.test.mjs's
+ * CORE_IMPORT_EXCEPTIONS). The phone reaches them through src/shared/providers/selection.ts.
+ */
+const OUTSIDE_IMPORTS = new Set([
+  'plugins/claude/shared/claude.ts',
+  'plugins/claude/shared/local.ts',
+  'plugins/codex/shared/codex.ts',
+  'plugins/gemini/shared/gemini.ts',
+  'plugins/grok/shared/grok.ts'
+])
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])
 
@@ -103,6 +115,7 @@ function walk() {
         const target = resolveLocal(file, spec)
         if (!target) problems.push(`${rel}: cannot resolve ${spec}`)
         else if (!relative(join(root, 'src', 'shared'), target).startsWith('..')) queue.push(target)
+        else if (OUTSIDE_IMPORTS.has(relative(root, target).split(sep).join('/'))) queue.push(target)
         else problems.push(`${rel}: imports ${relative(root, target)}, outside src/shared`)
       } else if (spec.startsWith('node:') || builtinModules.includes(spec.split('/')[0])) {
         problems.push(`${rel}: imports the Node built-in ${spec}`)

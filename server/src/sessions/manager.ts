@@ -6,13 +6,8 @@ import { discoverCodexSession } from '../../../src/host/agentService.ts'
 import type { AttentionTopic } from '../../../src/shared/model/topics'
 import type { Project, Session, SessionContext, SessionStatus, Worktree } from '../../../src/shared/model/types'
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
-import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
-import {
-  resolveGlobalLlm,
-  resolveNewSessionLlm,
-  sanitizeLlmSelection,
-  sessionLaunch
-} from '../../../src/shared/providers/selection.ts'
+import { resolveGlobalAgent, resolveNewSessionLlm, sanitizeAgentSelection, sessionLaunch, type AgentLookup } from '../../../src/shared/agents/selection.ts'
+import type { AgentRegistry } from '../agents/registry.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
@@ -21,8 +16,8 @@ import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
-import type { McpAccess } from '../../../src/shared/providers/types'
-import { agentCommand, sessionEnv, sessionProcess } from './launch.ts'
+import type { McpAccess } from '../mcp/access.ts'
+import { agentLaunch, sessionEnv, sessionProcess } from './launch.ts'
 import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQuestion, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
@@ -37,7 +32,7 @@ import {
   type Activity
 } from './status.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
-import { agentCommands, commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
+import { commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
 import type { ServerAgents } from '../../../src/shared/protocolV2'
 
 export const LOAD_COLS = 120
@@ -50,6 +45,8 @@ export interface ScheduledJob {
 }
 
 export interface SessionManagerDeps {
+  /** The agents this server can launch (plugins A1: its set-up plugins'; server/src/agents/registry.ts) */
+  agents: AgentRegistry
   projects: ProjectState
   store: ConfigStore
   /** Where the `attention` topic is published; without it the topic is not published */
@@ -71,12 +68,12 @@ export interface SessionManagerDeps {
   platform?: NodeJS.Platform
 }
 
-/** An optional LLM pick from a client. */
-function checkLlm(value: unknown): LlmSelection | undefined {
+/** An optional agent pick from a client: one this server has. */
+function checkLlm(value: unknown, agents: AgentLookup): LlmSelection | undefined {
   if (value === undefined) return undefined
-  // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
-  if (!isRecord(value) || !isProviderId(value.provider)) throw bad('llm.provider must be a known provider')
-  const pick = sanitizeLlmSelection(value)
+  // sanitizeAgentSelection turns an unknown agent into the default one: refuse it instead.
+  if (!isRecord(value) || typeof value.provider !== 'string' || !agents.has(value.provider)) throw bad('llm.provider must be a known provider')
+  const pick = sanitizeAgentSelection(value, (id) => agents.has(id))
   if (!pick) throw bad('llm must be an LLM selection')
   return pick
 }
@@ -127,6 +124,8 @@ interface Owner {
 
 export class SessionManager {
   readonly terminals: TerminalHost
+  /** The agents (plugins A1): move, promote, the automations and the MCP tools reach them here */
+  readonly agentRegistry: AgentRegistry
   private readonly deps: SessionManagerDeps
   private readonly newId: () => string
   private readonly now: () => number
@@ -151,6 +150,7 @@ export class SessionManager {
 
   constructor(deps: SessionManagerDeps) {
     this.deps = deps
+    this.agentRegistry = deps.agents
     this.newId = deps.newId ?? randomUUID
     this.now = deps.now ?? Date.now
     this.discover = deps.discover ?? discoverCodexSession
@@ -213,7 +213,7 @@ export class SessionManager {
       sessionType = settings.sessionTypes?.find((t) => t.id === id)
       if (!sessionType) throw bad(`No session type with id "${id}"`)
     }
-    const pick = checkLlm(p.llm)
+    const pick = checkLlm(p.llm, this.deps.agents)
     if (p.context !== undefined) throw bad('context is set by the server')
     const context = options.context === undefined ? undefined : checkContext(project, options.context, global)
     const llm = this.defaultLlm(project, global, pick, sessionType?.llm)
@@ -231,7 +231,7 @@ export class SessionManager {
     // Loading replaced the project snapshot: count the sessions in the current one.
     const current = this.deps.projects.require(project.id)
     const list = worktree ? findWorktree(current, worktree.id).worktree.sessions : current.globalSessions
-    const provider = getProvider(llm.provider)
+    const provider = this.deps.agents.get(llm.provider)
     const sessionId = this.newId()
     const session: Session = {
       id: sessionId,
@@ -297,7 +297,7 @@ export class SessionManager {
     const title = checkTitle(requireName(p.title, 'title'), 'title')
     if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
     // null: the default for a new session of its kind, as start resolves it without a pick.
-    const llm = p.llm === null ? this.defaultLlm(project, !found.worktree) : checkLlm(p.llm) ?? found.session.llm
+    const llm = p.llm === null ? this.defaultLlm(project, !found.worktree) : checkLlm(p.llm, this.deps.agents) ?? found.session.llm
     // Checked before the running pty is killed: a killed pty holds its slot until it exits.
     this.assertCapacity()
     const sessionId = found.session.id
@@ -312,7 +312,7 @@ export class SessionManager {
       s.title = title
       s.llm = llm
       // A preset-id agent gets a new conversation id; a discovered one (Codex) is discovered again.
-      if (getProvider(llm.provider).capabilities.presetSessionId) s.agentSessionId = this.newId()
+      if (this.deps.agents.get(llm.provider).capabilities.presetSessionId) s.agentSessionId = this.newId()
       else delete s.agentSessionId
     })
     let ptyId: string
@@ -324,7 +324,7 @@ export class SessionManager {
           s.status = 'exited'
           s.exitCode = -1
           // The id names a conversation that never started: a restart must not resume it.
-          if (getProvider(s.llm.provider).capabilities.presetSessionId) delete s.agentSessionId
+          if (this.deps.agents.get(s.llm.provider).capabilities.presetSessionId) delete s.agentSessionId
         })
       } catch {
         // the session is gone
@@ -479,14 +479,14 @@ export class SessionManager {
   /** The agents this server can launch, and its default (server.agents). */
   async agents(p: any): Promise<ServerAgents> {
     const settings = p.projectId === undefined ? undefined : this.deps.projects.require(p.projectId).settings
-    const llm = this.deps.store.llmSettings()
+    const registry = this.deps.agents
     const agents = await Promise.all(
-      agentCommands(llm, settings).map(async ({ provider, label, command }) => {
-        const binary = commandBinary(command, this.deps.platform)
-        return { provider, label, installed: binary ? await this.probe.installed(binary) : false }
+      registry.all().map(async (agent) => {
+        const binary = commandBinary(agent.command(registry.config(agent.id, settings)), this.deps.platform)
+        return { provider: agent.id, label: agent.label, installed: binary ? await this.probe.installed(binary) : false }
       })
     )
-    return { llmDefault: llm.llmDefault, agents }
+    return { llmDefault: this.deps.store.llmDefault(registry), agents }
   }
 
   /** True once the session's current run has produced live output (cleared when its pty ends). */
@@ -707,9 +707,10 @@ export class SessionManager {
   /** The agent a new session runs: the pick, else the project's Global agent or the session type's / project's default. */
   private defaultLlm(project: Project, global: boolean, pick?: LlmSelection, typeLlm?: LlmSelection): LlmSelection {
     const settings = project.settings
-    const serverDefault = this.deps.store.llmSettings().llmDefault
+    const agents = this.deps.agents
+    const serverDefault = this.deps.store.llmDefault(agents)
     return global
-      ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
+      ? pick ?? resolveGlobalAgent(settings.globalLlm, settings.llmDefault ?? serverDefault, agents)
       : resolveNewSessionLlm({ pick, sessionType: typeLlm, projectDefault: settings.llmDefault, appDefault: serverDefault })
   }
 
@@ -734,7 +735,7 @@ export class SessionManager {
     this.assertCapacity()
     const project = this.deps.projects.require(projectId)
     const { session, worktree, repo } = findSession(project, sessionId)
-    const provider = getProvider(session.llm.provider)
+    const provider = this.deps.agents.get(session.llm.provider)
     // A new session's preset id names a conversation the agent has not created yet: start it, don't resume it.
     const launch = run.fresh
       ? { sessionId: session.agentSessionId ?? this.newId(), resume: false }
@@ -759,7 +760,7 @@ export class SessionManager {
     } catch (err) {
       console.error(`MCP access for project ${projectId} unavailable; launching session ${sessionId} without it`, err)
     }
-    const spec = agentCommand(
+    const spec = agentLaunch(
       {
         mcp,
         llm: session.llm,
@@ -772,7 +773,8 @@ export class SessionManager {
         addDirs
       },
       project.settings,
-      this.deps.store.llmSettings()
+      this.deps.agents,
+      this.deps.platform ?? process.platform
     )
     const ptyId = this.newId()
     this.terminals.spawn(ptyId, {
@@ -872,7 +874,7 @@ export class SessionManager {
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
     this.outputSeen.add(owner.sessionId)
-    const markers = getProvider(session.llm.provider).statusMarkers
+    const markers = this.deps.agents.get(session.llm.provider).statusMarkers
     const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
     const r = onOutput(session.status, entry.activity, data, markers, changed)
     entry.activity = r.activity

@@ -1,8 +1,8 @@
 // scripts/agentLaunchCases.mjs — the launches the agent parity check covers (plugins A1): every
 // agent and an unknown id, × 32 option sets, × fresh and resume, × worktree and Global, × with and
-// without Trek's MCP, × a Linux, macOS and Windows server: 4608 launches. The old core
-// (agentLaunchGolden.mjs) and the new one (agentParity.test.mjs) are given the same inputs, each in
-// its own shape, and read the same server config file through a ConfigStore.
+// without Trek's MCP, × a Linux, macOS and Windows server: 4608 launches. The old core's answers
+// are scripts/fixtures/agent-launch-golden.json (written in plugins A1 Task 5, before the old core
+// went); the new one (agentParity.test.mjs) reads the same server config file through a ConfigStore.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -121,8 +121,8 @@ export function launchCases() {
 
 /**
  * The server's config store for each option set: a config file in a temp dir holding the case's
- * `llm.providers`, read as the server reads it. Both cores take their server config from it (the
- * old through llmSettings(), the new through agentServerConfig()). `close()` removes the dir.
+ * `llm.providers`, read as the server reads it (ConfigStore.agentServerConfig; the old core read
+ * it through llmSettings() when the golden file was written). `close()` removes the dir.
  */
 export function configStores() {
   const dir = mkdtempSync(join(tmpdir(), 'trek-agent-parity-'))

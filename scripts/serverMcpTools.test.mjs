@@ -23,6 +23,7 @@ import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 import { removeDir } from './testPlatform.mjs'
+import { builtinAgents } from './agentsHarness.mjs'
 
 // The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
 // which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
@@ -104,7 +105,7 @@ async function toolSetup(t, opts = {}) {
   const jobs = []
   const schedule = (fn, ms) => { const job = { fn, ms, cancelled: false, fired: false }; jobs.push(job); return { cancel: () => { job.cancelled = true } } }
   // A POSIX server's launches on any OS (the fake agents are not on a Windows PATH).
-  const sessions = new SessionManager({ projects, store, hub, spawner, schedule, discover: async () => undefined, platform: 'linux' })
+  const sessions = new SessionManager({ projects, store, hub, spawner, agents: builtinAgents({ serverConfig: (id) => store.agentServerConfig(id) }), schedule, discover: async () => undefined, platform: 'linux' })
   t.after(() => { sessions.stopAll(); poller.stop(); store.close() })
   // The tools' poll timers are unref'd (as in the server, where the listener holds the loop): hold it for the test.
   const keepAlive = setInterval(() => {}, 1000)

@@ -41,6 +41,7 @@ import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
 import { legacyCapabilitiesOf, type PluginPresence } from '../../src/shared/plugins/manifest.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
+import { createAgentRegistry, type AgentRegistry } from './agents/registry.ts'
 import { pluginPathChecks } from './plugins/coreChecks.ts'
 import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
 import { installedIdReserved } from './plugins/reserved.ts'
@@ -187,15 +188,6 @@ export function startServer(
     // The SessionManager is made below; a list only runs once the server is up.
     onAttentionChange: () => sessions.refreshAttention()
   })
-  let mcpAccess: McpAccessStore | undefined
-  if (options.mcpDir !== undefined) {
-    try {
-      mcpAccess = new McpAccessStore(options.mcpDir)
-    } catch (err) {
-      console.warn(`[mcp] disabled: ${(err as Error).message}`)
-    }
-  }
-  const access = mcpAccess
   const plugins: PluginRegistry | undefined = options.plugins
     ? createPluginRegistry({
         plugins: options.plugins.list,
@@ -211,6 +203,17 @@ export function startServer(
         importFrom: options.plugins.importFrom
       })
     : undefined
+  // The agents this server can launch (plugins A1): those its set-up plugins offer; none without plugins.
+  const agents: AgentRegistry = createAgentRegistry({ agents: plugins?.agentProviders() ?? [], serverConfig: (id) => store.agentServerConfig(id) })
+  let mcpAccess: McpAccessStore | undefined
+  if (options.mcpDir !== undefined) {
+    try {
+      mcpAccess = new McpAccessStore(options.mcpDir, () => agents.mcpFiles())
+    } catch (err) {
+      console.warn(`[mcp] disabled: ${(err as Error).message}`)
+    }
+  }
+  const access = mcpAccess
   // The installed plugins (theme plugins phase 1): stored and handed to clients, never run here.
   const installedPlugins: InstalledPlugins | undefined = options.plugins
     ? createInstalledPlugins({ dir: join(options.plugins.dataDir, 'plugins-installed'), reserved: installedIdReserved(options.plugins.list) })
@@ -219,6 +222,7 @@ export function startServer(
   /** The welcome's `plugins`: the built-ins, then the installed ones. */
   const pluginPresence = (): PluginPresence[] => [...(plugins?.presence() ?? []), ...(installedPlugins?.presence() ?? [])]
   const sessions = new SessionManager({
+    agents,
     projects,
     store,
     hub,

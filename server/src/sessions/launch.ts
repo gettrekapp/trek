@@ -1,11 +1,7 @@
-// Pure: the agent command line for a session, the shell that runs it, and its env.
-// Mirrors the desktop's launchSpec/worktreeLaunch/globalLaunch, with app-level
-// settings coming from the server config's `llm` section.
+// Pure: the agent command line for a session (through its plugin, plugins A1), the shell that runs it, and its env.
 import type { ProjectSettings } from '../../../src/shared/model/types'
-import { GLOBAL_SYSTEM_PROMPT, globalAgentPrompt } from '../../../src/shared/providers/prompts.ts'
-import { getProvider } from '../../../src/shared/providers/registry.ts'
-import { effectiveEffort, sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
-import type { LaunchSpec, LlmSelection, LlmSettings, McpAccess } from '../../../src/shared/providers/types'
+import { globalAgentPrompt } from '../../../src/shared/providers/prompts.ts'
+import type { LaunchSpec } from '../../../src/shared/providers/types'
 import { readFileSync, statSync } from 'node:fs'
 import { codedError } from '../errors.ts'
 import { NO_CWD_EXE_LOOKUP } from '../../../src/host/commandPath.ts'
@@ -13,58 +9,6 @@ import { winSpawnPlan, type WinLaunchDeps } from './winLaunch.ts'
 import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { effectiveEffortOf, sanitizeAgentSelection, type AgentSelection } from '../../../src/shared/agents/selection.ts'
 import type { AgentRegistry } from '../agents/registry.ts'
-
-export interface AgentLaunch {
-  llm: LlmSelection
-  /** The id passed to the agent (preset or the discovered one to resume) */
-  sessionId: string
-  resume: boolean
-  /** A Global panel session */
-  global: boolean
-  /** The session type's prompt (worktree sessions) */
-  systemPrompt?: string
-  /** The plugins' prompts (the voice plugin's, while it is set up); only for an agent that gets the MCP tools, which has theirs */
-  pluginPrompt?: string
-  /** Sent only on a fresh start */
-  initialMessage?: string
-  addDirs?: string[]
-  /** Phase 2e: the server's MCP endpoint */
-  mcp?: McpAccess
-}
-
-export function agentCommand(launch: AgentLaunch, settings: ProjectSettings, llm: LlmSettings): LaunchSpec {
-  const selection = sanitizeLlmSelection(launch.llm) ?? { provider: 'claude' }
-  const provider = getProvider(selection.provider)
-  const config = llm.providers[provider.id] ?? {}
-  const isClaude = provider.id === 'claude'
-  const mcp = launch.mcp && provider.capabilities.mcp ? launch.mcp : undefined
-  const plugins = mcp ? launch.pluginPrompt : undefined
-  // Trek's own guidance (the Global role, the plugins' prompts) first, then the user's (the session
-  // type's prompt, the project's shared or Global prompt) last, so the user's can override it,
-  // "do not speak summaries" included, as the desktop ordered them (worktreeLaunch/globalLaunch).
-  const prompts = launch.global
-    ? [mcp ? (isClaude ? GLOBAL_SYSTEM_PROMPT : globalAgentPrompt(provider.label)) : undefined, plugins, settings.globalSystemPrompt?.trim()]
-    : [plugins, launch.systemPrompt?.trim(), settings.sessionSystemPrompt?.trim()]
-  const systemPrompt = prompts.filter(Boolean).join('\n\n') || undefined
-  return provider.buildLaunch({
-    sessionId: launch.sessionId,
-    resume: launch.resume,
-    model: selection.model,
-    effort: effectiveEffort(selection),
-    approvalMode:
-      (isClaude ? settings.claudePermissionMode?.trim() : undefined) ||
-      config.approvalMode?.trim() ||
-      provider.defaultApprovalMode,
-    command: (isClaude ? settings.claudeCommand?.trim() || undefined : undefined) ?? (config.command?.trim() || undefined),
-    extraArgs: isClaude ? settings.claudeArgs?.trim() || undefined : undefined,
-    mcp,
-    systemPrompt,
-    initialMessage: launch.resume ? undefined : launch.initialMessage,
-    addDirs: provider.capabilities.addDirs ? launch.addDirs : undefined,
-    localBackend: llm.providers.local?.backend,
-    baseUrl: llm.providers.local?.baseUrl
-  })
-}
 
 /** A session's launch as core knows it (plugins A1): the agent's own inputs come from the registry. */
 export interface AgentLaunchInput {
@@ -86,8 +30,9 @@ export interface AgentLaunchInput {
 }
 
 /**
- * The agent's command line for a session (plugins A1): agentCommand's rules, with every
- * agent-specific choice made by the agent (its command, approval mode, MCP flags, Global role).
+ * The agent's command line for a session (plugins A1): core's rules (the prompts' order, MCP only
+ * for an agent that takes it, no initial message on resume), with every agent-specific choice
+ * made by the agent (its command, approval mode, MCP flags, Global role).
  */
 export function agentLaunch(launch: AgentLaunchInput, settings: ProjectSettings, agents: AgentRegistry, platform: string = process.platform): LaunchSpec {
   const selection = sanitizeAgentSelection(launch.llm, (id) => agents.has(id)) ?? { provider: DEFAULT_AGENT_ID }

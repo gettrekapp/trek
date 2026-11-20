@@ -24,6 +24,7 @@ import { voiceServerPlugin } from '../plugins/voice/server/index.ts'
 import { migrateConfigFile } from '../plugins/voice/server/configFile.ts'
 import { VOICE_SUMMARY_PROMPT } from '../plugins/voice/server/prompt.ts'
 import { removeDir, removeDirWhenFree } from './testPlatform.mjs'
+import { builtinAgents } from './agentsHarness.mjs'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
 const posix = process.platform !== 'win32'
@@ -324,9 +325,10 @@ async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessi
     store,
     hub,
     spawner,
+    agents: builtinAgents(),
     schedule: () => ({ cancel() {} }),
     discover: async () => undefined,
-    mcpAccess: () => ({ configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }),
+    mcpAccess: () => ({ url: 'http://x/mcp', token: 't', files: { '.json': '/c.json', '.gemini.json': '/g.json' } }),
     pluginPrompt: (projectId) => registry.sessionPrompt(projectId),
     // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns.
     platform: 'linux'

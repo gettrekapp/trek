@@ -1,62 +1,61 @@
-// scripts/serverLaunch.test.mjs — agent command lines, shell wrapping and env for server sessions.
+// scripts/serverLaunch.test.mjs — agent command lines through the agent registry (plugins A1), shell
+// wrapping and env for server sessions.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { agentCommand, sessionEnv, shellLaunch } from '../server/src/sessions/launch.ts'
-import { DEFAULT_LLM_SETTINGS } from '../src/shared/providers/types.ts'
+import { agentLaunch, sessionEnv, shellLaunch } from '../server/src/sessions/launch.ts'
+import { builtinAgents } from './agentsHarness.mjs'
 
 const base = { sessionId: '11111111-1111-4111-8111-111111111111', resume: false, global: false }
+const agents = builtinAgents()
+const mcp = { url: 'http://x/mcp', token: 't', files: { '.json': '/c.json', '.gemini.json': '/g.json', '.codex.json': '/x.json' } }
+const launch = (input, settings = {}, registry = agents) => agentLaunch(input, settings, registry, 'linux')
 
 test('a fresh Claude session with the defaults', () => {
-  const spec = agentCommand({ ...base, llm: { provider: 'claude' } }, {}, DEFAULT_LLM_SETTINGS)
-  assert.equal(spec.command, `claude --permission-mode auto --session-id ${base.sessionId}`)
+  assert.equal(launch({ ...base, llm: { provider: 'claude' } }).command, `claude --permission-mode auto --session-id ${base.sessionId}`)
 })
 
 test('resume drops the initial message; a fresh start keeps it', () => {
-  const fresh = agentCommand({ ...base, llm: { provider: 'claude' }, initialMessage: 'hi' }, {}, DEFAULT_LLM_SETTINGS)
-  assert.match(fresh.command, /--session-id \S+ 'hi'$/)
-  const resumed = agentCommand({ ...base, resume: true, llm: { provider: 'claude' }, initialMessage: 'hi' }, {}, DEFAULT_LLM_SETTINGS)
-  assert.match(resumed.command, /--resume \S+$/)
+  assert.match(launch({ ...base, llm: { provider: 'claude' }, initialMessage: 'hi' }).command, /--session-id \S+ 'hi'$/)
+  assert.match(launch({ ...base, resume: true, llm: { provider: 'claude' }, initialMessage: 'hi' }).command, /--resume \S+$/)
 })
 
-test('project settings beat server settings for Claude', () => {
-  const llm = { llmDefault: { provider: 'claude' }, providers: { claude: { command: '/srv/claude', approvalMode: 'manual' } } }
-  assert.match(agentCommand({ ...base, llm: { provider: 'claude' } }, {}, llm).command, /^\/srv\/claude --permission-mode manual /)
-  const project = { claudeCommand: '/p/claude', claudePermissionMode: 'plan' }
-  assert.match(agentCommand({ ...base, llm: { provider: 'claude' } }, project, llm).command, /^\/p\/claude --permission-mode plan /)
-  assert.match(agentCommand({ ...base, llm: { provider: 'claude' } }, { claudeArgs: '--verbose' }, llm).command, /^\/srv\/claude --verbose /)
+test("project settings beat the server config for Claude (the claude plugin's project settings)", () => {
+  const server = builtinAgents({ serverConfig: (id) => (id === 'claude' ? { command: '/srv/claude', approvalMode: 'manual' } : {}) })
+  assert.match(launch({ ...base, llm: { provider: 'claude' } }, {}, server).command, /^\/srv\/claude --permission-mode manual /)
+  assert.match(launch({ ...base, llm: { provider: 'claude' } }, { claudeCommand: '/p/claude', claudePermissionMode: 'plan' }, server).command, /^\/p\/claude --permission-mode plan /)
+  assert.match(launch({ ...base, llm: { provider: 'claude' } }, { claudeArgs: '--verbose' }, server).command, /^\/srv\/claude --verbose /)
 })
 
 test('worktree sessions get their type prompt then the shared prompt', () => {
-  const spec = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE' }, { sessionSystemPrompt: ' SHARED ' }, DEFAULT_LLM_SETTINGS)
-  assert.match(spec.command, /--append-system-prompt 'TYPE\n\nSHARED'/)
+  assert.match(launch({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE' }, { sessionSystemPrompt: ' SHARED ' }).command, /--append-system-prompt 'TYPE\n\nSHARED'/)
 })
 
-test('global sessions get the global prompt and addDirs; the role prompt only with MCP', () => {
-  const plain = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, addDirs: ['/r/b'] }, { globalSystemPrompt: 'G' }, DEFAULT_LLM_SETTINGS)
+test("global sessions get the global prompt and addDirs; the role prompt only with MCP, Claude's own or core's", () => {
+  const plain = launch({ ...base, global: true, llm: { provider: 'claude' }, addDirs: ['/r/b'] }, { globalSystemPrompt: 'G' })
   assert.match(plain.command, /--append-system-prompt 'G' --add-dir '\/r\/b'/)
   assert.doesNotMatch(plain.command, /global Claude session/)
-  const mcp = { configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }
-  const withMcp = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, mcp }, {}, DEFAULT_LLM_SETTINGS)
+  const withMcp = launch({ ...base, global: true, llm: { provider: 'claude' }, mcp })
   assert.match(withMcp.command, /global Claude session/)
   assert.match(withMcp.command, /--mcp-config '\/c.json'/)
+  assert.match(launch({ ...base, global: true, llm: { provider: 'codex' }, mcp }).command, /You are the global Codex session of Trek Dev/)
 })
 
 test("the plugins' prompt goes before the user's prompts (they can override it), after a Global session's role, and only with MCP", () => {
-  const mcp = { configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }
-  const worktree = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }, DEFAULT_LLM_SETTINGS)
-  assert.match(worktree.command, /--append-system-prompt 'VOICE\n\nTYPE\n\nSHARED'/)
-  const global = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, pluginPrompt: 'VOICE', mcp }, { globalSystemPrompt: 'G' }, DEFAULT_LLM_SETTINGS)
-  assert.match(global.command, /global Claude session[^']*\n\nVOICE\n\nG'/)
+  assert.match(launch({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }).command, /--append-system-prompt 'VOICE\n\nTYPE\n\nSHARED'/)
+  assert.match(launch({ ...base, global: true, llm: { provider: 'claude' }, pluginPrompt: 'VOICE', mcp }, { globalSystemPrompt: 'G' }).command, /global Claude session[^']*\n\nVOICE\n\nG'/)
   // Without the MCP tools there is no speak_summary to call.
-  const noMcp = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE' }, {}, DEFAULT_LLM_SETTINGS)
-  assert.match(noMcp.command, /--append-system-prompt 'TYPE'/)
+  assert.match(launch({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE' }).command, /--append-system-prompt 'TYPE'/)
 })
 
-test('other providers, local backend env and an invalid selection', () => {
-  assert.match(agentCommand({ ...base, llm: { provider: 'codex' } }, {}, DEFAULT_LLM_SETTINGS).command, /^codex --full-auto/)
-  const local = agentCommand({ ...base, llm: { provider: 'local' } }, {}, { llmDefault: { provider: 'claude' }, providers: { local: { backend: 'lmstudio' } } })
-  assert.equal(local.env.ANTHROPIC_BASE_URL, 'http://localhost:1234')
-  assert.match(agentCommand({ ...base, llm: { provider: 'nope' } }, {}, DEFAULT_LLM_SETTINGS).command, /^claude /)
+test('other agents, the local backend env, an unknown agent, and the token in no argv or env', () => {
+  assert.match(launch({ ...base, llm: { provider: 'codex' } }).command, /^codex --full-auto/)
+  const local = builtinAgents({ serverConfig: (id) => (id === 'local' ? { backend: 'lmstudio' } : {}) })
+  assert.equal(launch({ ...base, llm: { provider: 'local' } }, {}, local).env.ANTHROPIC_BASE_URL, 'http://localhost:1234')
+  assert.match(launch({ ...base, llm: { provider: 'nope' } }).command, /^claude /)
+  for (const provider of ['claude', 'codex', 'gemini', 'local']) {
+    const spec = launch({ ...base, llm: { provider }, mcp: { ...mcp, token: 'SECRET-TOKEN' } })
+    assert.ok(!spec.command.includes('SECRET-TOKEN') && !JSON.stringify(spec.env ?? {}).includes('SECRET-TOKEN'), provider)
+  }
 })
 
 test('shellLaunch: a login shell with -c; cmd /c on Windows', () => {

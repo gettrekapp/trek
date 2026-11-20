@@ -135,7 +135,7 @@ test("another process's environment does not show in ps from inside the sandbox"
 // Seatbelt does not gate sysctl(KERN_PROCARGS2): on macOS 26.2 no rule tried stops it, not
 // (deny process-info* (target others)), not (deny sysctl-read), not even (deny default). So any
 // process of this user, sandboxed or not, can read another's argv and environment. This is why
-// no Trek token is ever put in a process's environment or argv (see providers.test.mjs), and
+// no Trek token is ever put in a process's environment or argv (see agentLaunch.test.mjs), and
 // why the profile has no process-info rule. If this starts failing, macOS now hides it: say so.
 test('known gap: KERN_PROCARGS2 still reads another process\'s environment from inside the sandbox', { skip: skip || (!hasPython && 'no python3') }, (t) => {
   const { pid, secret } = envHolder(t)

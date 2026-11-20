@@ -21,7 +21,7 @@ import {
 import { sessionProcess, shellLaunch } from '../server/src/sessions/launch.ts'
 import { commandBinary } from '../server/src/sessions/agents.ts'
 import { launchSpec, quoted, raw, word } from '../src/shared/providers/shell.ts'
-import { claude } from '../src/shared/providers/claude.ts'
+import { claudeAgent } from '../plugins/claude/shared/claude.ts'
 import { windowsOnly, removeDir } from './testPlatform.mjs'
 
 /**
@@ -166,7 +166,7 @@ const WIN_FILES = {
 const winDeps = (extra = {}) => ({ env: { ...ENV, ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, cwd: 'C:\\repo', ...files({ ...WIN_FILES, ...extra }) })
 
 test('winSpawnPlan: an .exe gets its arguments MSVC-quoted, multi-line prompt included', () => {
-  const spec = claude.buildLaunch({ sessionId: 'id-1', resume: false, command: 'C:\\tools\\claude.exe', systemPrompt: 'a\nb "c"', initialMessage: '100% & done' })
+  const spec = claudeAgent.buildLaunch({ sessionId: 'id-1', resume: false, systemPrompt: 'a\nb "c"', initialMessage: '100% & done', platform: 'win32' }, { server: { command: 'C:\\tools\\claude.exe' }, project: {} })
   const plan = winSpawnPlan(spec, winDeps())
   assert.equal(plan.file, 'C:\\tools\\claude.exe')
   assert.deepEqual(parseWindowsCommandLine(`x ${plan.args}`).slice(1), [

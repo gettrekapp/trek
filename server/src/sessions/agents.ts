@@ -1,15 +1,11 @@
-// What the server can launch (`server.agents`): each provider, and whether the
-// program of the command the server would run for it is installed for the
-// server's user. The command line itself is never sent: it may carry secrets
+// What the server can launch (server.agents): whether the program of each agent's command is installed
+// for the server's user. The command line itself is never sent: it may carry secrets
 // (`API_KEY=… claude`).
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { win32 } from 'node:path'
 import { commandExists } from '../../../src/host/agentService.ts'
 import { parseWindowsCommandLine, resolveWindowsCommand } from './winLaunch.ts'
-import type { ProjectSettings } from '../../../src/shared/model/types'
-import { PROVIDER_LIST } from '../../../src/shared/providers/registry.ts'
-import type { LlmProviderId, LlmSettings } from '../../../src/shared/providers/types'
 
 /** How long an installed check is reused. */
 export const PROBE_TTL_MS = 60_000
@@ -60,20 +56,6 @@ export function platformCommandExists(
   // A full path ignores cwd; a bare name never uses it (PATH only).
   const resolved = resolveWindowsCommand(binary, { ...deps, cwd: homedir() })
   return Promise.resolve(resolved !== undefined && WINDOWS_RUNNABLE.has(win32.extname(resolved).toLowerCase()))
-}
-
-/** Each provider with the command the server runs it with, chosen as agentCommand does. */
-export function agentCommands(
-  llm: LlmSettings,
-  settings: ProjectSettings | undefined
-): { provider: LlmProviderId; label: string; command: string }[] {
-  return PROVIDER_LIST.map((p) => ({
-    provider: p.id,
-    label: p.label,
-    command:
-      (p.id === 'claude' ? settings?.claudeCommand?.trim() || undefined : undefined) ??
-      (llm.providers[p.id]?.command?.trim() || p.defaultCommand)
-  }))
 }
 
 /**

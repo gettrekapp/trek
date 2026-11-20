@@ -335,24 +335,6 @@ test('validateConfig requires an absolute dataDir', () => {
   assert.throws(() => validateConfig({ repos: [], dataDir: 'rel/data' }), /config\.dataDir must be an absolute path/)
 })
 
-test('llmSettings: defaults without an llm section, sanitized with one', (t) => {
-  const configPath = join(tempDir(t), 'config.json')
-  saveConfig(configPath, { repos: [] })
-  const a = new ConfigStore(configPath)
-  t.after(() => a.close())
-  assert.deepEqual(a.llmSettings(), { llmDefault: { provider: 'claude' }, providers: {} })
-  saveConfig(configPath, {
-    repos: [],
-    llm: { llmDefault: { provider: 'codex', model: 'gpt-5' }, providers: { claude: { command: '/opt/claude', bogus: 1 }, nope: {} } }
-  })
-  const b = new ConfigStore(configPath)
-  t.after(() => b.close())
-  assert.deepEqual(b.llmSettings(), {
-    llmDefault: { provider: 'codex', model: 'gpt-5' },
-    providers: { claude: { command: '/opt/claude' } }
-  })
-})
-
 test("llmDefault and agentServerConfig (plugins A1): the default against the server's agents; an agent's non-empty strings", (t) => {
   const configPath = join(tempDir(t), 'config.json')
   saveConfig(configPath, { repos: [] })
