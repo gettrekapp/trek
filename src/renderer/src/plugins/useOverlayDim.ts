@@ -1,4 +1,4 @@
-// A terminal pane's plugin overlay dim (campsite's hiker): on while the pane is scrolled back,
+// A terminal pane's plugin overlay dim: on while the pane is scrolled back,
 // and for DIM_AFTER_KEY_MS after the last key. One debounced timer, so keys don't re-render the pane.
 // `enabled` false (no plugin fills terminalOverlay): no scroll subscription, keys do nothing, never dimmed.
 import { useCallback, useEffect, useRef, useState } from 'react'

@@ -6,6 +6,6 @@ export const CAMPSITE_MANIFEST: PluginManifest = {
   id: 'campsite',
   version: '1.0.0',
   name: 'Campsite',
-  description: "Each agent session is a hiker: on its tab, in its terminal's corner and at a campsite along the bottom of the window, where those who need you wave by the fire.",
+  description: "Each agent session is a hiker: on its tab, on its terminal's button row and at a campsite along the bottom of the window, where those who need you wave by the fire.",
   defaultEnabled: true
 }

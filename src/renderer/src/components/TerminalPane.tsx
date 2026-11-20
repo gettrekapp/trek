@@ -73,7 +73,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     plan: QuickButtonPlan
     builtins: BuiltinValues
   } | null>(null)
-  // The plugin overlay steps back while the user types here or scrolls back (campsite's hiker).
+  // A plugin's overlay steps back while the user types here or scrolls back.
   const overlayFilled = activeSlotEntries(usePluginEntries(), 'terminalOverlay').length > 0
   const overlay = useOverlayDim(terminalId, visible, overlayFilled)
 
@@ -343,6 +343,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
               {buttons.length === 0 ? 'Add a quick button' : '+'}
             </button>
             <span className="quick-buttons-spacer" />
+            {/* The wrapper keeps the row's height and gives way before the buttons do, whatever a plugin puts in it */}
+            <div className="quick-bar-end">
+              <PluginSlot name="terminalBarEnd" props={{ terminalId }} />
+            </div>
             {!exited && <QueueChip terminalId={terminalId} global={global} />}
           </div>
         </div>

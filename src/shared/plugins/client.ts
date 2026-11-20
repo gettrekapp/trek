@@ -232,8 +232,16 @@ export interface ClientPlugin {
      * mark-complete click (absent while offline).
      */
     sessionIndicator?: FC<SessionIndicatorProps>
-    /** In each terminal pane's corner; the wrapper takes no clicks and dims while the user types or scrolls back */
+    /** In each terminal pane's corner; the wrapper takes no clicks and dims while the user types or scrolls back. No built-in plugin fills it now (campsite moved to terminalBarEnd). */
     terminalOverlay?: FC<{ terminalId: string }>
+    /**
+     * At the right end of each terminal's quick button row, before the queue chip. Its wrapper is
+     * 24 px tall, bottom-aligned, under 8 px of row padding: taller content rises into that padding
+     * and the row keeps its height. The wrapper (`.quick-bar-end`) shrinks before the buttons do, to
+     * nothing unless the plugin's CSS gives it a floor (`.quick-bar-end:has(> .its-root) { min-width }`);
+     * what no longer fits is cut from the left.
+     */
+    terminalBarEnd?: FC<{ terminalId: string }>
     /** A strip along the bottom of the project window, above the Global bar; the plugin sets its height */
     bottomBar?: FC
     /** An entry in a worktree's Run menu, between Docker and Stack, and the panel it opens (plugins E3) */
@@ -265,7 +273,7 @@ export type PluginSlotName = keyof NonNullable<ClientPlugin['slots']>
 export type PluginSlotProps<N extends PluginSlotName> = NonNullable<ClientPlugin['slots']>[N] extends FC<infer P> | undefined ? P : never
 
 /** The slots PluginSlot mounts, each active plugin's component (the others have mounts of their own) */
-export type MultiSlotName = 'sidebarToolbar' | 'overlay' | 'terminalOverlay' | 'bottomBar'
+export type MultiSlotName = 'sidebarToolbar' | 'overlay' | 'terminalOverlay' | 'terminalBarEnd' | 'bottomBar'
 
 /** Types a plugin's client half. */
 export const defineClientPlugin = (plugin: ClientPlugin): ClientPlugin => plugin

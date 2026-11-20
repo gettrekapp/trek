@@ -119,6 +119,11 @@ export function indicatorTitle(state: Pick<PluginSession, 'status' | 'decision'>
   return state.decision ? 'Agent is waiting on your decision' : statusTitle(state.status, clickable)
 }
 
+/** What a session's hiker is up to, in words: its chore while working, else its status */
+export function hikerDoing(session: Pick<PluginSession, 'status' | 'decision'>, chore: Chore): string {
+  return session.status === 'working' && !isWaiting(session) ? CHORE_NAMES[chore] : statusText(session)
+}
+
 export function hikerTooltip(session: PluginSession, chore: Chore): string {
   const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
   const parts = [session.label, where, statusText(session)]
