@@ -389,3 +389,17 @@ test('automation.save (plugins A1b): refuses an agent turned off in the project,
   const switched = call(input({ id: 'a', llm: { provider: 'gemini', model: 'x' } }))
   assert.equal(switched.ok, true, 'a model change keeps its agent')
 })
+
+test("automation.save (plugins A1b): an automation whose agent the server no longer has stays editable; taking such an agent is refused", () => {
+  const s = setupScheduler([auto({ llm: { provider: 'gone', model: 'm' } })])
+  const call = (automation) => dispatchV2('automation.save', { projectId: 'p1', automation }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler, sessions: { agentRegistry: AGENTS } })
+  const kept = call(input({ id: 'a', enabled: false, llm: { provider: 'gone', model: 'm' } }))
+  assert.equal(kept.ok, true, kept.error?.message)
+  const saved = s.list().find((a) => a.id === 'a')
+  assert.deepEqual([saved.enabled, saved.llm], [false, { provider: 'gone', model: 'm' }])
+  const refused = call(input({ llm: { provider: 'gone' } }))
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+  assert.match(refused.error?.message, /known provider/)
+  // An agent without Trek's tools, newly taken, is still refused.
+  assert.match(call(input({ id: 'a', llm: { provider: 'grok' } })).error?.message ?? '', /Trek’s tools/)
+})

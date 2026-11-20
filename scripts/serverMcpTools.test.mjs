@@ -1385,3 +1385,12 @@ test('plugins A1b: start_session and save_automation refuse an agent turned off 
   assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome, r.error]), [['manual', 'failed', 'Codex is turned off for this project']])
   assert.equal(s.spawned.length, 0, 'nothing launched')
 })
+
+test('plugins A1b: save_automation { enabled: false } on an automation whose agent the server no longer has', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', MORNING)
+  s.projects.apply(s.projectId, (d) => { d.automations.find((a) => a.id === created.id).llm = { provider: 'gone' } })
+  const saved = await s.call('save_automation', { automation: created.id, enabled: false })
+  assert.equal(saved.enabled, false)
+  assert.deepEqual(s.projects.require(s.projectId).automations[0].llm, { provider: 'gone' })
+})

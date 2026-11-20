@@ -39,7 +39,12 @@ export function checkSchedule(raw: unknown, now: number): { cron: string; tz: st
   return { cron: cron.trim().split(/\s+/).join(' '), tz }
 }
 
-export function checkInput(raw: unknown, now: number, agents: AgentLookup): CheckedInput {
+/**
+ * `storedLlm`: the stored automation's agent, by id (an update). An agent unchanged from it isn't held
+ * to the server's agents (plugins A1b): an automation whose agent's plugin is gone stays editable,
+ * to disable it, say. Its runs fail meanwhile.
+ */
+export function checkInput(raw: unknown, now: number, agents: AgentLookup, storedLlm?: (id: string) => LlmSelection | undefined): CheckedInput {
   if (!isRecord(raw)) throw bad('automation must be an object')
   const out: CheckedInput = { name: '', prompt: '', schedule: { cron: '', tz: '' }, enabled: false }
   if (raw.id !== undefined) {
@@ -60,10 +65,12 @@ export function checkInput(raw: unknown, now: number, agents: AgentLookup): Chec
   out.enabled = requireBoolean(raw.enabled, 'automation.enabled')
   if (raw.llm !== undefined && raw.llm !== null) {
     // sanitizeAgentSelection turns an unknown agent into the default one: refuse it instead (as session.start does).
-    if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string' || !agents.has(raw.llm.provider)) throw bad('automation.llm.provider must be a known provider')
-    const llm: LlmSelection | undefined = sanitizeAgentSelection(raw.llm, (id) => agents.has(id))
+    const stored = out.id === undefined ? undefined : storedLlm?.(out.id)?.provider
+    const unchanged = isRecord(raw.llm) && typeof raw.llm.provider === 'string' && raw.llm.provider === stored
+    if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string' || (!unchanged && !agents.has(raw.llm.provider))) throw bad('automation.llm.provider must be a known provider')
+    const llm: LlmSelection | undefined = sanitizeAgentSelection(raw.llm, (id) => (unchanged && id === stored) || agents.has(id))
     if (!llm) throw bad('automation.llm must be an LLM selection')
-    if (!agents.facts(llm.provider).capabilities.mcp) throw bad('automation.llm.provider must be an agent that can use Trek’s tools (MCP)')
+    if (!unchanged && !agents.facts(llm.provider).capabilities.mcp) throw bad('automation.llm.provider must be an agent that can use Trek’s tools (MCP)')
     out.llm = llm
   }
   return out

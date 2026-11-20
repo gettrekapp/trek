@@ -52,7 +52,8 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
   // Registered there, but not for its platform (plugins E1): as good as missing.
   if (listed.available === false) return 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
-  return pluginEnabled(settings, { id: manifest.id, defaultEnabled: listed.defaultEnabled }) ? 'on' : 'off'
+  // A `required` plugin (plugins A1b) is on whatever the project says.
+  return pluginEnabled(settings, { id: manifest.id, defaultEnabled: listed.defaultEnabled, ...(listed.required === true ? { required: true as const } : {}) }) ? 'on' : 'off'
 }
 
 /** The window mounts the plugin's Runtime and slots. */

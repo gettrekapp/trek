@@ -1489,6 +1489,10 @@ test('plugins A1b: an agent turned off in the project is refused for new session
   assert.match(cmd(s.spawned.at(-1)), /^claude /)
   s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
   assert.match(cmd(s.spawned.at(-1)), /^claude /)
+  // An explicit pick for a Global session is refused like a worktree's.
+  const spawnedBefore = s.spawned.length
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, llm: { provider: 'codex' }, ...size }), refused)
+  assert.equal(s.spawned.length, spawnedBefore, 'nothing launched')
   // A Codex session started while it was on restarts after it is turned off.
   off.delete('codex')
   const { sessionId } = start({ llm: { provider: 'codex' } })

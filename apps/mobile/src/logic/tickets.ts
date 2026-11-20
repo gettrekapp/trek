@@ -58,7 +58,8 @@ export function pluginOn(manifest: PluginManifest, server: TicketServer, setting
     return server.capabilities?.includes(CAPABILITY.prResolve) !== true
   }
   if (listed.available === false) return false
-  return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled })
+  // A `required` plugin (plugins A1b) is on whatever the project says.
+  return pluginEnabled(settings.plugins, { id: manifest.id, defaultEnabled: listed.defaultEnabled, ...(listed.required === true ? { required: true as const } : {}) })
 }
 
 /** The ticket providers on for the project; none before the server's welcome. */

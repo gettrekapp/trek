@@ -1402,7 +1402,9 @@ test('required (plugins A1b): an import or a load that turns it off is not refus
       return e
     }
   })()
-  assert.doesNotMatch(err?.message ?? '', /always on|plugins/)
+  assert.ok(err, 'the import fails, at its repository')
+  assert.equal(err.code, 'PATH_DENIED')
+  assert.match(err.message, /\/nowhere is not a registered repo/)
   // A whole settings object (validateSettings, an import's check) isn't refused either; a live edit is.
   assert.doesNotThrow(() => validateSettings({ plugins: { core: { enabled: false } } }, 'project.settings', registry.settingRules))
   // A live edit that switches it off is refused; one that resends an imported `false` (an old

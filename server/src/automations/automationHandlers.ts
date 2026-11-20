@@ -26,8 +26,9 @@ export const automationHandlers: Record<string, Handler> = {
     const s = scheduler(ctx)
     const now = s.now()
     const agents = ctx.sessions.agentRegistry
-    const input = checkInput(p.automation, now, agents)
     return ctx.projects.apply(p.projectId, (d) => {
+      // Checked against the stored automation: its own agent, unchanged, passes even when the server lacks it.
+      const input = checkInput(p.automation, now, agents, (id) => d.automations?.find((a) => a.id === id)?.llm)
       // An agent turned off in the project is refused only when the automation takes it now (plugins
       // A1b): one that already had it stays editable (to disable it, say). Its runs fail meanwhile.
       const before = input.id === undefined ? undefined : d.automations?.find((a) => a.id === input.id)

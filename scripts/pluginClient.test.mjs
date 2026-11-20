@@ -349,3 +349,9 @@ test("the host (plugins E3): a request's timeout; the repos, their changes and t
   assert.deepEqual([bare.repos(), bare.repos() === bare.repos(), await bare.confirm({ title: 'T', message: 'M', confirmLabel: 'OK' })], [[], true, false])
   assert.equal(bare.components.SettingText({ value: '', onCommit: () => {} }), null)
 })
+
+test('pluginStatus (plugins A1b): a plugin the server lists as required is on whatever the project says', () => {
+  const welcome = { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: false, required: true }], capabilities: [] }
+  assert.equal(pluginStatus(quiet, welcome, { quiet: { enabled: false } }), 'on')
+  assert.equal(pluginStatus(quiet, { plugins: [{ id: 'quiet', version: '1.0.0', defaultEnabled: false }], capabilities: [] }, { quiet: { enabled: false } }), 'off', 'not listed so: the setting holds')
+})

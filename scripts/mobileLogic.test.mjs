@@ -3269,3 +3269,10 @@ test('global tray: where a ui.focus for a session goes', () => {
   assert.equal(focusPlace(project, 'new'), 'unknown', 'not listed yet')
   assert.equal(focusPlace(null, 'g1'), 'unknown', 'no snapshot yet')
 })
+
+test('pluginOn (plugins A1b): a plugin the server lists as required is on whatever the project says', () => {
+  const linear = { id: 'linear', version: '1.0.0', name: 'Linear', description: '', defaultEnabled: false }
+  const off = { plugins: { linear: { enabled: false } } }
+  assert.equal(pluginOn(linear, { plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: false, required: true }], capabilities: [] }, off), true)
+  assert.equal(pluginOn(linear, { plugins: [{ id: 'linear', version: '1.0.0', defaultEnabled: false }], capabilities: [] }, off), false, 'not listed so: the setting holds')
+})
