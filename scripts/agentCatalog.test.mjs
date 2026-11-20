@@ -3,7 +3,7 @@
 // glyphs and notes the windows and the phone show; the default the server would pick.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { agentCatalog, agentNote, describeAgent, expectedDefault, fallbackGlyph, globalStart, sessionGlyph } from '../src/shared/agents/catalog.ts'
+import { agentCatalog, agentNote, describeAgent, exitedAgentHint, expectedDefault, fallbackGlyph, globalStart, sessionGlyph } from '../src/shared/agents/catalog.ts'
 import { LEGACY_AGENTS } from '../src/shared/agents/legacyAgents.ts'
 
 const caps = (over = {}) => ({ presetSessionId: true, resume: true, mcp: true, appendSystemPrompt: true, effort: false, addDirs: true, sessionMigration: false, ...over })
@@ -172,4 +172,20 @@ test("an old server's answer keeps an agent's `on: false` and its glyph where it
     ['newbie', 'NB', false]
   ])
   assert.deepEqual(c.offered.map((a) => a.id), ['claude'])
+})
+
+test("exitedAgentHint: an exited session's agent may be missing on the server: said for sure when the server says so, as a maybe when it can't", () => {
+  const c = agentCatalog(current)
+  assert.deepEqual(exitedAgentHint({ provider: 'codex' }, c, true), { kind: 'missing', label: 'Codex' }, 'the server said it is not installed')
+  assert.equal(exitedAgentHint({ provider: 'aider' }, c, true), null, 'installed')
+  assert.equal(exitedAgentHint({ provider: 'claude' }, c, true), null)
+  assert.deepEqual(exitedAgentHint({ provider: 'mystery' }, c, true), { kind: 'maybe', label: 'mystery' }, 'not listed by the server')
+  // No answer yet, or a server without agents: the snapshot can't say, so a maybe for any but the default agent.
+  const none = agentCatalog(null)
+  assert.deepEqual(exitedAgentHint({ provider: 'codex' }, none, false), { kind: 'maybe', label: 'Codex' })
+  assert.equal(exitedAgentHint({ provider: 'claude' }, none, false), null)
+  assert.equal(exitedAgentHint(undefined, none, false), null, 'an older session without an agent runs the default one')
+  // An older session without an agent, where the server says the default one is missing.
+  const noDefault = agentCatalog({ ...current, agents: current.agents.map((a) => (a.provider === 'claude' ? { ...a, installed: false } : a)) })
+  assert.deepEqual(exitedAgentHint(undefined, noDefault, true), { kind: 'missing', label: 'Claude' })
 })

@@ -185,3 +185,22 @@ export function agentNote(llm: AgentSelection | undefined, catalog: AgentCatalog
   if (!agent.on) return `${agent.label} is turned off for this project: new sessions can't use it. Pick another agent, or turn it on in Settings → Plugins.`
   return null
 }
+
+/**
+ * What an exited session's overlay says about its agent's command: `missing` when the server said
+ * it is not installed; `maybe` for an agent other than the default one when the server can't say
+ * (no answer yet, a server without `agents`, or an agent it doesn't list); else nothing. A session
+ * without an agent runs the default one.
+ */
+export function exitedAgentHint(
+  llm: AgentSelection | undefined,
+  catalog: AgentCatalog,
+  answered: boolean
+): { kind: 'missing' | 'maybe'; label: string } | null {
+  const agentId = llm?.provider ?? DEFAULT_AGENT_ID
+  const known = catalog.get(agentId)
+  const label = catalog.label(agentId)
+  if (known?.installed === false) return { kind: 'missing', label }
+  if (agentId !== DEFAULT_AGENT_ID && (!known || !answered)) return { kind: 'maybe', label }
+  return null
+}

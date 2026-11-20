@@ -14,8 +14,9 @@ import { QuickButtonModal } from './QuickButtonModal'
 import { QuickButtonRunModal } from './QuickButtonRunModal'
 import { useAppStore } from '../store'
 import { useAgentCatalog } from '../agents'
+import { exitedAgentHint } from '../../../shared/agents/catalog.ts'
+import { DEFAULT_AGENT_ID } from '../../../shared/plugins/agents.ts'
 import {
-  agentLabel,
   attachTerminal,
   fitTerminal,
   focusTerminal,
@@ -64,6 +65,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   // Subscribed so the restart label follows the session's agent.
   const llm = useAppStore((s) => s.terminals[terminalId]?.llm)
   const catalog = useAgentCatalog()
+  const answered = useAppStore((s) => s.serverAgents !== null)
+  /** The session's agent's label, as the server names it; a session without one runs the default agent */
+  const label = catalog.label(llm?.provider ?? DEFAULT_AGENT_ID)
+  const hint = exitedAgentHint(llm, catalog, answered)
   const quickButtons = useAppStore((s) =>
     global ? s.project?.globalTerminalButtons : s.project?.terminalButtons
   )
@@ -369,11 +374,13 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
                 if (readOnly === undefined) void getBackend().sessions.restart(terminalId)
               }}
             >
-              Restart {agentLabel(terminalId)}
+              Restart {label}
             </button>
-            {llm && catalog.get(llm.provider)?.installed === false && (
+            {hint && (
               <span className="exited-hint">
-                {`If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`}
+                {hint.kind === 'missing'
+                  ? `${hint.label} isn't installed on the server: its command is set in the server's config.`
+                  : `If ${hint.label} isn't installed on the server, its command is set in the server's config.`}
               </span>
             )}
           </div>
