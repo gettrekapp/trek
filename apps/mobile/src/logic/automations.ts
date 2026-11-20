@@ -145,8 +145,11 @@ export function lastRunLine(a: Automation, now: number): string {
  */
 export function agentLine(a: Automation, agents: readonly AgentInfo[] = []): string | null {
   if (!a.llm) return null
-  const label = agents.find((x) => x.provider === a.llm?.provider)?.label ?? a.llm.provider
-  return `Agent: ${[label, a.llm.model, a.llm.effort].filter(Boolean).join(' · ')}`
+  const agent = agents.find((x) => x.provider === a.llm?.provider)
+  const label = agent?.label ?? a.llm.provider
+  // Its runs fail while its agent is off (plugins A1b); the automation stays editable.
+  const off = agent?.on === false ? ' (turned off for this project)' : ''
+  return `Agent: ${[label, a.llm.model, a.llm.effort].filter(Boolean).join(' · ')}${off}`
 }
 
 /**

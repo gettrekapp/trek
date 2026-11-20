@@ -2,7 +2,7 @@
 // teardown plan); their changes, diffs and commits from demoData; the branch list, the agents and
 // ui.report.
 import { WORKTREE_OPS, type ChangesSource, type Worktree } from '../../shared.ts'
-import type { DemoChanges } from '../demoData.ts'
+import { DEMO_AGENTS, type DemoChanges } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
 import { checkProject, findRepo, findWorktree } from '../demoProject.ts'
@@ -124,15 +124,7 @@ export const WORKTREE_HANDLERS: DemoHandlers<WorktreeMethods> = {
     findRepo(ctx.server.state.project, p.repoId)
     return [...ctx.server.state.branches]
   },
-  'server.agents': () => ({
-    llmDefault: { provider: 'claude' },
-    agents: [
-      { provider: 'claude', label: 'Claude', installed: true },
-      { provider: 'codex', label: 'Codex', installed: true },
-      { provider: 'gemini', label: 'Gemini', installed: true },
-      { provider: 'grok', label: 'Grok', installed: false },
-      { provider: 'local', label: 'Local model', installed: false }
-    ]
-  }),
+  // A copy, so a screen can't change the demo's list.
+  'server.agents': () => structuredClone(DEMO_AGENTS),
   'ui.report': () => null
 }

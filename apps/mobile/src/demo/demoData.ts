@@ -1,6 +1,6 @@
 // The demo server's sample project (apps/mobile/src/demo): what someone sees after Try the demo. A
 // fresh copy on every call, its times relative to `now` ("2 hours ago" stays true). Pure.
-import type { Automation, ChangedFile, CommitInfo, HistoryEvent, Project, Repository, ReviewComment, Session, Worktree } from '../shared.ts'
+import type { Automation, ChangedFile, CommitInfo, HistoryEvent, Project, Repository, ReviewComment, ServerAgents, Session, Worktree } from '../shared.ts'
 import { parseCron, slotsBetween } from '../shared.ts'
 import { CODEX_TICKS, SCROLLBACK } from './demoScripts.ts'
 
@@ -9,6 +9,98 @@ export const DEMO_PROJECT_NAME = 'acme-web'
 export const DEMO_REPO_ID = 'demo-repo'
 export const DEMO_ROOT = '/home/demo/code/acme-web'
 export const DEMO_NIGHTLY_ID = 'auto-nightly'
+
+type DemoCapabilities = NonNullable<ServerAgents['agents'][number]['capabilities']>
+const caps = (more: Partial<DemoCapabilities> = {}): DemoCapabilities => ({
+  presetSessionId: true,
+  resume: true,
+  mcp: true,
+  appendSystemPrompt: true,
+  effort: false,
+  addDirs: true,
+  sessionMigration: false,
+  ...more
+})
+const EFFORTS = ['low', 'medium', 'high']
+
+/** The demo server's agents, as a current server lists them (server.agents with agentInfo, plugins A2): all on */
+export const DEMO_AGENTS: ServerAgents = {
+  llmDefault: { provider: 'claude' },
+  agents: [
+    {
+      provider: 'claude',
+      label: 'Claude',
+      installed: true,
+      glyph: 'CL',
+      plugin: 'claude',
+      capabilities: caps({ effort: true, sessionMigration: true }),
+      models: [
+        { id: 'opus', label: 'Opus (latest)', efforts: EFFORTS },
+        { id: 'sonnet', label: 'Sonnet (latest)', efforts: EFFORTS }
+      ],
+      efforts: EFFORTS,
+      approvalModes: [{ value: 'auto', label: 'Auto' }],
+      defaultApprovalMode: 'auto',
+      listsModels: false,
+      on: true
+    },
+    {
+      provider: 'codex',
+      label: 'Codex',
+      installed: true,
+      glyph: 'CX',
+      plugin: 'codex',
+      capabilities: caps({ presetSessionId: false, effort: true }),
+      models: [{ id: 'gpt-5-codex', label: 'GPT-5 Codex', efforts: EFFORTS }],
+      efforts: EFFORTS,
+      approvalModes: [{ value: 'full-auto', label: 'Full auto (sandboxed)' }],
+      defaultApprovalMode: 'full-auto',
+      listsModels: false,
+      on: true
+    },
+    {
+      provider: 'gemini',
+      label: 'Gemini',
+      installed: true,
+      glyph: 'GM',
+      plugin: 'gemini',
+      capabilities: caps({ appendSystemPrompt: false }),
+      models: [{ id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }],
+      efforts: [],
+      approvalModes: [{ value: 'auto_edit', label: 'Auto-approve edits' }],
+      defaultApprovalMode: 'auto_edit',
+      listsModels: false,
+      on: true
+    },
+    {
+      provider: 'grok',
+      label: 'Grok',
+      installed: false,
+      glyph: 'GK',
+      plugin: 'grok',
+      capabilities: caps({ presetSessionId: false, resume: false, mcp: false, appendSystemPrompt: false, addDirs: false }),
+      models: [{ id: 'grok-4', label: 'Grok 4' }],
+      efforts: [],
+      approvalModes: [],
+      listsModels: false,
+      on: true
+    },
+    {
+      provider: 'local',
+      label: 'Local',
+      installed: false,
+      glyph: 'LC',
+      plugin: 'claude',
+      capabilities: caps({ sessionMigration: true }),
+      models: [],
+      efforts: [],
+      approvalModes: [{ value: 'auto', label: 'Auto' }],
+      defaultApprovalMode: 'auto',
+      listsModels: true,
+      on: true
+    }
+  ]
+}
 const CHECKOUT_HEAD = '7b2e9d4c1a8f3e6b0d5c2a9f8e7d6c5b4a3f2e1d'
 const PR_URL = 'https://github.com/example/acme-web/pull/42'
 

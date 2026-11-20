@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, type PressableStateCallbackType, type StyleProp, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CAPABILITY, type AgentInfo, type LlmSelection } from '../shared.ts'
+import { startableAgents } from '../logic/agents.ts'
 import { globalAgentLabel, globalRow, normalGlobalSessions } from '../logic/globalSessions.ts'
 import { BAR_HEIGHT, snapHeight, stepHeight, tapHeight, trayHeights, trayLayout, trayTab } from '../logic/globalTray.ts'
 import { sessionMark } from '../logic/worktreeRow.ts'
@@ -99,6 +100,7 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
 
   // New session (＋ or the empty tray's button): a picker of the project's Global agent and the other installed ones.
   const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [listed, setListed] = useState<AgentInfo[]>([])
   const [serverDefault, setServerDefault] = useState<LlmSelection | undefined>(undefined)
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -110,7 +112,8 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
       .request('server.agents', { projectId })
       .then((a) => {
         if (cancelled) return
-        setAgents(a.agents.filter((x) => x.installed))
+        setAgents(startableAgents(a.agents))
+        setListed(a.agents)
         setServerDefault(a.llmDefault)
       })
       .catch(() => {})
@@ -144,7 +147,7 @@ export function GlobalTray({ serverId, projectId, paneHeight }: { serverId: stri
   const open = height !== 'collapsed'
   const label = open ? 'Global' : (row?.text ?? 'Global')
   const markText = row?.mark === 'decision' ? 'decision' : row?.mark === 'attention' ? 'needs you' : null
-  const globalLabel = project ? globalAgentLabel(project.settings, serverDefault, agents) : null
+  const globalLabel = project ? globalAgentLabel(project.settings, serverDefault, listed) : null
   const canStart = !busy && !!server && !!project
   const pickRow = ({ pressed }: PressableStateCallbackType): StyleProp<ViewStyle> => [ui.listRow, { alignItems: 'baseline' }, pressed ? { backgroundColor: colors.panel } : null]
 

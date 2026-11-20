@@ -26,6 +26,7 @@ import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
 import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
+import { sessionTypeNote, startableAgents } from '../apps/mobile/src/logic/agents.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree, teardownRemove } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, pluginOn, ticketView } from '../apps/mobile/src/logic/tickets.ts'
@@ -2200,6 +2201,7 @@ test('automations: a card says Off, the last run with its age and error, the age
   assert.equal(agentLine(automation({ llm: { provider: 'codex', model: 'gpt-5', effort: 'high' } }), agents), 'Agent: Codex · gpt-5 · high')
   // The server's agent list not loaded (or an agent it no longer lists): the provider's id.
   assert.equal(agentLine(automation({ llm: { provider: 'codex' } })), 'Agent: codex')
+  assert.equal(agentLine(automation({ llm: { provider: 'codex' } }), [{ provider: 'codex', label: 'Codex', installed: true, on: false }]), 'Agent: Codex (turned off for this project)')
 
   const off = automationCard(automation({ enabled: false, llm: { provider: 'codex' }, history: [ran], missed: { since: Date.UTC(2026, 0, 2, 14, 0), count: 2 } }), A_NOW, agents)
   assert.deepEqual(off, {
@@ -3074,6 +3076,31 @@ test('global sessions: the Global agent label', () => {
   assert.equal(globalAgentLabel({ globalLlm: { provider: 'grok' } }, claude, agents), 'Claude')
   // A provider the list does not name: its id.
   assert.equal(globalAgentLabel({ globalLlm: { provider: 'gemini' } }, claude, agents), 'gemini')
+  // With agentInfo (plugins A2): an agent off in the project is passed over; an agent this phone
+  // never heard of, described by the server, is taken at its word.
+  const caps = (mcp) => ({ presetSessionId: true, resume: true, mcp, appendSystemPrompt: true, effort: false, addDirs: true, sessionMigration: false })
+  const described = [
+    { provider: 'claude', label: 'Claude', installed: true, glyph: 'CL', capabilities: caps(true), on: true },
+    { provider: 'codex', label: 'Codex', installed: true, glyph: 'CX', capabilities: caps(true), on: false },
+    { provider: 'aider', label: 'Aider', installed: true, glyph: 'AI', capabilities: caps(true), on: true }
+  ]
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'codex' } }, claude, described), 'Claude')
+  assert.equal(globalAgentLabel({ globalLlm: { provider: 'aider' } }, claude, described), 'Aider')
+})
+
+test('agents (plugins A2): a New session list offers the installed ones that are on; a session type whose agent is off says why', () => {
+  const agents = [
+    { provider: 'claude', label: 'Claude', installed: true, on: true },
+    { provider: 'codex', label: 'Codex', installed: true, on: false },
+    { provider: 'grok', label: 'Grok', installed: false },
+    { provider: 'gemini', label: 'Gemini', installed: true }
+  ]
+  assert.deepEqual(startableAgents(agents).map((a) => a.provider), ['claude', 'gemini'])
+  const server = { llmDefault: { provider: 'claude' }, agents }
+  assert.equal(sessionTypeNote({ llm: { provider: 'codex' } }, server), "Codex is turned off for this project: new sessions can't use it. Pick another agent, or turn it on in Settings → Plugins.")
+  assert.equal(sessionTypeNote({ llm: { provider: 'gemini' } }, server), null)
+  assert.equal(sessionTypeNote({}, server), null)
+  assert.equal(sessionTypeNote({ llm: { provider: 'codex' } }, null), null, "before the server's list: nothing to say")
 })
 
 test('tag filter: the options are the workflow tags, the custom tags and Untagged', () => {

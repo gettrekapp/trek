@@ -22,10 +22,12 @@ import {
   type Project,
   type RegisteredServer,
   type Repository,
+  type ServerAgents,
   type SessionType,
   type TeardownItem,
   type Worktree
 } from '../../../../../src/shared.ts'
+import { sessionTypeNote, startableAgents } from '../../../../../src/logic/agents.ts'
 import { activeTicketProviders } from '../../../../../src/logic/tickets.ts'
 import { activePrProviders } from '../../../../../src/logic/pullRequests.ts'
 import { branchParts, type BranchPart } from '../../../../../src/logic/worktreeList.ts'
@@ -74,6 +76,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   // An open Global tray has the keyboard: this screen, under it, keeps its size.
   const tray = useGlobalTray()
   const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [serverAgents, setServerAgents] = useState<ServerAgents | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
@@ -106,13 +109,18 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
   }, [])
 
+  // Asked again when the project's plugin switches change: an agent switched off leaves the list.
+  const pluginsKey = topic.state === 'ready' ? JSON.stringify(topic.snapshot.settings.plugins ?? {}) : ''
   useEffect(() => {
     if (!server || !server.connection.welcome?.capabilities.includes(CAPABILITY.agents)) return
     void server.connection
       .request('server.agents', { projectId })
-      .then((a) => setAgents(a.agents.filter((x) => x.installed)))
+      .then((a) => {
+        setServerAgents(a)
+        setAgents(startableAgents(a.agents))
+      })
       .catch(() => {})
-  }, [server, projectId])
+  }, [server, projectId, pluginsKey])
 
   const project = topic.state === 'ready' ? topic.snapshot : null
   const found = project ? findWorktree(project, worktreeId) : undefined
@@ -416,12 +424,26 @@ export default function WorktreeScreen(): React.JSX.Element {
                     <Text style={[ui.text, { fontSize: 15 }]}>{a.label}</Text>
                   </Pressable>
                 ))}
-                {sessionTypes.map((t) => (
-                  <Pressable key={t.id} accessibilityRole="button" style={listRow} onPress={() => void start({ type: t })}>
-                    <Text style={[ui.text, { flex: 1, fontSize: 15 }]}>{t.name}</Text>
-                    <Text style={{ color: colors.muted, fontSize: 12 }}>session type</Text>
-                  </Pressable>
-                ))}
+                {sessionTypes.map((t) => {
+                  // Its agent is off in the project (or not on the server): the server would refuse it.
+                  const note = sessionTypeNote(t, serverAgents)
+                  return (
+                    <Pressable
+                      key={t.id}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: note !== null }}
+                      disabled={note !== null}
+                      style={(state) => [listRow(state), note ? { opacity: 0.5 } : null]}
+                      onPress={() => void start({ type: t })}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[ui.text, { fontSize: 15 }]}>{t.name}</Text>
+                        {note ? <Text style={{ color: colors.muted, fontSize: 12 }}>{note}</Text> : null}
+                      </View>
+                      <Text style={{ color: colors.muted, fontSize: 12 }}>session type</Text>
+                    </Pressable>
+                  )
+                })}
               </View>
             ) : null}
             <View style={ui.section}>

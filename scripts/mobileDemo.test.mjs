@@ -12,6 +12,7 @@ import { parseCron, slotsBetween } from '../src/shared/cron.ts'
 import { numberedLines, patchBody } from '../src/shared/changes.ts'
 import { ServerRegistry, globalSocketFactory } from '../src/shared/client/index.ts'
 import { DemoServer, DEMO_URL, createDemoSocketFactory } from '../apps/mobile/src/demo/index.ts'
+import { DEMO_CAPABILITIES } from '../apps/mobile/src/demo/demoServer.ts'
 import { DEMO_METHODS, NOT_IN_DEMO } from '../apps/mobile/src/demo/demoHandlers.ts'
 
 test('demo data: a project with three worktrees, sessions, automations and history', () => {
@@ -513,6 +514,9 @@ test('demo: changes, diffs and commits per source', async () => {
     assert.deepEqual(Object.keys(diff), ['src/ui/Badge.tsx'])
     const agents = await h.conn.request('server.agents', { projectId: DEMO_PROJECT_ID })
     assert.ok(agents.agents.some((a) => a.provider === 'codex' && a.installed))
+    // The demo is a current server (plugins A2): its agents carry agentInfo, and every one is on.
+    assert.ok(agents.agents.every((a) => a.glyph && a.plugin && a.capabilities && a.on === true))
+    assert.deepEqual(agents.agents.find((a) => a.provider === 'local')?.label, 'Local')
   } finally {
     h.close()
   }
@@ -661,4 +665,8 @@ test('demo: every request the phone sends is answered by the demo or listed as n
   assert.deepEqual(missing, [], 'handle these in apps/mobile/src/demo, or list them in NOT_IN_DEMO with why')
   // And nothing is both
   assert.deepEqual(DEMO_METHODS.filter((m) => m in NOT_IN_DEMO), [])
+})
+
+test('demo: it advertises agentInfo, as a current server does (plugins A2)', () => {
+  assert.ok(DEMO_CAPABILITIES.includes('agentInfo'))
 })

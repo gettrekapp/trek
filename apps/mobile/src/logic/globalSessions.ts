@@ -1,7 +1,7 @@
 // A project's Global sessions on the phone: which ones the Global tray lists (an automation's run
 // tab lives under Automations, as in the desktop's drawer), the Global tray's bar (globalRow), the
-// agent a new one gets (the server's own rule, src/shared/providers/selection.ts). Pure.
-import { resolveGlobalLlm } from '../shared.ts'
+// agent a new one gets (the server's own rule, src/shared/agents/catalog.ts). Pure.
+import { agentCatalog, expectedDefault } from '../shared.ts'
 import type { AgentInfo, LlmSelection, Session } from '../shared.ts'
 
 /** The Global sessions the Global tray shows: every one but an automation's run tab, in tab order. */
@@ -31,8 +31,8 @@ export function globalRow(project: {
 /**
  * The label of the agent a Global session started without `llm` gets: the project's Global agent,
  * else its default, else the server's (`serverDefault`, server.agents' `llmDefault`), passing over
- * one without Trek's tools, as the server does. By the server's label for it (`agents`), else the
- * provider's id. Null until the server's default is known.
+ * one without Trek's tools or turned off in the project, as the server does. By the server's label
+ * for it (`agents`), else the provider's id. Null until the server's default is known.
  */
 export function globalAgentLabel(
   settings: { globalLlm?: LlmSelection; llmDefault?: LlmSelection },
@@ -40,6 +40,6 @@ export function globalAgentLabel(
   agents: readonly AgentInfo[]
 ): string | null {
   if (!serverDefault) return null
-  const llm = resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
-  return agents.find((a) => a.provider === llm.provider)?.label ?? llm.provider
+  const catalog = agentCatalog({ llmDefault: serverDefault, agents: [...agents] })
+  return catalog.label(expectedDefault(settings, serverDefault, catalog, true).provider)
 }

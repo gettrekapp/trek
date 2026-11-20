@@ -1,7 +1,7 @@
 // The demo's sessions and terminals (apps/mobile/src/demo): session.*, review.send and pty.*. A
 // prompt is typed into the session's terminal and gets a canned reply; then the session is done.
-import { resolveGlobalLlm, reviewPrompt, type Session, type Worktree } from '../../shared.ts'
-import { DEMO_ROOT } from '../demoData.ts'
+import { agentCatalog, expectedDefault, reviewPrompt, type Session, type Worktree } from '../../shared.ts'
+import { DEMO_AGENTS, DEMO_ROOT } from '../demoData.ts'
 import { DemoError } from '../demoError.ts'
 import type { DemoHandlers } from '../demoHandlers.ts'
 import { allSessions, checkProject, findSession, findWorktree, setStatus, type FoundSession } from '../demoProject.ts'
@@ -12,8 +12,9 @@ import type { DemoContext } from '../demoServer.ts'
 const MAX_QUEUE_ENTRY = 100_000
 const MAX_QUEUE_LENGTH = 100
 
-const AGENT_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', local: 'Local model' }
-export const agentLabel = (provider: string): string => AGENT_LABELS[provider] ?? provider
+/** The demo's agents as a client sees them: their labels, and the Global agent's rule */
+const DEMO_CATALOG = agentCatalog(DEMO_AGENTS)
+export const agentLabel = (provider: string): string => DEMO_CATALOG.label(provider)
 
 /** Where a session runs, for its banner */
 const whereOf = (found: { worktree?: Worktree }): string => found.worktree?.branch ?? found.worktree?.name ?? 'Global'
@@ -83,7 +84,7 @@ export const SESSION_HANDLERS: DemoHandlers<SessionMethods> = {
     const project = ctx.server.state.project
     // As the real server: a Global session gets the project's Global agent (sessions/manager.ts).
     const llm: Session['llm'] =
-      p.llm ?? (p.worktreeId === null ? resolveGlobalLlm(project.settings.globalLlm, project.settings.llmDefault ?? { provider: 'claude' }) : project.settings.llmDefault ?? { provider: 'claude' })
+      p.llm ?? expectedDefault(project.settings, DEMO_AGENTS.llmDefault, DEMO_CATALOG, p.worktreeId === null)
     const label = agentLabel(llm.provider)
     let found: { list: Session[]; worktree?: Worktree }
     if (p.worktreeId === null) found = { list: project.globalSessions }

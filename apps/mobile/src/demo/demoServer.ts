@@ -18,6 +18,8 @@ export const DEMO_CAPABILITIES: string[] = [
   CAPABILITY.decisions,
   CAPABILITY.dequeue,
   CAPABILITY.agents,
+  // Its agents carry their facts and whether they are on (plugins A2), as a current server's do.
+  CAPABILITY.agentInfo,
   CAPABILITY.prWatch,
   CAPABILITY.review,
   CAPABILITY.history,

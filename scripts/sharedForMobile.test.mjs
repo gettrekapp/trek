@@ -40,8 +40,8 @@ export const MOBILE_ENTRIES = [
   'src/shared/tickets.ts',
   // Pull requests: the PR providers' contract and helpers, and the GitHub plugin's pure links.
   'src/shared/plugins/pullRequests.ts',
-  // The Global agent a new Global session gets (the server's own rule, for its label).
-  'src/shared/providers/selection.ts',
+  // The server's agents as one catalog (plugins A2): the Global agent's label, notes, what is on.
+  'src/shared/agents/catalog.ts',
   'src/shared/providers/types.ts',
   'plugins/linear/manifest.ts',
   'plugins/linear/shared/ticket.ts',
@@ -51,17 +51,10 @@ export const MOBILE_ENTRIES = [
   'plugins/github/shared/pr.ts'
 ]
 /**
- * Files outside src/shared that src/shared may import, walked like the rest: the agent plugins'
- * shared halves the static agent table re-exports (plugins A1 to A2, as pluginBoundaries.test.mjs's
- * CORE_IMPORT_EXCEPTIONS). The phone reaches them through src/shared/providers/selection.ts.
+ * Files outside src/shared that src/shared may import, walked like the rest: none since plugins A2
+ * (the agent plugins' shared halves were re-exported by the static agent table until then).
  */
-const OUTSIDE_IMPORTS = new Set([
-  'plugins/claude/shared/claude.ts',
-  'plugins/claude/shared/local.ts',
-  'plugins/codex/shared/codex.ts',
-  'plugins/gemini/shared/gemini.ts',
-  'plugins/grok/shared/grok.ts'
-])
+const OUTSIDE_IMPORTS = new Set([])
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])
 
