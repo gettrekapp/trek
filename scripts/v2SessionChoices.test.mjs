@@ -7,6 +7,7 @@ import {
   agentsRetryDelay,
   agentsSettingsKey,
   agentsStale,
+  windowAgentsKey,
   createPickMemory,
   serverFirstPick,
   v2GlobalLabel,
@@ -88,6 +89,22 @@ test("agentsSettingsKey: the project's plugin switches and the plugins' own sett
   assert.notEqual(agentsSettingsKey({ ...base, claudeCommand: 'other' }, keys), key, "a plugin's project setting")
   assert.equal(agentsSettingsKey({ ...base, claudeCommand: 'my-claude' }, keys), key, 'trimmed')
   assert.equal(agentsSettingsKey(null, keys), '')
+})
+
+test("the window's key reads the server-held project, not the store's: a pending switch asks nothing, the confirmed one asks again", () => {
+  const keys = ['claudeCommand']
+  const up = { link: 'connected', hasProject: true, capabilities: ['agents'] }
+  const held = { id: 'p1', name: 'p', settings: { claudeCommand: 'claude', plugins: { codex: { enabled: true } } }, repositories: [], globalSessions: [] }
+  const before = windowAgentsKey(up, held, keys)
+  // The store's project, which shows the pending edit (codex off), is not an input: while the
+  // mirror still holds the old value, the key is the mirror's.
+  assert.equal(before, agentsSettingsKey(held.settings, keys))
+  assert.notEqual(before, agentsSettingsKey({ ...held.settings, plugins: { codex: { enabled: false } } }, keys))
+  // The server confirmed it: the mirror holds codex off, and the key changes.
+  const confirmed = { ...held, settings: { ...held.settings, plugins: { codex: { enabled: false } } } }
+  assert.notEqual(windowAgentsKey(up, confirmed, keys), before)
+  assert.equal(windowAgentsKey({ ...up, link: 'disconnected' }, confirmed, keys), null)
+  assert.equal(windowAgentsKey(up, undefined, keys), '', 'no server-held project yet: the bare key')
 })
 
 test('with agentInfo: only the agents on in the project are offered, and Default passes over an off one as the server does', () => {

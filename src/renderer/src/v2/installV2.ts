@@ -18,7 +18,7 @@ import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { cancelTeardown, requestTeardown } from './teardownPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { requestSessionSelect } from '../attentionSelect'
-import { agentsFetchKey, agentsRetryDelay, agentsSettingsKey, agentsStale } from './sessionChoices'
+import { agentsRetryDelay, agentsStale, windowAgentsKey } from './sessionChoices'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
@@ -291,12 +291,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     if (state.serverAgents !== null && agentsStale({ link: state.serverLink, capabilities })) {
       useAppStore.setState({ serverAgents: null })
     }
-    const key = agentsFetchKey({
-      link: state.serverLink,
-      hasProject: state.project !== null,
-      capabilities,
-      settingsKey: agentsSettingsKey(state.project, PLUGIN_PROJECT_KEYS)
-    })
+    // The server-held settings (the mirror's), not the store's pending overlay (windowAgentsKey).
+    const key = windowAgentsKey({ link: state.serverLink, hasProject: state.project !== null, capabilities }, mirrorProject(), PLUGIN_PROJECT_KEYS)
     if (key === agentsKey) return
     agentsKey = key
     if (agentsRetry !== null) clearTimeout(agentsRetry)

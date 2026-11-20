@@ -111,6 +111,20 @@ export function agentsSettingsKey(project: object | null | undefined, pluginKeys
 }
 
 /**
+ * The window's `server.agents` key, from the project as the server holds it (the mirror's
+ * snapshot), never the store's: the store shows the settings writer's pending edits, and an
+ * answer asked for one comes back with the old `on`/`installed`, and nothing would ask again once
+ * the edit is confirmed. The mirror's next patch changes the key and asks again.
+ */
+export function windowAgentsKey(
+  state: Pick<AgentsFetchState, 'link' | 'hasProject' | 'capabilities'>,
+  serverHeld: { settings: object } | undefined,
+  pluginKeys: readonly string[]
+): string | null {
+  return agentsFetchKey({ ...state, settingsKey: agentsSettingsKey(serverHeld?.settings, pluginKeys) })
+}
+
+/**
  * Whether the window's `server.agents` answer is stale and must go: the link
  * is up with a server that has no `agents` (one that lost it across a
  * restart), so the menu falls back to what the window knows.
