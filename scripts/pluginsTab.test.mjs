@@ -93,3 +93,22 @@ test('an agent plugin switched off (plugins A2): its agents are hidden for new s
   assert.equal(pluginDetailNote('off', { offersAgents: true }), 'Its agents are hidden for new sessions in this project. Sessions already running keep going and can restart. Turn it on to use them again.')
   assert.equal(pluginDetailNote('off'), 'Turn it on to set it up for this project.')
 })
+
+test('legacy rows on a server that lists plugins (plugins A2): in the On group, always on, no switch', () => {
+  // 0.12.0: it lists plugins, but runs the agents in core (no agent plugins, no agentInfo).
+  const groups = pluginGroups([{ id: 'claude', name: 'Claude Code', status: 'legacy' }, voice], 'Towbook', false)
+  assert.deepEqual(groups.map((g) => [g.id, g.heading, g.rows.map((r) => r.id)]), [['on', 'On in Towbook · 2', ['claude', 'voice']]])
+  const [claude, voiceRow] = groups[0].rows
+  assert.deepEqual([claude.control, claude.line, claude.dim], ['none', 'Always on · update the server to switch it', false])
+  assert.equal(voiceRow.control, 'switch')
+  assert.deepEqual(resolveSelection(groups, null), { kind: 'plugin', id: 'claude' }, 'the first row is a legacy one')
+  assert.deepEqual(resolveSelection(groups, { kind: 'plugin', id: 'claude' }), { kind: 'plugin', id: 'claude' }, 'a legacy row stays selectable')
+  assert.equal(pluginSwitchLabel('legacy', 'Towbook'), 'Always on')
+  assert.equal(pluginDetailNote('legacy'), null, 'its settings show')
+  // A 0.3–0.10 server: it lists plugins, with GitHub in core.
+  const old = pluginGroups([linear, { id: 'github', name: 'GitHub', status: 'legacy' }, azure], 'Towbook', false)
+  assert.deepEqual(old.map((g) => [g.id, g.rows.map((r) => [r.id, r.control])]), [
+    ['on', [['linear', 'switch'], ['github', 'none']]],
+    ['off', [['azure-devops', 'switch']]]
+  ])
+})

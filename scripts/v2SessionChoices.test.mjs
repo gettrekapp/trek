@@ -116,8 +116,12 @@ test("the window's key reads the server-held project, not the store's: a pending
 
 test("the claude half's project settings are in the window's key: a confirmed claudeCommand edit asks server.agents again (plugins A2)", () => {
   const builtin = readFileSync(new URL('../plugins/builtin.client.ts', import.meta.url), 'utf8')
+  // The array's own entries, comments dropped: a comment naming a half is not its registration.
+  const list = /BUILTIN_CLIENT_PLUGINS[^=]*=\s*\[([^\]]*)\]/.exec(builtin)
+  assert.ok(list, 'BUILTIN_CLIENT_PLUGINS is an array literal')
+  const entries = list[1].replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').split(',').map((e) => e.trim()).filter(Boolean)
   for (const name of ['claudeClientPlugin', 'codexClientPlugin', 'geminiClientPlugin', 'grokClientPlugin']) {
-    assert.match(builtin, new RegExp(`BUILTIN_CLIENT_PLUGINS[^=]*=[^\\]]*\\b${name}\\b`), `${name} is registered`)
+    assert.ok(entries.includes(name), `${name} is registered`)
   }
   const keys = pluginProjectKeys([claudeClientPlugin, codexClientPlugin, geminiClientPlugin, grokClientPlugin])
   for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(keys.includes(key), key)

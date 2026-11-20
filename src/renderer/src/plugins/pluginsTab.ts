@@ -70,7 +70,9 @@ const ORDER = ['on', 'off', 'missing'] as const
 /**
  * The list's groups, in order, each with its rows in the plugins' own order; a group with no row
  * is left out. A server older than plugins (`legacyServer`) has one group: what it runs, with no
- * switch. A plugin whose status is not known yet is not listed.
+ * switch. On a server that lists plugins, a `legacy` one (core runs it there: the agents on 0.12.0,
+ * GitHub before P3) is in the On group, with no switch. A plugin whose status is not known yet is
+ * not listed.
  */
 export function pluginGroups(inputs: readonly PluginRowInput[], projectName: string, legacyServer: boolean): PluginGroup[] {
   if (legacyServer) {
@@ -79,7 +81,7 @@ export function pluginGroups(inputs: readonly PluginRowInput[], projectName: str
   }
   const groups: PluginGroup[] = []
   for (const id of ORDER) {
-    const rows = inputs.filter((i) => i.status === id).map(toRow)
+    const rows = inputs.filter((i) => i.status === id || (id === 'on' && i.status === 'legacy')).map(toRow)
     if (rows.length > 0) groups.push({ id, heading: HEADINGS[id](rows.length, projectName), rows })
   }
   return groups
