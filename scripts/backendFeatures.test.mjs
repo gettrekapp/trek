@@ -4,10 +4,8 @@ import assert from 'node:assert/strict'
 import {
   FEATURE_NAMES,
   NO_FEATURES,
-  SETTINGS_SECTIONS,
   V2_FEATURES,
   globalPanelMode,
-  settingsSections,
   v2Features
 } from '../src/renderer/src/backendFeatures.ts'
 
@@ -84,27 +82,6 @@ test("docker and stacks run on the server's machine: each follows its own capabi
   assert.equal(FEATURE_NAMES.includes('env'), false)
 })
 
-test("the settings sections: a server window shows what its server has and keeps the project's agents", () => {
-  const v2 = settingsSections(v2Features(['mcp']))
-  assert.deepEqual(Object.keys(v2), [...SETTINGS_SECTIONS])
-  const by = (mode) => SETTINGS_SECTIONS.filter((name) => v2[name] === mode)
-  assert.deepEqual(by('hidden'), [], "every section shows (the plugins' are PluginsSettings' and their own tabs)")
-  assert.deepEqual(by('project'), ['agents'])
-  assert.deepEqual(by('edit'), [
-    'sessionMode',
-    'audioAlerts',
-    'linkedDirs',
-    'appearance',
-    'worktreeTags',
-    'customTags',
-    'terminalButtons',
-    'sessionPrompt',
-    'globalPrompt',
-    'globalButtons',
-    'sessionTypes'
-  ])
-})
-
 const MACHINE = ['reveal', 'openInEditor']
 const SERVER_MACHINE = ['mcp', 'docker', 'stacks', 'linear', 'voice', 'skills']
 
@@ -131,14 +108,6 @@ test("this machine's features need both the Local entry and the `local` capabili
   // The Local entry before its welcome, or a server there that is not a Local one.
   assert.deepEqual(any(undefined, { localEntry: true }), [])
   assert.deepEqual(any(SERVER_MACHINE, { localEntry: true }), [])
-})
-
-test('the Settings sections are the same on Local or not', () => {
-  for (const [caps, options] of [[[...SERVER_MACHINE, 'local'], { localEntry: true }], [SERVER_MACHINE, {}]]) {
-    const sections = settingsSections(v2Features(caps, options))
-    assert.deepEqual(SETTINGS_SECTIONS.filter((name) => sections[name] === 'hidden'), [])
-    assert.equal(sections.agents, 'project')
-  }
 })
 
 test('the same capabilities give the same object, so a React snapshot read is stable', () => {

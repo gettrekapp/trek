@@ -60,8 +60,7 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Asking the server for a pull request's head branch (Add Worktree) needs `prResolve`: an older
  *   server has no `pr.resolve`, and the worktree falls back to `pr/<n>`.
  * - Settings are edited on the server (every v2 server has
- *   project.updateSettings, so no capability), with the sections
- *   `settingsSections` picks.
+ *   project.updateSettings, so no capability).
  * - Skills are the server's (5b), read on its disk: they need `skills`, on
  *   any server. (Voice and Linear are plugins since plugin system phases 1
  *   and 2: plugins/.)
@@ -174,42 +173,4 @@ export function v2Features(capabilities: readonly string[] | undefined, options:
 export function globalPanelMode(features: BackendFeatures, globalTabs: number): 'full' | 'readOnly' | 'hidden' {
   if (features.globalPanel) return 'full'
   return globalTabs > 0 ? 'readOnly' : 'hidden'
-}
-
-/** The Settings panel's sections, in panel order. */
-export const SETTINGS_SECTIONS = [
-  'sessionMode',
-  'audioAlerts',
-  'linkedDirs',
-  'appearance',
-  'agents',
-  'worktreeTags',
-  'customTags',
-  'terminalButtons',
-  'sessionPrompt',
-  'globalPrompt',
-  'globalButtons',
-  'sessionTypes'
-] as const
-
-export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
-
-/**
- * How a section shows: `edit`, the whole section; `project` only the
- * project's part, with a hint that the rest is the server's config (the
- * agents: the server's default and its provider commands are its `llm`
- * section, which the protocol does not edit); `hidden`. (A plugin's section is
- * PluginsSettings', which says when the server is too old for it.)
- */
-export type SectionMode = 'edit' | 'project' | 'hidden'
-
-/**
- * Which Settings sections a window shows. A server window edits the project's
- * settings on the server.
- */
-export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
-  const out = {} as Record<SettingsSection, SectionMode>
-  for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
-  out.agents = 'project'
-  return out
 }
