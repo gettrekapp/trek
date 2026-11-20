@@ -21,6 +21,8 @@
 //   - the window's Codex tab shows the server's glyph; Choose… → Local lists the models the server read from a loopback Ollama stub;
 //   - opening Settings → Agents with a saved Local default and session type that have no model
 //     sends no project.updateSettings: showing a saved choice saves nothing;
+//   - Settings → Plugins → Claude Code → Test (Local's endpoint): "Connected: 2 models" and the
+//     stub's model names, asked with agents.models (no URL from the window), the server asking the stub;
 //   - no error dialogs (main's dialogs are stubbed), no console or page errors.
 //
 // Prints PROVIDERS SMOKE PASS (n checks) or PROVIDERS SMOKE FAIL and exits 0 or 1.
@@ -36,7 +38,7 @@ import { SMOKE_SHELL, writeShellRc, homeEnv, smokeLocalProfile } from './smokeSh
 import { fileURLToPath } from 'node:url'
 import { realPath } from '../src/host/pathContainment.ts'
 import { writeFakeAgent } from './fakeAgent.mjs'
-import { openSettingsTab } from './smokeSettings.mjs'
+import { openPlugin, openSettingsTab } from './smokeSettings.mjs'
 import { createServer } from 'node:http'
 
 const WATCHDOG_MS = 180_000
@@ -98,8 +100,10 @@ for (const [name, marker] of [['fake-codex', 'esc to interrupt'], ['fake-gemini'
 // Local's endpoint (plugins A2): a loopback stub answering Ollama's model list, so the window's
 // picker shows Local's models as its server lists them. Never a real model server; Local is never
 // started (its command is a fake agent anyway).
+let modelListAsks = 0
 const modelStub = createServer((req, res) => {
   if (req.url === '/api/tags') {
+    modelListAsks++
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ models: [{ name: 'stub-coder:7b' }, { name: 'stub-chat:1b' }] }))
   } else {
@@ -418,6 +422,33 @@ try {
     check('settings: the window asked agents.models for them (the recorder sees its requests)', (await sentByWindow(sentAt, 'agents.models')).length > 0)
     const after = (await project()).settings
     check("settings: the server's default and session type still have no model", JSON.stringify([after.llmDefault, after.sessionTypes?.[0]?.llm]) === JSON.stringify([{ provider: 'local' }, { provider: 'local' }]), JSON.stringify([after.llmDefault, after.sessionTypes?.[0]?.llm]))
+    await win.locator('.server-window .sidebar button[title="App settings"]').click()
+    await settings.waitFor({ state: 'hidden', timeout: 5000 })
+  }
+
+  // Local's Test (plugins A2b): Settings → Plugins → Claude Code asks the server (agents.models),
+  // which reads the models at its config's baseUrl, the loopback stub; the window never names a URL.
+  {
+    const sentAt = await sentCount()
+    const asksBefore = modelListAsks
+    await win.locator('.server-window .sidebar button[title="App settings"]').click()
+    const settings = win.locator('.server-window .settings-panel')
+    await settings.waitFor({ timeout: 5000 })
+    await openSettingsTab(settings, 'Plugins')
+    await openPlugin(settings, 'claude')
+    const section = settings.locator('.plugin-settings .claude-local')
+    await section.getByRole('button', { name: 'Test', exact: true }).click()
+    const result = await until(async () => {
+      const text = (await section.locator('.claude-local-result').textContent().catch(() => null)) ?? ''
+      return text.startsWith('Connected') ? text : null
+    })
+    check("local test: says Connected and the server's model count", result === 'Connected: 2 models', String(result))
+    check("local test: lists the endpoint's model names", (await section.locator('.claude-local-models').textContent().catch(() => null)) === 'stub-coder:7b, stub-chat:1b', String(await section.locator('.claude-local-models').textContent().catch(() => null)))
+    const asked = await sentByWindow(sentAt, 'agents.models')
+    check('local test: asked with agents.models for local, naming no URL', asked.length > 0 && asked.every((p) => p.provider === 'local' && !JSON.stringify(p).includes('http')), JSON.stringify(asked))
+    // The server keeps a model list for a while (MODELS_TTL_MS), so Test may be answered from the list
+    // the pickers above asked for: the stub was asked, and at most once more for Test.
+    check('local test: the models are the stub\'s, which the server asked (its list is kept a while)', modelListAsks >= 1 && modelListAsks <= asksBefore + 1, `${asksBefore} -> ${modelListAsks}`)
     await win.locator('.server-window .sidebar button[title="App settings"]').click()
     await settings.waitFor({ state: 'hidden', timeout: 5000 })
   }

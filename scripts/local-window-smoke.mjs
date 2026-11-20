@@ -20,7 +20,8 @@
 //   - Notes and All Notes: a note saved on the server; a note on a branch with no worktree is
 //     listed as gone, and its delete (asked again in the confirm bar) clears it on the server; a
 //     note edited on the page is saved on the server;
-//   - Settings: Audio alerts and the session mode, saved on the server;
+//   - Settings: Audio alerts and the session mode (Settings → Plugins → Claude Code), saved on the
+//     server, and Server default removing it;
 //   - the overflow menus: the primary's (Open in VS Code, Reveal and Promote branch to worktree; no
 //     Move or Delete) and a worktree's (Delete and Promote to primary; no Move);
 //   - Unload (shown on the row's hover) unloads the worktree on the server (no tab, a dormant dot, ▸1, "1 saved session") and ▸1
@@ -452,6 +453,9 @@ try {
   check('the session mode starts at the default', await mode.inputValue(), '')
   await mode.selectOption('acceptEdits')
   check('a picked mode is saved on the server', await until(async () => (await project()).settings.claudePermissionMode ?? null, 'acceptEdits'), 'acceptEdits')
+  // Server default ('') removes the project's key, as Settings → Agents did.
+  await mode.selectOption('')
+  check('Server default removes the mode on the server', await until(async () => 'claudePermissionMode' in (await project()).settings, false), false)
   if (SERVER_HAS_ENVS) {
     const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
     await openSettingsTab(settings, 'Environments')

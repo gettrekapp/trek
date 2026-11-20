@@ -19,6 +19,7 @@
 //     moves nothing; a window can be as small as 480x320, with no horizontal overflow;
 //   - a hidden sidebar (its button, and View → Toggle Sidebar's channel) is recorded with its
 //     window and is still hidden after a relaunch and a reload;
+//   - File → Toggle Global Panel's channel (toggle-global-panel) opens and closes the Global panel;
 //   - quit and relaunch: both windows come back on their projects, alpha with its size; the
 //     target survives a reload; a window on a server entry that does not exist comes back on its
 //     target, shows Server removed, keeps the target across a reload and is recorded again;
@@ -456,6 +457,22 @@ try {
   check('the menu’s channel hides the sidebar', await until(() => sidebarOf(alphaPage), [0, 1]), [0, 1])
   await sendToggle()
   check('and shows it again', await until(() => sidebarOf(alphaPage), [1, 0]), [1, 0])
+  // File → Toggle Global Panel (plugins A2b; "Toggle Global Claude" before), on its renamed channel,
+  // sent to alpha's window directly as above: it opens and closes the Global panel.
+  check('the menus have Toggle Global Panel (File), and no Toggle Global Claude', await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.flatMap((m) => (m.submenu?.items ?? []).filter((i) => (i.label ?? '').startsWith('Toggle Global')).map((i) => `${m.label}: ${i.label}`))), ['File: Toggle Global Panel'])
+  const globalOf = (page) => page.evaluate(() => [window.__store.getState().globalPanelOpen, [...document.querySelectorAll('.global-sessions .global-panel')].some((e) => e.getClientRects().length > 0)])
+  const sendGlobal = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').webContents.send('menu:toggle-global-panel'))
+  const alphaBefore = await sessionsIn(alphaPage)
+  check('alpha’s Global panel starts closed', await globalOf(alphaPage), [false, false])
+  await sendGlobal()
+  check('the menu’s toggle-global-panel channel opens the Global panel', await until(() => globalOf(alphaPage), [true, true]), [true, true])
+  // An empty Global panel opens a Global session (the fake agent): it waits for it, so the panel's
+  // start is not left in flight, and closes it, so alpha's sessions after the relaunch are as before.
+  const globalOpened = await until(async () => (await sessionsIn(alphaPage)).filter((id) => !alphaBefore.includes(id)).length, 1)
+  await sendGlobal()
+  check('and closes it again', await until(() => globalOf(alphaPage), [false, false]), [false, false])
+  for (const id of (await sessionsIn(alphaPage)).filter((id) => !alphaBefore.includes(id))) await sdk.request('session.close', { projectId: ids.alpha, sessionId: id })
+  check('the Global session it opened is closed again', [globalOpened, await until(() => sessionsIn(alphaPage), alphaBefore)], [1, alphaBefore])
 
   // ---- Quit, relaunch: the windows come back -------------------------------------------------------------
 
