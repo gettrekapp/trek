@@ -24,7 +24,7 @@ test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
   assert.equal(plan.mainBranch, 'main')
   assert.equal(plan.dirty, true)
   assert.deepEqual(plan.sessions.map((x) => [x.title, x.carried]), [['Claude 1', true], ['Codex 1', false]])
-  assert.match(plan.sessions[1].reason, /closed/)
+  assert.equal(plan.sessions[1].reason, "Codex keeps its history by folder, so it can't follow; it is closed")
   assert.equal(plan.reviewComments, 1)
   assert.equal(plan.reviewCarried, true)
   assert.deepEqual(plan.ignored, ['ignored/'])

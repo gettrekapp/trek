@@ -136,7 +136,7 @@ export class SessionManager {
   private readonly schedule: NonNullable<SessionManagerDeps['schedule']>
   /** ptyId → the session it runs */
   private readonly owners = new Map<string, Owner>()
-  /** sessionId → its pending Codex discovery */
+  /** sessionId → its pending session-id discovery (an agent with the discoverSessionId hook: Codex's) */
   private readonly pending = new Map<string, PendingDiscovery>()
   /** folder → its poll loop, while it has pending sessions */
   private readonly loops = new Map<string, FolderLoop>()
@@ -814,7 +814,7 @@ export class SessionManager {
     // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
     // not excluded. restart has the same race; automation runs are minutes apart.
-    if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume) {
+    if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume && provider.discoverSessionId) {
       this.startDiscovery({ projectId, sessionId, agentId: provider.id, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
     }
     return ptyId

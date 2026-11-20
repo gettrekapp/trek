@@ -24,7 +24,8 @@ import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/h
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDir } from './testPlatform.mjs'
-import { builtinAgents } from './agentsHarness.mjs'
+import { builtinAgentEntries, builtinAgents } from './agentsHarness.mjs'
+import { createAgentRegistry } from '../server/src/agents/registry.ts'
 import { createGithubPrProvider } from '../plugins/github/server/provider.ts'
 
 const gitEnv = {
@@ -192,6 +193,7 @@ test('move.prepare lists the branch, its origin and which sessions are carried',
   assert.equal(res.result.queuedPrompts, 1)
   assert.equal(res.result.prWatch, true)
   assert.deepEqual(res.result.sessions.map((x) => [x.title, x.carried]), [['Claude 1', true], ['Claude 2', false], ['Codex 1', false]])
+  assert.equal(res.result.sessions[2].reason, 'only Claude sessions move; this one stays behind and is closed')
   const main = s.A.project().repositories[0].worktrees.find((w) => w.isMain)
   assert.equal((await s.A.call('move.prepare', { projectId: s.A.projectId, worktreeId: main.id })).error?.code, 'BAD_REQUEST')
 })
@@ -211,6 +213,7 @@ test('move.export refuses a loaded worktree and never touches the index', async 
   assert.equal(res.result.head, git(s.path, 'rev-parse', 'HEAD').trim())
   assert.deepEqual(res.result.sessions.map((x) => x.agentSessionId), [CLAUDE_ID])
   assert.equal(res.result.notCarried.length, 2)
+  assert.ok(res.result.notCarried.includes('Codex 1: only Claude sessions move; this one stays behind and is closed'), JSON.stringify(res.result.notCarried))
   assert.deepEqual(res.result.branchData, { note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: true, env: 'PORT=1\n', tag: 'Review' })
 })
 
@@ -330,7 +333,8 @@ test('move.receive validates what it is given', async (t) => {
   assert.equal(await code({ head: 'HEAD' }), 'BAD_REQUEST')
   assert.equal(await code({ branch: '-x' }), 'BAD_REQUEST')
   const one = { title: 't', llm: { provider: 'claude' }, agentSessionId: CLAUDE_ID, historyBytes: 5, historySha256: 'a'.repeat(64) }
-  assert.equal(await code({ sessions: [{ ...one, llm: { provider: 'codex' } }] }), 'BAD_REQUEST')
+  const codex = await s.B.call('move.receive', { ...base, sessions: [{ ...one, llm: { provider: 'codex' } }] })
+  assert.deepEqual([codex.error?.code, codex.error?.message], ['BAD_REQUEST', 'sessions[0]: only Claude sessions are carried'])
   assert.equal(await code({ sessions: [{ ...one, agentSessionId: '../x' }] }), 'BAD_REQUEST')
   assert.equal(await code({ sessions: [{ ...one, historyBytes: 64 * 1024 * 1024 + 1 }] }), 'BAD_REQUEST')
   assert.equal(await code({ sessions: [one, one] }), 'BAD_REQUEST', 'a repeated session')
@@ -1105,4 +1109,50 @@ test('move.unreceive and worktree.promote (plugins E1) hold the worktree: each i
   const undone = await undoing
   assert.equal(undone.ok, true, JSON.stringify(undone))
   assert.ok(!existsSync(target))
+})
+
+test('a server none of whose agents carries a history says no sessions move on it', async (t) => {
+  const s = await setup(t)
+  s.A.sessions.agentRegistry = createAgentRegistry({ agents: [], serverConfig: () => ({}) })
+  const res = await s.A.call('move.prepare', s.ref)
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(res.result.sessions.map((x) => [x.carried, x.reason]), [
+    [false, 'no sessions move on this server; this one stays behind and is closed'],
+    [false, 'no sessions move on this server; this one stays behind and is closed'],
+    [false, 'no sessions move on this server; this one stays behind and is closed']
+  ])
+  // Agents it knows, none with a history file: a receive refuses their sessions in the same words.
+  s.B.sessions.agentRegistry = createAgentRegistry({
+    agents: builtinAgentEntries().map((e) => ({ ...e, agent: { ...e.agent, history: undefined } })),
+    serverConfig: () => ({})
+  })
+  const one = { title: 't', llm: { provider: 'claude' }, agentSessionId: CLAUDE_ID, historyBytes: 5, historySha256: 'a'.repeat(64) }
+  const r = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: '', sessions: [one], branchData: {} })
+  assert.deepEqual([r.error?.code, r.error?.message], ['BAD_REQUEST', 'sessions[0]: no sessions are carried on this server'])
+})
+
+test('move.unreceive removes every history folder the receive created, not only the first session\'s', async (t) => {
+  const s = await setup(t)
+  // An agent that keeps each conversation in a folder of its own.
+  const folderOf = (cwd, id) => `${projectDir(cwd)}-${id.slice(0, 8)}`
+  const ownFolders = () => createAgentRegistry({
+    agents: builtinAgentEntries().map((e) => e.agent.id !== 'claude' ? e : ({
+      ...e,
+      agent: { ...e.agent, history: { ...e.agent.history, file: (cwd, id) => join(folderOf(cwd, id), `${id}.jsonl`) } }
+    })),
+    serverConfig: () => ({})
+  })
+  s.A.sessions.agentRegistry = ownFolders()
+  s.B.sessions.agentRegistry = ownFolders()
+  for (const id of [CLAUDE_ID, FRESH_ID]) {
+    mkdirSync(folderOf(s.path, id), { recursive: true })
+    writeFileSync(join(folderOf(s.path, id), `${id}.jsonl`), `{"id":"${id}"}\n`)
+  }
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const target = join(s.dir, 'b', 'app-feat')
+  for (const id of [CLAUDE_ID, FRESH_ID]) assert.ok(existsSync(join(folderOf(target, id), `${id}.jsonl`)), id)
+  const res = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  for (const id of [CLAUDE_ID, FRESH_ID]) assert.ok(!existsSync(folderOf(target, id)), `${id}'s folder goes`)
 })

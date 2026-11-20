@@ -135,9 +135,9 @@ interface Receipt {
   movedFrom: string | null
   /** The history entries the receive added (taken out again by move.unreceive) */
   historyIds?: string[]
-  /** History files the receive created, and the history folder if it created that */
+  /** History files the receive created, and the history folders it created */
   createdFiles: string[]
-  createdDir: string | null
+  createdDirs: string[]
   expires: number
 }
 
@@ -159,13 +159,18 @@ export const moveTestHooks: { beforeUnreceive?: (path: string) => Promise<void> 
 /** Whether a move carries the agent's sessions (plugins A1: its history has one file to carry; Claude's). */
 const carries = (agents: AgentRegistry, provider: string): boolean => agents.has(provider) && agents.get(provider).history?.file !== undefined
 
-/** The labels of the agents whose sessions a move carries ("Claude"), for the reasons a move gives. */
-const carriedLabels = (agents: AgentRegistry): string =>
-  agents
+/**
+ * Which sessions a move carries, for the reasons it gives: "only Claude sessions move", from the
+ * labels of the agents whose history has a file; "no sessions move on this server" when none has.
+ */
+const onlyCarried = (agents: AgentRegistry, verb: string): string => {
+  const labels = agents
     .all()
     .filter((a) => a.history?.file)
     .map((a) => a.label)
     .join(', ')
+  return labels ? `only ${labels} sessions ${verb}` : `no sessions ${verb} on this server`
+}
 
 /** A session's history file under the worktree's path, if its agent's history moves (plugins A1), and its size. */
 async function historyOf(worktree: Worktree, session: Session, agents: AgentRegistry): Promise<{ file: string; size: number } | null> {
@@ -187,7 +192,7 @@ async function carriedSessions(worktree: Worktree, agents: AgentRegistry): Promi
     const same = carried.find((c) => c.session.agentSessionId === session.agentSessionId)
     const base = { title: session.title, provider: session.llm.provider }
     if (!carries(agents, session.llm.provider)) {
-      info.push({ ...base, carried: false, reason: `only ${carriedLabels(agents)} sessions move; this one stays behind and is closed` })
+      info.push({ ...base, carried: false, reason: `${onlyCarried(agents, 'move')}; this one stays behind and is closed` })
       continue
     }
     const history = await historyOf(worktree, session, agents)
@@ -278,7 +283,7 @@ function checkSessions(value: unknown, agents: AgentRegistry): MoveSession[] {
     if (!isRecord(raw)) throw bad(`sessions[${i}] must be an object`)
     const title = checkTitle(requireString(raw.title, `sessions[${i}].title`), `sessions[${i}].title`)
     if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string' || !agents.has(raw.llm.provider)) throw bad(`sessions[${i}].llm.provider must be a known provider`)
-    if (!carries(agents, raw.llm.provider)) throw bad(`sessions[${i}]: only ${carriedLabels(agents)} sessions are carried`)
+    if (!carries(agents, raw.llm.provider)) throw bad(`sessions[${i}]: ${onlyCarried(agents, 'are carried')}`)
     const llm = sanitizeAgentSelection(raw.llm, (id) => agents.has(id))
     if (!llm) throw bad(`sessions[${i}].llm must be an LLM selection`)
     const agentSessionId = requireString(raw.agentSessionId, `sessions[${i}].agentSessionId`)
@@ -711,7 +716,7 @@ async function unreceive(ctx: V2Context, project: Project, repo: Repository, tok
   })
   if (endWatch) ctx.prWatch?.forget(project.id, repo.id, receipt.branch)
   for (const file of receipt.createdFiles) await rm(file, { force: true }).catch(() => {})
-  if (receipt.createdDir) await rmdir(receipt.createdDir).catch(() => {})
+  for (const dir of receipt.createdDirs) await rmdir(dir).catch(() => {})
   ctx.sessions.refreshAttention()
 }
 
@@ -798,7 +803,7 @@ async function build(
   let movedFrom: string | null = null
   let digest = ''
   const createdFiles: string[] = []
-  let createdDir: string | null = null
+  const createdDirs = new Set<string>()
   /** Run once the receive succeeded (dropping the backups of histories it replaced) */
   const later: (() => Promise<unknown>)[] = []
   try {
@@ -846,13 +851,15 @@ async function build(
     } finally {
       unblock()
     }
-    // Each carried session's history file here, as its agent names it (plugins A1: Claude's, all in one folder).
+    // Each carried session's history file here, as its agent names it (plugins A1: Claude's, all in
+    // one folder). Every folder the receive creates for them is removed again on undo.
     const agents = ctx.sessions.agentRegistry
     const fileOf = (s: MoveSession): string => agents.get(s.llm.provider).history!.file!(target, s.agentSessionId)
-    const dir = sessions.length > 0 ? dirname(fileOf(sessions[0])) : null
-    if (dir !== null && !existsSync(dir)) {
+    for (const s of sessions) {
+      const dir = dirname(fileOf(s))
+      if (createdDirs.has(dir) || existsSync(dir)) continue
       await mkdir(dir, { recursive: true })
-      createdDir = dir
+      createdDirs.add(dir)
       undo.push(() => rmdir(dir))
     }
     for (const s of sessions) {
@@ -923,7 +930,7 @@ async function build(
       createdBranch,
       movedFrom,
       createdFiles,
-      createdDir,
+      createdDirs: [...createdDirs],
       expires: Date.now() + MOVE_UNDO_MS
     })
     return { worktreeId, dropped, undoToken }
