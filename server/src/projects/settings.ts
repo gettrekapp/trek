@@ -3,7 +3,7 @@
 // server stores and returns, not acts on.
 import type { BranchData, ProjectSettings, Repository } from '../../../src/shared/model/types'
 import { DEFAULT_WORKTREE_TAGS } from '../../../src/shared/types.ts'
-import { isProviderId } from '../../../src/shared/providers/registry.ts'
+import { AGENT_ID_RE } from '../../../src/shared/plugins/agents.ts'
 import { codedError } from '../errors.ts'
 import { checkTitle, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { assertNoProtoKeys, isRecord } from '../validate.ts'
@@ -56,6 +56,8 @@ export interface PluginSettingRules {
   kind(key: string): 'string' | undefined
   /** A value's problem, or null; only called with a value of the declared kind */
   check(key: string, value: string): string | null
+  /** Whether a session type's agent is one this server has (plugins A1: the set-up plugins' agents) */
+  knownAgent?(id: string): boolean
 }
 
 /** Whether `key` is a core project setting (an own key of the settings table). */
@@ -69,7 +71,7 @@ export function isSettingsKey(key: string, plugins?: PluginSettingRules): boolea
 }
 
 /** Session types are acted on at every session.start, so their fields are checked, not just their kind. */
-function checkSessionTypes(types: unknown[], field: string): void {
+function checkSessionTypes(types: unknown[], field: string, knownAgent: (id: string) => boolean): void {
   const bad = (message: string): Error => codedError('BAD_REQUEST', `${field}${message}`)
   if (types.length > MAX_SESSION_TYPES) throw bad(` must hold at most ${MAX_SESSION_TYPES} session types`)
   types.forEach((t, i) => {
@@ -84,7 +86,7 @@ function checkSessionTypes(types: unknown[], field: string): void {
       if (typeof t.initialMessage !== 'string') throw bad(`${at}.initialMessage must be a string`)
       if (t.initialMessage.length > MAX_QUEUE_ENTRY) throw bad(`${at}.initialMessage must be at most ${MAX_QUEUE_ENTRY} characters`)
     }
-    if (t.llm !== undefined && (!isRecord(t.llm) || !isProviderId(t.llm.provider))) throw bad(`${at}.llm must have a known provider`)
+    if (t.llm !== undefined && (!isRecord(t.llm) || typeof t.llm.provider !== 'string' || !knownAgent(t.llm.provider))) throw bad(`${at}.llm must have a known provider`)
     if (t.icon !== undefined && typeof t.icon !== 'string') throw bad(`${at}.icon must be a string`)
   })
 }
@@ -107,7 +109,8 @@ function checkValue(key: string, value: unknown, field: string, plugins?: Plugin
     : isRecord(value)
   if (!ok) throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
   assertNoProtoKeys(value, `${field}.${key}`)
-  if (key === 'sessionTypes') checkSessionTypes(value as unknown[], `${field}.${key}`)
+  // Without the plugins' rules (a server with no plugins: tests), any well-formed agent id.
+  if (key === 'sessionTypes') checkSessionTypes(value as unknown[], `${field}.${key}`, plugins?.knownAgent ? (id) => plugins.knownAgent!(id) : (id) => AGENT_ID_RE.test(id))
   if (key === 'plugins') {
     const problem = pluginSettingsProblem(value as Record<string, unknown>)
     if (problem) throw codedError('BAD_REQUEST', `${field}.plugins: ${problem}`)

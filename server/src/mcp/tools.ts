@@ -5,9 +5,8 @@
 import { randomUUID } from 'node:crypto'
 import type { BranchData, Project, Repository, ReviewComment, Session } from '../../../src/shared/model/types'
 import { keySequence } from '../../../src/shared/keys.ts'
-import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
-import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
-import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
+import { sanitizeAgentSelection, type AgentLookup } from '../../../src/shared/agents/selection.ts'
+import type { LlmSelection } from '../../../src/shared/providers/types.ts'
 import { parseTicketWith, ticketView } from '../../../src/shared/tickets.ts'
 import type { SessionType } from '../../../src/shared/types'
 import type { ConfigStore } from '../configStore'
@@ -75,489 +74,500 @@ const AUTOMATION_PARAM = {
 const STACK_DESCRIPTION =
   "A worktree's dev stack is the repo's docker/stack/stack.sh, run on the Trek server's machine: its own docker compose project (trek-<name>), Trek_<name> database, Cosmos database and block of ports, running side by side with other worktrees' stacks."
 
-const LLM_PARAMS = {
+/** The { provider, model, effort } parameters, the provider one of `agentIds` (plugins A1: the server's agents). */
+const llmParams = (agentIds: readonly string[]) => ({
   provider: {
     type: 'string',
-    enum: [...PROVIDER_IDS],
+    ...(agentIds.length > 0 ? { enum: [...agentIds] } : {}),
     description: "Optional agent CLI to run. Defaults to the session type's agent, then the project/app default."
   },
   model: { type: 'string', description: "Optional model id (with provider). Omit for the agent's default." },
   effort: { type: 'string', description: 'Optional effort level (with provider), e.g. high.' }
-}
+})
 
-export const MCP_TOOLS: ToolDefinition[] = [
-  {
-    name: 'list_worktrees',
-    description:
-      'List every git worktree of the project with branch, workflow tag, custom tags, ticket, PR, note, git status, whether it is the primary checkout, whether its sessions are loaded, and its agent sessions (terminalId, title, status, llm — the provider/model/effort it runs — queue — the prompts queued in its Queue panel, oldest first). Status is one of working, attention (waiting on input), done, complete, idle, exited.',
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'get_current_session',
-    description:
-      'The agent session calling this tool and the worktree it runs in. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID). Returns terminalId, title, status, llm, queue and the worktree, in the same shape as a list_worktrees entry.',
-    inputSchema: {
-      type: 'object',
-      properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
-      required: ['terminalId']
-    }
-  },
-  {
-    name: 'get_selected_worktree',
-    description:
-      "What the user is looking at: the worktree selected in the Trek client they used most recently (a desktop window, the web client or the phone), in the same shape as a list_worktrees entry, and terminalId, the session tab shown there. worktree is null when none is selected or the Global panel is shown; terminalId is null when no session is shown. client says which kind of client it is and at when it last said so. Fails when no Trek client has this project open.",
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'focus_session',
-    description:
-      "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It selects the tab only: it does not raise the client's window, take the keyboard focus or mark the session seen. Success means the client was asked, not that the user saw it. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open, or when that client cannot be asked right now.",
-    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
-  },
-  {
-    name: 'request_decision',
-    description:
-      "Tell the user you need them to make a decision before you can continue. Flags your session for every Trek client of this server and lists it in their notifications; it clears when the user types in your session or dismisses it. Call it whenever you stop to ask the user to choose between options or approve an approach, after writing the question and options in your reply, then end your turn and wait for their answer. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
-        question: {
-          type: 'string',
-          description: 'One-line summary of the decision needed, shown in the notification. Line breaks and tabs become spaces; other control characters are refused. At most 1000 characters'
-        }
-      },
-      required: ['terminalId', 'question']
-    }
-  },
-  {
-    name: 'create_worktree',
-    description:
-      'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        branch: { type: 'string', description: 'Branch name' },
-        existingBranch: {
-          type: 'boolean',
-          description: 'Check out an existing branch instead of creating a new one (default false)'
-        },
-        repo: {
-          type: 'string',
-          description:
-            'Repository name or id (the repo field of list_worktrees). Required when the project has more than one repository.'
-        },
-        ...ATTRIBUTION_PARAMS
-      },
-      required: ['branch']
-    }
-  },
-  {
-    name: 'start_session',
-    description:
-      "Start a new agent session in a worktree (the default agent unless provider is given). Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once the agent is ready. Returns the new terminalId.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        sessionType: { ...SESSION_TYPE_PARAM, description: `Optional. ${SESSION_TYPE_PARAM.description}` },
-        prompt: { type: 'string', description: 'Optional first prompt to send' },
-        ...LLM_PARAMS
-      },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'list_session_types',
-    description:
-      'List the configured session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'save_session_type',
-    description:
-      'Create or update a session type. Updates the type matching id (or, without id, an existing type with the same name); otherwise creates a new one. Returns the saved type.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Id of the type to update' },
-        name: { type: 'string', description: 'Name — the menu label and the tab title of its sessions' },
-        systemPrompt: { type: 'string', description: "Appended to the agent's system prompt (sent ahead of the first message for agents without one)" },
-        initialMessage: {
-          type: 'string',
-          description: 'Sent as the first message when a session of this type starts; empty for none'
-        },
-        llm: {
-          type: ['object', 'null'],
-          description: 'Agent for sessions of this type: { provider, model?, effort? }. null = use the default.',
-          properties: LLM_PARAMS
-        }
+/**
+ * trek-dev's core tools, with the agent enums of start_session, save_session_type and save_automation
+ * filled in (plugins A1): `agentIds` the server's agents, `mcpAgentIds` those that can use Trek's tools.
+ */
+export function coreTools(agentIds: readonly string[], mcpAgentIds: readonly string[]): ToolDefinition[] {
+  const LLM_PARAMS = llmParams(agentIds)
+  return [
+    {
+      name: 'list_worktrees',
+      description:
+        'List every git worktree of the project with branch, workflow tag, custom tags, ticket, PR, note, git status, whether it is the primary checkout, whether its sessions are loaded, and its agent sessions (terminalId, title, status, llm — the provider/model/effort it runs — queue — the prompts queued in its Queue panel, oldest first). Status is one of working, attention (waiting on input), done, complete, idle, exited.',
+      inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'get_current_session',
+      description:
+        'The agent session calling this tool and the worktree it runs in. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID). Returns terminalId, title, status, llm, queue and the worktree, in the same shape as a list_worktrees entry.',
+      inputSchema: {
+        type: 'object',
+        properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
+        required: ['terminalId']
       }
-    }
-  },
-  {
-    name: 'delete_session_type',
-    description: 'Delete a session type. Sessions already started from it keep their prompt.',
-    inputSchema: {
-      type: 'object',
-      properties: { sessionType: SESSION_TYPE_PARAM },
-      required: ['sessionType']
-    }
-  },
-  {
-    name: 'load_worktree',
-    description: "Resume a worktree's saved sessions.",
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'unload_worktree',
-    description:
-      "Unload a worktree's sessions to free resources. They are saved and resume on the next load.",
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'remove_worktree',
-    description:
-      "Delete a linked worktree: its directory, git's record of it and its row. The branch is kept. Refused for the primary checkout and for a loaded worktree (unload_worktree first, which ends its sessions). A worktree with uncommitted or untracked changes is refused unless force is true, which discards them. First it tears down what runs for the worktree on the server's machine that Trek ticks by default (its dev stack, its Colima VM, a plugin's part), and says what in tornDown; teardown: false leaves all of that running.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' },
-        teardown: { type: 'boolean', description: "Tear down what runs for it first, as Trek's confirm ticks by default. Default true." },
-        ...ATTRIBUTION_PARAMS
-      },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'send_prompt',
-    description:
-      "Type a prompt into a session's agent input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
-    inputSchema: {
-      type: 'object',
-      properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
-      required: ['terminalId', 'text']
-    }
-  },
-  {
-    name: 'enqueue_prompt',
-    description:
-      "Add a prompt to the end of a session's Queue panel without sending it. The user sends queued prompts by clicking them; use send_prompt to submit immediately.",
-    inputSchema: {
-      type: 'object',
-      properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
-      required: ['terminalId', 'text']
-    }
-  },
-  {
-    name: 'remove_queued_prompt',
-    description:
-      "Remove a prompt from a session's queue by its 0-based index (as listed in list_worktrees, oldest first).",
-    inputSchema: {
-      type: 'object',
-      properties: { terminalId: TERMINAL_PARAM, index: { type: 'integer', minimum: 0 } },
-      required: ['terminalId', 'index']
-    }
-  },
-  {
-    name: 'send_keys',
-    description:
-      'Send keystrokes to a session, e.g. to answer a permission prompt or interrupt. Named keys: enter, escape, tab, shift-tab, up, down, left, right, backspace, space, ctrl-c, ctrl-d. Any other entry is typed literally.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalId: TERMINAL_PARAM,
-        keys: { type: 'array', items: { type: 'string' } }
-      },
-      required: ['terminalId', 'keys']
-    }
-  },
-  {
-    name: 'read_terminal',
-    description: "Read the last lines of a session's terminal screen and scrollback. Also takes an automation's run session (runSession in list_automations).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalId: TERMINAL_PARAM,
-        lines: { type: 'number', description: 'How many lines (default 80, max 2000)' }
-      },
-      required: ['terminalId']
-    }
-  },
-  {
-    name: 'wait_for_sessions',
-    description:
-      "Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status. Also takes an automation's run session (runSession in list_automations).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalIds: { type: 'array', items: { type: 'string' } },
-        until: {
-          type: 'string',
-          enum: ['all', 'any'],
-          description: 'Wait for all sessions (default) or the first one'
+    },
+    {
+      name: 'get_selected_worktree',
+      description:
+        "What the user is looking at: the worktree selected in the Trek client they used most recently (a desktop window, the web client or the phone), in the same shape as a list_worktrees entry, and terminalId, the session tab shown there. worktree is null when none is selected or the Global panel is shown; terminalId is null when no session is shown. client says which kind of client it is and at when it last said so. Fails when no Trek client has this project open.",
+      inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'focus_session',
+      description:
+        "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It selects the tab only: it does not raise the client's window, take the keyboard focus or mark the session seen. Success means the client was asked, not that the user saw it. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open, or when that client cannot be asked right now.",
+      inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+    },
+    {
+      name: 'request_decision',
+      description:
+        "Tell the user you need them to make a decision before you can continue. Flags your session for every Trek client of this server and lists it in their notifications; it clears when the user types in your session or dismisses it. Call it whenever you stop to ask the user to choose between options or approve an approach, after writing the question and options in your reply, then end your turn and wait for their answer. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
+          question: {
+            type: 'string',
+            description: 'One-line summary of the decision needed, shown in the notification. Line breaks and tabs become spaces; other control characters are refused. At most 1000 characters'
+          }
         },
-        timeoutSeconds: { type: 'number', description: 'Default 300, max 600' }
-      },
-      required: ['terminalIds']
-    }
-  },
-  {
-    name: 'close_session',
-    description: 'Close a session for good, killing its agent process.',
-    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
-  },
-  {
-    name: 'rename_session',
-    description: "Rename a session: its tab title in Trek. Use it to label a session you started with what it is working on.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalId: TERMINAL_PARAM,
-        title: { type: 'string', description: `The new title: one line, at most ${MAX_TITLE_LENGTH} characters` }
-      },
-      required: ['terminalId', 'title']
-    }
-  },
-  {
-    name: 'mark_session_complete',
-    description:
-      "Mark a session complete: its work is finished and needs nothing more from the user (status complete in list_worktrees), until it next works. A session can mark itself, passing its $TREK_TERMINAL_ID. Pass complete false to clear the mark (back to idle). Returns the session's status.",
-    inputSchema: {
-      type: 'object',
-      properties: { terminalId: TERMINAL_PARAM, complete: { type: 'boolean', description: 'true (default) to mark it, false to clear the mark' } },
-      required: ['terminalId']
-    }
-  },
-  {
-    name: 'restart_session',
-    description:
-      "Restart a session whose agent has exited (status exited), resuming its conversation where the agent supports that. Refused while the session is running, and while its worktree is unloaded (load_worktree first). Returns at once with the session's status: follow with wait_for_sessions, or send_prompt, which waits until the agent is ready.",
-    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
-  },
-  {
-    name: 'set_worktree_tag',
-    description:
-      "Set a worktree branch's workflow tag, by name (case-insensitive). Tags are configured per project; an unknown name fails with the list of valid tags. Omit tag to clear it.",
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, tag: { type: 'string' }, ...ATTRIBUTION_PARAMS },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'set_worktree_custom_tag',
-    description:
-      "Turn one of a worktree branch's custom tags on or off, by name (case-insensitive). A branch can carry any number of custom tags alongside its workflow tag. Custom tags are configured per project; an unknown name fails with the list of valid ones.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        tag: { type: 'string' },
-        enabled: { type: 'boolean', description: 'true (default) to add the tag, false to remove it' },
-        ...ATTRIBUTION_PARAMS
-      },
-      required: ['worktree', 'tag']
-    }
-  },
-  {
-    name: 'set_worktree_note',
-    description: "Replace a worktree branch's free-form note. An empty note clears it.",
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, note: { type: 'string' }, ...ATTRIBUTION_PARAMS },
-      required: ['worktree', 'note']
-    }
-  },
-  {
-    name: 'set_worktree_ticket',
-    description:
-      'Link a worktree branch to a ticket of a tracker on in this project (its id or URL: a Linear issue such as TOW-123 or https://linear.app/<workspace>/issue/TOW-123, an Azure DevOps work item, as the project has them on). Omit ticket to unlink it. An unrecognised ticket says which trackers are on.',
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' }, ...ATTRIBUTION_PARAMS },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'get_stack',
-    description: `${STACK_DESCRIPTION} Returns whether the worktree has one, its state (starting, running, stopping, stopped), running container count, ports and URLs (App, API, Admin).`,
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'start_stack',
-    description: `${STACK_DESCRIPTION} Starts it in the background (stack.sh up) and returns immediately; poll get_stack until state is running and read_stack_log for progress. A first start restores the database and can take minutes.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        starter: {
-          type: 'boolean',
-          description:
-            'Restore a new stack database from the starter dataset (a year of history) instead of the default slim one. Only matters for a stack whose database does not exist yet.'
-        }
-      },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'stop_stack',
-    description: `${STACK_DESCRIPTION} Stops it (stack.sh down): removes its containers but keeps its database for the next start. Waits until stopped.`,
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'read_stack_log',
-    description: `${STACK_DESCRIPTION} Returns the last lines of the stack.sh output (setup steps, then the App, API, nodeapp and admin container logs), from the log's last 64 KiB.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        lines: { type: 'number', description: 'Lines from the end (default 100, max 2000)' }
-      },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'set_worktree_pull_request',
-    description:
-      'Link a worktree branch to a pull request: its link, or just the number (123 or #123) when the repository already has another pull request linked to infer the repository from. The link forms each host takes are in the server instructions. Omit pullRequest to unlink it.',
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' }, ...ATTRIBUTION_PARAMS },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'get_review_comments',
-    description:
-      "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent; agent: true when an agent did), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'add_review_comment',
-    description:
-      "Add a line comment to a worktree's draft review, shown in Trek's Changes tab under that line and labelled as yours. Use it to leave review findings where the user reads the diff. The line must be one the chosen diff shows (an added, removed or context line): Trek reads the line's text itself. The user can edit, delete or send the draft; nothing is sent to a session by this tool. Pass your $TREK_TERMINAL_ID as terminalId so the comment names your session. Returns the comment in the same shape as a get_review_comments entry.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        file: { type: 'string', description: "The file's path as the diff names it, relative to the worktree (its new name for a rename)" },
-        line: { type: 'integer', minimum: 1, description: '1-based line number: in the new file for side new, in the old file for side old' },
-        side: { type: 'string', enum: ['new', 'old'], description: 'new (default): an added or unchanged line. old: a removed line.' },
-        comment: { type: 'string', description: 'The comment, at most 4000 characters; line breaks are kept' },
-        source: {
-          type: 'object',
-          description: 'The diff to comment on: { kind: "branch" } (default: the branch against its base), { kind: "uncommitted" }, or { kind: "commit", sha } with a full commit id',
-          properties: { kind: { type: 'string', enum: ['branch', 'uncommitted', 'commit'] }, sha: { type: 'string' } }
+        required: ['terminalId', 'question']
+      }
+    },
+    {
+      name: 'create_worktree',
+      description:
+        'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Branch name' },
+          existingBranch: {
+            type: 'boolean',
+            description: 'Check out an existing branch instead of creating a new one (default false)'
+          },
+          repo: {
+            type: 'string',
+            description:
+              'Repository name or id (the repo field of list_worktrees). Required when the project has more than one repository.'
+          },
+          ...ATTRIBUTION_PARAMS
         },
-        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID, so the comment names your session (optional)' }
-      },
-      required: ['worktree', 'file', 'line', 'comment']
-    }
-  },
-  {
-    name: 'remove_review_comment',
-    description: "Remove a comment an agent wrote from a worktree's draft review, by its id from get_review_comments. The user's own comments are refused.",
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, id: { type: 'string', description: 'The comment id' } },
-      required: ['worktree', 'id']
-    }
-  },
-  {
-    name: 'watch_pull_request',
-    description:
-      "Watch (or stop watching) a worktree branch's linked pull request. The Trek server reads it every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktree: WORKTREE_PARAM,
-        watch: { type: 'boolean', description: 'false stops watching (default true)' },
-        ...ATTRIBUTION_PARAMS
-      },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'get_pull_request',
-    description:
-      "Read the state of a worktree branch's linked pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while the host works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
-    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
-  },
-  {
-    name: 'get_worktree_history',
-    description:
-      "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given.",
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, limit: { type: 'number', description: `Entries to return (default ${DEFAULT_HISTORY_TOOL_LIMIT}, max ${HISTORY_PAGE_SIZE})` } },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'promote_to_primary',
-    description:
-      "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. A second call for the same worktree while one waits gets the same answer. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked. If you run in the worktree being promoted, you are stopped and resumed in the main checkout, so this call never returns to you: a prompt saying how it went is queued in your session's Queue panel instead (not sent; the user sends it).",
-    inputSchema: {
-      type: 'object',
-      properties: { worktree: WORKTREE_PARAM, ...ATTRIBUTION_PARAMS },
-      required: ['worktree']
-    }
-  },
-  {
-    name: 'list_automations',
-    description:
-      "List the project's automations: scheduled prompts that each run unattended in their own Global session (the run tab), started anew on every run. Each has id, name, prompt, cron, timezone, enabled, llm (absent: the project's Global agent), nextRun (absent when disabled), missed (slots that passed while the server could not run them, waiting for the user's answer), runSession (its run tab's terminalId and status, once it has run) and history (its runs, newest first, at most 20: at, trigger, outcome, error).",
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'save_automation',
-    description:
-      'Create an automation, or update the one `automation` names. An update changes only the arguments you pass. Without `automation` it always creates (names are not unique) and needs name, prompt and cron. To turn one on or off, pass automation and enabled. A schedule change or a re-enable restarts its clock: nothing counts as missed. Returns the saved automation in the same shape as a list_automations entry.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        automation: { ...AUTOMATION_PARAM, description: `The automation to update; omit to create one. ${AUTOMATION_PARAM.description}` },
-        name: { type: 'string', description: 'Name, at most 80 characters; also the title of its run tab' },
-        prompt: { type: 'string', description: 'The first message of each run, at most 20000 characters' },
-        cron: {
-          type: 'string',
-          description: 'Five-field cron expression (minute hour day-of-month month day-of-week), e.g. "0 9 * * *" for every day at 09:00. It must not run more often than every 5 minutes.'
+        required: ['branch']
+      }
+    },
+    {
+      name: 'start_session',
+      description:
+        "Start a new agent session in a worktree (the default agent unless provider is given). Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once the agent is ready. Returns the new terminalId.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          sessionType: { ...SESSION_TYPE_PARAM, description: `Optional. ${SESSION_TYPE_PARAM.description}` },
+          prompt: { type: 'string', description: 'Optional first prompt to send' },
+          ...LLM_PARAMS
         },
-        timezone: { type: 'string', description: "IANA timezone the cron is read in, e.g. America/New_York. Defaults to the server machine's timezone when creating." },
-        enabled: { type: 'boolean', description: 'Whether it runs on schedule. Defaults to true when creating.' },
-        llm: {
-          type: ['object', 'null'],
-          description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
-          properties: {
-            ...LLM_PARAMS,
-            // Only the agents automation.save takes: those that can use Trek's tools.
-            provider: { type: 'string', enum: PROVIDER_IDS.filter((id) => getProvider(id).capabilities.mcp), description: "Agent CLI to run; one that can use Trek's tools (MCP)" }
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'list_session_types',
+      description:
+        'List the configured session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
+      inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'save_session_type',
+      description:
+        'Create or update a session type. Updates the type matching id (or, without id, an existing type with the same name); otherwise creates a new one. Returns the saved type.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Id of the type to update' },
+          name: { type: 'string', description: 'Name — the menu label and the tab title of its sessions' },
+          systemPrompt: { type: 'string', description: "Appended to the agent's system prompt (sent ahead of the first message for agents without one)" },
+          initialMessage: {
+            type: 'string',
+            description: 'Sent as the first message when a session of this type starts; empty for none'
+          },
+          llm: {
+            type: ['object', 'null'],
+            description: 'Agent for sessions of this type: { provider, model?, effort? }. null = use the default.',
+            properties: LLM_PARAMS
           }
         }
       }
+    },
+    {
+      name: 'delete_session_type',
+      description: 'Delete a session type. Sessions already started from it keep their prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: { sessionType: SESSION_TYPE_PARAM },
+        required: ['sessionType']
+      }
+    },
+    {
+      name: 'load_worktree',
+      description: "Resume a worktree's saved sessions.",
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'unload_worktree',
+      description:
+        "Unload a worktree's sessions to free resources. They are saved and resume on the next load.",
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'remove_worktree',
+      description:
+        "Delete a linked worktree: its directory, git's record of it and its row. The branch is kept. Refused for the primary checkout and for a loaded worktree (unload_worktree first, which ends its sessions). A worktree with uncommitted or untracked changes is refused unless force is true, which discards them. First it tears down what runs for the worktree on the server's machine that Trek ticks by default (its dev stack, its Colima VM, a plugin's part), and says what in tornDown; teardown: false leaves all of that running.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' },
+          teardown: { type: 'boolean', description: "Tear down what runs for it first, as Trek's confirm ticks by default. Default true." },
+          ...ATTRIBUTION_PARAMS
+        },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'send_prompt',
+      description:
+        "Type a prompt into a session's agent input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
+      inputSchema: {
+        type: 'object',
+        properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
+        required: ['terminalId', 'text']
+      }
+    },
+    {
+      name: 'enqueue_prompt',
+      description:
+        "Add a prompt to the end of a session's Queue panel without sending it. The user sends queued prompts by clicking them; use send_prompt to submit immediately.",
+      inputSchema: {
+        type: 'object',
+        properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
+        required: ['terminalId', 'text']
+      }
+    },
+    {
+      name: 'remove_queued_prompt',
+      description:
+        "Remove a prompt from a session's queue by its 0-based index (as listed in list_worktrees, oldest first).",
+      inputSchema: {
+        type: 'object',
+        properties: { terminalId: TERMINAL_PARAM, index: { type: 'integer', minimum: 0 } },
+        required: ['terminalId', 'index']
+      }
+    },
+    {
+      name: 'send_keys',
+      description:
+        'Send keystrokes to a session, e.g. to answer a permission prompt or interrupt. Named keys: enter, escape, tab, shift-tab, up, down, left, right, backspace, space, ctrl-c, ctrl-d. Any other entry is typed literally.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terminalId: TERMINAL_PARAM,
+          keys: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['terminalId', 'keys']
+      }
+    },
+    {
+      name: 'read_terminal',
+      description: "Read the last lines of a session's terminal screen and scrollback. Also takes an automation's run session (runSession in list_automations).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terminalId: TERMINAL_PARAM,
+          lines: { type: 'number', description: 'How many lines (default 80, max 2000)' }
+        },
+        required: ['terminalId']
+      }
+    },
+    {
+      name: 'wait_for_sessions',
+      description:
+        "Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status. Also takes an automation's run session (runSession in list_automations).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terminalIds: { type: 'array', items: { type: 'string' } },
+          until: {
+            type: 'string',
+            enum: ['all', 'any'],
+            description: 'Wait for all sessions (default) or the first one'
+          },
+          timeoutSeconds: { type: 'number', description: 'Default 300, max 600' }
+        },
+        required: ['terminalIds']
+      }
+    },
+    {
+      name: 'close_session',
+      description: 'Close a session for good, killing its agent process.',
+      inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+    },
+    {
+      name: 'rename_session',
+      description: "Rename a session: its tab title in Trek. Use it to label a session you started with what it is working on.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terminalId: TERMINAL_PARAM,
+          title: { type: 'string', description: `The new title: one line, at most ${MAX_TITLE_LENGTH} characters` }
+        },
+        required: ['terminalId', 'title']
+      }
+    },
+    {
+      name: 'mark_session_complete',
+      description:
+        "Mark a session complete: its work is finished and needs nothing more from the user (status complete in list_worktrees), until it next works. A session can mark itself, passing its $TREK_TERMINAL_ID. Pass complete false to clear the mark (back to idle). Returns the session's status.",
+      inputSchema: {
+        type: 'object',
+        properties: { terminalId: TERMINAL_PARAM, complete: { type: 'boolean', description: 'true (default) to mark it, false to clear the mark' } },
+        required: ['terminalId']
+      }
+    },
+    {
+      name: 'restart_session',
+      description:
+        "Restart a session whose agent has exited (status exited), resuming its conversation where the agent supports that. Refused while the session is running, and while its worktree is unloaded (load_worktree first). Returns at once with the session's status: follow with wait_for_sessions, or send_prompt, which waits until the agent is ready.",
+      inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+    },
+    {
+      name: 'set_worktree_tag',
+      description:
+        "Set a worktree branch's workflow tag, by name (case-insensitive). Tags are configured per project; an unknown name fails with the list of valid tags. Omit tag to clear it.",
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, tag: { type: 'string' }, ...ATTRIBUTION_PARAMS },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'set_worktree_custom_tag',
+      description:
+        "Turn one of a worktree branch's custom tags on or off, by name (case-insensitive). A branch can carry any number of custom tags alongside its workflow tag. Custom tags are configured per project; an unknown name fails with the list of valid ones.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          tag: { type: 'string' },
+          enabled: { type: 'boolean', description: 'true (default) to add the tag, false to remove it' },
+          ...ATTRIBUTION_PARAMS
+        },
+        required: ['worktree', 'tag']
+      }
+    },
+    {
+      name: 'set_worktree_note',
+      description: "Replace a worktree branch's free-form note. An empty note clears it.",
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, note: { type: 'string' }, ...ATTRIBUTION_PARAMS },
+        required: ['worktree', 'note']
+      }
+    },
+    {
+      name: 'set_worktree_ticket',
+      description:
+        'Link a worktree branch to a ticket of a tracker on in this project (its id or URL: a Linear issue such as TOW-123 or https://linear.app/<workspace>/issue/TOW-123, an Azure DevOps work item, as the project has them on). Omit ticket to unlink it. An unrecognised ticket says which trackers are on.',
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' }, ...ATTRIBUTION_PARAMS },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'get_stack',
+      description: `${STACK_DESCRIPTION} Returns whether the worktree has one, its state (starting, running, stopping, stopped), running container count, ports and URLs (App, API, Admin).`,
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'start_stack',
+      description: `${STACK_DESCRIPTION} Starts it in the background (stack.sh up) and returns immediately; poll get_stack until state is running and read_stack_log for progress. A first start restores the database and can take minutes.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          starter: {
+            type: 'boolean',
+            description:
+              'Restore a new stack database from the starter dataset (a year of history) instead of the default slim one. Only matters for a stack whose database does not exist yet.'
+          }
+        },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'stop_stack',
+      description: `${STACK_DESCRIPTION} Stops it (stack.sh down): removes its containers but keeps its database for the next start. Waits until stopped.`,
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'read_stack_log',
+      description: `${STACK_DESCRIPTION} Returns the last lines of the stack.sh output (setup steps, then the App, API, nodeapp and admin container logs), from the log's last 64 KiB.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          lines: { type: 'number', description: 'Lines from the end (default 100, max 2000)' }
+        },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'set_worktree_pull_request',
+      description:
+        'Link a worktree branch to a pull request: its link, or just the number (123 or #123) when the repository already has another pull request linked to infer the repository from. The link forms each host takes are in the server instructions. Omit pullRequest to unlink it.',
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' }, ...ATTRIBUTION_PARAMS },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'get_review_comments',
+      description:
+        "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent; agent: true when an agent did), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'add_review_comment',
+      description:
+        "Add a line comment to a worktree's draft review, shown in Trek's Changes tab under that line and labelled as yours. Use it to leave review findings where the user reads the diff. The line must be one the chosen diff shows (an added, removed or context line): Trek reads the line's text itself. The user can edit, delete or send the draft; nothing is sent to a session by this tool. Pass your $TREK_TERMINAL_ID as terminalId so the comment names your session. Returns the comment in the same shape as a get_review_comments entry.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          file: { type: 'string', description: "The file's path as the diff names it, relative to the worktree (its new name for a rename)" },
+          line: { type: 'integer', minimum: 1, description: '1-based line number: in the new file for side new, in the old file for side old' },
+          side: { type: 'string', enum: ['new', 'old'], description: 'new (default): an added or unchanged line. old: a removed line.' },
+          comment: { type: 'string', description: 'The comment, at most 4000 characters; line breaks are kept' },
+          source: {
+            type: 'object',
+            description: 'The diff to comment on: { kind: "branch" } (default: the branch against its base), { kind: "uncommitted" }, or { kind: "commit", sha } with a full commit id',
+            properties: { kind: { type: 'string', enum: ['branch', 'uncommitted', 'commit'] }, sha: { type: 'string' } }
+          },
+          terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID, so the comment names your session (optional)' }
+        },
+        required: ['worktree', 'file', 'line', 'comment']
+      }
+    },
+    {
+      name: 'remove_review_comment',
+      description: "Remove a comment an agent wrote from a worktree's draft review, by its id from get_review_comments. The user's own comments are refused.",
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, id: { type: 'string', description: 'The comment id' } },
+        required: ['worktree', 'id']
+      }
+    },
+    {
+      name: 'watch_pull_request',
+      description:
+        "Watch (or stop watching) a worktree branch's linked pull request. The Trek server reads it every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worktree: WORKTREE_PARAM,
+          watch: { type: 'boolean', description: 'false stops watching (default true)' },
+          ...ATTRIBUTION_PARAMS
+        },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'get_pull_request',
+      description:
+        "Read the state of a worktree branch's linked pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while the host works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs the pull request's host signed in on the server's machine.",
+      inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+    },
+    {
+      name: 'get_worktree_history',
+      description:
+        "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given.",
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, limit: { type: 'number', description: `Entries to return (default ${DEFAULT_HISTORY_TOOL_LIMIT}, max ${HISTORY_PAGE_SIZE})` } },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'promote_to_primary',
+      description:
+        "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. A second call for the same worktree while one waits gets the same answer. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked. If you run in the worktree being promoted, you are stopped and resumed in the main checkout, so this call never returns to you: a prompt saying how it went is queued in your session's Queue panel instead (not sent; the user sends it).",
+      inputSchema: {
+        type: 'object',
+        properties: { worktree: WORKTREE_PARAM, ...ATTRIBUTION_PARAMS },
+        required: ['worktree']
+      }
+    },
+    {
+      name: 'list_automations',
+      description:
+        "List the project's automations: scheduled prompts that each run unattended in their own Global session (the run tab), started anew on every run. Each has id, name, prompt, cron, timezone, enabled, llm (absent: the project's Global agent), nextRun (absent when disabled), missed (slots that passed while the server could not run them, waiting for the user's answer), runSession (its run tab's terminalId and status, once it has run) and history (its runs, newest first, at most 20: at, trigger, outcome, error).",
+      inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'save_automation',
+      description:
+        'Create an automation, or update the one `automation` names. An update changes only the arguments you pass. Without `automation` it always creates (names are not unique) and needs name, prompt and cron. To turn one on or off, pass automation and enabled. A schedule change or a re-enable restarts its clock: nothing counts as missed. Returns the saved automation in the same shape as a list_automations entry.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          automation: { ...AUTOMATION_PARAM, description: `The automation to update; omit to create one. ${AUTOMATION_PARAM.description}` },
+          name: { type: 'string', description: 'Name, at most 80 characters; also the title of its run tab' },
+          prompt: { type: 'string', description: 'The first message of each run, at most 20000 characters' },
+          cron: {
+            type: 'string',
+            description: 'Five-field cron expression (minute hour day-of-month month day-of-week), e.g. "0 9 * * *" for every day at 09:00. It must not run more often than every 5 minutes.'
+          },
+          timezone: { type: 'string', description: "IANA timezone the cron is read in, e.g. America/New_York. Defaults to the server machine's timezone when creating." },
+          enabled: { type: 'boolean', description: 'Whether it runs on schedule. Defaults to true when creating.' },
+          llm: {
+            type: ['object', 'null'],
+            description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
+            properties: {
+              ...LLM_PARAMS,
+              // Only the agents automation.save takes: those that can use Trek's tools.
+              provider: { type: 'string', ...(mcpAgentIds.length > 0 ? { enum: [...mcpAgentIds] } : {}), description: "Agent CLI to run; one that can use Trek's tools (MCP)" }
+            }
+          }
+        }
+      }
+    },
+    {
+      name: 'delete_automation',
+      description: 'Delete an automation. Its run tab stays open as a normal Global session.',
+      inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
+    },
+    {
+      name: 'run_automation',
+      description:
+        "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history. Pass your $TREK_TERMINAL_ID as terminalId: a run cannot start its own automation again, since that would end the session asking.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          automation: AUTOMATION_PARAM,
+          terminalId: { type: 'string', description: "Value of $TREK_TERMINAL_ID. An automation's own run session is refused; any other caller runs it." }
+        },
+        required: ['automation']
+      }
     }
-  },
-  {
-    name: 'delete_automation',
-    description: 'Delete an automation. Its run tab stays open as a normal Global session.',
-    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
-  },
-  {
-    name: 'run_automation',
-    description:
-      "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history. Pass your $TREK_TERMINAL_ID as terminalId: a run cannot start its own automation again, since that would end the session asking.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        automation: AUTOMATION_PARAM,
-        terminalId: { type: 'string', description: "Value of $TREK_TERMINAL_ID. An automation's own run session is refused; any other caller runs it." }
-      },
-      required: ['automation']
-    }
-  }
-]
+  ]
+}
+
+/** The core tools without agent enums: their names and shapes, for what needs no server's agents (the plugin registry's names, the tests). */
+export const MCP_TOOLS: ToolDefinition[] = coreTools([], [])
 
 export const MCP_INSTRUCTIONS =
   "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID; get_selected_worktree says which worktree and session the user is looking at, and focus_session shows them one. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
@@ -713,8 +723,8 @@ function pullRequestUrl(input: string, repo: Repository, providers: readonly PrP
   return resolved.pr.url
 }
 
-/** A { provider, model?, effort? } argument; `required` when the caller passed an llm object. */
-function llmArg(args: Record<string, unknown>, required = false): LlmSelection | undefined {
+/** A { provider, model?, effort? } argument; `required` when the caller passed an llm object. The provider is one of the server's agents. */
+function llmArg(args: Record<string, unknown>, agents: AgentLookup & { all(): readonly { id: string }[] }, required = false): LlmSelection | undefined {
   if (args.provider === undefined || args.provider === '') {
     if (required) throw bad('llm needs a provider')
     if ((args.model !== undefined && args.model !== '') || (args.effort !== undefined && args.effort !== '')) {
@@ -722,10 +732,10 @@ function llmArg(args: Record<string, unknown>, required = false): LlmSelection |
     }
     return undefined
   }
-  if (!isProviderId(args.provider)) {
-    throw bad(`Unknown provider "${String(args.provider)}". Use one of: ${PROVIDER_IDS.join(', ')}`)
+  if (typeof args.provider !== 'string' || !agents.has(args.provider)) {
+    throw bad(`Unknown provider "${String(args.provider)}". Use one of: ${agents.all().map((a) => a.id).join(', ')}`)
   }
-  return sanitizeLlmSelection({ provider: args.provider, model: args.model, effort: args.effort })
+  return sanitizeAgentSelection({ provider: args.provider, model: args.model, effort: args.effort }, (id) => agents.has(id))
 }
 
 /** Session types as tools return them — the icon data URL is just noise to an agent. */
@@ -1334,7 +1344,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           throw bad('llm must be an object { provider, model?, effort? } or null')
         }
         const llm =
-          args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>, true)
+          args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>, deps.sessions.agentRegistry, true)
         let existing: SessionType | undefined
         if (typeof args.id === 'string' && args.id) {
           existing = types.find((t) => t.id === args.id)
@@ -1419,7 +1429,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           }
           sessionTypeId = type.id
         }
-        const llm = llmArg(args)
+        const llm = llmArg(args, deps.sessions.agentRegistry)
         const raw = rawArg(args.prompt, 'prompt')
         const prompt = raw?.trim() ? raw : undefined
         // Checked before the start: once the session exists, its id must reach the caller.

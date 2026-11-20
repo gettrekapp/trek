@@ -2,8 +2,7 @@
 // automationHandlers.ts). Pure: they take and return lists; ProjectState.apply saves them.
 import type { Automation } from '../../../src/shared/model/types'
 import { CronError, minGapOk, nextSlot, parseCron, validTimeZone } from '../../../src/shared/cron.ts'
-import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
-import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
+import { sanitizeAgentSelection, type AgentLookup } from '../../../src/shared/agents/selection.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import { codedError } from '../errors.ts'
 import { isRecord, requireBoolean } from '../validate.ts'
@@ -40,7 +39,7 @@ export function checkSchedule(raw: unknown, now: number): { cron: string; tz: st
   return { cron: cron.trim().split(/\s+/).join(' '), tz }
 }
 
-export function checkInput(raw: unknown, now: number): CheckedInput {
+export function checkInput(raw: unknown, now: number, agents: AgentLookup): CheckedInput {
   if (!isRecord(raw)) throw bad('automation must be an object')
   const out: CheckedInput = { name: '', prompt: '', schedule: { cron: '', tz: '' }, enabled: false }
   if (raw.id !== undefined) {
@@ -60,11 +59,11 @@ export function checkInput(raw: unknown, now: number): CheckedInput {
   out.schedule = checkSchedule(raw.schedule, now)
   out.enabled = requireBoolean(raw.enabled, 'automation.enabled')
   if (raw.llm !== undefined && raw.llm !== null) {
-    // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead (as session.start does).
-    if (!isRecord(raw.llm) || !isProviderId(raw.llm.provider)) throw bad('automation.llm.provider must be a known provider')
-    const llm = sanitizeLlmSelection(raw.llm)
+    // sanitizeAgentSelection turns an unknown agent into the default one: refuse it instead (as session.start does).
+    if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string' || !agents.has(raw.llm.provider)) throw bad('automation.llm.provider must be a known provider')
+    const llm: LlmSelection | undefined = sanitizeAgentSelection(raw.llm, (id) => agents.has(id))
     if (!llm) throw bad('automation.llm must be an LLM selection')
-    if (!getProvider(llm.provider).capabilities.mcp) throw bad('automation.llm.provider must be an agent that can use Trek’s tools (MCP)')
+    if (!agents.facts(llm.provider).capabilities.mcp) throw bad('automation.llm.provider must be an agent that can use Trek’s tools (MCP)')
     out.llm = llm
   }
   return out

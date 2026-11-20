@@ -34,7 +34,7 @@ import { SessionManager } from './sessions/manager.ts'
 import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost.ts'
 import { McpAccessStore } from './mcp/access.ts'
 import { startMcpListener, type McpListener } from './mcp/listener.ts'
-import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools.ts'
+import { coreTools, createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools.ts'
 import { createEventSink, type Machine } from './integrations/machineHandlers.ts'
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
@@ -207,6 +207,8 @@ export function startServer(
   // The agents this server can launch (plugins A1): those its set-up plugins offer; none without plugins.
   const agents: AgentRegistry = createAgentRegistry({ agents: plugins?.agentProviders() ?? [], serverConfig: (id) => store.agentServerConfig(id) })
   if (!agents.has(DEFAULT_AGENT_ID)) console.warn(`[agents] no ${DEFAULT_AGENT_ID} agent: its plugin is not set up, so sessions cannot start`)
+  // The core MCP tools with the server's agents in their enums (plugins A1): the agents are fixed for the server's life.
+  const trekTools = coreTools(agents.all().map((a) => a.id), agents.all().filter((a) => a.capabilities.mcp).map((a) => a.id))
   let mcpAccess: McpAccessStore | undefined
   if (options.mcpDir !== undefined) {
     try {
@@ -261,7 +263,7 @@ export function startServer(
   const promoteRequests = new PromoteRequests(hub)
   // What each client shows (`ui.report`), for get_selected_worktree and focus_session.
   const selections = new UiSelections(hub)
-  const toolCatalog = new ToolCatalog({ coreTools: MCP_TOOLS })
+  const toolCatalog = new ToolCatalog({ coreTools: trekTools })
 
   // Background push (6b). A token counts as connected while one of its phone sockets (hello
   // `client: 'trek-mobile'`) is open: the phone already shows what would be pushed. A desktop window
@@ -814,7 +816,7 @@ export function startServer(
     const mcpUp = startMcpListener({
       access,
       serverVersion: daemonVersion,
-      contextFor: (projectId) => mcpContext(projectId, callerFor(projectId), plugins)
+      contextFor: (projectId) => mcpContext(projectId, callerFor(projectId), plugins, trekTools)
     }).then(
       (listener) => {
         if (stopped) {

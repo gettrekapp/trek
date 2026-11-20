@@ -10,7 +10,7 @@ import { writeFileSync } from 'node:fs'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
-import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
+import { MCP_TOOLS, coreTools, createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
@@ -1346,4 +1346,24 @@ test('remove_worktree (plugins E1): a loaded worktree is refused before its plan
     return true
   })
   assert.ok(existsSync(created.path))
+})
+
+test("coreTools (plugins A1): the agent enums are the server's agents; save_automation's only those with Trek's tools", () => {
+  const tools = coreTools(['claude', 'codex', 'grok'], ['claude', 'codex'])
+  const schema = (name) => tools.find((t) => t.name === name).inputSchema
+  assert.deepEqual(schema('start_session').properties.provider.enum, ['claude', 'codex', 'grok'])
+  assert.deepEqual(schema('save_session_type').properties.llm.properties.provider.enum, ['claude', 'codex', 'grok'])
+  assert.deepEqual(schema('save_automation').properties.llm.properties.provider.enum, ['claude', 'codex'])
+  assert.deepEqual(tools.map((t) => t.name), MCP_TOOLS.map((t) => t.name))
+  assert.equal(coreTools([], []).find((t) => t.name === 'start_session').inputSchema.properties.provider.enum, undefined, 'no agents: no enum')
+})
+
+test('coreTools (plugins A1): the built-in agents give the enums and the unknown-provider message of before', async (t) => {
+  const agents = builtinAgents().all()
+  const tools = coreTools(agents.map((a) => a.id), agents.filter((a) => a.capabilities.mcp).map((a) => a.id))
+  const schema = (name) => tools.find((tool) => tool.name === name).inputSchema
+  assert.deepEqual(schema('start_session').properties.provider.enum, ['claude', 'codex', 'gemini', 'grok', 'local'])
+  assert.deepEqual(schema('save_automation').properties.llm.properties.provider.enum, ['claude', 'codex', 'gemini', 'local'])
+  const s = await toolSetup(t)
+  await assert.rejects(s.call('start_session', { worktree: 'main', provider: 'nope' }), (e) => e.code === 'BAD_REQUEST' && e.message === 'Unknown provider "nope". Use one of: claude, codex, gemini, grok, local')
 })

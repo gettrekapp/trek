@@ -503,7 +503,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       } catch (err) {
         return `its check failed: ${err instanceof Error ? err.message : String(err)}`
       }
-    }
+    },
+    knownAgent: (id) => agentOwners.has(id)
   }
 
   return {

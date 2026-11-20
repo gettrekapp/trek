@@ -66,7 +66,7 @@ test('sessionTypes elements are validated', () => {
   assert.equal(bad({ systemPrompt: 'x'.repeat(100_001) }), 'BAD_REQUEST')
   assert.equal(bad({ initialMessage: 3 }), 'BAD_REQUEST')
   assert.equal(bad({ initialMessage: 'x'.repeat(100_001) }), 'BAD_REQUEST')
-  assert.equal(bad({ llm: { provider: 'nope' } }), 'BAD_REQUEST')
+  assert.equal(bad({ llm: { provider: 'Not An Id' } }), 'BAD_REQUEST')
   assert.equal(bad({ llm: 'claude' }), 'BAD_REQUEST')
   assert.equal(bad({ icon: 5 }), 'BAD_REQUEST')
   assert.equal(code(() => applySettingsPatch({}, { sessionTypes: ['x'] })), 'BAD_REQUEST')
@@ -153,4 +153,12 @@ test('pruneDeletedTags: worktreeTags removed or absent means the default tags', 
   // From the defaults to a list without "In Review".
   const fromDefaults = prune(repos, {}, { worktreeTags: DEFAULT_WORKTREE_TAGS.filter((t) => t.id !== 'In Review') })
   assert.deepEqual(fromDefaults[0].branchData, {})
+})
+
+test("session types (plugins A1): with the plugins' rules, only an agent the server has; without them, any well-formed id", () => {
+  const rules = { kind: () => undefined, check: () => null, knownAgent: (id) => id === 'claude' }
+  const types = (provider) => ({ sessionTypes: [{ id: 't', name: 'T', systemPrompt: '', llm: { provider } }] })
+  assert.doesNotThrow(() => applySettingsPatch({}, types('claude'), rules))
+  assert.throws(() => applySettingsPatch({}, types('codex'), rules), (e) => e.code === 'BAD_REQUEST' && /known provider/.test(e.message))
+  assert.doesNotThrow(() => applySettingsPatch({}, types('codex')), 'a server without plugins')
 })

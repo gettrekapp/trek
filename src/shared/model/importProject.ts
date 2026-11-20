@@ -12,6 +12,7 @@ import type {
   WorktreeInstance
 } from '../types.ts'
 import { worktreeOrderKey } from './keys.ts'
+import { DEFAULT_AGENT_ID } from '../plugins/agents.ts'
 import type {
   BranchData,
   Project,
@@ -73,7 +74,7 @@ function toSession(t: PersistedTerminal | GlobalSession, newId: () => string): S
     id: newId(),
     agentSessionId: t.sessionId,
     title: t.title,
-    llm: t.llm ?? { provider: 'claude' },
+    llm: t.llm ?? { provider: DEFAULT_AGENT_ID },
     queue: 'queue' in t && t.queue ? [...t.queue] : [],
     status: 'idle'
   }

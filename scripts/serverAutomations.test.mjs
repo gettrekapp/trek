@@ -4,6 +4,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { MAX_AUTOMATIONS, checkInput, clearMissed, deleteAutomation, saveAutomation } from '../server/src/automations/model.ts'
+import { builtinAgents } from './agentsHarness.mjs'
+
+const AGENTS = builtinAgents()
 
 const T0 = Date.UTC(2026, 0, 5, 8, 59)
 const input = (over = {}) => ({ name: 'Nightly', prompt: 'Triage the inbox', schedule: { cron: '*/5 * * * *', tz: 'UTC' }, enabled: true, ...over })
@@ -19,10 +22,10 @@ let n = 0
 const newId = () => `a${++n}`
 
 test('checkInput takes a valid automation, trimming name and prompt', () => {
-  const d = checkInput(input({ name: '  Nightly ', prompt: ' go ' }), T0)
+  const d = checkInput(input({ name: '  Nightly ', prompt: ' go ' }), T0, AGENTS)
   assert.deepEqual(d, { name: 'Nightly', prompt: 'go', schedule: { cron: '*/5 * * * *', tz: 'UTC' }, enabled: true })
-  assert.deepEqual(checkInput(input({ llm: { provider: 'claude' } }), T0).llm, { provider: 'claude' })
-  assert.equal(checkInput(input({ llm: null }), T0).llm, undefined)
+  assert.deepEqual(checkInput(input({ llm: { provider: 'claude' } }), T0, AGENTS).llm, { provider: 'claude' })
+  assert.equal(checkInput(input({ llm: null }), T0, AGENTS).llm, undefined)
 })
 
 test('checkInput refuses bad input with BAD_REQUEST', () => {
@@ -40,12 +43,12 @@ test('checkInput refuses bad input with BAD_REQUEST', () => {
     input({ llm: { provider: 'nope' } }),
     input({ id: 7 })
   ]) {
-    assert.equal(code(() => checkInput(bad, T0)), 'BAD_REQUEST', JSON.stringify(bad))
+    assert.equal(code(() => checkInput(bad, T0, AGENTS)), 'BAD_REQUEST', JSON.stringify(bad))
   }
 })
 
 test('saveAutomation creates with lastSlot = now and an empty history', () => {
-  const { list, id } = saveAutomation([], checkInput(input(), T0), T0, newId)
+  const { list, id } = saveAutomation([], checkInput(input(), T0, AGENTS), T0, newId)
   assert.deepEqual(list, [{ id, name: 'Nightly', prompt: 'Triage the inbox', schedule: { cron: '*/5 * * * *', tz: 'UTC' }, enabled: true, createdAt: T0, lastSlot: T0, history: [] }])
 })
 
@@ -53,22 +56,22 @@ test('saveAutomation updates; a schedule change or re-enable resets lastSlot and
   const base = { id: 'a', name: 'N', prompt: 'p', schedule: { cron: '*/5 * * * *', tz: 'UTC' }, enabled: true, createdAt: 1, lastSlot: 5, missed: { since: 2, count: 3 }, history: [], llm: { provider: 'claude' } }
   const later = T0 + 1000
   // Same schedule, still enabled: lastSlot and missed kept; llm cleared when absent.
-  let { list } = saveAutomation([base], checkInput(input({ id: 'a', name: 'Renamed' }), later), later, newId)
+  let { list } = saveAutomation([base], checkInput(input({ id: 'a', name: 'Renamed' }), later, AGENTS), later, newId)
   assert.deepEqual([list[0].name, list[0].lastSlot, list[0].missed, 'llm' in list[0]], ['Renamed', 5, { since: 2, count: 3 }, false])
-  ;({ list } = saveAutomation([base], checkInput(input({ id: 'a', schedule: { cron: '0 9 * * *', tz: 'UTC' } }), later), later, newId))
+  ;({ list } = saveAutomation([base], checkInput(input({ id: 'a', schedule: { cron: '0 9 * * *', tz: 'UTC' } }), later, AGENTS), later, newId))
   assert.deepEqual([list[0].lastSlot, list[0].missed], [later, undefined])
-  ;({ list } = saveAutomation([{ ...base, enabled: false }], checkInput(input({ id: 'a' }), later), later, newId))
+  ;({ list } = saveAutomation([{ ...base, enabled: false }], checkInput(input({ id: 'a' }), later, AGENTS), later, newId))
   assert.deepEqual([list[0].lastSlot, list[0].missed], [later, undefined])
   // Disabling drops a pending missed prompt.
-  ;({ list } = saveAutomation([base], checkInput(input({ id: 'a', enabled: false }), later), later, newId))
+  ;({ list } = saveAutomation([base], checkInput(input({ id: 'a', enabled: false }), later, AGENTS), later, newId))
   assert.equal(list[0].missed, undefined)
-  assert.equal(code(() => saveAutomation([base], checkInput(input({ id: 'zz' }), later), later, newId)), 'NOT_FOUND')
+  assert.equal(code(() => saveAutomation([base], checkInput(input({ id: 'zz' }), later, AGENTS), later, newId)), 'NOT_FOUND')
 })
 
 test('saveAutomation: at most MAX_AUTOMATIONS', () => {
   let list = []
-  for (let i = 0; i < MAX_AUTOMATIONS; i++) list = saveAutomation(list, checkInput(input(), T0), T0, newId).list
-  assert.equal(code(() => saveAutomation(list, checkInput(input(), T0), T0, newId)), 'CAPACITY')
+  for (let i = 0; i < MAX_AUTOMATIONS; i++) list = saveAutomation(list, checkInput(input(), T0, AGENTS), T0, newId).list
+  assert.equal(code(() => saveAutomation(list, checkInput(input(), T0, AGENTS), T0, newId)), 'CAPACITY')
 })
 
 test('deleteAutomation and clearMissed', () => {
@@ -185,7 +188,7 @@ import { welcomeCapabilities } from '../server/src/capabilities.ts'
 
 function setupV2(automations = []) {
   const s = setupScheduler(automations)
-  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler })
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler, sessions: { agentRegistry: AGENTS } })
   return { ...s, call }
 }
 
@@ -231,9 +234,9 @@ test('automation.resolveMissed runs and dismisses; ids with nothing pending are 
 })
 
 test('checkInput refuses control characters in a prompt, but takes tabs and newlines', () => {
-  assert.equal(code(() => checkInput(input({ prompt: 'a\u0000b' }), T0)), 'BAD_REQUEST')
-  assert.equal(code(() => checkInput(input({ prompt: 'a\u001bb' }), T0)), 'BAD_REQUEST')
-  assert.equal(code(() => checkInput(input({ prompt: 'a\tb\nc\r\nd' }), T0)), 'ok')
+  assert.equal(code(() => checkInput(input({ prompt: 'a\u0000b' }), T0, AGENTS)), 'BAD_REQUEST')
+  assert.equal(code(() => checkInput(input({ prompt: 'a\u001bb' }), T0, AGENTS)), 'BAD_REQUEST')
+  assert.equal(code(() => checkInput(input({ prompt: 'a\tb\nc\r\nd' }), T0, AGENTS)), 'ok')
 })
 
 test('resolveMissed: a repeated run id starts one session; run wins over dismiss', () => {
@@ -365,4 +368,11 @@ test('run(): an exited run tab with a stale decision is renewed, not skipped', (
   s.scheduler.run('p1', 'a', 'manual')
   s.setSession((g) => { g.status = 'exited'; delete g.ptyId; g.decision = { question: 'q', at: 1 } })
   assert.deepEqual([s.scheduler.run('p1', 'a', 'manual').run.outcome, s.renewed.length], ['ran', 1])
+})
+
+test("checkInput (plugins A1): an automation's agent is one of the server's, with Trek's tools", () => {
+  const few = { has: (id) => id === 'claude' || id === 'grok', facts: (id) => AGENTS.get(id) }
+  assert.deepEqual(checkInput(input({ llm: { provider: 'claude' } }), T0, few).llm, { provider: 'claude' })
+  assert.equal(code(() => checkInput(input({ llm: { provider: 'codex' } }), T0, few)), 'BAD_REQUEST', 'not an agent this server has')
+  assert.equal(code(() => checkInput(input({ llm: { provider: 'grok' } }), T0, few)), 'BAD_REQUEST', 'no MCP tools')
 })

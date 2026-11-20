@@ -1368,3 +1368,9 @@ test('agentProviders (plugins A1): an installable plugin (a theme manifest) offe
   assert.deepEqual(registry.agentProviders(), [])
   assert.match(warnings.join('\n'), /skin not loaded: a theme plugin \(type\/contract\) cannot offer agents/)
 })
+
+test("settingRules.knownAgent (plugins A1): the set-up plugins' agents", (t) => {
+  const { registry } = setup(t, [agentPlugin('one', [agent('alpha')])])
+  assert.equal(registry.settingRules.knownAgent('alpha'), true)
+  assert.equal(registry.settingRules.knownAgent('beta'), false)
+})

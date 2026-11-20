@@ -42,6 +42,7 @@ import { BAR_HEIGHT, focusPlace, inTray, snapHeight, stepHeight, tapHeight, tray
 import { globalAgentLabel, globalRow, normalGlobalSessions } from '../apps/mobile/src/logic/globalSessions.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
+import { builtinAgents } from './agentsHarness.mjs'
 import {
   MAX_LINES_SHOWN,
   REVIEW_CHANGED,
@@ -2391,7 +2392,7 @@ test("automations: a name and prompt edit or an on/off flip, through the server'
   const withAgent = automation({ id: 'a1', llm: { provider: 'codex', model: 'gpt-5', effort: 'high' }, missed: { since: A_NOW - 30 * HOUR, count: 1 } })
   const globalAgent = automation({ id: 'a2', name: 'Nightly', schedule: { cron: '30 2 * * *', tz: 'Asia/Tokyo' } })
   const project = { id: 'p1', automations: [withAgent, globalAgent] }
-  const ctx = { automations: { now: () => A_NOW }, projects: { apply: (_id, fn) => fn(project), newId: () => 'new' } }
+  const ctx = { automations: { now: () => A_NOW }, projects: { apply: (_id, fn) => fn(project), newId: () => 'new' }, sessions: { agentRegistry: builtinAgents() } }
   const save = (input) => automationHandlers['automation.save']({ projectId: 'p1', automation: input }, ctx)
   const stored = (id) => project.automations.find((a) => a.id === id)
   // What the phone sends is what the wire carries: JSON.
