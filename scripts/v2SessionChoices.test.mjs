@@ -18,7 +18,8 @@ import {
 import { agentCatalog } from '../src/shared/agents/catalog.ts'
 import { readFileSync } from 'node:fs'
 // builtin.client.ts pulls in .tsx client halves, which plain Node can't load: the agent halves alone.
-import { claudeClientPlugin } from '../plugins/claude/client/index.ts'
+// The claude half has a Settings section (JSX, which node can't load): its manifest stands for it, as Linear's does.
+import { CLAUDE_MANIFEST } from '../plugins/claude/manifest.ts'
 import { codexClientPlugin } from '../plugins/codex/client/index.ts'
 import { geminiClientPlugin } from '../plugins/gemini/client/index.ts'
 import { grokClientPlugin } from '../plugins/grok/client/index.ts'
@@ -125,10 +126,10 @@ test("the claude half's project settings are in the window's key: a confirmed cl
   for (const name of ['claudeClientPlugin', 'codexClientPlugin', 'geminiClientPlugin', 'grokClientPlugin']) {
     assert.ok(entries.includes(name), `${name} is registered`)
   }
-  const keys = pluginProjectKeys([claudeClientPlugin, codexClientPlugin, geminiClientPlugin, grokClientPlugin])
+  const keys = pluginProjectKeys([{ manifest: CLAUDE_MANIFEST }, codexClientPlugin, geminiClientPlugin, grokClientPlugin])
   for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(keys.includes(key), key)
   // A ticket plugin's settings are not what server.agents reads: editing one asks nothing (that answer is slow, a login shell per agent).
-  const withTickets = pluginProjectKeys([claudeClientPlugin, { manifest: LINEAR_MANIFEST }, { manifest: AZURE_DEVOPS_MANIFEST }])
+  const withTickets = pluginProjectKeys([{ manifest: CLAUDE_MANIFEST }, { manifest: LINEAR_MANIFEST }, { manifest: AZURE_DEVOPS_MANIFEST }])
   for (const key of ['claudeCommand', 'claudeArgs', 'claudePermissionMode']) assert.ok(withTickets.includes(key), key)
   for (const key of ['linearWorkspace', 'azureDevOpsBaseUrl']) assert.ok(!withTickets.includes(key), key)
   const up = { link: 'connected', hasProject: true, capabilities: ['agents'] }

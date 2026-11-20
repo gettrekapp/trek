@@ -15,3 +15,8 @@ and a move carries a Claude session's history file to the other server.
 
 Tests and smokes never run the real CLI: `scripts/fixtures/fake-claude.mjs` and the fake agents of
 `scripts/fakeAgent.mjs` stand in, through the server config's `command`.
+
+Its client half (plugins A2) lists it in Settings → Plugins, always on, with the project's Claude
+session mode and a Test of the Local agent's endpoint: the server lists the models it finds at the
+`llm.providers.local` URL in its config (backend `ollama` or `lmstudio`, `baseUrl`), which is edited
+by hand there.

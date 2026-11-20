@@ -1068,11 +1068,11 @@ try {
     ['Session system prompt', 'Global system prompt'],
     ['Worktree tags', 'Custom tags', 'Linked directories'],
     ...(SERVER_HAS_ENVS ? [['Environments']] : []),
-    // The agent plugins first (plugins A2); the selected first row, Claude Code, has no section of its own until A2b.
+    // The agent plugins first (plugins A2); the selected first row is Claude Code, with its own section.
     [['Plugins'], SERVER_HAS_ENVS
       ? ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Colima environments', 'Campsite']
       // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
-      : ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], []],
+      : ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Claude Code']],
     // "Saved tokens" is there only when tokens are stored unencrypted (a Linux runner without a keyring).
     ['Appearance', 'Notifications', 'Local server', ...((await w1.evaluate(() => window.api.secretStorage())) === 'unencrypted' ? ['Saved tokens'] : [])]
   ])

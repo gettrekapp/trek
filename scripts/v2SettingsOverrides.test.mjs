@@ -41,7 +41,6 @@ function setup({ listsPlugin } = {}) {
 
 /** The store's SettingsSetter names (store.ts). */
 const SETTINGS_SETTERS = [
-  'setClaudePermissionMode',
   'setAudioAlerts',
   'setPluginEnabled',
   'setTitleBarColor',
@@ -74,8 +73,9 @@ test('each setter sends its key in the server form, with the current value as ex
   const type = { id: 't', name: 'Review', systemPrompt: '' }
   const button = { id: 'b', label: 'Go', text: 'go' }
   o.setAudioAlerts(true)
-  o.setClaudePermissionMode(undefined)
-  o.setClaudePermissionMode('plan')
+  // Claude's session mode is the claude plugin's project setting (plugins A2): its host writes it so.
+  o.setPluginSetting('claudePermissionMode', '', 'Claude Code')
+  o.setPluginSetting('claudePermissionMode', 'plan', 'Claude Code')
   o.setTitleBarColor('#123456')
   o.setLogoImage(undefined)
   o.setSessionSystemPrompt('   ')

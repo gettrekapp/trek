@@ -307,7 +307,6 @@ export function v2SettingsOverrides(
     return project && writer.overlay(project)
   }
   return {
-    setClaudePermissionMode: (mode) => write('claudePermissionMode', 'Claude session mode', textOrNull(mode)),
     setAudioAlerts: (enabled) => write('audioAlerts', 'Audio alerts', enabled),
     // The whole `plugins` setting, from what the window shows (pending edits included).
     setPluginEnabled: (id, enabled) => writer.write(pluginsField, withPluginEnabled(overlaid()?.settings.plugins, id, enabled)),

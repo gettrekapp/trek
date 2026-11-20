@@ -240,7 +240,7 @@ export interface AppState {
   toggleDockerFavorite: (containerName: string) => void
   setBranchTicket: (repoId: string, branch: string, ticketId: string | null) => void
   setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
-  /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`); '' removes it; `label` names it in a failure */
+  /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`; plugins A2: the claude plugin's, through its host); '' removes it; `label` names it in a failure */
   setPluginSetting: (key: string, value: string, label?: string) => void
   /** A plugin's settings for a repository (plugins E3): `values` replaces them ({} clears); `label` names them in a dialog */
   setPluginRepoSettings: (pluginId: string, repoId: string, values: PluginSettingValues, label?: string) => void
@@ -265,8 +265,6 @@ export interface AppState {
   setSessionTypes: (types: SessionType[]) => void
   setLinkedDirs: (repoId: string, dirs: string[]) => void
   setWorktreeOrder: (keys: string[]) => void
-  /** undefined clears the project's mode, so the app-wide Claude mode applies */
-  setClaudePermissionMode: (mode: string | undefined) => void
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
@@ -302,7 +300,6 @@ export type SessionSetter = (typeof SESSION_SETTERS)[number]
 
 /** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Docker panel, the plugins' settings). */
 const SETTINGS_SETTERS = [
-  'setClaudePermissionMode',
   'setAudioAlerts',
   'setPluginEnabled',
   'setTitleBarColor',

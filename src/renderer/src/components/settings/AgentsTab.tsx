@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { CLAUDE_PERMISSION_MODES } from '../../../../shared/providers/claude'
 import { useAppStore } from '../../store'
 import { ImagePicker, SESSION_ICON_LIMITS } from '../ImagePicker'
 import { LlmSettings } from '../LlmSettings'
@@ -10,14 +9,10 @@ import { typeAgentStart } from '../../agentPicker'
 import { SettingText } from '../SettingText'
 import type { SessionType } from '../../../../shared/types'
 
-/** Settings → Agents: the Claude session mode, the agents, and the session types. */
+/** Settings → Agents: the project's agents and the session types (Claude's session mode is the claude plugin's, in Settings → Plugins). */
 export function AgentsTab(): React.JSX.Element {
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const catalog = useAgentCatalog()
-  // '' is "Server default": the project leaves the mode to the server's Claude setting.
-  const permissionMode = useAppStore((s) => s.project?.claudePermissionMode ?? '')
-  const setClaudePermissionMode = useAppStore((s) => s.setClaudePermissionMode)
-  const claudeArgsOverride = useAppStore((s) => s.project?.claudeArgs?.trim())
   // Default applied outside the selector — `?? []` inside it would return a
   // fresh array every snapshot and loop React's store re-render (error #185).
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
@@ -31,34 +26,6 @@ export function AgentsTab(): React.JSX.Element {
 
   return (
     <>
-      <div className="settings-row">
-        <span className="settings-label">
-          <span className="settings-name">Claude session mode for this project</span>
-          <span className="settings-desc">
-            Permission mode passed to new Claude sessions (--permission-mode). Existing
-            sessions keep the mode they were started with.
-          </span>
-          {claudeArgsOverride && (
-            <span className="settings-desc settings-warn">
-              Ignored while the project sets claudeArgs: “{claudeArgsOverride}”
-            </span>
-          )}
-        </span>
-        <select
-          className="settings-select"
-          value={permissionMode}
-          onChange={(e) => {
-            setClaudePermissionMode(e.target.value || undefined)
-          }}
-        >
-          <option value="">Server default</option>
-          {CLAUDE_PERMISSION_MODES.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </div>
       <LlmSettings />
       <h3>Session types</h3>
       <div className="settings-row">

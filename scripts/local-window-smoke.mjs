@@ -40,7 +40,7 @@
 // ~/.config/trek-server/local-dev) and a temp --user-data-dir. Prints LOCAL WINDOW SMOKE PASS
 // (n checks) or LOCAL WINDOW SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
-import { openSettingsTab } from './smokeSettings.mjs'
+import { openPlugin, openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -445,8 +445,10 @@ try {
   check('Audio alerts start off', await audio.isChecked(), false)
   await audio.click()
   check('and are saved on the server', await until(async () => (await project()).settings.audioAlerts ?? false, true), true)
-  await openSettingsTab(settings, 'Agents')
-  const mode = settings.locator('select.settings-select').first()
+  // Claude's session mode is the claude plugin's section (plugins A2): Settings → Plugins → Claude Code.
+  await openSettingsTab(settings, 'Plugins')
+  await openPlugin(settings, 'claude')
+  const mode = settings.locator('.plugin-settings select[aria-label="Claude session mode"]')
   check('the session mode starts at the default', await mode.inputValue(), '')
   await mode.selectOption('acceptEdits')
   check('a picked mode is saved on the server', await until(async () => (await project()).settings.claudePermissionMode ?? null, 'acceptEdits'), 'acceptEdits')
