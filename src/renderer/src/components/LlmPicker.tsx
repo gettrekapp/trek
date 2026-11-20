@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBackend } from '../backend'
-import { pickerAgents } from '../agentPicker'
+import { firstModelPick, pickerAgents } from '../agentPicker'
 import { effortsOf } from '../../../shared/agents/selection.ts'
 import type { AgentCatalog, ClientAgent } from '../../../shared/agents/catalog.ts'
 import type { AgentModel } from '../../../shared/plugins/agents.ts'
@@ -15,6 +15,12 @@ interface Props {
   catalog: AgentCatalog
   /** Which of the offered agents to list (the Global panel's and automations': those with Trek's tools) */
   offer?: (agent: ClientAgent) => boolean
+  /**
+   * A one-off pick (the New session menu's): an agent without a default model gets its first
+   * listed one straight away. Otherwise only once the user picks that agent here, so a saved
+   * choice that is merely shown is not rewritten.
+   */
+  eagerModel?: boolean
 }
 
 interface ListedModels {
@@ -29,13 +35,18 @@ interface ListedModels {
  * from an endpoint (Local's): asked when it is picked, again on Retry. Picks the first model when
  * none is chosen: such an agent has no default model.
  */
-function useListedModels(agentId: string | null, value: LlmSelection, onChange: (value: LlmSelection) => void): ListedModels {
+function useListedModels(
+  agentId: string | null,
+  value: LlmSelection,
+  onChange: (value: LlmSelection) => void,
+  when: () => { pickedHere: boolean; eager: boolean }
+): ListedModels {
   const [models, setModels] = useState<AgentModel[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   // Latest props for the async answer, so it never acts on a stale selection.
-  const latest = useRef({ value, onChange })
-  latest.current = { value, onChange }
+  const latest = useRef({ value, onChange, when })
+  latest.current = { value, onChange, when }
   const token = useRef(0)
   const load = (): void => {
     if (agentId === null) return
@@ -47,10 +58,9 @@ function useListedModels(agentId: string | null, value: LlmSelection, onChange: 
       .then((list) => {
         if (mine !== token.current) return
         setModels(list)
-        const { value: current, onChange: change } = latest.current
-        if (current.provider === agentId && !current.model && list[0]) {
-          change({ provider: agentId, model: list[0].id, ...(current.effort ? { effort: current.effort } : {}) })
-        }
+        const { value: current, onChange: change, when: now } = latest.current
+        const next = firstModelPick(current, agentId, list, now())
+        if (next) change(next)
       })
       .catch((err) => mine === token.current && setError(err instanceof Error ? err.message : String(err)))
       .finally(() => mine === token.current && setLoading(false))
@@ -67,10 +77,15 @@ function useListedModels(agentId: string | null, value: LlmSelection, onChange: 
 }
 
 /** Agent → Model → Effort, over the server's agents. Changing the agent resets model and effort. */
-export function LlmPicker({ value, onChange, catalog, offer }: Props): React.JSX.Element {
+export function LlmPicker({ value, onChange, catalog, offer, eagerModel = false }: Props): React.JSX.Element {
   const agent = catalog.get(value.provider)
   const agents = pickerAgents(value, catalog, offer)
-  const listed = useListedModels(agent?.modelsFrom === 'server' ? agent.id : null, value, onChange)
+  /** The user picked the agent in this picker (not a saved choice it was given) */
+  const pickedHere = useRef(false)
+  const listed = useListedModels(agent?.modelsFrom === 'server' ? agent.id : null, value, onChange, () => ({
+    pickedHere: pickedHere.current,
+    eager: eagerModel
+  }))
   const [customOpen, setCustomOpen] = useState(false)
   /** No default model: the server lists the models (an endpoint's), or they are typed (an old server) */
   const noDefault = agent?.modelsFrom === 'server' || agent?.modelsFrom === 'typed'
@@ -90,6 +105,7 @@ export function LlmPicker({ value, onChange, catalog, offer }: Props): React.JSX
         value={value.provider}
         onChange={(e) => {
           setCustomOpen(false)
+          pickedHere.current = true
           onChange({ provider: e.target.value })
         }}
       >

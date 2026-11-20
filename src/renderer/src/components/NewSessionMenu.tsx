@@ -137,7 +137,7 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
             {listed ? (
               choosing ? (
                 <div className="new-session-choose">
-                  <LlmPicker value={pick} onChange={setPick} catalog={catalog} />
+                  <LlmPicker value={pick} onChange={setPick} catalog={catalog} eagerModel />
                   <button
                     className="btn btn-accent"
                     disabled={needsModel(pick, catalog) || !catalog.isOn(pick.provider)}

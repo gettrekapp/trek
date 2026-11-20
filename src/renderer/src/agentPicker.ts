@@ -26,3 +26,20 @@ export function needsModel(value: AgentSelection, catalog: AgentCatalog): boolea
   const from = catalog.get(value.provider)?.modelsFrom
   return (from === 'server' || from === 'typed') && !value.model
 }
+
+/**
+ * The selection to switch to once an agent's models are listed: its first model, when none is
+ * chosen. Only when the user picked the agent in this picker (`pickedHere`), or the picker holds a
+ * one-off pick (`eager`: the New session menu's); a saved choice (a session type's, a default)
+ * that is merely shown is left as it is, so showing it saves nothing.
+ */
+export function firstModelPick(
+  current: AgentSelection,
+  agentId: string,
+  models: readonly { id: string }[],
+  when: { pickedHere: boolean; eager: boolean }
+): AgentSelection | null {
+  if (!when.pickedHere && !when.eager) return null
+  if (current.provider !== agentId || current.model || !models[0]) return null
+  return { provider: agentId, model: models[0].id, ...(current.effort ? { effort: current.effort } : {}) }
+}
