@@ -71,7 +71,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linux', enabled, agents = (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }) } = {}) {
+function setup(t, { llm, maxSessions, mcpAccess, activity, commandExists, platform = 'linux', enabled, agents = (store) => builtinAgents({ serverConfig: (id) => store.agentServerConfig(id), enabled }) } = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
@@ -97,7 +97,7 @@ function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linu
   // A POSIX server's launches (a login shell's -c, which `cmd` reads) on any OS: winLaunch.ts's
   // Windows launches are checked in serverWinLaunch.test.mjs.
   const sessions = new SessionManager({
-    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists, platform,
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, activity, commandExists, platform,
     agents: agents(store),
     discover: async (cwd, ageMs, exclude, agentId) => {
       discoveries.push({ cwd, ageMs, exclude, agentId })
@@ -116,6 +116,12 @@ function setup(t, { llm, maxSessions, mcpAccess, commandExists, platform = 'linu
   const main = () => project().repositories[0].worktrees[0]
   const wx = () => project().repositories[0].worktrees[1]
   return { dir, a, b, store, hub, projects, sessions, saves, projectId, project, main, wx, ...fake, discoveries, scheduled, clock }
+}
+
+/** A feed that records what the SessionManager emits */
+const recorder = () => {
+  const events = []
+  return { events, emit: (e) => events.push(e), kinds: () => events.map((e) => (e.kind === 'session.status' ? `${e.from}>${e.to}:${e.cause}` : e.kind === 'session.decision' ? `decision:${e.state}` : e.kind)) }
 }
 
 const size = { cols: 100, rows: 30 }
@@ -924,6 +930,80 @@ test('close and project.delete drop attention entries and cancel the quiet timer
   assert.equal((await call('project.delete', { projectId: s.projectId })).ok, true)
   assert.equal(quietJobs(s).length, 0)
   assert.deepEqual(attention(s), [])
+})
+
+test('activity: start, output, quiet, bell, input, seen, complete, close', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const proc = s.spawned[0]
+  proc.emit('Thinking… (esc to interrupt)')
+  await s.sessions.terminals.settledAll()
+  fireQuiet(s)
+  proc.emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  s.sessions.noteInput(ptyId, 'y')
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: true })
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: false })
+  s.sessions.close({ projectId: s.projectId, sessionId })
+  assert.deepEqual(feed.kinds(), [
+    'session.started',
+    'idle>working:output',
+    'working>done:quiet',
+    'done>attention:bell',
+    'attention>working:input',
+    'working>complete:marked',
+    'complete>idle:marked',
+    'session.closed'
+  ])
+  const started = feed.events[0]
+  assert.deepEqual([started.projectId, started.terminalId, started.worktreeId, started.provider], [s.projectId, sessionId, 'wx', 'claude'])
+  assert.ok(feed.events.every((e) => e.terminalId === sessionId && typeof e.at === 'number'))
+})
+
+test('activity: a decision asked, answered by input; asked again, dismissed; seen', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'Ship it?' })
+  s.sessions.noteInput(ptyId, 'y')
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'Again?' })
+  s.sessions.dismissDecision({ projectId: s.projectId, sessionId })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  s.sessions.seen({ projectId: s.projectId, sessionId })
+  assert.deepEqual(feed.kinds(), [
+    'session.started',
+    'decision:asked',
+    'decision:answered',
+    'decision:asked',
+    'decision:dismissed',
+    'idle>attention:bell',
+    'attention>idle:seen'
+  ])
+})
+
+test('activity: exit, restart, and an unload that drops working status and a decision', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].exit(3)
+  s.sessions.restart({ projectId: s.projectId, sessionId, ...size })
+  s.spawned[1].emit('working')
+  await s.sessions.terminals.settledAll()
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'Ship it?' })
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  await tick()
+  assert.deepEqual(feed.kinds(), [
+    'session.started',
+    'idle>exited:other',
+    'exited>idle:other',
+    'session.started',
+    'idle>working:output',
+    'decision:asked',
+    'working>idle:other',
+    'decision:dismissed'
+  ])
 })
 
 // ---- limits ----

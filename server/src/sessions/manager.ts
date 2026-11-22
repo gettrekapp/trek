@@ -34,6 +34,7 @@ import {
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
 import { commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
 import type { ServerAgents } from '../../../src/shared/protocolV2'
+import type { ActivityEvent, SessionCause } from '../../../src/shared/plugins/activity.ts'
 
 export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
@@ -71,6 +72,8 @@ export interface SessionManagerDeps {
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
   /** Default process.platform: how a session is launched (a shell, or Windows' no-shell plan), its env, its pty's kill */
   platform?: NodeJS.Platform
+  /** Core's activity feed (campsite part 2): sessions starting, changing status, deciding, closing */
+  activity?: { emit(event: ActivityEvent): void }
 }
 
 /** An optional agent pick from a client: one this server has. */
@@ -127,6 +130,17 @@ interface Owner {
   sessionId: string
   /** Unset for a Global session */
   repoId?: string
+}
+
+/** What a change did to one session, for the activity feed */
+interface SessionChange {
+  projectId: string
+  id: string
+  worktreeId: string | null
+  from: SessionStatus
+  to: SessionStatus
+  had: boolean
+  has: boolean
 }
 
 export class SessionManager {
@@ -274,6 +288,7 @@ export class SessionManager {
       this.removeSession(project.id, sessionId)
       throw err
     }
+    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, provider: llm.provider })
     return { sessionId, ptyId }
   }
 
@@ -287,7 +302,9 @@ export class SessionManager {
       this.usableWorktree(project, found.worktree.id)
       if (!found.worktree.loaded) throw bad('load the worktree first')
     }
-    return { ptyId: this.spawnSession(project.id, found.session.id, { cols, rows }) }
+    const ptyId = this.spawnSession(project.id, found.session.id, { cols, rows })
+    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: found.session.id, worktreeId: found.worktree?.id ?? null, provider: found.session.llm.provider })
+    return { ptyId }
   }
 
   /**
@@ -317,7 +334,7 @@ export class SessionManager {
     const sessionId = found.session.id
     this.stopDiscovery(sessionId)
     this.killSession(found.session)
-    this.mutate(project.id, sessionId, (s) => {
+    this.change(project.id, sessionId, (s) => {
       delete s.ptyId
       delete s.exitCode
       delete s.decision
@@ -328,24 +345,25 @@ export class SessionManager {
       // A preset-id agent gets a new conversation id; a discovered one (Codex) is discovered again.
       if (this.deps.agents.get(llm.provider).capabilities.presetSessionId) s.agentSessionId = this.newId()
       else delete s.agentSessionId
-    })
+    }, 'other')
     let ptyId: string
     try {
       ptyId = this.spawnSession(project.id, sessionId, { cols, rows, fresh: true, initialMessage: p.initialMessage })
     } catch (err) {
       try {
-        this.mutate(project.id, sessionId, (s) => {
+        this.change(project.id, sessionId, (s) => {
           s.status = 'exited'
           s.exitCode = -1
           // The id names a conversation that never started: a restart must not resume it.
           if (this.deps.agents.get(s.llm.provider).capabilities.presetSessionId) delete s.agentSessionId
-        })
+        }, 'other')
       } catch {
         // the session is gone
       }
       this.publishAttention()
       throw err
     }
+    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: sessionId, worktreeId: null, provider: llm.provider })
     this.publishAttention()
     return { ptyId }
   }
@@ -356,6 +374,7 @@ export class SessionManager {
     this.stopDiscovery(found.session.id)
     this.killSession(found.session)
     this.removeSession(project.id, found.session.id)
+    this.emitActivity({ kind: 'session.closed', projectId: project.id, at: this.now(), terminalId: found.session.id, worktreeId: found.worktree?.id ?? null })
     this.since.delete(found.session.id)
     this.publishAttention()
     return null
@@ -363,10 +382,10 @@ export class SessionManager {
 
   markComplete(p: any): null {
     const complete = requireBoolean(p.complete, 'complete')
-    this.mutate(p.projectId, p.sessionId, (s) => {
+    this.change(p.projectId, p.sessionId, (s) => {
       if (complete) s.status = 'complete'
       else if (s.status === 'complete') s.status = 'idle'
-    })
+    }, 'marked')
     this.syncSince(p.projectId, p.sessionId)
     this.publishAttention()
     return null
@@ -446,12 +465,13 @@ export class SessionManager {
 
   /** A client showed the session to the user. */
   seen(p: any): null {
-    this.mutate(
+    this.change(
       p.projectId,
       p.sessionId,
       (s) => {
         if (s.status === 'attention' || s.status === 'done') s.status = 'idle'
       },
+      'seen',
       false
     )
     this.syncSince(p.projectId, p.sessionId)
@@ -465,14 +485,14 @@ export class SessionManager {
    */
   requestDecision(p: any): null {
     const question = checkQuestion(p.question, 'question')
-    this.mutate(p.projectId, p.sessionId, (s) => { s.decision = { question, at: this.now() } }, false)
+    this.change(p.projectId, p.sessionId, (s) => { s.decision = { question, at: this.now() } }, 'other', false)
     this.publishAttention()
     return null
   }
 
   /** A client dismissed the session's decision without answering it in the terminal. */
   dismissDecision(p: any): null {
-    this.mutate(p.projectId, p.sessionId, (s) => { delete s.decision }, false)
+    this.change(p.projectId, p.sessionId, (s) => { delete s.decision }, 'other', false, 'dismissed')
     this.publishAttention()
     return null
   }
@@ -569,11 +589,11 @@ export class SessionManager {
         // The worktree still counts as loaded: this session shows as exited and can be restarted.
         console.error(`could not resume session ${session.id} in ${worktree.path}`, err)
         try {
-          this.mutate(project.id, session.id, (s) => {
+          this.change(project.id, session.id, (s) => {
             delete s.ptyId
             s.status = 'exited'
             s.exitCode = -1
-          }, false)
+          }, 'other', false)
         } catch {
           // the session is gone
         }
@@ -598,6 +618,7 @@ export class SessionManager {
         }
       }
     }
+    const changes: SessionChange[] = []
     this.deps.projects.apply(
       projectId,
       (d) => {
@@ -605,16 +626,20 @@ export class SessionManager {
           for (const worktree of repo.worktrees) {
             for (const s of worktree.sessions) {
               if (!ids.has(s.id)) continue
+              const from = s.status
+              const had = s.decision !== undefined
               delete s.ptyId
               delete s.exitCode
               delete s.decision
               if (s.status !== 'complete') s.status = 'idle'
+              changes.push({ projectId: d.id, id: s.id, worktreeId: worktree.id, from, to: s.status, had, has: false })
             }
           }
         }
       },
       { persist: false }
     )
+    for (const c of changes) this.reportChange(c, 'other', 'dismissed')
     this.publishAttention()
   }
 
@@ -630,11 +655,11 @@ export class SessionManager {
       } catch (err) {
         console.error(`could not resume session ${id}`, err)
         try {
-          this.mutate(projectId, id, (s) => {
+          this.change(projectId, id, (s) => {
             delete s.ptyId
             s.status = 'exited'
             s.exitCode = -1
-          }, false)
+          }, 'other', false)
         } catch {
           // the session is gone
         }
@@ -649,21 +674,26 @@ export class SessionManager {
       this.stopDiscovery(session.id)
       this.killSession(session)
     }
+    const changes: SessionChange[] = []
     this.deps.projects.apply(
       project.id,
       (d) => {
         const target = findWorktree(d, worktree.id).worktree
         target.loaded = false
         for (const s of target.sessions) {
+          const from = s.status
+          const had = s.decision !== undefined
           delete s.ptyId
           delete s.exitCode
           // The agent that asked is gone; its question would outlive it.
           delete s.decision
           if (s.status !== 'complete') s.status = 'idle'
+          changes.push({ projectId: d.id, id: s.id, worktreeId: target.id, from, to: s.status, had, has: false })
         }
       },
       { persist: false }
     )
+    for (const c of changes) this.reportChange(c, 'other', 'dismissed')
     this.publishAttention()
     return null
   }
@@ -690,15 +720,19 @@ export class SessionManager {
    */
   forgetGlobal(projectId: string): void {
     this.forget((o) => o.projectId === projectId && o.repoId === undefined)
+    const changes: SessionChange[] = []
     try {
       this.deps.projects.apply(
         projectId,
         (d) => {
           for (const s of d.globalSessions) {
+            const from = s.status
+            const had = s.decision !== undefined
             delete s.ptyId
             delete s.exitCode
             delete s.decision
             if (s.status !== 'complete') s.status = 'idle'
+            changes.push({ projectId: d.id, id: s.id, worktreeId: null, from, to: s.status, had, has: false })
           }
         },
         { persist: false }
@@ -706,6 +740,7 @@ export class SessionManager {
     } catch {
       // the project is gone
     }
+    for (const c of changes) this.reportChange(c, 'other', 'dismissed')
     this.publishAttention()
   }
 
@@ -855,6 +890,7 @@ export class SessionManager {
     this.owners.set(ptyId, { projectId, sessionId, repoId: repo?.id })
     // A preset-id agent whose saved id was unusable got a fresh one: that must reach disk.
     const idChanged = provider.capabilities.presetSessionId && session.agentSessionId !== launch.sessionId
+    let revived = false
     try {
       this.deps.projects.apply(
         projectId,
@@ -862,6 +898,7 @@ export class SessionManager {
           const s = findSession(d, sessionId).session
           s.ptyId = ptyId
           delete s.exitCode
+          revived = s.status === 'exited'
           if (s.status === 'exited') s.status = 'idle'
           if (provider.capabilities.presetSessionId) s.agentSessionId = launch.sessionId
         },
@@ -873,6 +910,9 @@ export class SessionManager {
       this.dropActivity(sessionId)
       this.terminals.kill(ptyId)
       throw err
+    }
+    if (revived) {
+      this.emitActivity({ kind: 'session.status', projectId, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, from: 'exited', to: 'idle', cause: 'other' })
     }
     // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
@@ -907,6 +947,7 @@ export class SessionManager {
     // A Codex session that exited before its id was found is never bound (pickClaimant's rule).
     this.stopDiscovery(owner.sessionId)
     let exited: { projectName: string; worktreeId: string | null } | undefined
+    let from: SessionStatus | undefined
     try {
       this.deps.projects.apply(
         owner.projectId,
@@ -915,6 +956,7 @@ export class SessionManager {
           const s = found.session
           if (s.ptyId !== ptyId) return
           delete s.ptyId
+          from = s.status
           s.status = 'exited'
           s.exitCode = exitCode
           exited = { projectName: d.name, worktreeId: found.worktree?.id ?? null }
@@ -923,6 +965,9 @@ export class SessionManager {
       )
     } catch {
       // the project or session is gone
+    }
+    if (exited && from !== undefined && from !== 'exited') {
+      this.emitActivity({ kind: 'session.status', projectId: owner.projectId, at: this.now(), terminalId: owner.sessionId, worktreeId: exited.worktreeId, from, to: 'exited', cause: 'other' })
     }
     this.publishAttention()
     if (exited) {
@@ -954,7 +999,7 @@ export class SessionManager {
     entry.activity = r.activity
     this.activity.set(owner.sessionId, entry)
     if (r.restartTimer) this.armQuiet(ptyId, entry)
-    if (r.status !== session.status) this.setStatus(owner, r.status)
+    if (r.status !== session.status) this.setStatus(owner, r.status, 'output')
   }
 
   /** Cancels the session's pending quiet timer and schedules a new one IDLE_MS out. */
@@ -981,7 +1026,7 @@ export class SessionManager {
       this.activity.set(owner.sessionId, entry)
       this.armQuiet(ptyId, entry)
     }
-    this.setStatus(owner, status, answered)
+    this.setStatus(owner, status, 'input', answered)
   }
 
   private onQuietTimer(ptyId: string, entry: { activity: Activity; quiet?: ScheduledJob }): void {
@@ -994,7 +1039,7 @@ export class SessionManager {
     if (!session) return
     const r = onQuiet(session.status, entry.activity)
     entry.activity = r.activity
-    if (r.status !== session.status) this.setStatus(owner, r.status)
+    if (r.status !== session.status) this.setStatus(owner, r.status, 'quiet')
   }
 
   private onPtyBell(ptyId: string): void {
@@ -1003,7 +1048,7 @@ export class SessionManager {
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
     const status = onBell(session.status)
-    if (status !== session.status) this.setStatus(owner, status)
+    if (status !== session.status) this.setStatus(owner, status, 'bell')
   }
 
   /** The session's current record, or undefined if it (or its project) is gone. */
@@ -1020,16 +1065,21 @@ export class SessionManager {
    * session's decision cleared in the same patch, then the attention topic.
    * `since` moves only when the status does.
    */
-  private setStatus(owner: Owner, status: SessionStatus, clearDecision = false): void {
+  private setStatus(owner: Owner, status: SessionStatus, cause: SessionCause, clearDecision = false): void {
     let changed = false
+    let c: SessionChange | undefined
     try {
       this.deps.projects.apply(
         owner.projectId,
         (d) => {
-          const s = findSession(d, owner.sessionId).session
+          const found = findSession(d, owner.sessionId)
+          const s = found.session
+          const from = s.status
+          const had = s.decision !== undefined
           changed = s.status !== status
           s.status = status
           if (clearDecision) delete s.decision
+          c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, from, to: s.status, had, has: s.decision !== undefined }
         },
         { persist: false }
       )
@@ -1040,6 +1090,7 @@ export class SessionManager {
       if (status === 'attention' || status === 'done') this.since.set(owner.sessionId, this.now())
       else this.since.delete(owner.sessionId)
     }
+    if (c) this.reportChange(c, cause, 'answered')
     this.publishAttention()
   }
 
@@ -1078,6 +1129,43 @@ export class SessionManager {
 
   private mutate(projectId: unknown, sessionId: unknown, fn: (s: Session) => void, persist = true): void {
     this.deps.projects.apply(projectId, (d) => fn(findSession(d, sessionId).session), { persist })
+  }
+
+  private emitActivity(event: ActivityEvent): void {
+    this.deps.activity?.emit(event)
+  }
+
+  /** Reports a change: the status (with its cause), and a decision asked or cleared (`cleared`: how) */
+  private reportChange(c: SessionChange, cause: SessionCause, cleared: 'answered' | 'dismissed'): void {
+    const base = { projectId: c.projectId, at: this.now(), terminalId: c.id, worktreeId: c.worktreeId }
+    if (c.from !== c.to) this.emitActivity({ kind: 'session.status', ...base, from: c.from, to: c.to, cause })
+    if (!c.had && c.has) this.emitActivity({ kind: 'session.decision', ...base, state: 'asked' })
+    if (c.had && !c.has) this.emitActivity({ kind: 'session.decision', ...base, state: cleared })
+  }
+
+  /** `mutate`, reporting what it changed to the activity feed */
+  private change(
+    projectId: unknown,
+    sessionId: unknown,
+    fn: (s: Session) => void,
+    cause: SessionCause,
+    persist = true,
+    cleared: 'answered' | 'dismissed' = 'dismissed'
+  ): void {
+    let c: SessionChange | undefined
+    this.deps.projects.apply(
+      projectId,
+      (d) => {
+        const found = findSession(d, sessionId)
+        const s = found.session
+        const from = s.status
+        const had = s.decision !== undefined
+        fn(s)
+        c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, from, to: s.status, had, has: s.decision !== undefined }
+      },
+      { persist }
+    )
+    if (c) this.reportChange(c, cause, cleared)
   }
 
   /**
