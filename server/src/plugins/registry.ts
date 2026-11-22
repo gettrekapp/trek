@@ -20,6 +20,7 @@ import {
 import { agentProblem, type AgentProvider } from '../../../src/shared/plugins/agents.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, PrServerProvider, ServerPlugin, ServerPluginHost, WorktreeLifecycle } from '../../../src/shared/plugins/server.ts'
 import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
+import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
 import { repoIn } from '../projects/model.ts'
 import { codedError } from '../errors.ts'
@@ -94,6 +95,8 @@ export interface PluginRegistryOptions {
   siblingDataDirs?: () => string[]
   /** `start --local --import-env-from <dir>`: the app's data dir, for host.legacyImportFile */
   importFrom?: string
+  /** Core's activity feed (campsite part 2): what host.onActivity hears */
+  activity?: { subscribe(listener: (event: ActivityEvent) => void): () => void }
 }
 
 /** A plugin's worktree lifecycle, with the id its items are namespaced by (plugins E1). */
@@ -242,6 +245,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     live.add(stopped)
     void stopped.then(() => live.delete(stopped))
   }
+  /** Each plugin's host.onActivity unsubscribes: run when it is disposed */
+  const activityOffs = new Map<string, (() => void)[]>()
+  const dropActivity = (id: string): void => {
+    for (const off of activityOffs.get(id) ?? []) off()
+    activityOffs.delete(id)
+  }
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -334,6 +343,23 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       },
       testCommand: (envName, fallback) => commandFromEnv(envName, env[envName], fallback, warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
+      emitAll: (event, data) => {
+        let reached = 0
+        for (const project of options.projects.all()) {
+          if (enabled(project.id, manifest.id)) reached += options.hub.emit(projectTopic(project.id), `${manifest.id}.${event}`, data)
+        }
+        return reached
+      },
+      onActivity: (listener) => {
+        const off =
+          options.activity?.subscribe((e) => {
+            if (enabled(e.projectId, manifest.id)) listener(e)
+          }) ?? (() => {})
+        const list = activityOffs.get(manifest.id) ?? []
+        list.push(off)
+        activityOffs.set(manifest.id, list)
+        return off
+      },
       // No check that the plugin is on in a project, unlike `emit`: the caller asked for this
       // operation while it was on, and its log runs to its end (its `done`) even if the plugin is
       // turned off meanwhile.
@@ -453,28 +479,33 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     try {
       instance = plugin.setup(hostFor(manifest))
     } catch (err) {
+      dropActivity(manifest.id)
       refuse(`its setup failed: ${err instanceof Error ? err.message : String(err)}`)
       continue
     }
     const clash = (instance.mcpTools ?? []).map((t) => t.definition.name).find((name) => coreTools.has(name) || toolOwners.has(name))
     if (clash) {
       refuse(`its MCP tool ${clash} has the name of another tool`)
+      dropActivity(manifest.id)
       instance.dispose?.()
       continue
     }
     if (instance.ticketProvider && instance.ticketProvider.id !== manifest.id) {
       refuse(`its ticket provider's id ${JSON.stringify(instance.ticketProvider.id)} is not the plugin's id`)
+      dropActivity(manifest.id)
       instance.dispose?.()
       continue
     }
     if (instance.prProvider && instance.prProvider.id !== manifest.id) {
       refuse(`its pull request provider's id ${JSON.stringify(instance.prProvider.id)} is not the plugin's id`)
+      dropActivity(manifest.id)
       instance.dispose?.()
       continue
     }
     const agentRefusal = agentsRefusal(manifest, instance.agentProviders, agentOwners, mcpSuffixes)
     if (agentRefusal) {
       refuse(agentRefusal)
+      dropActivity(manifest.id)
       instance.dispose?.()
       continue
     }
@@ -588,6 +619,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       changedListeners.length = 0
       for (const a of aborts.values()) a.abort()
       aborts.clear()
+      for (const id of [...activityOffs.keys()]) dropActivity(id)
       for (const e of disposing) {
         try {
           e.instance.dispose?.()

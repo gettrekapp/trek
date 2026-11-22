@@ -1,6 +1,7 @@
 // The server half of a Trek plugin (plugin system phase 1): what trek-server hands it (the host)
 // and what it gives back (its instance). A plugin's server code imports only this module, the
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
+import type { ActivityEvent } from './activity.ts'
 import type { AgentProvider } from './agents.ts'
 import type { PluginManifest, PluginSettingValues } from './manifest.ts'
 import type { TicketProvider } from './tickets.ts'
@@ -188,6 +189,14 @@ export interface ServerPluginHost {
    * nothing, where the plugin is off for the project.
    */
   emit(projectId: string, event: string, data: unknown): number
+  /** `<id>.<event>` to the open windows of every project where the plugin is on; the number reached */
+  emitAll(event: string, data: unknown): number
+  /**
+   * What happens on the server (campsite part 2): sessions, pull requests, worktrees, as they
+   * happen, from the projects where the plugin is on. Returns the unsubscribe; the plugin's dispose
+   * unsubscribes it too.
+   */
+  onActivity(listener: (event: ActivityEvent) => void): () => void
   /**
    * `event` (its full name, which must start with `<id>.`) to one connection only (plugins E1),
    * through that connection's event sink: past its high-water mark a chunk is dropped and said so,

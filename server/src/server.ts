@@ -30,6 +30,7 @@ import { PairingCodes, PairingLimiter, redeemForPhone } from './pairing.ts'
 import { TopicHub, type Subscriber } from './topicHub.ts'
 import { dispatchV2, isCoreMethod, responseRev } from './v2.ts'
 import { GitPoller } from './git/poller.ts'
+import { createActivityFeed } from './activity.ts'
 import { SessionManager } from './sessions/manager.ts'
 import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost.ts'
 import { McpAccessStore } from './mcp/access.ts'
@@ -170,6 +171,8 @@ export function startServer(
   options: ServerOptions = {}
 ): TrekServer {
   const hub = new TopicHub()
+  // Core's activity feed (campsite part 2): sessions, pull requests and worktrees, for plugins' host.onActivity
+  const activity = createActivityFeed()
   // What a killed server left in the temp directory: its moves' staged histories and throwaway indexes (5d).
   if (options.sweepStaleMoves !== false) void sweepStaleMoveDirs().catch(() => {})
   let refreshServerTopic = (): void => {}
@@ -187,7 +190,8 @@ export function startServer(
     registry: () => store.config.repos,
     onHealth: () => refreshServerTopic(),
     // The SessionManager is made below; a list only runs once the server is up.
-    onAttentionChange: () => sessions.refreshAttention()
+    onAttentionChange: () => sessions.refreshAttention(),
+    activity
   })
   const plugins: PluginRegistry | undefined = options.plugins
     ? createPluginRegistry({
@@ -201,7 +205,8 @@ export function startServer(
         coreToolNames: MCP_TOOLS.map((t) => t.name),
         paths: pluginPathChecks({ projects, store, poller }),
         siblingDataDirs: options.plugins.siblingDataDirs,
-        importFrom: options.plugins.importFrom
+        importFrom: options.plugins.importFrom,
+        activity
       })
     : undefined
   // The agents this server can launch (plugins A1): those its set-up plugins offer; none without plugins.
@@ -236,7 +241,8 @@ export function startServer(
     hub,
     mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined,
     pluginPrompt: (projectId) => plugins?.sessionPrompt(projectId),
-    onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p })
+    onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p }),
+    activity
   })
 
   // Set once the connections exist (below): the first sign-in answer comes after this function returns.
@@ -251,7 +257,8 @@ export function startServer(
         pollMs: options.prWatch.pollMs,
         recheckMs: options.prWatch.recheckMs,
         onAvailability: (available) => prWatchChanged(available),
-        onReport: (p) => pusher?.prReport(p)
+        onReport: (p) => pusher?.prReport(p),
+        activity
       })
     : undefined
   prWatch?.start()
@@ -725,6 +732,7 @@ export function startServer(
         integrationsChanged,
         prWatch,
         automations,
+        activity,
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         selections,
@@ -810,7 +818,7 @@ export function startServer(
     shutdown: (reason, detail) => shutdown(reason, detail)
   }
   if (access) {
-    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins, history, automations, selections })
+    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins, history, automations, selections, activity })
     const callerFor = (projectId: string): ToolCall => {
       let call = callers.get(projectId)
       if (!call) callers.set(projectId, (call = caller(projectId)))

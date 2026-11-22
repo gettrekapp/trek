@@ -592,6 +592,8 @@ export interface ToolDeps {
   automations?: AutomationScheduler
   /** What each client shows (`ui.report`), for get_selected_worktree and focus_session; without it they say the server does not track it */
   selections?: UiSelections
+  /** Core's activity feed (campsite part 2): what the tools' v2 commands report (a PR linked, a worktree created or removed) */
+  activity?: V2Context['activity']
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -762,6 +764,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     plugins: deps.plugins,
     history: deps.history,
     automations: deps.automations,
+    activity: deps.activity,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
