@@ -3,6 +3,7 @@
 // it. Coordinates are px from the strip's top-left; the strip is STAGE_H tall. Pure.
 import type { DogPose } from './dog.ts'
 import { FRAMES, type Pose, type Rect } from './pixels.ts'
+import { HIKER_W } from './layout.ts'
 
 /** The strip's height (px) */
 export const STAGE_H = 112
@@ -125,3 +126,64 @@ const HEART_ROWS: readonly (readonly [number, number, number])[] = [
   [3, 5, 1]
 ]
 export const heartPixels = (): Rect[] => HEART_ROWS.map(([x, y, w]) => ({ x, y, w, h: 1, fill: '#ff6b8a' }))
+
+/** A walk takes this long however far it goes (the old CSS transition's 1.2 s) */
+export const WALK_MS = 1200
+/** Off the strip, past the edge nearer `x` */
+export const offstage = (x: number, width: number): number => (x < width / 2 ? -(HIKER_W / 2) * 3 : width + (HIKER_W / 2) * 3)
+
+/** From `from` to `to` (px), starting at `start` (ms) */
+export interface Walk {
+  from: number
+  to: number
+  start: number
+}
+export function walkAt(w: Walk, t: number): { x: number; walking: boolean } {
+  if (w.from === w.to || t >= w.start + WALK_MS) return { x: w.to, walking: false }
+  if (t <= w.start) return { x: w.from, walking: true }
+  return { x: w.from + (w.to - w.from) * ((t - w.start) / WALK_MS), walking: true }
+}
+
+/** A hiker on stage: where it walks, whether it is walking off for good, and which way it faces */
+export interface Mover {
+  id: string
+  walk: Walk
+  leaving: boolean
+  facingLeft: boolean
+}
+export interface Spot {
+  terminalId: string
+  x: number
+}
+
+/** A leaving hiker that has reached the edge */
+export const departed = (m: Mover, t: number): boolean => m.leaving && t >= m.walk.start + WALK_MS
+
+/**
+ * The hikers on stage after a new layout at t. New ones walk in from the nearer edge (or appear in
+ * place: on the stage's `first` layout, or `instant` for reduced motion). Moved ones walk from where
+ * they are now. Gone ones walk off to the nearer edge and are dropped once there (`instant`: at once).
+ * A leaving hiker back under the same id turns round. An unmoved hiker keeps its Mover.
+ */
+export function reconcileMovers(prev: ReadonlyMap<string, Mover>, spots: readonly Spot[], width: number, t: number, opts: { first: boolean; instant: boolean }): Map<string, Mover> {
+  const next = new Map<string, Mover>()
+  const walkTo = (m: Mover | undefined, id: string, to: number, leaving: boolean): Mover => {
+    if (!m) {
+      const from = opts.first || opts.instant ? to : offstage(to, width)
+      return { id, walk: { from, to, start: t }, leaving, facingLeft: to < from }
+    }
+    if (m.walk.to === to && m.leaving === leaving && !opts.instant) return m
+    const from = opts.instant ? to : walkAt(m.walk, t).x
+    return { id, walk: { from, to, start: t }, leaving, facingLeft: to === from ? m.facingLeft : to < from }
+  }
+  for (const s of spots) next.set(s.terminalId, walkTo(prev.get(s.terminalId), s.terminalId, s.x, false))
+  for (const [id, m] of prev) {
+    if (next.has(id) || opts.instant) continue
+    if (m.leaving) {
+      if (!departed(m, t)) next.set(id, m)
+      continue
+    }
+    next.set(id, walkTo(m, id, offstage(walkAt(m.walk, t).x, width), true))
+  }
+  return next
+}

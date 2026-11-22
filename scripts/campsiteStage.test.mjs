@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { dogFrameAt, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, rasterize, rgb, signAlpha } from '../plugins/campsite/shared/stage.ts'
+import { departed, dogFrameAt, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
 
 /** A rand that hands out the given numbers in turn */
 const seq = (...values) => {
@@ -104,6 +104,69 @@ test("a pet's heart pops up, rises and fades over a second", () => {
   assert.equal(heartAt(-1), null)
   const cells = heartPixels()
   assert.ok(cells.every((r) => r.x >= 0 && r.y >= 0 && r.x + r.w <= 7 && r.y + r.h <= 6))
+})
+
+const W = 1000
+const settled = (spots) => reconcileMovers(new Map(), spots, W, 0, { first: true, instant: false })
+
+test('offstage is past the nearer edge', () => {
+  assert.equal(offstage(100, W), -54)
+  assert.equal(offstage(700, W), 1054)
+})
+
+test("the stage's first layout: everyone appears in place", () => {
+  const m = settled([{ terminalId: 'a', x: 300 }])
+  assert.deepEqual(walkAt(m.get('a').walk, 0), { x: 300, walking: false })
+  assert.equal(m.get('a').leaving, false)
+})
+
+test('a new hiker walks in from the nearer edge, in WALK_MS', () => {
+  const m = reconcileMovers(settled([]), [{ terminalId: 'a', x: 300 }], W, 1000, { first: false, instant: false })
+  const a = m.get('a')
+  assert.deepEqual(a.walk, { from: -54, to: 300, start: 1000 })
+  assert.equal(a.facingLeft, false)
+  assert.deepEqual(walkAt(a.walk, 1000 + WALK_MS / 2), { x: 123, walking: true })
+  assert.deepEqual(walkAt(a.walk, 1000 + WALK_MS), { x: 300, walking: false })
+})
+
+test('a moved hiker walks from where it is now, and faces the way it goes', () => {
+  const one = reconcileMovers(settled([{ terminalId: 'a', x: 300 }]), [{ terminalId: 'a', x: 500 }], W, 5000, { first: false, instant: false })
+  assert.deepEqual(one.get('a').walk, { from: 300, to: 500, start: 5000 })
+  assert.equal(one.get('a').facingLeft, false)
+  const two = reconcileMovers(one, [{ terminalId: 'a', x: 100 }], W, 5600, { first: false, instant: false })
+  assert.deepEqual(two.get('a').walk, { from: 400, to: 100, start: 5600 })
+  assert.equal(two.get('a').facingLeft, true)
+})
+
+test('an unmoved hiker keeps its walk (the same object)', () => {
+  const one = settled([{ terminalId: 'a', x: 300 }])
+  const two = reconcileMovers(one, [{ terminalId: 'a', x: 300 }], W, 9000, { first: false, instant: false })
+  assert.equal(two.get('a'), one.get('a'))
+})
+
+test('a gone hiker walks off to the nearer edge, then is dropped', () => {
+  const gone = reconcileMovers(settled([{ terminalId: 'a', x: 700 }]), [], W, 100, { first: false, instant: false })
+  const a = gone.get('a')
+  assert.equal(a.leaving, true)
+  assert.deepEqual(a.walk, { from: 700, to: 1054, start: 100 })
+  assert.equal(departed(a, 100 + WALK_MS - 1), false)
+  assert.equal(departed(a, 100 + WALK_MS), true)
+  assert.equal(reconcileMovers(gone, [], W, 100 + WALK_MS, { first: false, instant: false }).has('a'), false)
+})
+
+test('a leaving hiker back under its id turns round', () => {
+  const gone = reconcileMovers(settled([{ terminalId: 'a', x: 700 }]), [], W, 100, { first: false, instant: false })
+  const back = reconcileMovers(gone, [{ terminalId: 'a', x: 700 }], W, 700, { first: false, instant: false }).get('a')
+  assert.equal(back.leaving, false)
+  assert.deepEqual(back.walk, { from: 877, to: 700, start: 700 })
+  assert.equal(back.facingLeft, true)
+})
+
+test('instant (reduced motion): hikers appear, move and vanish in place', () => {
+  const one = reconcileMovers(settled([{ terminalId: 'a', x: 300 }]), [{ terminalId: 'a', x: 500 }, { terminalId: 'b', x: 200 }], W, 10, { first: false, instant: true })
+  assert.deepEqual(one.get('a').walk, { from: 500, to: 500, start: 10 })
+  assert.deepEqual(one.get('b').walk, { from: 200, to: 200, start: 10 })
+  assert.equal(reconcileMovers(one, [], W, 20, { first: false, instant: true }).size, 0)
 })
 
 export { seq }
