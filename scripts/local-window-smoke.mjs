@@ -10,7 +10,8 @@
 //   - a session (a fake agent the server runs): its tab; output with the working marker makes
 //     the row's dot run and the footer count it; quiet, it is done; with the campsite plugin off
 //     for the project, a click on the core badge marks it complete (and another resumes); back on,
-//     a click on the tab's hiker marks it complete; a bell puts the row in attention (on the server too); showing the session
+//     a click on the tab's hiker marks it complete; the strip's header counts the camp's wood, which rises while the
+//     session works (a working minute shortened to 200 ms); a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -197,7 +198,9 @@ try {
     XDG_STATE_HOME: join(home, '.local', 'state'),
     ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
     TREK_NO_WINDOW_RESTORE: '1',
-    TREK_NO_UPDATE_CHECK: '1'
+    TREK_NO_UPDATE_CHECK: '1',
+    // The campsite's working minute, so a few seconds of work earn the camp wood
+    TREK_CAMPSITE_MINUTE_MS: '200'
   }
   stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
@@ -350,7 +353,19 @@ try {
   // Back on, the hiker toggles it the same way, and its title says so (once it is done again).
   await win.evaluate(() => window.__store.getState().setPluginEnabled('campsite', true))
   check('the campsite back on, on the server', await until(campsiteEnabled, true), true)
+  // The strip's header counts the camp's wood ("🪵 n"); a working session's minutes (200 ms here) raise it
+  const wood = async () => {
+    const m = /🪵 (\d+)/.exec(await win.locator('.campsite .cs-summary').innerText())
+    return m ? Number(m[1]) : null
+  }
+  const woodBefore = await until(async () => (await wood()) !== null, true) ? await wood() : null
   await type('work')
+  const woodWorked = await first(async () => {
+    const n = await wood()
+    return n !== null && n >= 1 && n > (woodBefore ?? 0) ? n : null
+  })
+  console.log(`     (the camp's wood: ${woodBefore} before the work, ${woodWorked} after)`)
+  check("the strip's header counts the camp's wood (🪵 n ≥ 1), and it rises while the session works", [woodBefore !== null, woodWorked !== null], [true, true])
   check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
   await detail.locator('.session-tab .cs-indicator.clickable').click()
   check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
