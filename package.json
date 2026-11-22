@@ -19,6 +19,7 @@
     "typecheck:relay": "npm --prefix relay run typecheck",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "campsite:render": "node scripts/campsite-render.mjs",
     "test": "node --test --test-timeout=600000 scripts/*.test.mjs",
     "test:bot-sandbox-mac": "TREK_SANDBOX_APP_TEST=1 node --test scripts/botSandboxMac.test.mjs",
     "test:bot-sandbox-linux": "node scripts/bot-sandbox-linux.mjs",
