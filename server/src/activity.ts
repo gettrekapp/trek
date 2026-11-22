@@ -23,6 +23,8 @@ export function createActivityFeed(options: { warn?: (message: string) => void; 
   const warnedAt = new Map<ActivityListener, number>()
   return {
     emit(event) {
+      // One object for every listener: frozen, so none can change what the next one hears.
+      Object.freeze(event)
       for (const listener of [...listeners]) {
         try {
           listener(event)

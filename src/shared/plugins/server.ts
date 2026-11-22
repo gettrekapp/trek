@@ -189,12 +189,17 @@ export interface ServerPluginHost {
    * nothing, where the plugin is off for the project.
    */
   emit(projectId: string, event: string, data: unknown): number
-  /** `<id>.<event>` to the open windows of every project where the plugin is on; the number reached */
+  /**
+   * `<id>.<event>` to the open windows of every project where the plugin is on; the number reached.
+   * Meant for low-rate broadcasts: each call checks every project.
+   */
   emitAll(event: string, data: unknown): number
   /**
    * What happens on the server (campsite part 2): sessions, pull requests, worktrees, as they
-   * happen, from the projects where the plugin is on. Returns the unsubscribe; the plugin's dispose
-   * unsubscribes it too.
+   * happen, from the projects where the plugin is on. The listener is called synchronously beside
+   * core's change: return quickly and defer any I/O. A throw is logged (naming the plugin) and
+   * goes no further. Returns the unsubscribe; the plugin's dispose unsubscribes it too, and after
+   * it this subscribes nothing.
    */
   onActivity(listener: (event: ActivityEvent) => void): () => void
   /**
