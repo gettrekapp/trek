@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { assign, crewLabel, levelFor, release, START_CREW, titleFor, TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
-import { applyActivity, applyCommits, CAPS, restore, RULES, tick, WOOD } from '../plugins/campsite/shared/economy.ts'
+import { applyActivity, applyCommits, CAPS, forget, restore, RULES, tick, WOOD } from '../plugins/campsite/shared/economy.ts'
 
 const T0 = 1_800_000_000_000
 const M = RULES.minuteMs
@@ -194,7 +194,59 @@ test('restore after a restart: open spans close at the last save, nobody waits',
 
 test('the ledger keeps the newest 2000 keys', () => {
   const camp = newCamp(1, T0)
-  for (let i = 0; i < 2100; i++) applyActivity(camp, { kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: `u${i}` }, T0)
+  for (let i = 0; i < 2100; i++) applyActivity(camp, { kind: 'pr.checks', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'passed', headSha: `h${i}` }, T0)
   assert.equal(camp.ledger.length, 2000)
-  assert.equal(camp.ledger[0], 'pr:u100')
+  assert.equal(camp.ledger[0], 'checks:u:h100')
+})
+
+test('pull requests linked: 3 an hour, a duplicate link does not use the cap', () => {
+  const camp = newCamp(1, T0)
+  const hour = Math.ceil(T0 / 3_600_000) * 3_600_000
+  const link = (url, at) => applyActivity(camp, { kind: 'pr.linked', projectId: 'p', at, repoId: 'r', branch: 'b', url }, at)
+  link('a', hour)
+  link('a', hour)
+  link('b', hour)
+  link('c', hour)
+  link('d', hour)
+  assert.equal(camp.wood, 3 * WOOD.prLinked)
+  link('d', hour + 3_600_000)
+  assert.equal(camp.wood, 4 * WOOD.prLinked)
+})
+
+test('a commit count the cap refuses records the head and pays no reward', () => {
+  const camp = newCamp(1, T0)
+  const hour = Math.ceil(T0 / 3_600_000) * 3_600_000
+  applyCommits(camp, { worktreeId: 'w', head: 'h1', count: 3 }, hour)
+  assert.deepEqual(applyCommits(camp, { worktreeId: 'w', head: 'h2', count: 1 }, hour), [])
+  assert.ok(camp.ledger.includes('head:h2'))
+})
+
+test('forget drops a session without paying; a stuck wait stops cooling the fire', () => {
+  const camp = fresh()
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
+  applyActivity(camp, S('t1', 'working', 'attention', 'bell', T0 + 1), T0 + 1)
+  applyActivity(camp, S('t1', 'attention', 'working', 'seen', T0 + 2), T0 + 2)
+  assert.equal(camp.spans.t1.project, 'p')
+  forget(camp, 't1', T0 + 3 * M)
+  assert.deepEqual([camp.spans, camp.assignments, camp.waiting, camp.worked], [{}, {}, {}, {}])
+  tick(camp, T0 + 10 * M)
+  assert.equal(camp.wood, 0)
+  const w = fresh()
+  applyActivity(w, S('t1', 'working', 'attention', 'bell', T0), T0)
+  assert.equal(w.waiting.t1.project, 'p')
+  forget(w, 't1', T0)
+  tick(w, T0 + 10 * M)
+  assert.equal(w.warmth, 0.5)
+})
+
+test('a span thirty days long pays at most the hourly cap, quickly', () => {
+  const camp = fresh()
+  camp.warmth = 0
+  const start = Math.ceil(T0 / 3_600_000) * 3_600_000
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', start), start)
+  const t = Date.now()
+  tick(camp, start + 30 * 24 * 60 * M)
+  assert.ok(Date.now() - t < 1000)
+  assert.equal(camp.wood, 30 * 24 * CAPS.workPerHour + 1, "720 full hours at the cap, plus the minute that lands on the next hour")
+  assert.equal(camp.worked.t1, 30 * 24 * 60)
 })

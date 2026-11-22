@@ -26,11 +26,11 @@ export interface Camp {
   /** Session (terminalId) → its member, and its project (for the prune) */
   assignments: Record<string, { crew: string; project: string }>
   /** Open working spans: since `start`, `paid` whole minutes paid */
-  spans: Record<string, { start: number; paid: number }>
+  spans: Record<string, { start: number; paid: number; project: string }>
   /** Whole working minutes since the session's last paid completion */
   worked: Record<string, number>
   /** Sessions waiting on the user: since when, and why */
-  waiting: Record<string, { since: number; attention: boolean; decision: boolean }>
+  waiting: Record<string, { since: number; attention: boolean; decision: boolean; project: string }>
   /** `<cap>:<hour>` → uses this hour */
   caps: Record<string, number>
   /** Recent reward keys, oldest first */

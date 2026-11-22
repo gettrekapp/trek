@@ -66,6 +66,7 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {} } = {}) {
   const listeners = new Set()
   const emitted = []
   const warnings = []
+  const off = new Set()
   const host = {
     id: 'campsite',
     dataFile: (name) => join(dir, name),
@@ -83,9 +84,10 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {} } = {}) {
       if (v instanceof Error) throw v
       return v
     },
+    isEnabled: (projectId) => !off.has(projectId),
     log: { info: () => {}, warn: (m) => warnings.push(m) }
   }
-  return { host, emitted, warnings, fire: (e) => { for (const l of listeners) l(e) }, listeners }
+  return { host, emitted, warnings, off, fire: (e) => { for (const l of listeners) l(e) }, listeners }
 }
 
 test('the server half: events earn wood, state answers the snapshot, emitAll follows (throttled)', async (t) => {
@@ -106,7 +108,7 @@ test('the server half: events earn wood, state answers the snapshot, emitAll fol
 })
 
 test('the server half counts fast-forward commits with git; a rewrite pays nothing', async (t) => {
-  const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': '', 'rev-list --count a..b': '2\n', 'merge-base --is-ancestor b c': new Error('not an ancestor') } })
+  const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': '', 'rev-list --count a..b': '2\n', 'merge-base --is-ancestor b c': new Error('') } })
   const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
@@ -128,4 +130,133 @@ test('the minute tick prunes assignments whose sessions are gone; dispose unsubs
   inst.dispose()
   assert.equal(h.listeners.size, 0)
   assert.ok(existsSync(h.host.dataFile('camp.json')))
+})
+
+test('a loaded camp with an open span and a wait is restored: span closed at savedAt, nobody waits', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const a = openCampStore(file, { now: () => T0, seed: () => 7, warn: () => {}, schedule: manual().schedule })
+  a.camp.spans.t1 = { start: T0, paid: 0, project: 'p' }
+  a.camp.waiting.t2 = { since: T0, attention: true, decision: false, project: 'p' }
+  a.camp.savedAt = T0
+  writeFileSync(file, JSON.stringify(a.camp))
+  const b = openCampStore(file, { now: () => T0 + 1, seed: () => 9, warn: () => {}, schedule: manual().schedule })
+  assert.deepEqual(b.camp.spans, {})
+  assert.deepEqual(b.camp.waiting, {})
+})
+
+test('valid JSON of the wrong shape is moved to camp.json.bak', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  writeFileSync(file, '{"version":1,"wood":"lots"}')
+  const warnings = []
+  const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
+  assert.equal(store.camp.wood, 0)
+  assert.ok(existsSync(`${file}.bak`))
+  assert.equal(warnings.length, 1)
+})
+
+test('a camp.json from a newer version is left alone: no .bak, a fresh camp in memory, never saved', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const text = '{"version":2,"wood":99}'
+  writeFileSync(file, text)
+  const warnings = []
+  const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
+  assert.equal(store.camp.wood, 0)
+  store.changed()
+  store.flush()
+  store.dispose()
+  assert.equal(readFileSync(file, 'utf8'), text)
+  assert.equal(existsSync(`${file}.bak`), false)
+  assert.equal(warnings.length, 1)
+})
+
+test('after dispose a store saves nothing more', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const clock = manual()
+  const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: () => {}, schedule: clock.schedule })
+  store.dispose()
+  rmSync(file)
+  store.camp.wood = 1
+  store.changed()
+  assert.equal(clock.jobs.length, 0)
+})
+
+test('a span whose session vanished stops earning after the next tick; a project with the plugin off is cleared', async (t) => {
+  const sessions = new Set(['t1', 't2'])
+  const h = fakeHost(t, { sessions })
+  let tickFn
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  for (const id of ['t1', 't2']) {
+    h.fire({ kind: 'session.started', projectId: id === 't1' ? 'p' : 'q', at: now, terminalId: id, worktreeId: 'w', provider: 'claude' })
+    h.fire({ kind: 'session.status', projectId: id === 't1' ? 'p' : 'q', at: now, terminalId: id, worktreeId: 'w', from: 'idle', to: 'working', cause: 'output' })
+  }
+  sessions.delete('t1')
+  h.off.add('q')
+  now += 5 * 60_000
+  tickFn()
+  const snap = await inst.handlers.state({}, {})
+  assert.equal(snap.wood, 0, 'nothing paid for the vanished or the switched-off')
+  assert.deepEqual(snap.assignments, {})
+  now += 5 * 60_000
+  tickFn()
+  assert.equal((await inst.handlers.state({}, {})).wood, 0)
+})
+
+test('nothing after dispose: a commit count that resolves later saves and emits nothing', async (t) => {
+  const h = fakeHost(t)
+  let release
+  const gate = new Promise((r) => { release = r })
+  const run = h.host.run
+  h.host.run = async (cmd, args) => { await gate; return run(cmd, args) }
+  const clock = manual()
+  const inst = createCampServer({ ...h.host, run: h.host.run }, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
+  await new Promise((r) => setImmediate(r))
+  inst.dispose()
+  const file = h.host.dataFile('camp.json')
+  rmSync(file, { force: true })
+  clock.jobs.length = 0
+  release()
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(existsSync(file), false)
+  assert.equal(clock.jobs.length, 0)
+  assert.equal(h.emitted.length, 0)
+})
+
+test('emits are throttled to one a second and skipped when nothing changed', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  const link = (url) => h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url })
+  link('a')
+  clock.run()
+  assert.equal(h.emitted.length, 1)
+  now += 400
+  link('b')
+  const wait = clock.jobs.find((j) => j.ms > 0 && j.ms <= 1000 && !j.cancelled)
+  assert.ok(wait && wait.ms === 600, 'the second change waits out the second')
+  now += 600
+  clock.run()
+  assert.equal(h.emitted.length, 2)
+  h.fire({ kind: 'pr.checks', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'a', result: 'failed', headSha: 'x' })
+  clock.run()
+  assert.equal(h.emitted.length, 2, 'unchanged snapshot, no emit')
+})
+
+test('git failures: a real error is logged and pays nothing; a worktree that cannot be checked is logged too', async (t) => {
+  const git = { 'merge-base --is-ancestor a b': new Error('fatal: bad object') }
+  const h = fakeHost(t, { git })
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(h.warnings.length, 1)
+  h.host.checkedWorktree = async () => { throw new Error('gone') }
+  h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'b', to: 'c' })
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(h.warnings.length, 2)
+  assert.equal((await inst.handlers.state({}, {})).wood, 0)
 })

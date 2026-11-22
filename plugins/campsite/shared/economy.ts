@@ -14,7 +14,7 @@ export interface Rules {
 export const RULES: Rules = { minuteMs: 60_000 }
 
 export const WOOD = { minute: 1, commit: 5, prLinked: 20, checksPassed: 15, merged: 50, complete: 10, answerFast: 5, answerSlow: 2 } as const
-export const CAPS = { workPerHour: 30, commitsPerHour: 3, answersPerHour: 12 } as const
+export const CAPS = { workPerHour: 30, commitsPerHour: 3, answersPerHour: 12, prLinksPerHour: 3 } as const
 /** Answers within this many minutes pay answerFast, within the second answerSlow */
 const ANSWER_MINUTES: readonly [number, number] = [2, 10]
 export const LEDGER_MAX = 2000
@@ -66,13 +66,21 @@ function payMinutes(camp: Camp, terminalId: string, now: number, rules: Rules, o
     camp.worked[terminalId] = (camp.worked[terminalId] ?? 0) + 1
     const at = span.start + span.paid * rules.minuteMs
     if (bump(camp, `work:${terminalId}`, CAPS.workPerHour, at)) pay(camp, { wood: WOOD.minute * warmthFactor(camp.warmth), markers: 0, terminalId, reason: 'working' }, out)
+    else {
+      // The hour's cap is spent: the rest of its minutes pay nothing, so skip them (still counted as worked)
+      const last = Math.min(whole, Math.ceil(((hourOf(at) + 1) * HOUR_MS - span.start) / rules.minuteMs) - 1)
+      if (last > span.paid) {
+        camp.worked[terminalId] += last - span.paid
+        span.paid = last
+      }
+    }
   }
 }
 
 /** Marks a session waiting (or not) for one reason; `since` is kept while it waits for either */
-function setWaiting(camp: Camp, terminalId: string, now: number, part: { attention?: boolean; decision?: boolean }): void {
+function setWaiting(camp: Camp, terminalId: string, now: number, project: string, part: { attention?: boolean; decision?: boolean }): void {
   const was = Object.hasOwn(camp.waiting, terminalId) ? camp.waiting[terminalId] : undefined
-  const next = { since: was?.since ?? now, attention: was?.attention ?? false, decision: was?.decision ?? false, ...part }
+  const next = { since: was?.since ?? now, attention: was?.attention ?? false, decision: was?.decision ?? false, project, ...part }
   if (!next.attention && !next.decision) delete camp.waiting[terminalId]
   else camp.waiting[terminalId] = next
 }
@@ -102,10 +110,10 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
         payMinutes(camp, id, now, rules, out)
         delete camp.spans[id]
       }
-      if (e.to === 'working') camp.spans[id] = { start: now, paid: 0 }
+      if (e.to === 'working') camp.spans[id] = { start: now, paid: 0, project: e.projectId }
       // Before the wait is cleared: it says how long the hiker waited
       if (e.from === 'attention' && e.cause === 'input') answer(camp, id, now, rules, out)
-      setWaiting(camp, id, now, { attention: e.to === 'attention' })
+      setWaiting(camp, id, now, e.projectId, { attention: e.to === 'attention' })
       if (e.to === 'complete' && e.cause === 'marked' && (camp.worked[id] ?? 0) >= 1) {
         camp.worked[id] = 0
         pay(camp, { wood: WOOD.complete, markers: 0, terminalId: id, reason: 'marked complete' }, out)
@@ -114,7 +122,7 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
     }
     case 'session.decision':
       if (e.state === 'answered') answer(camp, e.terminalId, now, rules, out)
-      setWaiting(camp, e.terminalId, now, { decision: e.state === 'asked' })
+      setWaiting(camp, e.terminalId, now, e.projectId, { decision: e.state === 'asked' })
       break
     case 'session.closed':
       payMinutes(camp, e.terminalId, now, rules, out)
@@ -124,6 +132,7 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       release(camp, e.terminalId, now)
       break
     case 'pr.linked':
+      if (camp.ledger.includes(`pr:${e.url}`) || !bump(camp, 'prs', CAPS.prLinksPerHour, now)) break
       pay(camp, { key: `pr:${e.url}`, wood: WOOD.prLinked, markers: 0, reason: 'pull request opened' }, out)
       break
     case 'pr.checks':
@@ -138,6 +147,14 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
   return out
 }
 
+/** A session that is gone without a `session.closed` (its project, repo or worktree removed, or the plugin switched off there): drops its span (unpaid), wait and member */
+export function forget(camp: Camp, terminalId: string, now: number): void {
+  delete camp.spans[terminalId]
+  delete camp.waiting[terminalId]
+  delete camp.worked[terminalId]
+  release(camp, terminalId, now)
+}
+
 /** New commits on a worktree (fast-forward, counted by the server half): 5 wood each, up to the hourly cap; a head is counted once */
 export function applyCommits(camp: Camp, c: { worktreeId: string; head: string; count: number }, now: number): Reward[] {
   const out: Reward[] = []
@@ -145,7 +162,12 @@ export function applyCommits(camp: Camp, c: { worktreeId: string; head: string; 
   if (c.count <= 0 || camp.ledger.includes(key)) return out
   let counted = 0
   for (let i = 0; i < c.count; i++) if (bump(camp, `commits:${c.worktreeId}`, CAPS.commitsPerHour, now)) counted++
-  pay(camp, { key, wood: counted * WOOD.commit, markers: 0, reason: `${c.count} commit${c.count === 1 ? '' : 's'}` }, out)
+  if (counted === 0) {
+    camp.ledger.push(key)
+    if (camp.ledger.length > LEDGER_MAX) camp.ledger.splice(0, camp.ledger.length - LEDGER_MAX)
+    return out
+  }
+  pay(camp, { key, wood: counted * WOOD.commit, markers: 0, reason: `${counted} commit${counted === 1 ? '' : 's'}` }, out)
   return out
 }
 
