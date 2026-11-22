@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { departed, dogFrameAt, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
+import { departed, DOG_HAPPY_MS, DOG_SETTLE_MS, dogAdvance, dogFrameAt, dogInit, dogPet, dogPoseAt, dogResize, dogX, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
 
 /** A rand that hands out the given numbers in turn */
 const seq = (...values) => {
@@ -167,6 +167,51 @@ test('instant (reduced motion): hikers appear, move and vanish in place', () => 
   assert.deepEqual(one.get('a').walk, { from: 500, to: 500, start: 10 })
   assert.deepEqual(one.get('b').walk, { from: 200, to: 200, start: 10 })
   assert.equal(reconcileMovers(one, [], W, 20, { first: false, instant: true }).size, 0)
+})
+
+// dogTrip takes three numbers: 0.9 (not to the fire), 0.9 (where: 24 + 0.9 × 752 → 701), 0 (the shortest rest, 1500 ms)
+const trip = () => seq(0.9, 0.9, 0)
+
+test('the dog starts sitting a quarter of the way in, and settles before its first run', () => {
+  const s = dogInit(800, 0)
+  assert.equal(dogX(s, 0), 200)
+  assert.equal(dogPoseAt(s, 0), 'sit')
+  assert.equal(dogAdvance(s, DOG_SETTLE_MS - 1, trip(), 800), s)
+})
+
+test('then it runs where dogTrip says, and sits there for the trip’s rest', () => {
+  const run = dogAdvance(dogInit(800, 0), DOG_SETTLE_MS, trip(), 800)
+  assert.equal(run.running, true)
+  assert.equal(run.from, 200)
+  assert.equal(run.to, 701)
+  assert.equal(run.until, DOG_SETTLE_MS + 3854)
+  assert.equal(run.left, false)
+  assert.equal(dogPoseAt(run, DOG_SETTLE_MS + 1), 'run')
+  assert.equal(dogX(run, DOG_SETTLE_MS + 1927), 450.5)
+  const sat = dogAdvance(run, run.until, trip(), 800)
+  assert.equal(sat.running, false)
+  assert.equal(dogX(sat, run.until), 701)
+  assert.equal(sat.until, run.until + 1500)
+})
+
+test('petted, it stops where it is and wags for DOG_HAPPY_MS', () => {
+  const run = dogAdvance(dogInit(800, 0), DOG_SETTLE_MS, trip(), 800)
+  const t = DOG_SETTLE_MS + 1927
+  const pet = dogPet(run, t)
+  assert.equal(pet.running, false)
+  assert.equal(dogX(pet, t + 5), 450.5)
+  assert.equal(dogPoseAt(pet, t + 5), 'happy')
+  assert.equal(pet.until, t + DOG_HAPPY_MS)
+  assert.equal(dogPoseAt(pet, t + DOG_HAPPY_MS), 'sit')
+})
+
+test('a resize stops it inside the strip, and it settles again', () => {
+  const run = dogAdvance(dogInit(800, 0), DOG_SETTLE_MS, trip(), 800)
+  const t = DOG_SETTLE_MS + 1927
+  const s = dogResize(run, t, 300)
+  assert.equal(s.running, false)
+  assert.equal(dogX(s, t), 300)
+  assert.equal(s.until, t + DOG_SETTLE_MS)
 })
 
 export { seq }

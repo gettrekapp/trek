@@ -1,7 +1,7 @@
 // The Pixi strip's pure half: pixels to RGBA, the animations' timing (as the CSS had it), walks in
 // and out, the camp dog's wander, and where the scene's shapes go. The client's scene/ draws from
 // it. Coordinates are px from the strip's top-left; the strip is STAGE_H tall. Pure.
-import type { DogPose } from './dog.ts'
+import { dogStart, dogTrip, type DogPose } from './dog.ts'
 import { FRAMES, type Pose, type Rect } from './pixels.ts'
 import { HIKER_W } from './layout.ts'
 
@@ -186,4 +186,60 @@ export function reconcileMovers(prev: ReadonlyMap<string, Mover>, spots: readonl
     next.set(id, walkTo(m, id, offstage(walkAt(m.walk, t).x, width), true))
   }
   return next
+}
+
+/** How long a petted dog stays put, wagging */
+export const DOG_HAPPY_MS = 1800
+/** The sit before its first run, and after a resize */
+export const DOG_SETTLE_MS = 900
+
+/** The dog: running from `from` to `to`, or sitting at `to`, until `until` (ms) */
+export interface DogState {
+  running: boolean
+  from: number
+  to: number
+  start: number
+  until: number
+  /** The sit after this run */
+  restMs: number
+  /** Wagging until then */
+  happyUntil: number
+  left: boolean
+}
+
+export function dogInit(width: number, t: number): DogState {
+  const x = dogStart(width)
+  return { running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS, restMs: 0, happyUntil: 0, left: false }
+}
+
+export function dogX(s: DogState, t: number): number {
+  if (!s.running || t >= s.until) return s.to
+  if (t <= s.start) return s.from
+  return s.from + (s.to - s.from) * ((t - s.start) / (s.until - s.start))
+}
+
+export const dogPoseAt = (s: DogState, t: number): DogPose => (s.running && t < s.until ? 'run' : t < s.happyUntil ? 'happy' : 'sit')
+
+/**
+ * The wander at t: a finished run sits for its rest; a finished sit starts the next trip (dogTrip:
+ * `rand` gives three numbers). Before `until`, the same state.
+ */
+export function dogAdvance(s: DogState, t: number, rand: () => number, width: number, fireX?: number): DogState {
+  if (t < s.until) return s
+  if (s.running) return { ...s, running: false, from: s.to, start: s.until, until: s.until + s.restMs }
+  const trip = dogTrip(rand, s.to, width, fireX)
+  if (trip.runMs === 0) return { ...s, from: trip.x, to: trip.x, start: t, until: t + trip.restMs }
+  return { running: true, from: s.to, to: trip.x, start: t, until: t + trip.runMs, restMs: trip.restMs, happyUntil: s.happyUntil, left: trip.x < s.to }
+}
+
+/** Petted: it stops where it is and wags for DOG_HAPPY_MS, then wanders on */
+export function dogPet(s: DogState, t: number): DogState {
+  const x = dogX(s, t)
+  return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_HAPPY_MS, happyUntil: t + DOG_HAPPY_MS }
+}
+
+/** The strip changed width: it sits where it is (inside the strip) and settles before running again */
+export function dogResize(s: DogState, t: number, width: number): DogState {
+  const x = Math.min(Math.max(dogX(s, t), 0), Math.max(0, width))
+  return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS }
 }
