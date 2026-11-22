@@ -1,0 +1,174 @@
+// The camp's rewards (campsite part 2): what core's activity feed earns. Outcomes pay most (a merge,
+// green checks, a pull request, commits, a marked-complete session, an answered hiker); whole
+// working minutes pay a trickle scaled by the fire's warmth. Every keyed reward is paid once
+// (ledger), and the busy ones have hourly caps. The rules change the camp in place and return what
+// they paid. Pure: the caller passes the time.
+import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
+import type { Camp } from './camp.ts'
+import { assign, creditXp, release } from './crew.ts'
+
+export interface Rules {
+  /** A working minute (shorter in tests and smokes) */
+  minuteMs: number
+}
+export const RULES: Rules = { minuteMs: 60_000 }
+
+export const WOOD = { minute: 1, commit: 5, prLinked: 20, checksPassed: 15, merged: 50, complete: 10, answerFast: 5, answerSlow: 2 } as const
+export const CAPS = { workPerHour: 30, commitsPerHour: 3, answersPerHour: 12 } as const
+/** Answers within this many minutes pay answerFast, within the second answerSlow */
+const ANSWER_MINUTES: readonly [number, number] = [2, 10]
+export const LEDGER_MAX = 2000
+const HOUR_MS = 3_600_000
+
+export interface Reward {
+  key?: string
+  wood: number
+  markers: number
+  /** The session it is credited to (its member's XP) */
+  terminalId?: string
+  reason: string
+}
+
+/** The trickle's multiplier: ×1 cold, ×1.5 at full warmth */
+export const warmthFactor = (warmth: number): number => 1 + 0.5 * warmth
+const hourOf = (t: number): number => Math.floor(t / HOUR_MS)
+
+/** Takes one use of `cap` in `at`'s hour; false at the limit */
+function bump(camp: Camp, cap: string, limit: number, at: number): boolean {
+  const key = `${cap}:${hourOf(at)}`
+  const used = camp.caps[key] ?? 0
+  if (used >= limit) return false
+  camp.caps[key] = used + 1
+  return true
+}
+
+/** Adds a reward unless its key was paid before; credits the member's XP */
+function pay(camp: Camp, r: Reward, out: Reward[]): boolean {
+  if (r.key !== undefined) {
+    if (camp.ledger.includes(r.key)) return false
+    camp.ledger.push(r.key)
+    if (camp.ledger.length > LEDGER_MAX) camp.ledger.splice(0, camp.ledger.length - LEDGER_MAX)
+  }
+  camp.wood += r.wood
+  camp.markers += r.markers
+  if (r.terminalId !== undefined) creditXp(camp, r.terminalId, r.wood)
+  out.push(r)
+  return true
+}
+
+/** Pays the whole minutes a session's working span has finished by `now` (up to the hourly cap); each counts toward its next completion */
+function payMinutes(camp: Camp, terminalId: string, now: number, rules: Rules, out: Reward[]): void {
+  const span = Object.hasOwn(camp.spans, terminalId) ? camp.spans[terminalId] : undefined
+  if (!span) return
+  const whole = Math.floor((now - span.start) / rules.minuteMs)
+  while (span.paid < whole) {
+    span.paid++
+    camp.worked[terminalId] = (camp.worked[terminalId] ?? 0) + 1
+    const at = span.start + span.paid * rules.minuteMs
+    if (bump(camp, `work:${terminalId}`, CAPS.workPerHour, at)) pay(camp, { wood: WOOD.minute * warmthFactor(camp.warmth), markers: 0, terminalId, reason: 'working' }, out)
+  }
+}
+
+/** Marks a session waiting (or not) for one reason; `since` is kept while it waits for either */
+function setWaiting(camp: Camp, terminalId: string, now: number, part: { attention?: boolean; decision?: boolean }): void {
+  const was = Object.hasOwn(camp.waiting, terminalId) ? camp.waiting[terminalId] : undefined
+  const next = { since: was?.since ?? now, attention: was?.attention ?? false, decision: was?.decision ?? false, ...part }
+  if (!next.attention && !next.decision) delete camp.waiting[terminalId]
+  else camp.waiting[terminalId] = next
+}
+
+/** The user answered a waiting session: pays by how long it waited, once per wait, up to the hourly cap; warms the fire */
+function answer(camp: Camp, terminalId: string, now: number, rules: Rules, out: Reward[]): void {
+  const w = Object.hasOwn(camp.waiting, terminalId) ? camp.waiting[terminalId] : undefined
+  if (!w) return
+  const waited = now - w.since
+  const wood = waited <= ANSWER_MINUTES[0] * rules.minuteMs ? WOOD.answerFast : waited <= ANSWER_MINUTES[1] * rules.minuteMs ? WOOD.answerSlow : 0
+  const key = `answer:${terminalId}:${w.since}`
+  if (wood === 0 || camp.ledger.includes(key)) return
+  if (!bump(camp, 'answers', CAPS.answersPerHour, now)) return
+  if (pay(camp, { key, wood, markers: 0, terminalId, reason: 'answered a waiting hiker' }, out)) camp.warmth = Math.min(1, camp.warmth + 0.1)
+}
+
+/** One activity event's effect on the camp; what it paid */
+export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: Rules = RULES): Reward[] {
+  const out: Reward[] = []
+  switch (e.kind) {
+    case 'session.started':
+      assign(camp, e.terminalId, e.projectId, now)
+      break
+    case 'session.status': {
+      const id = e.terminalId
+      if (e.from === 'working') {
+        payMinutes(camp, id, now, rules, out)
+        delete camp.spans[id]
+      }
+      if (e.to === 'working') camp.spans[id] = { start: now, paid: 0 }
+      // Before the wait is cleared: it says how long the hiker waited
+      if (e.from === 'attention' && e.cause === 'input') answer(camp, id, now, rules, out)
+      setWaiting(camp, id, now, { attention: e.to === 'attention' })
+      if (e.to === 'complete' && e.cause === 'marked' && (camp.worked[id] ?? 0) >= 1) {
+        camp.worked[id] = 0
+        pay(camp, { wood: WOOD.complete, markers: 0, terminalId: id, reason: 'marked complete' }, out)
+      }
+      break
+    }
+    case 'session.decision':
+      if (e.state === 'answered') answer(camp, e.terminalId, now, rules, out)
+      setWaiting(camp, e.terminalId, now, { decision: e.state === 'asked' })
+      break
+    case 'session.closed':
+      payMinutes(camp, e.terminalId, now, rules, out)
+      delete camp.spans[e.terminalId]
+      delete camp.waiting[e.terminalId]
+      delete camp.worked[e.terminalId]
+      release(camp, e.terminalId, now)
+      break
+    case 'pr.linked':
+      pay(camp, { key: `pr:${e.url}`, wood: WOOD.prLinked, markers: 0, reason: 'pull request opened' }, out)
+      break
+    case 'pr.checks':
+      if (e.result === 'passed') pay(camp, { key: `checks:${e.url}:${e.headSha}`, wood: WOOD.checksPassed, markers: 0, reason: 'checks passed' }, out)
+      break
+    case 'pr.ended':
+      if (e.result === 'merged') pay(camp, { key: `merged:${e.url}`, wood: WOOD.merged, markers: 1, reason: 'summit: pull request merged' }, out)
+      break
+    default:
+      break
+  }
+  return out
+}
+
+/** New commits on a worktree (fast-forward, counted by the server half): 5 wood each, up to the hourly cap; a head is counted once */
+export function applyCommits(camp: Camp, c: { worktreeId: string; head: string; count: number }, now: number): Reward[] {
+  const out: Reward[] = []
+  const key = `head:${c.head}`
+  if (c.count <= 0 || camp.ledger.includes(key)) return out
+  let counted = 0
+  for (let i = 0; i < c.count; i++) if (bump(camp, `commits:${c.worktreeId}`, CAPS.commitsPerHour, now)) counted++
+  pay(camp, { key, wood: counted * WOOD.commit, markers: 0, reason: `${c.count} commit${c.count === 1 ? '' : 's'}` }, out)
+  return out
+}
+
+/** Every minute: pays finished working minutes, cools the fire while anyone waits, drops past hours' caps */
+export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
+  const out: Reward[] = []
+  for (const id of Object.keys(camp.spans)) payMinutes(camp, id, now, rules, out)
+  const minutes = Math.floor((now - camp.lastTick) / rules.minuteMs)
+  if (minutes > 0) {
+    if (Object.keys(camp.waiting).length > 0) camp.warmth = Math.max(0, camp.warmth - 0.02 * minutes)
+    camp.lastTick += minutes * rules.minuteMs
+  }
+  const hour = hourOf(now)
+  for (const key of Object.keys(camp.caps)) if (Number(key.slice(key.lastIndexOf(':') + 1)) < hour) delete camp.caps[key]
+  return out
+}
+
+/** After a server restart (statuses came back idle): open spans close at the last save, paying their whole minutes; nobody is waiting */
+export function restore(camp: Camp, rules: Rules = RULES): void {
+  for (const id of Object.keys(camp.spans)) {
+    payMinutes(camp, id, camp.savedAt, rules, [])
+    delete camp.spans[id]
+  }
+  camp.waiting = {}
+  camp.lastTick = Math.max(camp.lastTick, camp.savedAt)
+}
