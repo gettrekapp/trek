@@ -8,6 +8,12 @@
 // - session.decision `asked`: the first question of a wait. A newer question replacing an open one
 //   is not reported; `answered` (the user's input) or `dismissed` (a client, or the agent stopping)
 //   ends the wait.
+// - session.started: every launch of the session's agent (a start, restart, renew, or a resume when
+//   its worktree loads).
+// - session.stopped: Trek stopped a running agent and kept the session's record, idle (its worktree
+//   unloaded, a promote moving it, a Global session stopped because the project's repositories
+//   changed). An agent that ends by itself is session.status to 'exited'; a session removed is
+//   session.closed.
 // - pr.linked: a branch's pull request link set or changed. Unlinking is not reported.
 // - worktree.created / worktree.removed: worktrees made or removed through Trek, not ones git's own
 //   commands add or remove outside it (those only show up as the poller lists them).
@@ -24,6 +30,8 @@ interface SessionFact {
   terminalId: string
   /** null: a Global session */
   worktreeId: string | null
+  /** An automation's run tab (a Global session that runs the automation unattended) */
+  automation: boolean
 }
 interface PrFact {
   projectId: string
@@ -45,6 +53,7 @@ export type ActivityEvent = Readonly<
   | (SessionFact & { kind: 'session.started'; provider: string })
   | (SessionFact & { kind: 'session.status'; from: ActivityStatus; to: ActivityStatus; cause: SessionCause })
   | (SessionFact & { kind: 'session.decision'; state: 'asked' | 'answered' | 'dismissed' })
+  | (SessionFact & { kind: 'session.stopped' })
   | (SessionFact & { kind: 'session.closed' })
   | (PrFact & { kind: 'pr.linked' })
   | (PrFact & { kind: 'pr.checks'; result: 'passed' | 'failed'; headSha: string })

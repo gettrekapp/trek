@@ -9,7 +9,7 @@ import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { projectTopic } from '../src/shared/model/topics.ts'
 import { removeDir } from './testPlatform.mjs'
 
-const ev = (n) => ({ kind: 'session.closed', projectId: 'p', at: n, terminalId: 't', worktreeId: null })
+const ev = (n) => ({ kind: 'session.closed', projectId: 'p', at: n, terminalId: 't', worktreeId: null, automation: false })
 
 test('the feed calls every listener in order, and unsubscribe stops one', () => {
   const feed = createActivityFeed()
@@ -77,13 +77,13 @@ test('host.onActivity delivers only events from projects where the plugin is on;
   const { registry, hub, host } = registryWith(t, feed)
   const got = []
   host.onActivity((e) => got.push(e))
-  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null })
-  feed.emit({ kind: 'session.closed', projectId: 'p2', at: 2, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null, automation: false })
+  feed.emit({ kind: 'session.closed', projectId: 'p2', at: 2, terminalId: 't', worktreeId: null, automation: false })
   assert.deepEqual(got.map((e) => e.projectId), ['p1'])
   assert.equal(host.emitAll('state', { wood: 1 }), 2)
   assert.deepEqual(hub.emitted, [[projectTopic('p1'), 'test.state', { wood: 1 }]])
   await registry.dispose()
-  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 3, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 3, terminalId: 't', worktreeId: null, automation: false })
   assert.equal(got.length, 1, 'disposed: unsubscribed')
 })
 
@@ -93,7 +93,7 @@ test("host.onActivity's unsubscribe stops it; a plugin refused after its setup, 
   const got = []
   const off = host.onActivity((e) => got.push(e))
   off()
-  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null, automation: false })
   assert.deepEqual(got, [])
 
   // A ticket provider whose id is not the plugin's: refused after its setup, and disposed; what it
@@ -115,8 +115,8 @@ test("a plugin's throwing onActivity listener is logged once a minute, naming th
   const got = []
   host.onActivity(() => { throw new Error('boom') })
   host.onActivity((e) => got.push(e.at))
-  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null })
-  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 2, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null, automation: false })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 2, terminalId: 't', worktreeId: null, automation: false })
   assert.deepEqual(got, [1, 2])
   assert.deepEqual(warnings, ['[plugin test] onActivity failed on session.closed: boom'])
 })
@@ -137,6 +137,6 @@ test('events are frozen: a listener cannot change what the next one hears', () =
   const seen = []
   feed.subscribe((e) => { e.projectId = 'changed' })
   feed.subscribe((e) => seen.push(e.projectId))
-  feed.emit({ kind: 'session.closed', projectId: 'p', at: 1, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p', at: 1, terminalId: 't', worktreeId: null, automation: false })
   assert.deepEqual(seen, ['p'])
 })

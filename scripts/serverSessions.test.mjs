@@ -1002,7 +1002,8 @@ test('activity: exit, restart, and an unload that drops working status and a dec
     'idle>working:output',
     'decision:asked',
     'working>idle:other',
-    'decision:dismissed'
+    'decision:dismissed',
+    'session.stopped'
   ])
 })
 
@@ -1013,8 +1014,8 @@ test('activity: a load that resumes a session reports its launch', async (t) => 
   s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
   await tick()
   s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
-  assert.deepEqual(feed.kinds(), ['session.started', 'session.started'])
-  const resumed = feed.events[1]
+  assert.deepEqual(feed.kinds(), ['session.started', 'session.stopped', 'session.started'])
+  const resumed = feed.events[2]
   assert.deepEqual([resumed.terminalId, resumed.worktreeId, resumed.provider], [sessionId, 'wx', 'claude'])
 })
 
@@ -1045,8 +1046,57 @@ test('activity: forgetGlobal reports its sessions going idle', async (t) => {
   await s.sessions.terminals.settledAll()
   s.sessions.forgetGlobal(s.projectId)
   await tick()
-  assert.deepEqual(feed.kinds(), ['session.started', 'idle>working:output', 'working>idle:other'])
+  assert.deepEqual(feed.kinds(), ['session.started', 'idle>working:output', 'working>idle:other', 'session.stopped'])
   assert.deepEqual([feed.events[2].terminalId, feed.events[2].worktreeId], [sessionId, null])
+  assert.deepEqual([feed.events[3].terminalId, feed.events[3].worktreeId], [sessionId, null])
+})
+
+test('activity: suspendSessions reports each running agent stopped; an exited one only goes idle', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const two = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[1].exit(0)
+  feed.events.length = 0
+  s.sessions.suspendSessions(s.projectId, [one.sessionId, two.sessionId])
+  await tick()
+  assert.deepEqual(feed.events.map((e) => [feed.kinds()[feed.events.indexOf(e)], e.terminalId]), [
+    ['session.stopped', one.sessionId],
+    ['exited>idle:other', two.sessionId]
+  ])
+})
+
+test('activity: an unload of a worktree whose agent already exited reports no stop', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].exit(0)
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  await tick()
+  assert.deepEqual(feed.kinds(), ['session.started', 'idle>exited:other', 'exited>idle:other'])
+})
+
+test("activity: every session event says whether it is an automation's run tab", async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  withAutomation(s)
+  const run = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }, { context: { kind: 'automation', automationId: 'a1' } })
+  const plain = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  const work = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  for (const p of s.spawned) p.emit('working')
+  await s.sessions.terminals.settledAll()
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId: run.sessionId, question: 'Ship it?' })
+  s.spawned[0].exit(0)
+  s.sessions.forgetGlobal(s.projectId)
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  s.sessions.close({ projectId: s.projectId, sessionId: run.sessionId })
+  await tick()
+  const byId = (id) => feed.events.filter((e) => e.terminalId === id)
+  const kinds = (id) => new Set(byId(id).map((e) => e.kind))
+  assert.deepEqual([...kinds(run.sessionId)].sort(), ['session.closed', 'session.decision', 'session.started', 'session.status'])
+  assert.ok(byId(run.sessionId).every((e) => e.automation === true), 'the run tab')
+  assert.ok(byId(plain.sessionId).length >= 3 && byId(plain.sessionId).every((e) => e.automation === false), 'a plain Global session')
+  assert.ok(byId(work.sessionId).length >= 3 && byId(work.sessionId).every((e) => e.automation === false), 'a worktree session')
 })
 
 // ---- limits ----
