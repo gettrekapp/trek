@@ -15,6 +15,7 @@ import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
+import type { ActivityEvent } from '../../src/shared/plugins/activity.ts'
 import type { SessionType } from '../../src/shared/types'
 import { MAX_PLUGIN_TEXT, pluginSettingsShapeProblem, pluginValuesProblem, type PluginSettingValues } from '../../src/shared/plugins/manifest.ts'
 import { envRepoValues, LEGACY_ENV_PLUGIN, mirrorBranch, mirrorRepo, repoValuesWithLegacy, setBranchEnv, setRepoEnv } from './projects/legacyEnv.ts'
@@ -127,6 +128,8 @@ export interface V2Context {
   update?: Pick<UpdateService, 'status' | 'check' | 'apply'>
   /** Who this request acts as, for the history: absent is a Trek client's user; the MCP tool caller sets `mcp` */
   attribution?: Attribution
+  /** Core's activity feed (campsite part 2): a pull request linked */
+  activity?: { emit(event: ActivityEvent): void }
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -456,7 +459,7 @@ const handlers: Record<string, Handler> = {
   'branch.setPr': (p, ctx) => {
     const pr = clearableString(p.pr, 'pr')
     const branch = requireBranch(p.branch)
-    const { ended, repoId, changes } = ctx.projects.apply(p.projectId, (d) => {
+    const { ended, repoId, changes, before } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
       const before = data.pr
@@ -471,10 +474,11 @@ const handlers: Record<string, Handler> = {
       }
       if (Object.keys(data).length === 0) delete repo.branchData[branch]
       else repo.branchData[branch] = data
-      return { ended, repoId: repo.id, changes }
+      return { ended, repoId: repo.id, changes, before }
     })
     const projectId = requireString(p.projectId, 'projectId')
     recordHistory(ctx, projectId, repoId, branch, changes)
+    if (pr !== null && pr !== before) ctx.activity?.emit({ kind: 'pr.linked', projectId, at: Date.now(), repoId, branch, url: pr })
     if (ended !== undefined) ctx.prWatch?.forget(projectId, ended, branch)
     return null
   },

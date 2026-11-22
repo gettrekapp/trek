@@ -8,6 +8,7 @@ import type { PrNotice, Project, Repository, Worktree } from '../../../src/share
 import { noticeText, promptText, watchStep, type PrEvent, type PrView, type PromptOutcome } from '../../../src/shared/prWatch.ts'
 import { prOwner, safeParse, type ParsedPr } from '../../../src/shared/plugins/pullRequests.ts'
 import type { PrServerProvider } from '../../../src/shared/plugins/server.ts'
+import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import type { HistoryStore } from '../history/store.ts'
 import { BY_TREK, recordHistory } from '../history/record.ts'
 import type { ProjectState } from '../projects/state.ts'
@@ -53,6 +54,8 @@ export interface PrWatcherDeps {
   onAvailability?: (available: boolean) => void
   /** A round found something to report (its notice is set): the push (6b) */
   onReport?: (p: { projectId: string; projectName: string; worktreeId: string; events: readonly PrEvent[] }) => void
+  /** Core's activity feed (campsite part 2): checks passed or failed, merged or closed */
+  activity?: { emit(event: ActivityEvent): void }
   pollMs?: number
   recheckMs?: number
   now?: () => number
@@ -447,6 +450,11 @@ export class PrWatcher {
       return // the project is gone
     }
     if (ended) recordHistory({ history: this.deps.history }, target.projectId, target.repoId, target.branch, [{ kind: 'prWatch.off', to: { text: ended } }], BY_TREK)
+    const fact = { projectId: target.projectId, at: this.now(), repoId: target.repoId, branch: target.branch, url: target.url }
+    for (const e of events) {
+      if (e.kind === 'checksPassed' || e.kind === 'checksFailed') this.deps.activity?.emit({ kind: 'pr.checks', ...fact, result: e.kind === 'checksPassed' ? 'passed' : 'failed', headSha: view.headSha })
+    }
+    if (ended) this.deps.activity?.emit({ kind: 'pr.ended', ...fact, result: ended })
     if (events.length > 0) this.report(target, events, provider)
   }
 

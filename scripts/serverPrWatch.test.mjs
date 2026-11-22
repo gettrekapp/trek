@@ -65,7 +65,7 @@ function githubOver(gh) {
 }
 const only = (provider) => ({ forProject: () => [provider], all: () => [provider] })
 
-function setup(initial = project(), ghAnswers = [], { providers } = {}) {
+function setup(initial = project(), ghAnswers = [], { providers, activity } = {}) {
   const hub = new TopicHub()
   const saved = []
   const projects = new ProjectState({ hub, store: { save: (p) => saved.push(structuredClone(p)), remove() {} }, onSummariesChange() {} }, [initial])
@@ -94,7 +94,7 @@ function setup(initial = project(), ghAnswers = [], { providers } = {}) {
   const jobs = []
   const history = new HistoryStore(join(historyRoot(), `h${++historyCount}`))
   const { fake, github } = githubOver(gh)
-  const watcher = new PrWatcher({ projects, sessions, history, providers: providers ?? only(github), now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
+  const watcher = new PrWatcher({ projects, sessions, history, activity, providers: providers ?? only(github), now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
   return { history, hub, projects, saved, queued, calls, watcher, jobs, answers, fake, github, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
@@ -137,6 +137,12 @@ const view = (over = {}) => {
 const failing = { statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE' }] }
 const target = { projectId: 'p1', repoId: 'r1', branch: 'feature', url: URL, number: 12, label: '#12', providerId: 'github' }
 const watching = { prWatch: { seen: { checks: 'aaa pending', conflict: false } } }
+const passing = { statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' }] }
+/** A feed that records what core emits */
+const recorder = () => {
+  const events = []
+  return { events, emit: (e) => events.push(e) }
+}
 
 test('pollMsFromEnv takes whole milliseconds, at least 1000', () => {
   assert.equal(pollMsFromEnv('1500'), 1500)
@@ -541,7 +547,7 @@ test('welcomeCapabilities lists prWatch only while gh is signed in', () => {
 })
 
 /** dispatchV2 with what these methods use. */
-function ctxFor(initial, { available = true, providers } = {}) {
+function ctxFor(initial, { available = true, providers, activity } = {}) {
   const hub = new TopicHub()
   const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [initial])
   const polled = []
@@ -559,7 +565,7 @@ function ctxFor(initial, { available = true, providers } = {}) {
   }
   const githubPrsServer = createGithubPrProvider(async () => '')
   const plugins = { prProviders: () => providers ?? [githubPrsServer] }
-  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, plugins, sessions: { refreshAttention() {} } })
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, plugins, activity, sessions: { refreshAttention() {} } })
   const callAsync = (method, params) => Promise.resolve(call(method, params))
   return { call, callAsync, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
 }
@@ -628,6 +634,48 @@ test('history: a closed PR records prWatch.off closed; a watch for another PR ur
   await other.watcher.ready
   await other.watcher.poll({ ...target, url: 'https://github.com/acme/app/pull/99' })
   assert.deepEqual(other.history.list('p1', 'r1', 'feature').events, [])
+})
+
+test('activity: checks passed or failed, with the head they ran on; the baseline round emits nothing', async () => {
+  const quiet = recorder()
+  const base = setup(project({ prWatch: {} }), [view(failing)], { activity: quiet })
+  await base.watcher.ready
+  await base.watcher.poll(target)
+  assert.deepEqual(quiet.events, [], 'the baseline')
+
+  const feed = recorder()
+  const s = setup(project(watching), [view({ ...passing, headRefOid: 'bbb' })], { activity: feed })
+  await s.watcher.ready
+  s.tick(5000)
+  await s.watcher.poll(target)
+  assert.deepEqual(feed.events, [{ kind: 'pr.checks', projectId: 'p1', at: 6000, repoId: 'r1', branch: 'feature', url: URL, result: 'passed', headSha: 'bbb' }])
+
+  const failed = recorder()
+  const f = setup(project(watching), [view(failing)], { activity: failed })
+  await f.watcher.ready
+  await f.watcher.poll(target)
+  assert.deepEqual(failed.events.map((e) => [e.kind, e.result, e.headSha]), [['pr.checks', 'failed', 'aaa']])
+})
+
+test('activity: merged or closed ends the pull request', async () => {
+  for (const [state, result] of [['MERGED', 'merged'], ['CLOSED', 'closed']]) {
+    const feed = recorder()
+    const s = setup(project({ prWatch: { seen: { checks: 'aaa passing', conflict: false } } }), [view({ state })], { activity: feed })
+    await s.watcher.ready
+    await s.watcher.poll(target)
+    assert.deepEqual(feed.events, [{ kind: 'pr.ended', projectId: 'p1', at: 1000, repoId: 'r1', branch: 'feature', url: URL, result }])
+  }
+})
+
+test('activity: branch.setPr to a new link is pr.linked; the same link again, or clearing it, is not', () => {
+  const feed = recorder()
+  const c = ctxFor(project({ prWatch: null, pr: null }), { activity: feed })
+  c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: URL })
+  c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: URL })
+  c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: null })
+  assert.equal(feed.events.length, 1)
+  const [e] = feed.events
+  assert.deepEqual([e.kind, e.projectId, e.repoId, e.branch, e.url, typeof e.at], ['pr.linked', 'p1', 'r1', 'feature', URL, 'number'])
 })
 
 const PR = { url: 'https://github.com/o/r/pull/12', number: 12, label: '#12' }
