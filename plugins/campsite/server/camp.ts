@@ -45,9 +45,9 @@ async function countCommits(host: CampHost, e: Extract<ActivityEvent, { kind: 'w
   try {
     await host.run('git', ['-C', worktree.path, 'merge-base', '--is-ancestor', e.from, e.to])
   } catch (err) {
-    // git says nothing when `from` is simply not an ancestor (a rewrite); anything else is a real failure
-    if (err instanceof Error && err.message !== '') throw err
-    return 0
+    // `merge-base --is-ancestor` exits 1 when `from` is simply not an ancestor (a rewrite); anything else is a real failure
+    if ((err as { exitCode?: number }).exitCode === 1) return 0
+    throw err
   }
   const n = Number.parseInt((await host.run('git', ['-C', worktree.path, 'rev-list', '--count', `${e.from}..${e.to}`])).trim(), 10)
   return Number.isFinite(n) && n > 0 ? n : 0
@@ -94,6 +94,8 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     for (const [id, a] of Object.entries(camp.assignments)) projects.set(id, a.project)
     for (const [id, s] of Object.entries(camp.spans)) projects.set(id, s.project)
     for (const [id, w] of Object.entries(camp.waiting)) projects.set(id, w.project)
+    // `worked` has no project: a count is dropped once nothing else holds its session
+    for (const id of Object.keys(camp.worked)) if (!projects.has(id)) delete camp.worked[id]
     for (const [terminalId, project] of projects) {
       try {
         if (!host.isEnabled(project)) forget(camp, terminalId, now())
@@ -122,7 +124,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     }
   })
 
-  // No prune at start: projects may not be loaded yet, and the tick retries
+  // The first tick prunes (and the camp starts out as restored, with no open spans)
   const ticker = (o.interval ?? defaultInterval)(() => {
     try {
       prune()

@@ -108,7 +108,7 @@ test('the server half: events earn wood, state answers the snapshot, emitAll fol
 })
 
 test('the server half counts fast-forward commits with git; a rewrite pays nothing', async (t) => {
-  const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': '', 'rev-list --count a..b': '2\n', 'merge-base --is-ancestor b c': new Error('') } })
+  const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': '', 'rev-list --count a..b': '2\n', 'merge-base --is-ancestor b c': Object.assign(new Error('git exited with 1'), { exitCode: 1 }) } })
   const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
