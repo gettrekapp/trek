@@ -354,7 +354,12 @@ export class CampStage {
   }
 
   private drawDog(s: StageSnapshot, t: number, still: boolean): void {
-    if (!this.dogState || !this.dog.visible) return
+    if (!this.dogState || !this.dog.visible) {
+      // A hidden dog keeps no hearts: they'd keep a reduced-motion ticker running
+      for (const h of this.hearts) h.sprite.destroy()
+      this.hearts = []
+      return
+    }
     const lit = s.sessions.length > 0
     if (!still && !s.paused) this.dogState = dogAdvance(this.dogState, t, Math.random, this.width, lit ? s.layout.fireX : undefined)
     const pose = dogPoseAt(this.dogState, t)
@@ -371,9 +376,11 @@ export class CampStage {
         h.sprite.destroy()
         return false
       }
-      h.sprite.position.set(0, top + at.dy)
-      h.sprite.alpha = at.alpha
-      h.sprite.scale.set(2 * at.scale)
+      // Reduced motion: the heart shows full size and still until it goes, as the CSS did
+      const pose = still ? { dy: 0, alpha: 1, scale: 1 } : at
+      h.sprite.position.set(0, top + pose.dy)
+      h.sprite.alpha = pose.alpha
+      h.sprite.scale.set(2 * pose.scale)
       return true
     })
   }
