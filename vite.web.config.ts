@@ -15,7 +15,8 @@ export default defineConfig({
     // Every asset is a file under assets/ (the server caches those for good): nothing inlined.
     assetsInlineLimit: 0,
     sourcemap: false,
-    // One chunk, the whole window (the Electron renderer is one too).
+    // The window is one big chunk (as in the Electron renderer), plus lazy chunks such as the
+    // campsite's Pixi renderer, loaded when the strip first opens.
     chunkSizeWarningLimit: 2000
   }
 })
