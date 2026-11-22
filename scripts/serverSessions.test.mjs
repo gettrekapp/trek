@@ -1006,6 +1006,49 @@ test('activity: exit, restart, and an unload that drops working status and a dec
   ])
 })
 
+test('activity: a load that resumes a session reports its launch', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  await tick()
+  s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.deepEqual(feed.kinds(), ['session.started', 'session.started'])
+  const resumed = feed.events[1]
+  assert.deepEqual([resumed.terminalId, resumed.worktreeId, resumed.provider], [sessionId, 'wx', 'claude'])
+})
+
+test('activity: renew drops the decision, goes idle, then reports the new launch', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.spawned[0].emit('working')
+  await s.sessions.terminals.settledAll()
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'Ship it?' })
+  s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', ...size })
+  assert.deepEqual(feed.kinds(), [
+    'session.started',
+    'idle>working:output',
+    'decision:asked',
+    'working>idle:other',
+    'decision:dismissed',
+    'session.started'
+  ])
+  assert.deepEqual([feed.events[5].terminalId, feed.events[5].worktreeId], [sessionId, null])
+})
+
+test('activity: forgetGlobal reports its sessions going idle', async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.spawned[0].emit('working')
+  await s.sessions.terminals.settledAll()
+  s.sessions.forgetGlobal(s.projectId)
+  await tick()
+  assert.deepEqual(feed.kinds(), ['session.started', 'idle>working:output', 'working>idle:other'])
+  assert.deepEqual([feed.events[2].terminalId, feed.events[2].worktreeId], [sessionId, null])
+})
+
 // ---- limits ----
 
 test('maxSessions caps running sessions; load marks the rest exited -1', async (t) => {

@@ -143,6 +143,21 @@ interface SessionChange {
   has: boolean
 }
 
+/**
+ * A record whose agent was stopped (unload, suspend, stale Global sessions): no pty or exit code,
+ * no decision (the agent that asked is gone; its question would outlive it), idle unless complete.
+ * Returns what it changed, for the activity feed.
+ */
+function stopRecord(s: Session, projectId: string, worktreeId: string | null): SessionChange {
+  const from = s.status
+  const had = s.decision !== undefined
+  delete s.ptyId
+  delete s.exitCode
+  delete s.decision
+  if (s.status !== 'complete') s.status = 'idle'
+  return { projectId, id: s.id, worktreeId, from, to: s.status, had, has: false }
+}
+
 export class SessionManager {
   readonly terminals: TerminalHost
   /** The agents (plugins A1): move, promote, the automations and the MCP tools reach them here */
@@ -288,7 +303,6 @@ export class SessionManager {
       this.removeSession(project.id, sessionId)
       throw err
     }
-    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, provider: llm.provider })
     return { sessionId, ptyId }
   }
 
@@ -302,9 +316,7 @@ export class SessionManager {
       this.usableWorktree(project, found.worktree.id)
       if (!found.worktree.loaded) throw bad('load the worktree first')
     }
-    const ptyId = this.spawnSession(project.id, found.session.id, { cols, rows })
-    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: found.session.id, worktreeId: found.worktree?.id ?? null, provider: found.session.llm.provider })
-    return { ptyId }
+    return { ptyId: this.spawnSession(project.id, found.session.id, { cols, rows }) }
   }
 
   /**
@@ -363,7 +375,6 @@ export class SessionManager {
       this.publishAttention()
       throw err
     }
-    this.emitActivity({ kind: 'session.started', projectId: project.id, at: this.now(), terminalId: sessionId, worktreeId: null, provider: llm.provider })
     this.publishAttention()
     return { ptyId }
   }
@@ -625,14 +636,7 @@ export class SessionManager {
         for (const repo of d.repositories) {
           for (const worktree of repo.worktrees) {
             for (const s of worktree.sessions) {
-              if (!ids.has(s.id)) continue
-              const from = s.status
-              const had = s.decision !== undefined
-              delete s.ptyId
-              delete s.exitCode
-              delete s.decision
-              if (s.status !== 'complete') s.status = 'idle'
-              changes.push({ projectId: d.id, id: s.id, worktreeId: worktree.id, from, to: s.status, had, has: false })
+              if (ids.has(s.id)) changes.push(stopRecord(s, d.id, worktree.id))
             }
           }
         }
@@ -680,16 +684,7 @@ export class SessionManager {
       (d) => {
         const target = findWorktree(d, worktree.id).worktree
         target.loaded = false
-        for (const s of target.sessions) {
-          const from = s.status
-          const had = s.decision !== undefined
-          delete s.ptyId
-          delete s.exitCode
-          // The agent that asked is gone; its question would outlive it.
-          delete s.decision
-          if (s.status !== 'complete') s.status = 'idle'
-          changes.push({ projectId: d.id, id: s.id, worktreeId: target.id, from, to: s.status, had, has: false })
-        }
+        for (const s of target.sessions) changes.push(stopRecord(s, d.id, target.id))
       },
       { persist: false }
     )
@@ -725,15 +720,7 @@ export class SessionManager {
       this.deps.projects.apply(
         projectId,
         (d) => {
-          for (const s of d.globalSessions) {
-            const from = s.status
-            const had = s.decision !== undefined
-            delete s.ptyId
-            delete s.exitCode
-            delete s.decision
-            if (s.status !== 'complete') s.status = 'idle'
-            changes.push({ projectId: d.id, id: s.id, worktreeId: null, from, to: s.status, had, has: false })
-          }
+          for (const s of d.globalSessions) changes.push(stopRecord(s, d.id, null))
         },
         { persist: false }
       )
@@ -911,9 +898,10 @@ export class SessionManager {
       this.terminals.kill(ptyId)
       throw err
     }
-    if (revived) {
-      this.emitActivity({ kind: 'session.status', projectId, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, from: 'exited', to: 'idle', cause: 'other' })
-    }
+    const fact = { projectId, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null }
+    if (revived) this.emitActivity({ kind: 'session.status', ...fact, from: 'exited', to: 'idle', cause: 'other' })
+    // Every launch of the session's agent (start, restart, renew, a resume on load): one session.started
+    this.emitActivity({ kind: 'session.started', ...fact, provider: session.llm.provider })
     // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
     // not excluded. restart has the same race; automation runs are minutes apart.
@@ -1066,7 +1054,6 @@ export class SessionManager {
    * `since` moves only when the status does.
    */
   private setStatus(owner: Owner, status: SessionStatus, cause: SessionCause, clearDecision = false): void {
-    let changed = false
     let c: SessionChange | undefined
     try {
       this.deps.projects.apply(
@@ -1076,7 +1063,6 @@ export class SessionManager {
           const s = found.session
           const from = s.status
           const had = s.decision !== undefined
-          changed = s.status !== status
           s.status = status
           if (clearDecision) delete s.decision
           c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, from, to: s.status, had, has: s.decision !== undefined }
@@ -1086,11 +1072,12 @@ export class SessionManager {
     } catch {
       return
     }
-    if (changed) {
+    if (!c) return
+    if (c.from !== c.to) {
       if (status === 'attention' || status === 'done') this.since.set(owner.sessionId, this.now())
       else this.since.delete(owner.sessionId)
     }
-    if (c) this.reportChange(c, cause, 'answered')
+    this.reportChange(c, cause, 'answered')
     this.publishAttention()
   }
 
