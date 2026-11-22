@@ -3,7 +3,7 @@
 // it. Coordinates are px from the strip's top-left; the strip is STAGE_H tall. Pure.
 import { dogStart, dogTrip, type DogPose } from './dog.ts'
 import { FRAMES, type Pose, type Rect } from './pixels.ts'
-import { HIKER_W, LOG_W, TENT_W, tentColors } from './layout.ts'
+import { HIKER_W, LOG_W, TENT_W, tentColors, type CampHikerSpot } from './layout.ts'
 import { SIGN_GLYPHS, type Sign } from './pose.ts'
 
 /** The strip's height (px) */
@@ -96,6 +96,7 @@ export function frameAt(pose: Pose, t: number): 0 | 1 {
 }
 
 const DOG_CYCLE: Readonly<Record<DogPose, number>> = { run: 300, sit: 500, happy: 240 }
+/** The dog's frames swap every half-cycle: a run's every 150 ms, a sit's 250 ms, a happy wag's 120 ms */
 export const dogFrameAt = (pose: DogPose, t: number): 0 | 1 => (cycle(t, DOG_CYCLE[pose]) < 0.5 ? 0 : 1)
 
 /** A waiting hiker's sign blinks: full, fading, faint, fading, each a quarter second (cs-pulse, steps(2)) */
@@ -154,10 +155,7 @@ export interface Mover {
   leaving: boolean
   facingLeft: boolean
 }
-export interface Spot {
-  terminalId: string
-  x: number
-}
+export type Spot = Pick<CampHikerSpot, 'terminalId' | 'x'>
 
 /** A leaving hiker that has reached the edge */
 export const departed = (m: Mover, t: number): boolean => m.leaving && t >= m.walk.start + WALK_MS
@@ -175,7 +173,7 @@ export function reconcileMovers(prev: ReadonlyMap<string, Mover>, spots: readonl
       const from = opts.first || opts.instant ? to : offstage(to, width)
       return { id, walk: { from, to, start: t }, leaving, facingLeft: to < from }
     }
-    if (m.walk.to === to && m.leaving === leaving && !opts.instant) return m
+    if (m.walk.to === to && m.leaving === leaving && (!opts.instant || m.walk.from === to)) return m
     const from = opts.instant ? to : walkAt(m.walk, t).x
     return { id, walk: { from, to, start: t }, leaving, facingLeft: to === from ? m.facingLeft : to < from }
   }
@@ -229,7 +227,11 @@ export const dogPoseAt = (s: DogState, t: number): DogPose => (s.running && t < 
  */
 export function dogAdvance(s: DogState, t: number, rand: () => number, width: number, fireX?: number): DogState {
   if (t < s.until) return s
-  if (s.running) return { ...s, running: false, from: s.to, start: s.until, until: s.until + s.restMs }
+  if (s.running) {
+    const sat: DogState = { ...s, running: false, from: s.to, start: s.until, until: s.until + s.restMs }
+    // Its rest already over too (the ticker was stopped): straight on to the next trip
+    return t < sat.until ? sat : dogAdvance(sat, t, rand, width, fireX)
+  }
   const trip = dogTrip(rand, s.to, width, fireX)
   if (trip.runMs === 0) return { ...s, from: trip.x, to: trip.x, start: t, until: t + trip.restMs }
   return { running: true, from: s.to, to: trip.x, start: t, until: t + trip.runMs, restMs: trip.restMs, happyUntil: s.happyUntil, left: trip.x < s.to }
@@ -318,7 +320,7 @@ export function backdrop(width: number): Backdrop {
 }
 
 export interface FireParts {
-  /** Stones either side of the logs, on the feet line */
+  /** The hearth: stones either side, and the logs between, on the feet line */
   hearth: Box[]
   /** Three flames standing on the hearth; each grows upward by flameScale(i) */
   flames: Box[]
@@ -347,6 +349,7 @@ export function fireParts(fireX: number): FireParts {
       { x: fireX + 6, y: FEET_Y - 35, w: 2, h: 2, fill: '#ffb347' },
       { x: fireX - 6, y: FEET_Y - 42, w: 2, h: 2, fill: '#ff7a3c' }
     ],
+    // its 100 px box hangs 40 px below the strip's bottom, as the CSS had it
     glow: { x: fireX - 70, y: STAGE_H + 40 - 100, w: 140, h: 100 }
   }
 }

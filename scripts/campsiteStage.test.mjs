@@ -271,4 +271,38 @@ test("a sign: a board over the head and its glyph's cells, from the hiker's top-
   assert.deepEqual(boxes[1], { x: 16.5, y: -21, w: 3, h: 3, fill: '#111113' })
 })
 
-export { seq }
+test('a dog whose run and rest both ended long ago goes straight on to its next trip', () => {
+  const run = dogAdvance(dogInit(800, 0), DOG_SETTLE_MS, trip(), 800)
+  const s = dogAdvance(run, run.until + 60_000, trip(), 800)
+  assert.equal(s.from, 701)
+  assert.ok(s.until > run.until + 60_000)
+})
+
+test('under reduced motion a settled hiker keeps its Mover', () => {
+  const opts = { first: false, instant: true }
+  const one = reconcileMovers(new Map(), [{ terminalId: 'a', x: 300 }], W, 0, opts)
+  const two = reconcileMovers(one, [{ terminalId: 'a', x: 300 }], W, 5, opts)
+  assert.equal(two.get('a'), one.get('a'))
+})
+
+test('a negative t still lands on a step', () => {
+  assert.equal(flameScale(2, 50), 1.25)
+  assert.ok(Math.abs(signAlpha(-100) - 0.65) < 1e-9)
+})
+
+test('greyscale of #d97757 is 138 in every channel (luminance 137.52)', () => {
+  const grey = greyscale(rasterize([{ x: 0, y: 0, w: 1, h: 1, fill: '#d97757' }], 1, 1))
+  assert.deepEqual([...grey], [138, 138, 138, 255])
+})
+
+test('a strip too narrow to run in leaves the dog sitting', () => {
+  const s = dogAdvance(dogInit(150, 0), DOG_SETTLE_MS, trip(), 150)
+  assert.equal(s.running, false)
+  assert.ok(s.until > DOG_SETTLE_MS)
+})
+
+test('a zero-width backdrop has no NaN', () => {
+  const b = backdrop(0)
+  const nums = [...b.stars.flatMap((x) => [x.x, x.y, x.w, x.h]), ...[b.moon, b.bite].flatMap((c) => [c.x, c.y, c.r]), ...b.ridge.points, ...b.pines.flatMap((p) => p.points), ...b.ground.flatMap((x) => [x.x, x.y, x.w, x.h])]
+  assert.ok(nums.length > 0 && nums.every((n) => Number.isFinite(n)))
+})
