@@ -7,8 +7,12 @@ ones do camp chores; finished ones cheer; ones marked complete sit with a cocoa;
 their bag. Click a hiker at camp to show its session. A camp dog runs about the strip; click it to pet
 it (it belongs to no session and does nothing else). Real work earns the camp (one for the whole
 server) wood and trail markers, which the strip's header counts (`🪵 340 · ⛳ 2`); each session
-borrows a named crew member, whom its hikers' tooltips name (`Aspen · Lv 2 Trailblazer`, or `Day
-hiker` when the crew is all out).
+borrows a named crew member while its agent runs, whom its hikers' tooltips name (`Aspen · Lv 2
+Trailblazer`, or `Day hiker` when the crew is all out). A member comes back to camp when the agent
+stops (it exits, its worktree is unloaded, a promote moves it, or the session closes), and the next
+launch borrows one again; an automation's run tab always gets a day hiker (it still earns wood).
+Commits earn wood as new commits on a worktree's head, however they got there (a commit, a pull, a
+fast-forward merge); a head that moves anywhere else (a rewrite, a reset back) earns nothing.
 
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
 - `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests
