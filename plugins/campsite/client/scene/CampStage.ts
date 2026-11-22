@@ -82,16 +82,31 @@ export class CampStage {
   /** Starts Pixi (WebGL) in `parent`; rejects when it can't */
   static async create(parent: HTMLElement, colors: SignColors): Promise<CampStage> {
     const app = new Application()
-    await app.init({
-      width: Math.max(1, parent.clientWidth),
-      height: STAGE_H,
-      background: SKY,
-      antialias: false,
-      resolution: window.devicePixelRatio || 1,
-      autoDensity: true,
-      roundPixels: true,
-      preference: 'webgl'
-    })
+    try {
+      await app.init({
+        width: Math.max(1, parent.clientWidth),
+        height: STAGE_H,
+        background: SKY,
+        antialias: false,
+        resolution: window.devicePixelRatio || 1,
+        autoDensity: true,
+        roundPixels: true,
+        // WebGL, else WebGPU; never the canvas renderer: without either, the strip shows its note
+        preference: ['webgl', 'webgpu'],
+        // Not Pixi's browser extras (pixi.js/browser: accessibility, events, filters): they add a
+        // global Tab listener, a focusable off-screen button and document-wide pointer listeners,
+        // and the DOM overlay takes the clicks. What the stage uses registers itself on import
+        // (Application: the ticker; Graphics: its pipe; pixi.js: rendering, sprites, textures).
+        skipExtensionImports: true
+      })
+    } catch (err) {
+      try {
+        app.destroy()
+      } catch {
+        // init failed part-way; there may be nothing to tear down
+      }
+      throw err
+    }
     return new CampStage(app, parent, colors)
   }
 

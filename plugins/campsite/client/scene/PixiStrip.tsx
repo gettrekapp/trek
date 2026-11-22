@@ -74,7 +74,7 @@ export function PixiStrip({ layout, sessions, now, selected, paused, showDog, on
   if (load.state === 'failed') {
     return (
       <div className="cs-fallback">
-        <span className="cs-fallback-note">The campsite needs WebGL to draw the camp.</span>
+        <span className="cs-fallback-note">The campsite couldn't start its renderer.</span>
         <div className="cs-mini-row">
           {sessions.map((s) => (
             <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => onPick(s.terminalId)} />
