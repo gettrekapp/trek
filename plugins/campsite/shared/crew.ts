@@ -1,6 +1,8 @@
-// The camp's crew (campsite part 2): named hikers a session borrows for its run. A new session gets
-// the free member who has rested longest; with none free it is a day hiker (no member, no XP). A
-// member earns XP equal to the wood its session earns. Pure.
+// The camp's crew (campsite part 2): named hikers a session borrows while its agent runs. A launch
+// gets the free member who has rested longest; with none free it is a day hiker (no member, no XP),
+// and an automation's run tab always is one. A member comes back to camp when the agent stops
+// (exits, is stopped by Trek, or the session closes). A member earns XP equal to the wood its
+// session earns. Pure.
 import type { Camp, CampSnapshot, CrewMember } from './camp.ts'
 import { fnv1a } from './hiker.ts'
 
@@ -30,7 +32,7 @@ export function assign(camp: Camp, terminalId: string, projectId: string, now: n
   return free[0].id
 }
 
-/** The session closed (or is gone): its member rests from now */
+/** The session's agent stopped (or the session closed or is gone): its member rests from now */
 export function release(camp: Camp, terminalId: string, now: number): void {
   if (!Object.hasOwn(camp.assignments, terminalId)) return
   const member = camp.crew.find((m) => m.id === camp.assignments[terminalId].crew)

@@ -54,12 +54,78 @@ test('snapshot: whole wood, crew with levels, assignments as crew ids; crewLabel
   assert.equal(crewLabel(snap, 't1'), `${camp.crew[0].name} · Lv 2 Trailblazer`)
   assert.equal(crewLabel(snap, 'nobody'), 'Day hiker')
 })
-const S = (terminalId, from, to, cause, at) => ({ kind: 'session.status', projectId: 'p', at, terminalId, worktreeId: 'w', from, to, cause })
+const S = (terminalId, from, to, cause, at, automation = false) => ({ kind: 'session.status', projectId: 'p', at, terminalId, worktreeId: 'w', automation, from, to, cause })
+const started = (terminalId, at, automation = false) => ({ kind: 'session.started', projectId: 'p', at, terminalId, worktreeId: automation ? null : 'w', automation, provider: 'claude' })
 const fresh = () => {
   const camp = newCamp(1, T0)
-  applyActivity(camp, { kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', provider: 'claude' }, T0)
+  applyActivity(camp, started('t1', T0), T0)
   return camp
 }
+
+test('an agent that exits frees its member, who rests from then; the next launch assigns again', () => {
+  const camp = fresh()
+  const member = camp.assignments.t1.crew
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
+  applyActivity(camp, S('t1', 'working', 'exited', 'other', T0 + 2 * M), T0 + 2 * M)
+  assert.deepEqual(camp.assignments, {})
+  assert.equal(camp.crew.find((m) => m.id === member).restedAt, T0 + 2 * M)
+  assert.equal(camp.wood, 2 * 1.25, 'its minutes are still paid')
+  // A restart: the revive (exited>idle) is not a live agent's change; session.started assigns
+  applyActivity(camp, S('t1', 'exited', 'idle', 'other', T0 + 3 * M), T0 + 3 * M)
+  assert.deepEqual(camp.assignments, {})
+  applyActivity(camp, started('t1', T0 + 3 * M), T0 + 3 * M)
+  assert.ok(camp.assignments.t1)
+})
+
+test('session.stopped (an unload, a promote, Global sessions stopped) frees the member', () => {
+  const camp = fresh()
+  const member = camp.assignments.t1.crew
+  applyActivity(camp, { kind: 'session.stopped', projectId: 'p', at: T0 + 5, terminalId: 't1', worktreeId: 'w', automation: false }, T0 + 5)
+  assert.deepEqual(camp.assignments, {})
+  assert.equal(camp.crew.find((m) => m.id === member).restedAt, T0 + 5)
+})
+
+test("an automation's run tab never gets a member, but its minutes still earn wood", () => {
+  const camp = newCamp(1, T0)
+  applyActivity(camp, started('run', T0, true), T0)
+  assert.deepEqual(camp.assignments, {})
+  applyActivity(camp, S('run', 'idle', 'working', 'output', T0, true), T0)
+  assert.deepEqual(camp.assignments, {}, 'not lazily either')
+  applyActivity(camp, S('run', 'working', 'idle', 'quiet', T0 + 2 * M, true), T0 + 2 * M)
+  assert.equal(camp.wood, 2 * 1.25)
+  assert.ok(camp.crew.every((m) => m.xp === 0))
+  // One stored before automations were told apart is let go on its next launch
+  camp.assignments.run = { crew: camp.crew[0].id, project: 'p' }
+  applyActivity(camp, started('run', T0 + 3 * M, true), T0 + 3 * M)
+  assert.deepEqual(camp.assignments, {})
+})
+
+test('lazy assign: a live session without a member gets a free one on its next live status change', () => {
+  const camp = newCamp(1, T0)
+  // Started while the campsite was off: no session.started was heard
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
+  assert.equal(camp.assignments.t1?.crew, camp.crew[0].id)
+  // Changes a stopped record can make (seen, marked, the revive or stop of a record) assign nobody
+  for (const [from, to, cause] of [['attention', 'idle', 'seen'], ['idle', 'complete', 'marked'], ['exited', 'idle', 'other'], ['working', 'idle', 'other']]) {
+    applyActivity(camp, S('t2', from, to, cause, T0), T0)
+    assert.equal(camp.assignments.t2, undefined, `${from}>${to}:${cause}`)
+  }
+  applyActivity(camp, S('t2', 'working', 'done', 'quiet', T0), T0)
+  applyActivity(camp, S('t3', 'idle', 'attention', 'bell', T0), T0)
+  assert.deepEqual(Object.keys(camp.assignments).sort(), ['t1', 't2', 't3'])
+  // The crew is out: a fourth stays a day hiker, and nothing changes on its later changes
+  const before = JSON.stringify(camp.assignments)
+  applyActivity(camp, S('t4', 'idle', 'working', 'output', T0), T0)
+  applyActivity(camp, S('t4', 'working', 'idle', 'quiet', T0 + M), T0 + M)
+  assert.equal(JSON.stringify(camp.assignments), before)
+  // An exit is not a reason to assign
+  applyActivity(camp, S('t1', 'working', 'exited', 'other', T0 + M), T0 + M)
+  applyActivity(camp, S('t5', 'idle', 'exited', 'other', T0 + M), T0 + M)
+  assert.equal(camp.assignments.t5, undefined)
+  // Freed by t1's exit: the day hiker t4 gets it on its next live change
+  applyActivity(camp, S('t4', 'idle', 'working', 'input', T0 + 2 * M), T0 + 2 * M)
+  assert.ok(camp.assignments.t4)
+})
 
 test('working minutes: 1 wood each × the warmth factor, paid as whole minutes pass; XP to the member', () => {
   const camp = fresh()
@@ -172,7 +238,7 @@ test('commits: 5 each, at most 3 an hour per worktree, a head counted once', () 
 test('closing a session pays its last minutes, releases its member, forgets it', () => {
   const camp = fresh()
   applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
-  applyActivity(camp, { kind: 'session.closed', projectId: 'p', at: T0 + 2 * M, terminalId: 't1', worktreeId: 'w' }, T0 + 2 * M)
+  applyActivity(camp, { kind: 'session.closed', projectId: 'p', at: T0 + 2 * M, terminalId: 't1', worktreeId: 'w', automation: false }, T0 + 2 * M)
   assert.equal(camp.wood, 2 * 1.25)
   assert.deepEqual([camp.spans, camp.assignments, camp.waiting, camp.worked], [{}, {}, {}, {}])
 })
@@ -190,6 +256,9 @@ test('restore after a restart: open spans close at the last save, nobody waits',
   assert.deepEqual(camp.spans, {})
   assert.deepEqual(camp.waiting, {})
   assert.ok(camp.lastTick >= camp.savedAt)
+  // Nothing runs after a restart: every member is back in camp, resting from the last save
+  assert.deepEqual(camp.assignments, {})
+  assert.equal(camp.crew[0].restedAt, camp.savedAt)
 })
 
 test('the ledger keeps the newest 2000 keys', () => {

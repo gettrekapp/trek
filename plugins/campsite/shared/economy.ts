@@ -19,6 +19,8 @@ export const CAPS = { workPerHour: 30, commitsPerHour: 3, answersPerHour: 12, pr
 const ANSWER_MINUTES: readonly [number, number] = [2, 10]
 export const LEDGER_MAX = 2000
 const HOUR_MS = 3_600_000
+/** Status changes only a running agent makes (pty output, the quiet timer, a bell, the user typing into it) */
+const LIVE_CAUSES: ReadonlySet<string> = new Set(['output', 'quiet', 'bell', 'input'])
 
 export interface Reward {
   key?: string
@@ -102,10 +104,18 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
   const out: Reward[] = []
   switch (e.kind) {
     case 'session.started':
-      assign(camp, e.terminalId, e.projectId, now)
+      // An automation's run tab is always a day hiker (one stored before that rule is let go)
+      if (e.automation) release(camp, e.terminalId, now)
+      else assign(camp, e.terminalId, e.projectId, now)
       break
     case 'session.status': {
       const id = e.terminalId
+      // The agent stopped running: its member comes back to camp
+      if (e.to === 'exited') release(camp, id, now)
+      // A live session with no member (it started while the campsite was off there, or as a day
+      // hiker when the crew was out) gets a free one, if any, on its next change only a running agent
+      // makes; assign keeps a member it has and changes nothing when nobody is free
+      else if (!e.automation && LIVE_CAUSES.has(e.cause)) assign(camp, id, e.projectId, now)
       if (e.from === 'working') {
         payMinutes(camp, id, now, rules, out)
         delete camp.spans[id]
@@ -123,6 +133,10 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
     case 'session.decision':
       if (e.state === 'answered') answer(camp, e.terminalId, now, rules, out)
       setWaiting(camp, e.terminalId, now, e.projectId, { decision: e.state === 'asked' })
+      break
+    case 'session.stopped':
+      // Trek stopped the agent (an unload, a promote, Global sessions restarted); the status change before it paid its minutes
+      release(camp, e.terminalId, now)
       break
     case 'session.closed':
       payMinutes(camp, e.terminalId, now, rules, out)
@@ -185,12 +199,13 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
   return out
 }
 
-/** After a server restart (statuses came back idle): open spans close at the last save, paying their whole minutes; nobody is waiting */
+/** After a server restart (nothing runs, statuses came back idle): open spans close at the last save, paying their whole minutes; nobody is waiting; every member is back in camp from the last save */
 export function restore(camp: Camp, rules: Rules = RULES): void {
   for (const id of Object.keys(camp.spans)) {
     payMinutes(camp, id, camp.savedAt, rules, [])
     delete camp.spans[id]
   }
   camp.waiting = {}
+  for (const id of Object.keys(camp.assignments)) release(camp, id, camp.savedAt)
   camp.lastTick = Math.max(camp.lastTick, camp.savedAt)
 }
