@@ -1,8 +1,10 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
-// prefs, the document's visibility, reduced motion and an element's width.
+// prefs, the camp's snapshot, the document's visibility, reduced motion and an element's width.
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
+import type { CampSnapshot } from '../shared/camp.ts'
 import type { CampsitePrefKey } from '../shared/prefs.ts'
+import { campStore } from './campStore.ts'
 import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
 
 export function useSessions(host: ClientPluginHost): readonly PluginSession[] {
@@ -48,6 +50,12 @@ export function useNow(): number {
 export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, (key: CampsitePrefKey, value: boolean) => void] {
   const store = prefsStore(host)
   return [useSyncExternalStore(store.subscribe, store.snapshot), store.set]
+}
+
+/** The camp's snapshot (wood, markers, crew), null until it loads */
+export function useCamp(host: ClientPluginHost): CampSnapshot | null {
+  const store = campStore(host)
+  return useSyncExternalStore(store.subscribe, store.snapshot)
 }
 
 function subscribeVisibility(listener: () => void): () => void {

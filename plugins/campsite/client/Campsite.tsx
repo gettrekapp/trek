@@ -4,9 +4,10 @@
 // hiker to show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import { crewLabel } from '../shared/crew.ts'
 import { campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
-import { useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
+import { useCamp, useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -15,6 +16,7 @@ export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
   const [{ loaded, prefs }, setPref] = usePrefs(host)
   const sessions = useSessions(host)
+  const camp = useCamp(host)
   const selected = useSelected(host)
   const now = useNow()
   const hidden = useDocumentHidden()
@@ -58,7 +60,7 @@ export function Campsite(): React.JSX.Element | null {
         <button ref={toggle} className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => flip(false)}>
           <Chevron up />
         </button>
-        <span className="cs-summary">{campSummary(sessions)}</span>
+        <span className="cs-summary">{campSummary(sessions, 0, camp)}</span>
         {waiting.length > 0 && (
           <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
             {waiting.length} waiting
@@ -66,7 +68,7 @@ export function Campsite(): React.JSX.Element | null {
         )}
         <div ref={rowRef} className="cs-mini-row">
           {row.shown.map((s) => (
-            <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => host.focusSession(s.terminalId)} />
+            <MiniHiker key={s.terminalId} session={s} now={now} crew={camp ? crewLabel(camp, s.terminalId) : undefined} onClick={() => host.focusSession(s.terminalId)} />
           ))}
           {row.more > 0 && <span className="cs-mini-more">+{row.more}</span>}
         </div>
@@ -89,7 +91,7 @@ export function Campsite(): React.JSX.Element | null {
         <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
           <Chevron />
         </button>
-        <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
+        <span className="cs-summary">{campSummary(sessions, layout.moreTents, camp)}</span>
       </div>
       {width > 0 && (
         <div className="cs-stage">
@@ -114,7 +116,7 @@ export function Campsite(): React.JSX.Element | null {
             />
           ))}
           {/* After the camps' badges in tab order, as the dog and hikers were; the canvas sits under everything (z-index 0) */}
-          <PixiStrip layout={layout} sessions={sessions} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
+          <PixiStrip layout={layout} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
       )}

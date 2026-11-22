@@ -4,6 +4,8 @@
 // plain row of tab-size hikers instead.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
+import type { CampSnapshot } from '../../shared/camp.ts'
+import { crewLabel } from '../../shared/crew.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
 import { useReducedMotion } from '../hooks.ts'
@@ -13,6 +15,8 @@ import type { CampStage, SignColors } from './CampStage.ts'
 interface Props {
   layout: CampLayout
   sessions: readonly PluginSession[]
+  /** The camp's snapshot (its crew names the hikers' tooltips); null until it loads */
+  camp: CampSnapshot | null
   /** The chores' clock */
   now: number
   selected: string | null
@@ -34,7 +38,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, sessions, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
+export function PixiStrip({ layout, sessions, camp, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -77,7 +81,7 @@ export function PixiStrip({ layout, sessions, now, selected, paused, showDog, on
         <span className="cs-fallback-note">The campsite couldn't start its renderer.</span>
         <div className="cs-mini-row">
           {sessions.map((s) => (
-            <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => onPick(s.terminalId)} />
+            <MiniHiker key={s.terminalId} session={s} now={now} crew={camp ? crewLabel(camp, s.terminalId) : undefined} onClick={() => onPick(s.terminalId)} />
           ))}
         </div>
       </div>
@@ -97,7 +101,7 @@ export function PixiStrip({ layout, sessions, now, selected, paused, showDog, on
               key={h.terminalId}
               ref={(el) => stage.bindTarget(h.terminalId, el)}
               className={`cs-camp-hiker${h.place === 'inside' ? ' inside' : ''}`}
-              title={hikerTooltip(s, choreFor(s.terminalId, now))}
+              title={hikerTooltip(s, choreFor(s.terminalId, now), camp ? crewLabel(camp, s.terminalId) : undefined)}
               aria-label={hikerLabel(s)}
               onClick={() => onPick(s.terminalId)}
             />

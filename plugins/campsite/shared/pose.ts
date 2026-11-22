@@ -124,9 +124,10 @@ export function hikerDoing(session: Pick<PluginSession, 'status' | 'decision'>, 
   return session.status === 'working' && !isWaiting(session) ? CHORE_NAMES[chore] : statusText(session)
 }
 
-export function hikerTooltip(session: PluginSession, chore: Chore): string {
+/** The hiker's tooltip; `crew` (its crew member, or "Day hiker") leads once the camp's state is loaded */
+export function hikerTooltip(session: PluginSession, chore: Chore, crew?: string): string {
   const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
-  const parts = [session.label, where, statusText(session)]
+  const parts = [crew, session.label, where, statusText(session)]
   if (session.status === 'working' && !isWaiting(session)) parts.push(CHORE_NAMES[chore])
   return parts.filter(Boolean).join(' · ')
 }

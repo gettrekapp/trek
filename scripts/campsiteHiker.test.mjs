@@ -203,6 +203,12 @@ test('labels: an unknown status reads as idle; a worktree session with no name f
   assert.equal(hikerTooltip(session({ worktreeId: null, worktreeName: 'x', branch: null, status: 'idle' }), 'chop'), 'Claude 2 · Global · idle')
 })
 
+test("labels: the tooltip starts with the session's crew member when given", () => {
+  assert.equal(hikerTooltip(session(), 'chop', 'Aspen · Lv 2 Trailblazer'), `Aspen · Lv 2 Trailblazer · Claude 2 · auth · working · ${CHORE_NAMES.chop}`)
+  assert.equal(hikerTooltip(session({ status: 'idle' }), 'chop', 'Day hiker'), 'Day hiker · Claude 2 · auth · idle')
+  assert.equal(hikerTooltip(session({ status: 'idle' }), 'chop', undefined), 'Claude 2 · auth · idle')
+})
+
 test("indicatorState: the session's own; with none, the tab's status and no decision; with neither, idle (a sleeping hiker)", () => {
   assert.deepEqual(indicatorState(session({ status: 'attention', decision: true }), 'working'), { status: 'attention', decision: true })
   assert.deepEqual(indicatorState(undefined, 'done'), { status: 'done', decision: false })

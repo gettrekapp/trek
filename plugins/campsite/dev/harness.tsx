@@ -29,6 +29,8 @@ const SCENARIOS: Record<string, PluginSession[]> = {
 const params = new URLSearchParams(location.search)
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 const prefs = { showDog: params.get('dog') !== '0' }
+// The camp's state, so the header shows its wood and markers and t1's tooltip names its crew member
+const camp = { wood: 340, markers: 2, crew: [{ id: 'c1', name: 'Aspen', level: 2, title: 'Trailblazer' }], assignments: { t1: 'c1' } }
 const host = {
   id: 'campsite',
   projectId: 'harness',
@@ -36,7 +38,13 @@ const host = {
   onSessionsChanged: () => () => {},
   selectedTerminalId: () => sessions[0]?.terminalId ?? null,
   focusSession: (id: string) => console.log('[harness] focus', id),
-  prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} }
+  prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} },
+  request: async (method: string) => {
+    if (method === 'state') return camp
+    throw new Error(`[harness] no method ${method}`)
+  },
+  onEvent: () => () => {},
+  onChanged: () => () => {}
 } as unknown as ClientPluginHost
 
 createRoot(document.getElementById('root')!).render(

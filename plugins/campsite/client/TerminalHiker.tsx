@@ -4,15 +4,17 @@
 import { useMemo } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
+import { crewLabel } from '../shared/crew.ts'
 import { lookFor } from '../shared/hiker.ts'
 import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, stanceFor } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
-import { useNow, usePrefs, useSession } from './hooks.ts'
+import { useCamp, useNow, usePrefs, useSession } from './hooks.ts'
 
 export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX.Element | null {
   const host = usePluginHost()
   const [{ loaded, prefs }] = usePrefs(host)
   const session = useSession(host, terminalId)
+  const camp = useCamp(host)
   const now = useNow()
   const provider = session?.provider ?? DEFAULT_AGENT_ID
   const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
@@ -20,7 +22,7 @@ export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX
   const chore = choreFor(terminalId, now)
   const stance = stanceFor(session, chore)
   return (
-    <span className="cs-bar-hiker" title={hikerTooltip(session, chore)}>
+    <span className="cs-bar-hiker" title={hikerTooltip(session, chore, camp ? crewLabel(camp, terminalId) : undefined)}>
       <span className={`cs-bar-text${stance.sign ? ` ${stance.sign}` : ''}`}>
         {session.label} · {hikerDoing(session, chore)}
       </span>

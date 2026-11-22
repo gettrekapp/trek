@@ -179,6 +179,14 @@ test('campSummary: one waiting hiker; camps the strip has no room for are counte
   assert.equal(campSummary([s('w1')], 1), 'Campsite · 1 hiker · +1 camp not shown')
 })
 
+test("campSummary: the camp's wood and markers at the end once the state is loaded; no flag before the first summit", () => {
+  assert.equal(campSummary([s('w1')], 0, { wood: 340, markers: 2 }), 'Campsite · 1 hiker · 🪵 340 · ⛳ 2')
+  assert.ok(campSummary([s('w1'), s('w2')], 3, { wood: 340, markers: 2 }).endsWith('· 🪵 340 · ⛳ 2'))
+  assert.equal(campSummary([s('w1')], 0, { wood: 340, markers: 0 }), 'Campsite · 1 hiker · 🪵 340')
+  assert.equal(campSummary([s('w1')], 0, null), 'Campsite · 1 hiker')
+  assert.equal(campSummary([s('w1')], 0), 'Campsite · 1 hiker')
+})
+
 test('hikers at 3×: each is whole inside the strip, none overlaps another, and those at the fire clear its hearth', () => {
   const crowd = [s('w1'), s('w1'), s('w1'), s('w2'), s('w2'), s('w3'), s(null), s(null), s('w1', { status: 'attention' }), s('w2', { decision: true }), s('w3', { status: 'attention' })]
   for (const sessions of [crowd, crowd.slice(0, 4), [...crowd, ...Array.from({ length: 12 }, (_, i) => s(`x${i % 5}`))]]) {
