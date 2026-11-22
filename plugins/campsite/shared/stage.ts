@@ -3,7 +3,8 @@
 // it. Coordinates are px from the strip's top-left; the strip is STAGE_H tall. Pure.
 import { dogStart, dogTrip, type DogPose } from './dog.ts'
 import { FRAMES, type Pose, type Rect } from './pixels.ts'
-import { HIKER_W } from './layout.ts'
+import { HIKER_W, LOG_W, TENT_W, tentColors } from './layout.ts'
+import { SIGN_GLYPHS, type Sign } from './pose.ts'
 
 /** The strip's height (px) */
 export const STAGE_H = 112
@@ -242,4 +243,130 @@ export function dogPet(s: DogState, t: number): DogState {
 export function dogResize(s: DogState, t: number, width: number): DogState {
   const x = Math.min(Math.max(dogX(s, t), 0), Math.max(0, width))
   return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS }
+}
+
+/** Where hikers and the dog stand: 10 px above the strip's bottom; a hiker inside a tent, 14 */
+export const FEET_Y = STAGE_H - 10
+export const INSIDE_FEET_Y = STAGE_H - 14
+/** The night sky, under everything */
+export const SKY = '#1a1622'
+
+export interface Box {
+  x: number
+  y: number
+  w: number
+  h: number
+  fill: string
+}
+/** A filled polygon: x, y, x, y, … */
+export interface Shape {
+  points: number[]
+  fill: string
+}
+export interface Circle {
+  x: number
+  y: number
+  r: number
+  fill: string
+}
+
+/** [left %, top px] */
+const STARS: readonly (readonly [number, number])[] = [[7, 14], [16, 8], [23, 30], [34, 18], [41, 10], [55, 16], [63, 22], [74, 8], [82, 26], [96, 20]]
+/** A treeline along the back, clear of the fire in the middle (nothing between 40% and 56%) */
+const PINES = [1, 3.5, 6.5, 10, 14, 19, 27, 36, 59, 66, 74, 81, 86, 90, 93.5, 97].map((left, i) => {
+  const height = 28 + ((i * 17) % 24)
+  return { left, height, width: Math.round(height * 0.62), light: i % 2 === 1 }
+})
+/** [x %, y %] of the ridge's box */
+const RIDGE: readonly (readonly [number, number])[] = [[0, 100], [0, 60], [8, 30], [15, 55], [24, 15], [33, 60], [42, 40], [52, 70], [61, 25], [70, 55], [79, 20], [88, 60], [95, 35], [100, 55], [100, 100]]
+/** [x %, y %] of a pine's box */
+const PINE: readonly (readonly [number, number])[] = [[50, 0], [80, 40], [65, 40], [95, 78], [58, 78], [58, 100], [42, 100], [42, 78], [5, 78], [35, 40], [20, 40]]
+/** The ground line: the ridge's and the pines' feet */
+const GROUND_Y = STAGE_H - 14
+const RIDGE_H = 46
+
+/** A shape in a box, from percentages */
+const inBox = (pts: readonly (readonly [number, number])[], left: number, top: number, w: number, h: number): number[] => pts.flatMap(([px, py]) => [left + (px * w) / 100, top + (py * h) / 100])
+
+export interface Backdrop {
+  stars: Box[]
+  moon: Circle
+  /** The sky-colored bite that makes the moon a crescent */
+  bite: Circle
+  ridge: Shape
+  pines: Shape[]
+  /** The ground, its top edge and the trail, in drawing order */
+  ground: Box[]
+}
+
+export function backdrop(width: number): Backdrop {
+  const moonLeft = Math.round(width - 0.09 * width) - 12
+  return {
+    stars: STARS.map(([left, top]) => ({ x: Math.round((left * width) / 100), y: top, w: 2, h: 2, fill: '#5a5068' })),
+    moon: { x: moonLeft + 6, y: 18, r: 6, fill: '#f0c9a0' },
+    bite: { x: moonLeft + 10, y: 15, r: 5, fill: SKY },
+    ridge: { points: inBox(RIDGE, 0, GROUND_Y - RIDGE_H, width, RIDGE_H), fill: '#272031' },
+    pines: PINES.map((p) => ({ points: inBox(PINE, (p.left * width) / 100, GROUND_Y - p.height, p.width, p.height), fill: p.light ? '#1e1a27' : '#17141d' })),
+    ground: [
+      { x: 0, y: GROUND_Y, w: width, h: 14, fill: '#16141b' },
+      { x: 0, y: GROUND_Y, w: width, h: 2, fill: '#2c2536' },
+      { x: 0, y: STAGE_H - 6, w: width, h: 3, fill: '#221e2a' }
+    ]
+  }
+}
+
+export interface FireParts {
+  /** Stones either side of the logs, on the feet line */
+  hearth: Box[]
+  /** Three flames standing on the hearth; each grows upward by flameScale(i) */
+  flames: Box[]
+  embers: Box[]
+  /** Where the glow's 140×100 gradient goes */
+  glow: { x: number; y: number; w: number; h: number }
+}
+
+export function fireParts(fireX: number): FireParts {
+  const x0 = fireX - 23
+  const top = FEET_Y - 6
+  return {
+    hearth: [
+      { x: x0, y: FEET_Y - 4, w: 4, h: 4, fill: '#55555e' },
+      { x: x0 + 5, y: FEET_Y - 6, w: 4, h: 6, fill: '#44444c' },
+      { x: x0 + 10, y: FEET_Y - 4, w: 26, h: 4, fill: '#5a3a22' },
+      { x: x0 + 37, y: FEET_Y - 6, w: 4, h: 6, fill: '#44444c' },
+      { x: x0 + 42, y: FEET_Y - 4, w: 4, h: 4, fill: '#55555e' }
+    ],
+    flames: [
+      { x: fireX - 10, y: top - 12, w: 6, h: 12, fill: '#ff5a2a' },
+      { x: fireX - 3, y: top - 20, w: 6, h: 20, fill: '#ff9a3c' },
+      { x: fireX + 4, y: top - 10, w: 6, h: 10, fill: '#ff5a2a' }
+    ],
+    embers: [
+      { x: fireX + 6, y: FEET_Y - 35, w: 2, h: 2, fill: '#ffb347' },
+      { x: fireX - 6, y: FEET_Y - 42, w: 2, h: 2, fill: '#ff7a3c' }
+    ],
+    glow: { x: fireX - 70, y: STAGE_H + 40 - 100, w: 140, h: 100 }
+  }
+}
+
+const TENT_H = 52
+/** A worktree's tent at x (its middle): left face, right face, door */
+export function tentShapes(x: number, worktreeId: string): Shape[] {
+  const [left, right] = tentColors(worktreeId)
+  const l = x - TENT_W / 2
+  const bottom = STAGE_H - 12
+  const peak = bottom - TENT_H
+  return [
+    { points: [l, bottom, x, peak, x, bottom], fill: left },
+    { points: [x, peak, l + TENT_W, bottom, x, bottom], fill: right },
+    { points: [x - 8, bottom, x, peak + 24, x + 8, bottom], fill: '#1f160b' }
+  ]
+}
+
+/** Global's log at x (its middle); drawn with 3 px round corners */
+export const logBox = (x: number): Box => ({ x: x - LOG_W / 2, y: FEET_Y - 6, w: LOG_W, h: 6, fill: '#5a3a22' })
+
+/** A waiting hiker's sign at 3×: a 5×7 board over the head and its glyph, from the hiker's top-left (px) */
+export function signBoxes(sign: Sign, color: string): Box[] {
+  return [{ x: 10.5, y: -24, w: 15, h: 21, fill: color }, ...SIGN_GLYPHS[sign].map(([gx, gy]) => ({ x: (4.5 + gx) * 3, y: (-7 + gy) * 3, w: 3, h: 3, fill: '#111113' }))]
 }

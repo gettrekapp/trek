@@ -3,8 +3,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { lookFor } from '../plugins/campsite/shared/hiker.ts'
+import { tentColors } from '../plugins/campsite/shared/layout.ts'
+import { SIGN_GLYPHS } from '../plugins/campsite/shared/pose.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { departed, DOG_HAPPY_MS, DOG_SETTLE_MS, dogAdvance, dogFrameAt, dogInit, dogPet, dogPoseAt, dogResize, dogX, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
+import { backdrop, FEET_Y, fireParts, INSIDE_FEET_Y, logBox, signBoxes, tentShapes, departed, DOG_HAPPY_MS, DOG_SETTLE_MS, dogAdvance, dogFrameAt, dogInit, dogPet, dogPoseAt, dogResize, dogX, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
 
 /** A rand that hands out the given numbers in turn */
 const seq = (...values) => {
@@ -212,6 +214,55 @@ test('a resize stops it inside the strip, and it settles again', () => {
   assert.equal(s.running, false)
   assert.equal(dogX(s, t), 300)
   assert.equal(s.until, t + DOG_SETTLE_MS)
+})
+
+test('feet: 10 px above the strip’s bottom; inside a tent, 14', () => {
+  assert.equal(FEET_Y, 102)
+  assert.equal(INSIDE_FEET_Y, 98)
+})
+
+test('the backdrop: stars, a crescent moon, a ridge, 16 pines on the ground line, and the ground', () => {
+  const b = backdrop(1000)
+  assert.equal(b.stars.length, 10)
+  assert.deepEqual(b.stars[0], { x: 70, y: 14, w: 2, h: 2, fill: '#5a5068' })
+  assert.deepEqual(b.moon, { x: 904, y: 18, r: 6, fill: '#f0c9a0' })
+  assert.deepEqual(b.bite, { x: 908, y: 15, r: 5, fill: '#1a1622' })
+  assert.deepEqual(b.ridge.points.slice(0, 2), [0, 98])
+  assert.deepEqual(b.ridge.points.slice(-2), [1000, 98])
+  for (let i = 1; i < b.ridge.points.length; i += 2) assert.ok(b.ridge.points[i] >= 52 && b.ridge.points[i] <= 98)
+  assert.equal(b.pines.length, 16)
+  for (const p of b.pines) assert.equal(Math.max(...p.points.filter((_, i) => i % 2 === 1)), 98)
+  assert.equal(Math.min(...b.pines[0].points.filter((_, i) => i % 2 === 1)), 70)
+  assert.deepEqual(b.ground[0], { x: 0, y: 98, w: 1000, h: 14, fill: '#16141b' })
+})
+
+test('the fire: a 46 px hearth on the feet line, three flames on it, two embers, and the glow', () => {
+  const f = fireParts(500)
+  assert.equal(f.hearth[0].x, 477)
+  assert.equal(f.hearth.at(-1).x + f.hearth.at(-1).w, 523)
+  for (const b of f.hearth) assert.equal(b.y + b.h, 102)
+  assert.deepEqual(f.flames.map((b) => [b.x, b.y + b.h, b.h]), [[490, 96, 12], [497, 96, 20], [504, 96, 10]])
+  assert.deepEqual(f.embers.map((b) => [b.x, b.y]), [[506, 67], [494, 60]])
+  assert.deepEqual(f.glow, { x: 430, y: 52, w: 140, h: 100 })
+})
+
+test("a tent: two faces in its worktree's colors and a door, 84×52 standing 12 px up", () => {
+  const [left, right] = tentColors('wt-1')
+  const [a, b, door] = tentShapes(300, 'wt-1')
+  assert.deepEqual(a, { points: [258, 100, 300, 48, 300, 100], fill: left })
+  assert.deepEqual(b, { points: [300, 48, 342, 100, 300, 100], fill: right })
+  assert.deepEqual(door, { points: [292, 100, 300, 72, 308, 100], fill: '#1f160b' })
+})
+
+test('the log, 72×6 on the feet line', () => {
+  assert.deepEqual(logBox(200), { x: 164, y: 96, w: 72, h: 6, fill: '#5a3a22' })
+})
+
+test("a sign: a board over the head and its glyph's cells, from the hiker's top-left", () => {
+  const boxes = signBoxes('attention', '#e2a336')
+  assert.deepEqual(boxes[0], { x: 10.5, y: -24, w: 15, h: 21, fill: '#e2a336' })
+  assert.equal(boxes.length, 1 + SIGN_GLYPHS.attention.length)
+  assert.deepEqual(boxes[1], { x: 16.5, y: -21, w: 3, h: 3, fill: '#111113' })
 })
 
 export { seq }
