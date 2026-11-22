@@ -1,6 +1,9 @@
-// scripts/campsitePlugin.test.mjs — the campsite plugin's identity: a manifest-only server half,
+// scripts/campsitePlugin.test.mjs — the campsite plugin's identity: a server half that keeps the camp,
 // built in after Colima, on by default.
 import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { CAMPSITE_MANIFEST } from '../plugins/campsite/manifest.ts'
 import { campsiteServerPlugin } from '../plugins/campsite/server/index.ts'
@@ -15,9 +18,14 @@ test('campsite: id, default on, no secrets or settings', () => {
   assert.equal(CAMPSITE_MANIFEST.projectSettings, undefined)
 })
 
-test('campsite: its server half has no methods, tools or events', () => {
-  const instance = campsiteServerPlugin.setup({ id: 'campsite' })
-  assert.deepEqual(instance, { handlers: {} })
+test('campsite: its server half answers state, and has no MCP tools', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-campsite-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const host = { id: 'campsite', dataFile: (n) => join(dir, n), onActivity: () => () => {}, emitAll: () => 0, session: () => ({}), checkedWorktree: async () => ({}), run: async () => '', log: { info() {}, warn() {} } }
+  const instance = campsiteServerPlugin.setup(host)
+  t.after(() => instance.dispose?.())
+  assert.deepEqual(Object.keys(instance.handlers), ['state'])
+  assert.equal(instance.mcpTools, undefined)
 })
 
 test('campsite: built in last, after Colima', () => {
