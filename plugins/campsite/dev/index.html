@@ -2,8 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- The app's CSP, exactly as src/renderer/index.html has it: no 'unsafe-eval', so the render
+         proves Pixi runs under it. scripts/campsite-render.mjs serves this page with no HMR and no
+         React refresh (whose inline preamble the CSP would block), so dev needs nothing more. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:"
+    />
     <title>Campsite harness</title>
     <style>
+      /* The app's stylesheet makes every element border-box: the strip's sizes are the real ones */
+      *, *::before, *::after { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: #111113; }
     </style>
   </head>

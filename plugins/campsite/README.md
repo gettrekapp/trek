@@ -19,11 +19,11 @@ it (it belongs to no session and does nothing else).
   - `prefs.ts`: the per-app switches
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
   - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar)
-  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` draws and animates; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without WebGL the strip shows a note and a row of tab-size hikers.
+  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` draws and animates; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `hooks.ts` (sessions, selection, prefs, width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `out/campsite-render/`
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages)
 
 It uses only the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`): no methods or events of its own.

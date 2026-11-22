@@ -7,3 +7,4 @@ dist-release/
 # Local design specs and plans (not tracked)
 docs/superpowers/
 .superpowers/
+.campsite-render/
