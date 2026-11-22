@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { greyscale, rasterize, rgb } from '../plugins/campsite/shared/stage.ts'
+import { dogFrameAt, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, rasterize, rgb, signAlpha } from '../plugins/campsite/shared/stage.ts'
 
 /** A rand that hands out the given numbers in turn */
 const seq = (...values) => {
@@ -53,6 +53,57 @@ test('every hiker pose and frame stands on the bottom row of its 12×16 grid', (
       assert.ok(bottom.some((a) => a === 255), `${pose} ${f}`)
     }
   }
+})
+
+test('two-frame poses swap every 250 ms, a sleeper every 1.5 s; one-frame poses stay on 0', () => {
+  assert.equal(frameAt('chop', 0), 0)
+  assert.equal(frameAt('chop', 250), 1)
+  assert.equal(frameAt('chop', 500), 0)
+  assert.equal(frameAt('sleep', 1499), 0)
+  assert.equal(frameAt('sleep', 1500), 1)
+  assert.equal(frameAt('cheer', 300), 0)
+})
+
+test('motions: bob, wave, step, hop and breathe, as the CSS had them; none is still', () => {
+  assert.deepEqual(motionAt('bob', 0), { dy: 0, sx: 1, sy: 1 })
+  assert.equal(motionAt('bob', 700).dy, -1)
+  assert.equal(motionAt('wave', 250).dy, -1)
+  assert.equal(motionAt('step', 100).dy, 0)
+  assert.equal(motionAt('step', 200).dy, -1)
+  assert.equal(motionAt('hop', 0).dy, 0)
+  assert.equal(motionAt('hop', 450).dy, -4)
+  const breath = motionAt('breathe', 1500)
+  assert.ok(Math.abs(breath.sx - 1.03) < 1e-9 && Math.abs(breath.sy - 0.97) < 1e-9)
+  assert.equal(breath.dy, 0)
+  assert.deepEqual(motionAt(undefined, 123), { dy: 0, sx: 1, sy: 1 })
+})
+
+test('the dog swaps frames at its own pace', () => {
+  assert.equal(dogFrameAt('run', 149), 0)
+  assert.equal(dogFrameAt('run', 150), 1)
+  assert.equal(dogFrameAt('happy', 120), 1)
+  assert.equal(dogFrameAt('sit', 249), 0)
+})
+
+test('a sign blinks: full, then faint, each half a second', () => {
+  assert.equal(signAlpha(0), 1)
+  assert.equal(signAlpha(600), 0.3)
+})
+
+test('flames flicker a third of a cycle apart', () => {
+  assert.equal(flameScale(0, 0), 1)
+  assert.equal(flameScale(0, 150), 1.25)
+  assert.equal(flameScale(1, 0), 1.25)
+  assert.equal(flameScale(1, 100), 1)
+})
+
+test("a pet's heart pops up, rises and fades over a second", () => {
+  assert.deepEqual(heartAt(0), { dy: 4, alpha: 0, scale: 0.6 })
+  assert.deepEqual(heartAt(200), { dy: -2, alpha: 1, scale: 1 })
+  assert.equal(heartAt(1000), null)
+  assert.equal(heartAt(-1), null)
+  const cells = heartPixels()
+  assert.ok(cells.every((r) => r.x >= 0 && r.y >= 0 && r.x + r.w <= 7 && r.y + r.h <= 6))
 })
 
 export { seq }
