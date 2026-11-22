@@ -23,7 +23,7 @@ const SCENARIOS: Record<string, PluginSession[]> = {
   empty: [],
   few: [s(1, 'working', 'api'), s(2, 'attention', 'api'), s(3, 'done', 'web'), s(4, 'idle', null), s(5, 'complete', 'web'), s(6, 'working', null, { decision: true })],
   exited: [s(1, 'exited', 'api'), s(2, 'working', 'api'), s(3, 'exited', null)],
-  grouped: Array.from({ length: 16 }, (_, i) => s(i + 1, i % 5 === 0 ? 'attention' : 'working', `wt${i % 6}`))
+  grouped: Array.from({ length: 20 }, (_, i) => s(i + 1, i % 5 === 0 ? 'attention' : 'working', `wt${i % 6}`))
 }
 
 const params = new URLSearchParams(location.search)
