@@ -15,12 +15,15 @@ it (it belongs to no session and does nothing else).
   - `pose.ts`: the stance for a status, the rotating chores (`choreFor` is where activity detection would go), labels
   - `layout.ts`: where tents, the log and hikers stand; grouped mode when crowded (`moreWaiting` and `moreTents` count what does not fit); badge wording and color, tent colors, which way a camp's list opens, the header line, the collapsed row
   - `dog.ts`: the camp dog's pixels, and where it runs next
+  - `stage.ts`: the Pixi strip's pure half: pixels to RGBA, the motions' timing, walks in and off (`reconcileMovers`), the dog's wander, and where the backdrop, fire, tents, log and signs go
   - `prefs.ts`: the per-app switches
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
-  - `Campsite.tsx` (the strip and its collapsed bar), `CampScene.tsx` (the dusk backdrop), `CampHiker.tsx` (a walking hiker), `Tent.tsx` (a tent in its worktree's color, and its grouped popover), `Dog.tsx` (the camp dog: runs, sits, gets petted), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar)
+  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar)
+  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` draws and animates; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without WebGL the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `hooks.ts` (sessions, selection, prefs, width, reduced motion)
-  - `campsite.css`: the animations; `prefers-reduced-motion` is handled here, so hikers stand still
+  - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `out/campsite-render/`
 
 It uses only the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`): no methods or events of its own.
