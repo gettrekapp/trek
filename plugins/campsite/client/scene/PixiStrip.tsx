@@ -2,7 +2,7 @@
 // collapsed strip never pay for Pixi) under a DOM overlay of buttons over the hikers and the dog,
 // which carry their names, tooltips, focus and clicks. If Pixi can't start (no WebGL), a note and a
 // plain row of tab-size hikers instead.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
@@ -24,7 +24,11 @@ interface Props {
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
 
-/** A theme's color token, if it is a #rrggbb Pixi can read; else the fallback */
+/**
+ * A theme's color token, if it is a #rrggbb Pixi can read; else the fallback. The sign colors are
+ * read once, when the stage mounts: a theme switch shows the next time the strip opens, and only
+ * #rrggbb values are taken (a theme's rgb(), hsl() or named color falls back).
+ */
 function token(style: CSSStyleDeclaration, name: string, fallback: string): string {
   const value = style.getPropertyValue(name).trim()
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
@@ -62,7 +66,8 @@ export function PixiStrip({ layout, sessions, now, selected, paused, showDog, on
   }, [])
 
   const stage = load.state === 'ready' ? load.stage : null
-  useEffect(() => {
+  // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
+  useLayoutEffect(() => {
     stage?.update({ layout, sessions, now, selected, reduced, paused, showDog })
   }, [stage, layout, sessions, now, selected, reduced, paused, showDog])
 

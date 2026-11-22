@@ -6,7 +6,7 @@ import { lookFor } from '../plugins/campsite/shared/hiker.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
 import { SIGN_GLYPHS } from '../plugins/campsite/shared/pose.ts'
 import { FRAMES, POSES, pixels } from '../plugins/campsite/shared/pixels.ts'
-import { backdrop, FEET_Y, fireParts, INSIDE_FEET_Y, logBox, signBoxes, tentShapes, departed, DOG_HAPPY_MS, DOG_SETTLE_MS, dogAdvance, dogFrameAt, dogInit, dogPet, dogPoseAt, dogResize, dogX, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
+import { backdrop, FEET_Y, fireParts, INSIDE_FEET_Y, logBox, signBoxes, tentShapes, departed, DOG_HAPPY_MS, DOG_SETTLE_MS, dogAdvance, dogFrameAt, dogHalt, dogInit, dogPet, dogPoseAt, dogResize, dogX, flameScale, frameAt, greyscale, heartAt, heartPixels, motionAt, offstage, rasterize, reconcileMovers, rgb, signAlpha, walkAt, WALK_MS } from '../plugins/campsite/shared/stage.ts'
 
 /** A rand that hands out the given numbers in turn */
 const seq = (...values) => {
@@ -220,6 +220,16 @@ test('a resize stops it inside the strip, and it settles again', () => {
   assert.equal(s.running, false)
   assert.equal(dogX(s, t), 300)
   assert.equal(s.until, t + DOG_SETTLE_MS)
+})
+
+test('halted mid-run (the window hidden), it stays where it was drawn', () => {
+  const run = dogAdvance(dogInit(800, 0), DOG_SETTLE_MS, trip(), 800)
+  const t = DOG_SETTLE_MS + 1927
+  assert.equal(dogPoseAt(run, t), 'run')
+  const x = dogX(run, t)
+  const s = dogHalt(run, t, 800)
+  assert.equal(s.running, false)
+  for (const later of [t, t + 100, t + 5000, t + 60_000]) assert.equal(dogX(s, later), x)
 })
 
 test('feet: 10 px above the strip’s bottom; inside a tent, 14', () => {

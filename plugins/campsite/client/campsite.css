@@ -186,13 +186,21 @@
 }
 /* The Pixi canvas, under the camps' signs and the overlay's buttons; clicks go through to them */
 .cs-canvas {
+  /* Bottom-anchored at the strip's full 112 px: with border-box, .campsite's 1 px top border leaves
+     .cs-stage 111 px tall, and a top-anchored canvas would sit every sprite 1 px below its
+     bottom-anchored DOM button and sign */
   position: absolute;
-  inset: 0;
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 112px;
   z-index: 0;
   pointer-events: none;
 }
 .cs-canvas canvas {
   display: block;
+  image-rendering: pixelated;
 }
 /* No WebGL: a note and the hikers in a row, under the header */
 .cs-fallback {

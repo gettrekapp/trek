@@ -249,6 +249,9 @@ export function dogResize(s: DogState, t: number, width: number): DogState {
   return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS }
 }
 
+/** The window was hidden or shown again: it stops where it is drawn and settles before running again */
+export const dogHalt = (s: DogState, t: number, width: number): DogState => dogResize(s, t, width)
+
 /** Where hikers and the dog stand: 10 px above the strip's bottom; a hiker inside a tent, 14 */
 export const FEET_Y = STAGE_H - 10
 export const INSIDE_FEET_Y = STAGE_H - 14

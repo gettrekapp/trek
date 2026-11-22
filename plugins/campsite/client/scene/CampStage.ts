@@ -22,6 +22,7 @@ import {
   departed,
   dogAdvance,
   dogFrameAt,
+  dogHalt,
   dogInit,
   dogPet,
   dogPoseAt,
@@ -120,6 +121,13 @@ export class CampStage {
   private dogTarget: HTMLElement | null = null
   private hearts: { start: number; sprite: Sprite }[] = []
   private destroyed = false
+  /** Watches for the display's scale changing (a move to another screen, a zoom) */
+  private dpr: MediaQueryList | null = null
+  private readonly onDpr = (): void => {
+    if (this.destroyed) return
+    this.app.renderer.resize(Math.max(1, this.width), STAGE_H, window.devicePixelRatio)
+    this.watchDpr()
+  }
 
   private constructor(app: Application, parent: HTMLElement, colors: SignColors) {
     this.app = app
@@ -130,7 +138,17 @@ export class CampStage {
     this.dogSprite.anchor.set(0.5, 1)
     this.dog.addChild(this.dogSprite)
     app.stage.addChild(this.backdrop, this.glow, this.inside, this.camps, this.fire, this.dog, this.front)
+    // Pixel art at a few px a frame: 30 fps is plenty
+    app.ticker.maxFPS = 30
     app.ticker.add(() => this.frame(performance.now()))
+    this.watchDpr()
+  }
+
+  /** (Re-)arms the scale watcher for the current devicePixelRatio */
+  private watchDpr(): void {
+    this.dpr?.removeEventListener('change', this.onDpr)
+    this.dpr = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+    this.dpr.addEventListener('change', this.onDpr)
   }
 
   /** A new layout, sessions, selection or prefs: reconcile the sprites and draw at once */
@@ -141,6 +159,8 @@ export class CampStage {
     if (width !== this.width) this.resize(width, t)
     this.movers = reconcileMovers(this.movers, s.layout.hikers, width, t, { first: !this.laidOut, instant: s.reduced })
     if (width > 0) this.laidOut = true
+    // Hidden or shown again: the dog stops where it is drawn (and doesn't run on unseen), then settles
+    if (this.snapshot && this.snapshot.paused !== s.paused && this.dogState) this.dogState = dogHalt(this.dogState, t, width)
     this.snapshot = s
     this.drawCamps(s.layout)
     this.syncHikers(s)
@@ -149,11 +169,13 @@ export class CampStage {
     this.embers.visible = lit
     this.dog.visible = s.showDog && width > 0
     if (this.dogTarget) this.dogTarget.style.visibility = this.dog.visible ? '' : 'hidden'
-    if (s.paused) this.app.ticker.stop()
+    // Hidden, or reduced motion with no heart rising: nothing moves, so no frames
+    const idle = s.paused || (s.reduced && this.hearts.length === 0)
+    if (idle) this.app.ticker.stop()
     else this.app.ticker.start()
     this.frame(t)
     // A stopped ticker doesn't render: draw this change once by hand
-    if (s.paused) this.app.render()
+    if (idle) this.app.render()
   }
 
   /** The overlay button over a hiker's sprite (null: it went) */
@@ -182,11 +204,15 @@ export class CampStage {
     sprite.anchor.set(0.5, 1)
     this.dog.addChild(sprite)
     this.hearts.push({ start: t, sprite })
+    // Reduced motion stops the ticker: run it while the heart rises (frame() stops it after)
+    this.app.ticker.start()
   }
 
   destroy(): void {
     if (this.destroyed) return
     this.destroyed = true
+    this.dpr?.removeEventListener('change', this.onDpr)
+    this.dpr = null
     this.app.destroy({ removeView: true }, { children: true })
     this.textures.destroy()
     this.targets.clear()
@@ -234,8 +260,8 @@ export class CampStage {
         actor.lookKey = lookKey
       }
       actor.session = session
-      // A leaving hiker keeps its last place
-      actor.place = places.get(id) ?? actor.place
+      // A leaving hiker walks off as an out hiker (on the feet line, in front, not grey), as the old departures did
+      actor.place = this.movers.get(id)?.leaving ? 'tent' : (places.get(id) ?? actor.place)
       const layer = actor.place === 'inside' ? this.inside : this.front
       if (actor.root.parent !== layer) layer.addChild(actor.root)
     }
@@ -256,6 +282,8 @@ export class CampStage {
   private removeHiker(id: string): void {
     this.hikers.get(id)?.root.destroy({ children: true })
     this.hikers.delete(id)
+    // Its textures' keys are `hiker:${lookKey}:…`, and lookKey is `${id}:${provider}`
+    this.textures.evict(`hiker:${id}:`)
   }
 
   /** Every frame (and after each update): positions, poses, frames, motions, the fire, the dog */
@@ -274,6 +302,8 @@ export class CampStage {
     }
     this.drawFlames(s, t, still)
     this.drawDog(s, t, still)
+    // Reduced motion: the last heart has gone, so stop the frames petDog() started
+    if (s.reduced && this.hearts.length === 0 && this.app.ticker.started) this.app.ticker.stop()
   }
 
   private drawHiker(a: HikerActor, m: Mover, s: StageSnapshot, t: number, still: boolean): void {
@@ -311,7 +341,7 @@ export class CampStage {
   private drawDog(s: StageSnapshot, t: number, still: boolean): void {
     if (!this.dogState || !this.dog.visible) return
     const lit = s.sessions.length > 0
-    if (!still) this.dogState = dogAdvance(this.dogState, t, Math.random, this.width, lit ? s.layout.fireX : undefined)
+    if (!still && !s.paused) this.dogState = dogAdvance(this.dogState, t, Math.random, this.width, lit ? s.layout.fireX : undefined)
     const pose = dogPoseAt(this.dogState, t)
     const frame = still ? 0 : dogFrameAt(pose, t)
     this.dogSprite.texture = this.textures.get(`dog:${pose}:${frame}`, DOG_GRID.w, DOG_GRID.h, () => dogPixels(pose, frame))

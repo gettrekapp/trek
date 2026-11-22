@@ -19,7 +19,8 @@ export class TextureCache {
     canvas.width = w
     canvas.height = h
     canvas.getContext('2d')!.putImageData(new ImageData(rgba, w, h), 0, 0)
-    const texture = Texture.from(canvas)
+    // Private canvases: kept out of Pixi's global Cache, so destroying them here frees them
+    const texture = Texture.from(canvas, true)
     texture.source.scaleMode = 'nearest'
     this.cache.set(k, texture)
     return texture
@@ -41,9 +42,18 @@ export class TextureCache {
     gradient.addColorStop(0.7, 'rgba(255, 154, 60, 0)')
     ctx.fillStyle = gradient
     ctx.fillRect(-70, -70, 140, 140)
-    const texture = Texture.from(canvas)
+    const texture = Texture.from(canvas, true)
     this.cache.set('glow', texture)
     return texture
+  }
+
+  /** Destroys and forgets every texture whose key starts with `prefix` (in either color) */
+  evict(prefix: string): void {
+    for (const [k, t] of this.cache) {
+      if (!k.startsWith(prefix)) continue
+      t.destroy(true)
+      this.cache.delete(k)
+    }
   }
 
   destroy(): void {
