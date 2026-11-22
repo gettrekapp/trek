@@ -29,7 +29,7 @@ const gitEnv = {
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
-async function setup(t, { prProviders } = {}) {
+async function setup(t, { prProviders, activity } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-wt-')))
   t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
@@ -50,7 +50,7 @@ async function setup(t, { prProviders } = {}) {
   const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } }, refreshAttention }
   // The project's PR providers (plugins P3): the github one by default, over a gh that is never run.
   const plugins = { prProviders: () => prProviders ?? [createGithubPrProvider(async () => { throw new Error('no gh in these tests') })] }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions, plugins })
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions, plugins, activity })
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId
   await poller.refresh(a)
@@ -344,6 +344,18 @@ test('worktree.remove deletes a clean worktree and its worktreeOrder entry', asy
   assert.equal(existsSync(wt.path), false)
   assert.equal(s.worktree(wt.id), undefined)
   assert.equal(s.project().settings.worktreeOrder, undefined)
+})
+
+test('activity: worktree.create is worktree.created, worktree.remove is worktree.removed', async (t) => {
+  const events = []
+  const s = await setup(t, { activity: { emit: (e) => events.push(e) } })
+  const wt = await withWorktree(s, 'camp')
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(events.map(({ at, ...e }) => (assert.equal(typeof at, 'number'), e)), [
+    { kind: 'worktree.created', projectId: s.projectId, repoId: s.repoId, worktreeId: wt.id, branch: 'camp' },
+    { kind: 'worktree.removed', projectId: s.projectId, repoId: s.repoId, worktreeId: wt.id, branch: 'camp' }
+  ])
 })
 
 /** Gives a worktree a PR notice (5c-1) and republishes attention, as the PR watch does. */

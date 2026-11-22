@@ -291,6 +291,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     })
     const projectId = requireString(p.projectId, 'projectId')
     recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'created', to: { text: target } }])
+    ctx.activity?.emit({ kind: 'worktree.created', projectId, at: Date.now(), repoId: repo.id, worktreeId, branch: branchName ?? null })
     if (tagged) recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'status', to: tagged }], BY_TREK)
     return linkWarnings.length > 0 ? { worktreeId, linkWarnings } : { worktreeId }
   },
@@ -375,6 +376,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     // The `attention` topic lists the row's PR notice (5c-1), if it had one.
     ctx.sessions.refreshAttention()
     recordHistory(ctx, requireString(p.projectId, 'projectId'), repo.id, worktree.branch, [{ kind: 'removed', from: { text: worktree.path } }])
+    ctx.activity?.emit({ kind: 'worktree.removed', projectId: requireString(p.projectId, 'projectId'), at: Date.now(), repoId: repo.id, worktreeId: worktree.id, branch: worktree.branch ?? null })
     // What was torn down first (plugins E1): the labels of the items that ran, none skipped.
     return { tornDown }
   },

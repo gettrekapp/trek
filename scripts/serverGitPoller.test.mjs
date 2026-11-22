@@ -17,7 +17,7 @@ function gate() {
 /** Lets pending reads reach the fake git. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 
-function setup(t, { onHealth } = {}) {
+function setup(t, { onHealth, activity } = {}) {
   const hub = new TopicHub()
   const saves = []
   const failSave = new Set()
@@ -62,7 +62,7 @@ function setup(t, { onHealth } = {}) {
   const registry = [A]
   let healthChanges = 0
   const poller = new GitPoller({
-    projects, hub, registry: () => registry, git, now: () => clock,
+    projects, hub, registry: () => registry, git, now: () => clock, activity,
     onHealth: () => { healthChanges++; onHealth?.() }
   })
   t.after(() => poller.stop())
@@ -345,4 +345,26 @@ test('a list read that finishes after stop() applies nothing', async (t) => {
   s.gates.list.open()
   await refreshed
   assert.ok(!s.project(id).repositories[0].worktrees.some((w) => w.path === '/r/a-new'))
+})
+
+test('activity: a moved head is worktree.head; nothing moved, or a new row, is not', async (t) => {
+  const events = []
+  const s = setup(t, { activity: { emit: (e) => events.push(e) } })
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  await s.poller.tick()
+  assert.deepEqual(events, [], 'the first rows had no previous head')
+
+  s.listing.get('/r/a')[1].head = 'h3'
+  s.advance(60_000)
+  await s.poller.tick()
+  const feat = s.project(id).repositories[0].worktrees[1]
+  assert.deepEqual(events, [{ kind: 'worktree.head', projectId: id, at: 1_060_000, repoId: s.project(id).repositories[0].id, worktreeId: feat.id, branch: 'feat', from: 'h2', to: 'h3' }])
+
+  s.advance(60_000)
+  await s.poller.tick()
+  s.listing.get('/r/a').push({ path: '/r/a-new', branch: 'new', head: 'h4', isMain: false })
+  s.advance(60_000)
+  await s.poller.tick()
+  assert.ok(s.project(id).repositories[0].worktrees.some((w) => w.path === '/r/a-new'))
+  assert.equal(events.length, 1)
 })

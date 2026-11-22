@@ -4,6 +4,7 @@
 import { listWorktrees, worktreeStatuses } from '../../../src/host/gitService.ts'
 import { parseTopic, projectTopic } from '../../../src/shared/model/topics.ts'
 import type { HealthWarning, Project, Repository } from '../../../src/shared/model/types'
+import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import type { GitWorktreeInfo, WorktreeStatus } from '../../../src/shared/types'
 import type { ProjectState } from '../projects/state.ts'
@@ -39,6 +40,8 @@ export interface GitPollerDeps {
   onHealth: () => void
   /** Called when a list drops a row that had a PR notice (5c-1): the `attention` topic lists it, so it is republished */
   onAttentionChange?: () => void
+  /** Core's activity feed (campsite part 2): a worktree's head moved */
+  activity?: { emit(event: ActivityEvent): void }
   git?: GitReader
   now?: () => number
   intervals?: Partial<PollIntervals>
@@ -266,6 +269,7 @@ export class GitPoller {
     if (!repo) return false
     // A dry run decides whether this write must reach disk.
     const preview = reconcileWorktrees(repo, listed, () => 'preview')
+    const before = new Map(repo.worktrees.map((w) => [w.id, w.head]))
     let droppedNotice = false
     this.deps.projects.apply(
       projectId,
@@ -283,6 +287,15 @@ export class GitPoller {
         this.deps.onAttentionChange?.()
       } catch (err) {
         console.warn('git poller attention listener failed', err)
+      }
+    }
+    if (preview.headsChanged) {
+      const after = this.find(projectId)?.repositories.find((r) => r.id === repo.id)
+      for (const w of after?.worktrees ?? []) {
+        const from = before.get(w.id)
+        if (from && w.head && from !== w.head) {
+          this.deps.activity?.emit({ kind: 'worktree.head', projectId, at: this.now(), repoId: repo.id, worktreeId: w.id, branch: w.branch ?? null, from, to: w.head })
+        }
       }
     }
     return preview.headsChanged
