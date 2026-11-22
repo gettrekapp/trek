@@ -49,6 +49,7 @@ function registryWith(t, feed, more = {}) {
   const emitted = []
   const hub = { emitted, emit: (topic, event, data) => (emitted.push([topic, event, data]), 2), eventSubscriberCount: () => 0 }
   const seen = {}
+  const warnings = []
   const plugin = {
     manifest: { id: 'test', version: '1.0.0', name: 'test', description: '', defaultEnabled: true },
     setup(host) {
@@ -66,9 +67,9 @@ function registryWith(t, feed, more = {}) {
     isCoreMethod: () => false,
     coreToolNames: [],
     activity: feed,
-    warn: () => {}
+    warn: (m) => warnings.push(m)
   })
-  return { registry, hub, host: seen.host }
+  return { registry, hub, host: seen.host, warnings }
 }
 
 test('host.onActivity delivers only events from projects where the plugin is on; emitAll reaches those projects', async (t) => {
@@ -106,4 +107,36 @@ test("host.onActivity's unsubscribe stops it; a plugin refused after its setup, 
   assert.equal(listeners.size, 1)
   await kept.registry.dispose()
   assert.equal(listeners.size, 0)
+})
+
+test("a plugin's throwing onActivity listener is logged once a minute, naming the plugin; the others still hear", (t) => {
+  const feed = createActivityFeed({ warn: () => assert.fail('the plugin host catches it first') })
+  const { host, warnings } = registryWith(t, feed)
+  const got = []
+  host.onActivity(() => { throw new Error('boom') })
+  host.onActivity((e) => got.push(e.at))
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 1, terminalId: 't', worktreeId: null })
+  feed.emit({ kind: 'session.closed', projectId: 'p1', at: 2, terminalId: 't', worktreeId: null })
+  assert.deepEqual(got, [1, 2])
+  assert.deepEqual(warnings, ['[plugin test] onActivity failed on session.closed: boom'])
+})
+
+test('host.onActivity after the plugin was disposed subscribes nothing', async (t) => {
+  const listeners = new Set()
+  const counting = { subscribe: (l) => (listeners.add(l), () => listeners.delete(l)) }
+  const { registry, host } = registryWith(t, counting)
+  await registry.dispose()
+  const off = host.onActivity(() => {})
+  assert.equal(listeners.size, 0)
+  assert.equal(typeof off, 'function')
+  off()
+})
+
+test('events are frozen: a listener cannot change what the next one hears', () => {
+  const feed = createActivityFeed({ warn: () => {} })
+  const seen = []
+  feed.subscribe((e) => { e.projectId = 'changed' })
+  feed.subscribe((e) => seen.push(e.projectId))
+  feed.emit({ kind: 'session.closed', projectId: 'p', at: 1, terminalId: 't', worktreeId: null })
+  assert.deepEqual(seen, ['p'])
 })

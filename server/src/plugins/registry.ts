@@ -60,6 +60,8 @@ function fileIn(dir: string, name: string): string {
 /** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. PATH_DENIED and GIT_ERROR: the host's checked lookups (plugins E2). */
 const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR', 'NOT_SIGNED_IN', 'PATH_DENIED', 'GIT_ERROR'])
 
+/** A plugin's failing onActivity listener is logged at most this often */
+const ACTIVITY_WARN_MS = 60_000
 /** How long dispose waits for the plugins' children (plugins E2): past the SIGKILL that follows their SIGTERM. */
 export const PLUGIN_STOP_MS = SPAWN_KILL_GRACE_MS + 500
 
@@ -247,7 +249,10 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   }
   /** Each plugin's host.onActivity unsubscribes: run when it is disposed */
   const activityOffs = new Map<string, (() => void)[]>()
+  /** Plugins disposed (or refused): a later host.onActivity of theirs subscribes nothing */
+  const activityDropped = new Set<string>()
   const dropActivity = (id: string): void => {
+    activityDropped.add(id)
     for (const off of activityOffs.get(id) ?? []) off()
     activityOffs.delete(id)
   }
@@ -269,6 +274,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const allowedSecrets = new Set(manifest.secrets ?? [])
     const abort = new AbortController()
     aborts.set(manifest.id, abort)
+    /** When this plugin's onActivity listener failure was last logged */
+    let activityWarnedAt: number | undefined
     /**
      * A program's cwd (plugins E1, E2: host.spawn, and host.run when it has one): exactly a project's
      * repository or present worktree, inside the server's allowed paths, or this plugin's data directory.
@@ -351,9 +358,20 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         return reached
       },
       onActivity: (listener) => {
+        if (activityDropped.has(manifest.id)) return () => {}
         const off =
           options.activity?.subscribe((e) => {
-            if (enabled(e.projectId, manifest.id)) listener(e)
+            if (!enabled(e.projectId, manifest.id)) return
+            try {
+              listener(e)
+            } catch (err) {
+              // Named here (the feed's own warning can't say whose listener it was), once a minute per plugin.
+              const now = Date.now()
+              if (activityWarnedAt === undefined || now - activityWarnedAt >= ACTIVITY_WARN_MS) {
+                activityWarnedAt = now
+                warn(`[plugin ${manifest.id}] onActivity failed on ${e.kind}: ${err instanceof Error ? err.message : String(err)}`)
+              }
+            }
           }) ?? (() => {})
         const list = activityOffs.get(manifest.id) ?? []
         list.push(off)
@@ -619,7 +637,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       changedListeners.length = 0
       for (const a of aborts.values()) a.abort()
       aborts.clear()
-      for (const id of [...activityOffs.keys()]) dropActivity(id)
+      for (const id of new Set([...disposing.map((e) => e.manifest.id), ...activityOffs.keys()])) dropActivity(id)
       for (const e of disposing) {
         try {
           e.instance.dispose?.()
