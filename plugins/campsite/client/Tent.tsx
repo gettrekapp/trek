@@ -1,11 +1,11 @@
-// A worktree's tent at the campsite strip, in its own color, with its branch on a sign across the peak,
+// A worktree's tent at the campsite strip: its branch on a sign across the peak (Pixi draws the tent),
 // and Global's log. Grouped (a crowded camp), each carries a badge (name, count, who is waiting)
 // that opens a list of its sessions (TentPopover, drawn beside the tents so it sits over the app,
 // not inside the tent's stacking context).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { lookFor } from '../shared/hiker.ts'
-import { LOG_W, TENT_W, campTone, popoverLeft, signText, tentBadge, tentColors, type CampTent, type FireSide } from '../shared/layout.ts'
+import { LOG_W, TENT_W, campTone, popoverLeft, signText, tentBadge, type CampTent, type FireSide } from '../shared/layout.ts'
 import { SIGN_TEXT, choreFor, hikerLabel, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
 
@@ -18,15 +18,8 @@ interface Props {
 }
 
 export function Tent({ tent, grouped, open, onToggle }: Props): React.JSX.Element {
-  const [left, right] = tentColors(tent.worktreeId)
   return (
     <div className="cs-tent" style={{ left: tent.x - TENT_W / 2, width: TENT_W }}>
-      {/* Drawn on an 84-wide grid, scaled to TENT_W */}
-      <svg width={TENT_W} height={52} viewBox="0 0 84 52" preserveAspectRatio="none" aria-hidden="true">
-        <polygon points="0,52 42,0 42,52" fill={left} />
-        <polygon points="42,0 84,52 42,52" fill={right} />
-        <polygon points="34,52 42,24 50,52" fill="#1f160b" />
-      </svg>
       {grouped ? (
         <CampBadge camp={tent} name={signText(tent.name)} title={tent.name} open={open} onToggle={onToggle} />
       ) : (

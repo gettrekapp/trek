@@ -178,76 +178,38 @@
 .cs-paused * {
   animation-play-state: paused !important;
 }
-.cs-scene {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-}
-.cs-scene i {
-  position: absolute;
-  display: block;
-}
-.cs-star {
-  width: 2px;
-  height: 2px;
-  background: #5a5068;
-}
-.cs-moon {
-  right: 9%;
-  top: 12px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #f0c9a0;
-}
-/* The bite that makes it a crescent */
-.cs-moon::after {
-  content: '';
-  position: absolute;
-  right: -3px;
-  top: -2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #1a1622;
-}
-.cs-ridge {
-  left: 0;
-  right: 0;
-  bottom: 14px;
-  height: 46px;
-  background: #272031;
-  clip-path: polygon(0 100%, 0 60%, 8% 30%, 15% 55%, 24% 15%, 33% 60%, 42% 40%, 52% 70%, 61% 25%, 70% 55%, 79% 20%, 88% 60%, 95% 35%, 100% 55%, 100% 100%);
-}
-.cs-pine {
-  bottom: 14px;
-  background: #17141d;
-  clip-path: polygon(50% 0, 80% 40%, 65% 40%, 95% 78%, 58% 78%, 58% 100%, 42% 100%, 42% 78%, 5% 78%, 35% 40%, 20% 40%);
-}
-.cs-pine.light {
-  background: #1e1a27;
-}
-.cs-ground {
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 14px;
-  background: #16141b;
-  border-top: 2px solid #2c2536;
-  box-sizing: border-box;
-}
-.cs-trail {
-  left: 0;
-  right: 0;
-  bottom: 3px;
-  height: 3px;
-  background: #221e2a;
-}
 /* Clips hikers walking in from off-stage; the header and the popover sit beside it */
 .cs-stage {
   position: absolute;
   inset: 0;
   overflow: hidden;
+}
+/* The Pixi canvas, under the camps' signs and the overlay's buttons; clicks go through to them */
+.cs-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.cs-canvas canvas {
+  display: block;
+}
+/* No WebGL: a note and the hikers in a row, under the header */
+.cs-fallback {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cs-fallback .cs-mini-row {
+  flex: none;
+}
+.cs-fallback-note {
+  color: #9a9aa2;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .cs-header {
   position: absolute;
@@ -292,84 +254,11 @@
   font: 700 11px ui-monospace, 'SF Mono', Menlo, monospace;
   cursor: pointer;
 }
-.cs-fire {
-  position: absolute;
-  bottom: 10px;
-  width: 46px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 1;
-}
-.cs-flames {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 1px;
-  height: 22px;
-}
-.cs-flames span {
-  display: block;
-  width: 6px;
-  background: #ff9a3c;
-  transform-origin: bottom;
-  animation: cs-flick 0.3s steps(2) infinite;
-}
-.cs-flames span:nth-child(1) { height: 12px; background: #ff5a2a; }
-.cs-flames span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
-.cs-flames span:nth-child(3) { height: 10px; background: #ff5a2a; animation-delay: 0.2s; }
-/* A ring of stones either side of the logs */
-.cs-hearth {
-  display: flex;
-  align-items: flex-end;
-  gap: 1px;
-}
-.cs-hearth b {
-  width: 4px;
-  height: 4px;
-  background: #55555e;
-}
-.cs-hearth b:nth-child(2),
-.cs-hearth b:nth-child(4) {
-  height: 6px;
-  background: #44444c;
-}
-.cs-hearth em {
-  width: 26px;
-  height: 4px;
-  background: #5a3a22;
-}
-.cs-ember {
-  position: absolute;
-  left: 50%;
-  width: 2px;
-  height: 2px;
-}
-.cs-ember.a { top: -7px; margin-left: 6px; background: #ffb347; }
-.cs-ember.b { top: -14px; margin-left: -6px; background: #ff7a3c; }
-.cs-fire.cold .cs-flames,
-.cs-fire.cold .cs-ember {
-  display: none;
-}
-@keyframes cs-flick {
-  0%, 100% { transform: scaleY(1); }
-  50% { transform: scaleY(1.25); }
-}
-.cs-glow {
-  position: absolute;
-  bottom: -40px;
-  width: 140px;
-  height: 100px;
-  background: radial-gradient(rgba(255, 154, 60, 0.2), transparent 70%);
-  pointer-events: none;
-}
 .cs-log {
   position: absolute;
   bottom: 10px;
   /* width: LOG_W, inline (Tent.tsx) */
   height: 6px;
-  background: #5a3a22;
-  border-radius: 3px;
   z-index: 1;
 }
 .cs-tent {
@@ -377,9 +266,6 @@
   bottom: 12px;
   /* width: TENT_W, inline (Tent.tsx) */
   z-index: 1;
-}
-.cs-tent svg {
-  display: block;
 }
 /* Across the tent's peak: 60–76 px above the strip's bottom, clear of a 3× hiker's hat in front (58 px) and of the header (from 82 px) */
 .cs-tent-sign {
@@ -490,90 +376,43 @@
 .cs-row-status.decision {
   color: var(--decision, #b18cff);
 }
+/* Over a hiker's sprite (CampStage moves it every frame): invisible, but it takes the click, the focus ring and the tooltip */
 .cs-camp-hiker {
   position: absolute;
   left: 0;
   bottom: 10px;
+  width: 36px;
+  height: 48px;
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
   z-index: 2;
-  transition: transform 1.2s linear;
-}
-/* The flip is on a wrapper: the hiker's own animations (the walk's bob) set its transform */
-.cs-facing {
-  display: block;
-}
-.cs-camp-hiker.left .cs-facing {
-  transform: scaleX(-1);
-}
-/* The sign reads the right way round on a hiker facing left (the board is centred on x = 6) */
-.cs-camp-hiker.left .cs-sign {
-  transform: scaleX(-1);
-  transform-origin: 6px 0;
 }
 .cs-camp-hiker.inside {
   z-index: 0;
   bottom: 14px;
 }
-/* The lantern: a flat pool of light under the shown session's hiker */
-.cs-camp-hiker.selected::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -3px;
-  width: 40px;
-  height: 6px;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: rgba(255, 230, 128, 0.5);
-  pointer-events: none;
-}
 .cs-camp-hiker:focus-visible {
   outline: 1px solid #ffe680;
   outline-offset: 2px;
 }
-/* The camp dog: runs between sits (the run's length is set inline), behind the hikers */
+/* Over the dog's sprite (CampStage moves it), before the hikers so a click on a hiker is never the dog's */
 .cs-dog {
   position: absolute;
   left: 0;
   bottom: 10px;
+  width: 36px;
+  height: 24px;
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
   z-index: 2;
-  transition: transform 0s linear;
 }
-.cs-dog.left .cs-facing {
-  transform: scaleX(-1);
-}
-.cs-dog svg {
-  display: block;
-  overflow: visible;
-}
-.cs-dog.run .cs-frame-0,
-.cs-dog.run .cs-frame-1 { animation-duration: 0.3s; }
-/* Petted: the tail goes faster */
-.cs-dog.happy .cs-frame-0,
-.cs-dog.happy .cs-frame-1 { animation-duration: 0.24s; }
 .cs-dog:focus-visible {
   outline: 1px solid #ffe680;
   outline-offset: 2px;
-}
-.cs-heart {
-  position: absolute;
-  left: 50%;
-  bottom: 100%;
-  margin-left: -7px;
-  pointer-events: none;
-  animation: cs-heart 1s ease-out forwards;
-}
-@keyframes cs-heart {
-  0% { transform: translateY(4px) scale(0.6); opacity: 0; }
-  20% { transform: translateY(-2px) scale(1); opacity: 1; }
-  100% { transform: translateY(-22px) scale(1); opacity: 0; }
 }
 .cs-more,
 .cs-empty {

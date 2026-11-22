@@ -1,0 +1,103 @@
+// The expanded strip's stage: a Pixi canvas (CampStage, loaded on first use so the app and the
+// collapsed strip never pay for Pixi) under a DOM overlay of buttons over the hikers and the dog,
+// which carry their names, tooltips, focus and clicks. If Pixi can't start (no WebGL), a note and a
+// plain row of tab-size hikers instead.
+import { useEffect, useRef, useState } from 'react'
+import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
+import type { CampLayout } from '../../shared/layout.ts'
+import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
+import { useReducedMotion } from '../hooks.ts'
+import { MiniHiker } from '../MiniHiker.tsx'
+import type { CampStage, SignColors } from './CampStage.ts'
+
+interface Props {
+  layout: CampLayout
+  sessions: readonly PluginSession[]
+  /** The chores' clock */
+  now: number
+  selected: string | null
+  /** The window is hidden */
+  paused: boolean
+  showDog: boolean
+  onPick: (terminalId: string) => void
+}
+
+type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
+
+/** A theme's color token, if it is a #rrggbb Pixi can read; else the fallback */
+function token(style: CSSStyleDeclaration, name: string, fallback: string): string {
+  const value = style.getPropertyValue(name).trim()
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
+}
+
+export function PixiStrip({ layout, sessions, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
+  const reduced = useReducedMotion()
+  const host = useRef<HTMLDivElement>(null)
+  const [load, setLoad] = useState<Load>({ state: 'loading' })
+
+  useEffect(() => {
+    const el = host.current
+    if (!el) return
+    let gone = false
+    let made: CampStage | null = null
+    const style = getComputedStyle(el)
+    const colors: SignColors = { attention: token(style, '--attention', '#e2a336'), decision: token(style, '--decision', '#b18cff') }
+    import('./CampStage.ts')
+      .then(({ CampStage }) => CampStage.create(el, colors))
+      .then((stage) => {
+        if (gone) stage.destroy()
+        else {
+          made = stage
+          setLoad({ state: 'ready', stage })
+        }
+      })
+      .catch((err: unknown) => {
+        console.warn('[campsite] the strip could not start Pixi', err)
+        if (!gone) setLoad({ state: 'failed' })
+      })
+    return () => {
+      gone = true
+      made?.destroy()
+    }
+  }, [])
+
+  const stage = load.state === 'ready' ? load.stage : null
+  useEffect(() => {
+    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog })
+  }, [stage, layout, sessions, now, selected, reduced, paused, showDog])
+
+  if (load.state === 'failed') {
+    return (
+      <div className="cs-fallback">
+        <span className="cs-fallback-note">The campsite needs WebGL to draw the camp.</span>
+        <div className="cs-mini-row">
+          {sessions.map((s) => (
+            <MiniHiker key={s.terminalId} session={s} now={now} onClick={() => onPick(s.terminalId)} />
+          ))}
+        </div>
+      </div>
+    )
+  }
+  const byId = new Map(sessions.map((s) => [s.terminalId, s]))
+  return (
+    <>
+      <div ref={host} className="cs-canvas" aria-hidden="true" />
+      {stage && showDog && <button ref={(el) => stage.bindDog(el)} className="cs-dog" title="Pet the dog" aria-label="Pet the dog" onClick={() => stage.petDog()} />}
+      {stage &&
+        layout.hikers.map((h) => {
+          const s = byId.get(h.terminalId)
+          if (!s) return null
+          return (
+            <button
+              key={h.terminalId}
+              ref={(el) => stage.bindTarget(h.terminalId, el)}
+              className={`cs-camp-hiker${h.place === 'inside' ? ' inside' : ''}`}
+              title={hikerTooltip(s, choreFor(s.terminalId, now))}
+              aria-label={hikerLabel(s)}
+              onClick={() => onPick(s.terminalId)}
+            />
+          )
+        })}
+    </>
+  )
+}
