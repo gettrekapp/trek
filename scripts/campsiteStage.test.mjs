@@ -70,8 +70,10 @@ test('motions: bob, wave, step, hop and breathe, as the CSS had them; none is st
   assert.deepEqual(motionAt('bob', 0), { dy: 0, sx: 1, sy: 1 })
   assert.equal(motionAt('bob', 700).dy, -1)
   assert.equal(motionAt('wave', 250).dy, -1)
-  assert.equal(motionAt('step', 100).dy, 0)
+  assert.equal(motionAt('step', 0).dy, 0)
+  assert.equal(motionAt('step', 100).dy, -0.5)
   assert.equal(motionAt('step', 200).dy, -1)
+  assert.equal(motionAt('step', 300).dy, -0.5)
   assert.equal(motionAt('hop', 0).dy, 0)
   assert.equal(motionAt('hop', 450).dy, -4)
   const breath = motionAt('breathe', 1500)
@@ -87,14 +89,18 @@ test('the dog swaps frames at its own pace', () => {
   assert.equal(dogFrameAt('sit', 249), 0)
 })
 
-test('a sign blinks: full, then faint, each half a second', () => {
+test('a sign blinks in four held steps: full, fading, faint, fading', () => {
   assert.equal(signAlpha(0), 1)
+  assert.ok(Math.abs(signAlpha(300) - 0.65) < 1e-9)
   assert.equal(signAlpha(600), 0.3)
+  assert.ok(Math.abs(signAlpha(800) - 0.65) < 1e-9)
 })
 
-test('flames flicker a third of a cycle apart', () => {
+test('flames step through 1, 1.125, 1.25, 1.125, a third of a cycle apart', () => {
   assert.equal(flameScale(0, 0), 1)
+  assert.equal(flameScale(0, 100), 1.125)
   assert.equal(flameScale(0, 150), 1.25)
+  assert.equal(flameScale(0, 250), 1.125)
   assert.equal(flameScale(1, 0), 1.25)
   assert.equal(flameScale(1, 100), 1)
 })

@@ -51,6 +51,8 @@ export const POSE_MOTION: Readonly<Partial<Record<Pose, Motion>>> = { stand: 'bo
 
 /** Where t (ms) is in a cycle of `ms`, in [0, 1) */
 const cycle = (t: number, ms: number): number => (((t % ms) + ms) % ms) / ms
+/** A `steps(2)` animation over keyframes 0% `from`, 50% `to`, 100% `from`: four held values, each a quarter of the cycle */
+const quarters = (t: number, ms: number, from: number, to: number): number => [from, (from + to) / 2, to, (from + to) / 2][Math.floor(cycle(t, ms) * 4)]
 /** Ease in and out over [0, 1] */
 const ease = (p: number): number => (1 - Math.cos(Math.PI * p)) / 2
 /** Up 1 px and back over a cycle (0 at its ends, -1 at its middle) */
@@ -72,7 +74,7 @@ export function motionAt(motion: Motion | undefined, t: number): MotionOffset {
     case 'wave':
       return { ...STILL, dy: bob(cycle(t, 500)) }
     case 'step':
-      return { ...STILL, dy: cycle(t, 350) < 0.5 ? 0 : -1 }
+      return { ...STILL, dy: quarters(t, 350, 0, -1) }
     case 'hop': {
       const p = cycle(t, 900)
       const up = p < 0.4 ? ease(p / 0.4) : p < 0.6 ? 1 : 1 - ease((p - 0.6) / 0.4)
@@ -96,11 +98,11 @@ export function frameAt(pose: Pose, t: number): 0 | 1 {
 const DOG_CYCLE: Readonly<Record<DogPose, number>> = { run: 300, sit: 500, happy: 240 }
 export const dogFrameAt = (pose: DogPose, t: number): 0 | 1 => (cycle(t, DOG_CYCLE[pose]) < 0.5 ? 0 : 1)
 
-/** A waiting hiker's sign blinks: full for half a second, faint for the next */
-export const signAlpha = (t: number): number => (cycle(t, 1000) < 0.5 ? 1 : 0.3)
+/** A waiting hiker's sign blinks: full, fading, faint, fading, each a quarter second (cs-pulse, steps(2)) */
+export const signAlpha = (t: number): number => quarters(t, 1000, 1, 0.3)
 
-/** Flame `i` (0–2): its height's scale, each flame 100 ms behind the one before */
-export const flameScale = (i: number, t: number): number => (cycle(t - i * 100, 300) < 0.5 ? 1 : 1.25)
+/** Flame `i` (0–2): its height's scale, stepping through 1, 1.125, 1.25, 1.125; each flame 100 ms behind the one before */
+export const flameScale = (i: number, t: number): number => quarters(t - i * 100, 300, 1, 1.25)
 
 /** How long a pet's heart lasts */
 export const HEART_MS = 1000
