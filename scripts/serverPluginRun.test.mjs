@@ -20,6 +20,11 @@ test('runCommand: stdout on exit 0; the first stderr line on a failure; ENOENT f
   await assert.rejects(runCommand('/no/such/program-trek', []), (e) => e.code === 'ENOENT')
 })
 
+test('runCommand: a failure carries the exit status as exitCode, with or without stderr', async () => {
+  await assert.rejects(runCommand(node, ['-e', 'process.exit(3)']), (e) => e.exitCode === 3)
+  await assert.rejects(runCommand(node, ['-e', 'console.error("bad"); process.exit(1)']), (e) => e.exitCode === 1 && e.message === 'bad')
+})
+
 test('runCommand: a child that dies of its own signal is not a timeout', { skip: posixOnly('POSIX signals') }, async () => {
   await assert.rejects(runCommand(node, ['-e', 'process.kill(process.pid, "SIGKILL")']), (e) => e.message === `${node} exited with SIGKILL`)
 })

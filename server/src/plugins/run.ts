@@ -102,7 +102,7 @@ export function runCommand(command: string, args: readonly string[], options: Ru
                 .split(/\r?\n/)
                 .map((l) => l.trim())
                 .find(Boolean)
-              reject(new Error(line ?? `${command} exited with ${e.code ?? e.signal}`))
+              reject(Object.assign(new Error(line ?? `${command} exited with ${e.code ?? e.signal}`), { exitCode: typeof e.code === 'number' ? e.code : undefined }))
             }
             return
           }

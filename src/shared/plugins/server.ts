@@ -174,7 +174,7 @@ export interface ServerPluginHost {
   legacyDataFile(name: string): string
   /** A test endpoint from the server's environment (`envName`), taken only as http(s) on loopback */
   testEndpoint(envName: string): string | undefined
-  /** Runs a program (a bare name on PATH, or an absolute path) with no shell; resolves with stdout, rejects with stderr's first line (`code: 'ENOENT'` when it is not installed). Aborted by the plugin's dispose. */
+  /** Runs a program (a bare name on PATH, or an absolute path) with no shell; resolves with stdout, rejects with stderr's first line (`code: 'ENOENT'` when it is not installed; `exitCode` the program's exit status when it ran and failed). Aborted by the plugin's dispose. */
   run(command: string, args: readonly string[], options?: RunOptions): Promise<string>
   /**
    * Starts a program (plugins E1) under `run`'s rules (no shell; a bare name on PATH or an absolute
