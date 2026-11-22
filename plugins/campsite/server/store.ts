@@ -41,7 +41,7 @@ function load(file: string, o: CampStoreOptions): { camp: Camp; writable: boolea
       return { camp: newCamp(o.seed(), o.now()), writable: false }
     }
     if (!isCamp(raw)) throw new Error('not a camp')
-    restore(raw, o.rules ?? RULES)
+    restore(raw, o.rules ?? RULES, o.now())
     return { camp: raw, writable: true }
   } catch (err) {
     try {

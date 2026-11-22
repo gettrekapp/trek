@@ -199,13 +199,18 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
   return out
 }
 
-/** After a server restart (nothing runs, statuses came back idle): open spans close at the last save, paying their whole minutes; nobody is waiting; every member is back in camp from the last save */
-export function restore(camp: Camp, rules: Rules = RULES): void {
+/**
+ * After a server restart (nothing runs, statuses came back idle): open spans close at the last save,
+ * paying their whole minutes; nobody is waiting; every member is back in camp from the last save. The
+ * fire's clock starts at `now`: nobody waited through the down time, and quiet minutes before it were
+ * not saved, so the last save can be long before it.
+ */
+export function restore(camp: Camp, rules: Rules = RULES, now: number = camp.savedAt): void {
   for (const id of Object.keys(camp.spans)) {
     payMinutes(camp, id, camp.savedAt, rules, [])
     delete camp.spans[id]
   }
   camp.waiting = {}
   for (const id of Object.keys(camp.assignments)) release(camp, id, camp.savedAt)
-  camp.lastTick = Math.max(camp.lastTick, camp.savedAt)
+  camp.lastTick = Math.max(camp.lastTick, camp.savedAt, now)
 }

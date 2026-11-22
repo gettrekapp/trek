@@ -120,16 +120,25 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
           applyCommits(camp, { worktreeId: e.worktreeId, head: e.to, count }, now())
           changed()
         })
-        .catch((err: unknown) => warn('counting commits', err))
+        .catch((err: unknown) => {
+          if (disposed) return
+          warn('counting commits', err)
+        })
     }
   })
 
-  // The first tick prunes (and the camp starts out as restored, with no open spans)
+  /** What camp.json would hold, less the clocks: lastTick need not be saved (a restart starts it again; nobody waits across one) */
+  const saved = (): string => JSON.stringify({ ...camp, lastTick: 0, savedAt: 0 })
+
+  // The first tick prunes (and the camp starts out as restored, with no open spans). Saved only when
+  // something saved changed (paid minutes, cooling, a prune, an hour's caps dropped), and every
+  // minute while a span is open, so a restart closes it near where it was; otherwise not rewritten.
   const ticker = (o.interval ?? defaultInterval)(() => {
     try {
+      const before = saved()
       prune()
       tick(camp, now(), rules)
-      changed()
+      if (Object.keys(camp.spans).length > 0 || saved() !== before) changed()
     } catch (err) {
       warn('tick', err)
     }

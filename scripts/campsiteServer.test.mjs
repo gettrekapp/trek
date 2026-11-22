@@ -260,3 +260,103 @@ test('git failures: a real error is logged and pays nothing; a worktree that can
   assert.equal(h.warnings.length, 2)
   assert.equal((await inst.handlers.state({}, {})).wood, 0)
 })
+
+test('the minute tick saves camp.json only when something saved changed (or a span is open)', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  let tickFn
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  const file = h.host.dataFile('camp.json')
+  const saves = () => clock.jobs.filter((j) => j.ms === 2000 && !j.cancelled).length
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude' })
+  clock.run()
+  const saved = readFileSync(file, 'utf8')
+  // Quiet minutes: nothing to save (lastTick alone is not written)
+  for (let i = 0; i < 3; i++) {
+    now += 60_000
+    tickFn()
+    assert.equal(saves(), 0, `quiet minute ${i + 1}`)
+  }
+  clock.run()
+  assert.equal(readFileSync(file, 'utf8'), saved)
+  // An open span: saved every minute
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'idle', to: 'working', cause: 'output' })
+  clock.run()
+  now += 60_000
+  tickFn()
+  assert.equal(saves(), 1, 'a paid minute')
+  clock.run()
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'working', to: 'attention', cause: 'bell' })
+  clock.run()
+  // Someone waits: the fire cools, which is saved
+  now += 60_000
+  tickFn()
+  assert.equal(saves(), 1, 'warmth changed')
+  clock.run()
+  assert.ok(JSON.parse(readFileSync(file, 'utf8')).warmth < 0.5)
+  // A session that is gone: the prune is saved
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'attention', to: 'idle', cause: 'seen' })
+  clock.run()
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 'gone', worktreeId: 'w', automation: false, provider: 'claude' })
+  clock.run()
+  now += 60_000
+  tickFn()
+  assert.equal(saves(), 1, 'pruned')
+  clock.run()
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).assignments.gone, undefined)
+})
+
+test('a restart after hours of unsaved quiet minutes: wood kept, members back in camp, and the fire does not cool for the down time', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  let tickA
+  const a = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickA = fn; return { clear() {} } }, minuteMs: 60_000 })
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude' })
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'idle', to: 'working', cause: 'output' })
+  now += 2 * 60_000
+  tickA()
+  clock.run()
+  const file = h.host.dataFile('camp.json')
+  const savedAt = JSON.parse(readFileSync(file, 'utf8')).savedAt
+  const wood = JSON.parse(readFileSync(file, 'utf8')).wood
+  assert.equal(wood, 2 * 1.25)
+  // The span ends; then hours of quiet minutes save nothing
+  h.fire({ kind: 'session.status', projectId: 'p', at: now + 10, terminalId: 't1', worktreeId: 'w', automation: false, from: 'working', to: 'idle', cause: 'quiet' })
+  clock.run()
+  for (let i = 0; i < 180; i++) { now += 60_000; tickA(); clock.run() }
+  // Saved only when the past hour's caps were dropped, not every minute
+  const lastSave = JSON.parse(readFileSync(file, 'utf8')).savedAt
+  assert.ok(lastSave > savedAt && lastSave <= now - 100 * 60_000, `last saved ${(now - lastSave) / 60_000} minutes ago`)
+  // The server dies (no dispose) and comes back; a session waits at once
+  h.listeners.clear()
+  let tickB
+  const b = createCampServer(h.host, { now: () => now, seed: () => 2, schedule: clock.schedule, interval: (fn) => { tickB = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => b.dispose?.())
+  const snap = await b.handlers.state({}, {})
+  assert.equal(snap.wood, Math.floor(wood))
+  assert.deepEqual(snap.assignments, {}, 'nothing runs after a restart')
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'idle', to: 'attention', cause: 'bell' })
+  now += 60_000
+  tickB()
+  clock.run()
+  const warmth = JSON.parse(readFileSync(file, 'utf8')).warmth
+  assert.ok(Math.abs(warmth - 0.48) < 1e-9, `one minute of cooling, not hours (${warmth})`)
+  void a
+})
+
+test('a commit count that fails after dispose logs nothing', async (t) => {
+  const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': new Error('fatal: bad object') } })
+  let release
+  const gate = new Promise((r) => { release = r })
+  const run = h.host.run
+  const inst = createCampServer({ ...h.host, run: async (cmd, args) => { await gate; return run(cmd, args) } }, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
+  await new Promise((r) => setImmediate(r))
+  inst.dispose()
+  release()
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  assert.deepEqual(h.warnings, [])
+})
