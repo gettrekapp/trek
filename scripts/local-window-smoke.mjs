@@ -325,6 +325,10 @@ try {
   const campsiteEnabled = async () => (await project()).settings.plugins?.campsite?.enabled ?? true
   const tabHiker = detail.locator('.session-tab .cs-indicator')
   check('the campsite draws a hiker on the tab, in place of the badge', [await until(() => tabHiker.count(), 1), await detail.locator('.session-tab .badge').count()], [1, 0])
+  // The strip at the window's bottom is expanded by default (opened here as a user would, if not):
+  // Pixi draws it into a canvas under the app's CSP, not the no-renderer fallback.
+  if (await win.locator('.campsite.collapsed').count()) await win.locator('.campsite .cs-toggle').click()
+  check('the expanded campsite strip draws with Pixi, not its fallback', [await until(() => win.locator('.campsite .cs-canvas canvas').count(), 1), await win.locator('.campsite .cs-fallback').count()], [1, 0])
   // Its hiker stands on the shown terminal's quick button row, and the row is as tall with it as without (the terminal never resizes for it).
   const barHikers = () => win.locator('.quick-buttons .cs-bar-hiker').count()
   const rowHeight = () =>
