@@ -24,7 +24,7 @@ const gitEnv = {
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
-async function setup(t, { startFails = false, startError, full = false, repos = 1 } = {}) {
+async function setup(t, { startFails = false, startError, full = false, repos = 1, agentsOn } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-task-start-')))
   t.after(() => removeDir(dir))
   const paths = []
@@ -45,7 +45,7 @@ async function setup(t, { startFails = false, startError, full = false, repos = 
   const sessions = {
     refreshAttention() {},
     blockPath: () => () => {},
-    agentRegistry: builtinAgents(),
+    agentRegistry: builtinAgents(agentsOn ? { enabled: agentsOn } : {}),
     assertRoomFor: () => {
       if (full) throw Object.assign(new Error('the server is running its maximum of 1 sessions'), { code: 'CAPACITY' })
     },
@@ -139,6 +139,16 @@ test('task.start checks llm before any git work; a good one reaches the session'
   assert.equal(s.started[0].llm.provider, 'claude')
 })
 
+test('task.start: an agent turned off in the project is refused before any git work', async (t) => {
+  const s = await setup(t, { agentsOn: () => false })
+  const taskId = await s.addTask('Off')
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0], llm: { provider: 'claude' } })
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+  assert.match(res.error.message, /turned off/)
+  assert.equal(extraWorktrees(s), 0, 'no worktree was made')
+  assert.equal(s.started.length, 0)
+})
+
 test('task.start: no room for a session refuses before any git work', async (t) => {
   const s = await setup(t, { full: true })
   const taskId = await s.addTask('Full')
@@ -154,6 +164,14 @@ test('task.start: a session failure with no wire code is TOOL_ERROR, still namin
   const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0] })
   assert.equal(res.error?.code, 'TOOL_ERROR')
   assert.match(res.error.message, /task\/odd.*spawn exploded/)
+})
+
+test('task.start: a session failure keeps the error details it carried', async (t) => {
+  const s = await setup(t, { startError: Object.assign(new Error('no room'), { code: 'CAPACITY', details: { reason: 'the server is full' } }) })
+  const taskId = await s.addTask('Full')
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0] })
+  assert.equal(res.error?.code, 'CAPACITY')
+  assert.equal(res.error.details?.reason, 'the server is full')
 })
 
 test('task.start gives the session a title cut to the session title limit', async (t) => {

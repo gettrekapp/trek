@@ -1418,22 +1418,28 @@ Every method also answers `NOT_FOUND` for an unknown project.
 
 **`task.start`** makes a new worktree for the task in the repository `repositoryId` (`NOT_FOUND` if
 the project has no such repository) and starts an agent session in it. `BAD_REQUEST` for an
-archived task, or when no free branch name is left; `GIT_ERROR` when git cannot read the repository's branches. An `llm` the session would refuse (`BAD_REQUEST`) and a project at its session limit (`CAPACITY`) are refused before any worktree is made. A completed task can be started. The branch is
-`task/<slug>`, the slug being the title in lower-case ASCII letters, digits and single dashes, at
-most 40 characters (`task` when none are left); when that branch exists locally, or the default
-worktree folder for it exists, `task/<slug>-2` up to `-99` are tried, and `BAD_REQUEST` follows
-if all are taken. The worktree is made as `worktree.create` with `createBranch: true` makes one
-(its errors are `task.start`'s, and its `linkWarnings`, when it has any, are in the result). The session starts in it as `session.start` does, titled with the task's title (cut to the title limit), with `llm`
-(the agent's default when unset), and its first message is the task's title, a blank line,
-its details (when set), a blank line and `This is Trek task <id> ("<title>"). Use the get_task tool
-to reread it and complete_task when it's done.`. The start is recorded in the task's `starts` and
-its `updatedAt` bumped; if the task changed meanwhile it is recorded on what is stored, and if the
-task was deleted meanwhile nothing is recorded.
+archived task, or when no free branch name is left; `GIT_ERROR` when git cannot read the
+repository's branches. Before any worktree is made, an `llm` the session would refuse or an agent
+turned off in the project is `BAD_REQUEST`, and a project or server at its session limit is
+`CAPACITY`. A completed task can be started.
+
+The branch is `task/<slug>`, the slug being the title in lower-case ASCII letters, digits and single
+dashes, at most 40 characters (`task` when none are left). When that branch exists locally, or the
+default worktree folder for it exists, `task/<slug>-2` up to `-99` are tried, and `BAD_REQUEST`
+follows if all are taken. The worktree is made as `worktree.create` with `createBranch: true` makes
+one (its errors are `task.start`'s, and its `linkWarnings`, when it has any, are in the result).
+
+The session starts in it as `session.start` does, titled with the task's title (cut to the title
+limit), with `llm` (the project's default agent when unset, as `session.start` picks it). Its first
+message is the task's title, a blank line, its details (when set), a blank line and `This is Trek
+task <id> ("<title>"). Use the get_task tool to reread it and complete_task when it's done.`. The
+start is recorded in the task's `starts` and its `updatedAt` bumped; if the task changed meanwhile it
+is recorded on what is stored, and if the task was deleted meanwhile nothing is recorded.
 
 If the session cannot start, the worktree stays (as after `create_worktree` followed by a failed
 `start_session`), the start is recorded without `sessionId`, and the method fails with the session
-failure's error code (`TOOL_ERROR` when it has none a client may see) and the message `Created the worktree on <branch>, but its session did not
-start: <reason>`.
+failure's error code (`TOOL_ERROR` when it has none a client may see), its details when it has any,
+and the message `Created the worktree on <branch>, but its session did not start: <reason>`.
 
 The task MCP tools (`list_tasks`, `get_task`, `save_task`, `complete_task`, `archive_task`) are in
 the table under [MCP tools](#mcp-trek-dev-on-the-server); they resolve a task by id, then by title.

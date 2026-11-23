@@ -1422,3 +1422,28 @@ test('task tools say Tasks is off when the project switched it off', async (t) =
     await assert.rejects(s.call(name, args), (e) => e.code === 'TOOL_ERROR' && /turned off/.test(e.message), name)
   }
 })
+
+test('task tools: ambiguous titles, filter all, null flags, and save_task sends the updatedAt it read', async (t) => {
+  const s = await toolSetup(t)
+  const a = await s.call('save_task', { title: 'Same' })
+  const b = await s.call('save_task', { title: 'Same' })
+  assert.notEqual(a.id, b.id)
+  await assert.rejects(s.call('get_task', { task: 'same' }), (e) => e.code === 'BAD_REQUEST' && e.message.includes(a.id) && e.message.includes(b.id))
+  await assert.rejects(s.call('save_task', { task: 'Same', status: 'x' }), (e) => e.code === 'BAD_REQUEST')
+  await s.call('complete_task', { task: a.id, completed: null })
+  await s.call('archive_task', { task: b.id, archived: null })
+  assert.deepEqual((await s.call('list_tasks', { filter: 'all' })).map((x) => x.id), [a.id, b.id])
+  assert.deepEqual((await s.call('list_tasks', { filter: 'archived' })).map((x) => x.id), [b.id])
+  // A change between the tool's read and its write is a CONFLICT: the tool read `project` first, then the task moved on.
+  const c = await s.call('save_task', { title: 'Race' })
+  const realApply = s.projects.apply.bind(s.projects)
+  let bumped = false
+  s.projects.apply = (id, fn) => {
+    if (!bumped) {
+      bumped = true
+      realApply(id, (d) => { const t = d.tasks.find((x) => x.id === c.id); t.updatedAt += 5 })
+    }
+    return realApply(id, fn)
+  }
+  await assert.rejects(s.call('save_task', { task: c.id, status: 'late' }), (e) => e.code === 'CONFLICT')
+})

@@ -1397,7 +1397,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       complete_task: async (args, project) => {
         requireTasksOn(project)
         const t = resolveTask(project, args.task)
-        if (args.completed !== undefined && typeof args.completed !== 'boolean') throw bad('completed must be a boolean')
+        if (args.completed !== undefined && args.completed !== null && typeof args.completed !== 'boolean') throw bad('completed must be a boolean')
         await v2('task.setCompleted', { taskId: t.id, completed: args.completed ?? true })
         return describeTask(findTask(deps.projects.require(projectId).tasks ?? [], t.id), false)
       },
@@ -1405,7 +1405,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       archive_task: async (args, project) => {
         requireTasksOn(project)
         const t = resolveTask(project, args.task)
-        if (args.archived !== undefined && typeof args.archived !== 'boolean') throw bad('archived must be a boolean')
+        if (args.archived !== undefined && args.archived !== null && typeof args.archived !== 'boolean') throw bad('archived must be a boolean')
         await v2('task.setArchived', { taskId: t.id, archived: args.archived ?? true })
         return describeTask(findTask(deps.projects.require(projectId).tasks ?? [], t.id), false)
       },

@@ -104,6 +104,7 @@ export const taskHandlers: Record<string, Handler> = {
     const repo = repoIn(project, requireString(p.repositoryId, 'repositoryId'))
     // What the session would refuse, refused before any git work leaves a worktree behind.
     const llm = checkLlm(p.llm, ctx.sessions.agentRegistry)
+    if (llm) ctx.sessions.agentRegistry.checkOn(projectId, llm.provider)
     ctx.sessions.assertRoomFor(projectId)
     const branch = await freeTaskBranch(repo.path, slugifyTaskTitle(task.title))
     const { worktreeId, linkWarnings } = (await worktreeHandlers['worktree.create']({ projectId, repoId: repo.id, branch, createBranch: true }, ctx)) as {
@@ -132,8 +133,8 @@ export const taskHandlers: Record<string, Handler> = {
       d.tasks = recordTaskStart(d.tasks, taskId, { at, repositoryId: repo.id, worktreeId, branch, ...(sessionId ? { sessionId } : {}) }, at)
     })
     if (failure !== undefined) {
-      const e = failure as { code?: string; message?: string }
-      throw codedError(isPassthroughCode(e.code) ? e.code : 'TOOL_ERROR', `Created the worktree on ${branch}, but its session did not start: ${e.message ?? String(failure)}`)
+      const e = failure as { code?: string; message?: string; details?: Parameters<typeof codedError>[2] }
+      throw codedError(isPassthroughCode(e.code) ? e.code : 'TOOL_ERROR', `Created the worktree on ${branch}, but its session did not start: ${e.message ?? String(failure)}`, e.details)
     }
     return { worktreeId, sessionId: sessionId!, branch, ...(linkWarnings?.length ? { linkWarnings } : {}) }
   }
