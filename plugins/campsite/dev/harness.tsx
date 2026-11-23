@@ -19,6 +19,10 @@
 // into its crossing, frozen or not (?r, default 0.5, is the crossing's die: its length and spot);
 // window.__sighting(species, dir) sends one, as the server does.
 // ?sheet=1 shows every species' two frames at the strip's scale instead of the strip.
+// Real chores (campsite 4): ?tool=read|edit|run|delegate|web|mcp|other gives t1 (working) a tool call
+// a second old, in the `state` answer as the server sends it (its chore and its tooltip's words);
+// ?tool=think, one 20 s old (thinking). ?sheet=hikers shows every hiker pose and frame at the tab's,
+// the terminal bar's and the strip's scales (1, 2, 3) instead of the strip.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -26,6 +30,8 @@ import '../client/campsite.css'
 import { Campsite } from '../client/Campsite.tsx'
 import { ANIMAL_SCALE, animalPixels, animalSize } from '../shared/animalPixels.ts'
 import { newCamp, snapshot } from '../shared/camp.ts'
+import { lookFor, withKit } from '../shared/hiker.ts'
+import { FRAMES, POSES, pixels } from '../shared/pixels.ts'
 import { SPECIES } from '../shared/wildlife.ts'
 
 const PROVIDERS = ['claude', 'codex', 'gemini', 'grok']
@@ -179,6 +185,15 @@ if (params.get('away') === 'sightings') {
   state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 0, levelUps: [], sightings: 12, newSpecies: ['heron', 'lynx'] }
 }
 const camp = snapshot(state, T, { project: (id) => (id === 'harness' ? 'trek' : 'website') })
+// ?tool=<kind>: t1's latest tool call, a second old (?tool=think: 20 s old), as `state` answers it
+const TOOL_LABELS: Record<string, string> = { read: 'Campsite.tsx', edit: 'Campsite.tsx', run: 'npm test', delegate: 'Explore the trails', web: 'github.com', mcp: 'trek-dev list_worktrees', other: 'TodoWrite' }
+const toolParam = params.get('tool') ?? ''
+const tools =
+  toolParam === 'think'
+    ? { t1: { kind: 'edit', label: TOOL_LABELS.edit, age: 20_000 } }
+    : Object.hasOwn(TOOL_LABELS, toolParam)
+      ? { t1: { kind: toolParam, label: TOOL_LABELS[toolParam], age: 1000 } }
+      : null
 const listeners = new Map<string, Set<(data: unknown) => void>>()
 ;(window as unknown as { __summit: (worktreeId: string, branch: string) => void }).__summit = (worktreeId, branch) => {
   for (const l of listeners.get('summit') ?? []) l({ projectId: 'harness', worktreeId, branch })
@@ -233,7 +248,7 @@ const host = {
   focusSession: (id: string) => console.log('[harness] focus', id),
   prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} },
   request: async (method: string, params?: { crewId?: string; projectId?: string }) => {
-    if (method === 'state') return camp
+    if (method === 'state') return tools ? { ...camp, tools } : camp
     if (method === 'journal') return { journal: state.crew.find((m) => m.id === params?.crewId)?.journal ?? [] }
     if (method === 'trailLog') return { log: state.trailLog[params?.projectId ?? ''] ?? [] }
     if (method === 'seen' || method === 'awaySeen') return { ok: true }
@@ -275,9 +290,42 @@ function Sheet(): React.JSX.Element {
   )
 }
 
+/** ?sheet=hikers: every pose and frame, four looks (the last geared), at the tab's, the terminal bar's and the strip's scales */
+function HikerSheet(): React.JSX.Element {
+  const looks = [lookFor('t1', 'claude'), lookFor('t2', 'codex'), { ...lookFor('t3', 'gemini'), hat: 'cap' as const }, withKit(lookFor('t4', 'grok'), { pack: 3, boots: 3, hat: 3, tool: 3 })]
+  const cells = POSES.flatMap((pose) => Array.from({ length: FRAMES[pose] }, (_, frame) => ({ pose, frame })))
+  return (
+    <div style={{ padding: 8, background: '#1a1622', color: '#c9c2d6', font: '10px ui-monospace, Menlo, monospace' }}>
+      {[1, 2, 3].map((scale) => (
+        <div key={scale} style={{ marginBottom: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cells.length}, ${Math.max(12 * scale, 64)}px)`, gap: 4, alignItems: 'end' }}>
+            {cells.map(({ pose, frame }) => (
+              <span key={`${pose}${frame}`}>
+                {pose}
+                {FRAMES[pose] === 2 ? ` ${frame}` : ''}
+              </span>
+            ))}
+            {looks.flatMap((look, i) =>
+              cells.map(({ pose, frame }) => (
+                <svg key={`${i}${pose}${frame}`} width={12 * scale} height={16 * scale} viewBox="0 0 12 16" shapeRendering="crispEdges" style={{ background: '#2c2536' }}>
+                  {pixels(look, pose, frame).map((r, j) => (
+                    <rect key={j} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />
+                  ))}
+                </svg>
+              ))
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 createRoot(document.getElementById('root')!).render(
   params.get('sheet') === '1' ? (
     <Sheet />
+  ) : params.get('sheet') === 'hikers' ? (
+    <HikerSheet />
   ) : (
     <PluginHostContext.Provider value={host}>
       <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0 }}>

@@ -86,7 +86,18 @@ const SHOTS = [
   // With ranger tower II, from the counts and the Guide tab: hints on the unseen (scrolled to the rares)
   { name: 'guide-tab-tower', scenario: 'few', built: 'out', guide: 'some', tower: 2, guideFrom: 'tab', height: 1000 },
   // The away card with sightings and new species
-  { name: 'away-sightings', scenario: 'few', away: 'sightings' }
+  { name: 'away-sightings', scenario: 'few', away: 'sightings' },
+  // Real chores (campsite 4): every hiker pose and frame at the tab's, the terminal bar's and the strip's scales (the whole page)
+  { name: 'hiker-sheet', sheet: 'hikers', width: 1440, height: 520 },
+  // t1 (working, at the api camp) with its agent's latest tool call a second old: each kind's chore; thinking 20 s after it
+  // (its tooltip must end in `words`)
+  { name: 'tool-read', scenario: 'few', tool: 'read', words: 'Reading Campsite.tsx' },
+  { name: 'tool-edit', scenario: 'few', tool: 'edit', words: 'Editing Campsite.tsx' },
+  { name: 'tool-run', scenario: 'few', tool: 'run', words: 'Running npm test' },
+  { name: 'tool-delegate', scenario: 'few', tool: 'delegate', words: 'Sending a scout: Explore the trails' },
+  { name: 'tool-web', scenario: 'few', tool: 'web', words: 'Looking up github.com' },
+  { name: 'tool-mcp', scenario: 'few', tool: 'mcp', words: 'On the radio: trek-dev list_worktrees' },
+  { name: 'tool-think', scenario: 'few', tool: 'think', words: 'Thinking' }
 ]
 
 /**
@@ -149,7 +160,7 @@ try {
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
     if (shot.sheet) {
-      await page.goto(`${url}?sheet=1`)
+      await page.goto(`${url}?sheet=${shot.sheet === true ? 1 : shot.sheet}`)
       await page.waitForTimeout(300)
       const path = join(out, `${shot.name}.png`)
       await page.screenshot({ path, fullPage: true, ...still })
@@ -157,7 +168,7 @@ try {
       await page.close()
       continue
     }
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? `&away=${shot.away === true ? 1 : shot.away}` : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${shot.tower ? `&tower=${shot.tower}` : ''}${shot.guide ? `&guide=${shot.guide}` : ''}${shot.animal ? `&animal=${shot.animal}&age=${shot.age ?? 0}${shot.dir ? `&dir=${shot.dir}` : ''}${shot.r === undefined ? '' : `&r=${shot.r}`}` : ''}${freeze ? '&freeze=1' : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? `&away=${shot.away === true ? 1 : shot.away}` : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${shot.tower ? `&tower=${shot.tower}` : ''}${shot.guide ? `&guide=${shot.guide}` : ''}${shot.tool ? `&tool=${shot.tool}` : ''}${shot.animal ? `&animal=${shot.animal}&age=${shot.age ?? 0}${shot.dir ? `&dir=${shot.dir}` : ''}${shot.r === undefined ? '' : `&r=${shot.r}`}` : ''}${freeze ? '&freeze=1' : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
@@ -166,6 +177,11 @@ try {
       await page.waitForSelector('.cs-animal', { state: 'attached', timeout: 5000 })
       await page.waitForFunction(() => window.__animalAged === true, null, { timeout: 5000 })
       await page.waitForTimeout(300)
+    }
+    // A tool call's words: the working hiker's tooltip names it
+    if (shot.words) {
+      const title = await page.getAttribute('.cs-camp-hiker[aria-label="Agent 1, working"]', 'title')
+      if (!title?.endsWith(` · ${shot.words}`)) problems.push(`${shot.name}: the hiker's title is ${JSON.stringify(title)}, not ending in ${JSON.stringify(shot.words)}`)
     }
     // The stage skips Pixi's browser extras: no accessibility hook button (nor its global listeners)
     if (await page.evaluate(() => document.querySelector('button[title*="accessibility"]') !== null)) {
