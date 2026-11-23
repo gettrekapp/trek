@@ -316,3 +316,20 @@ test('a zero-width backdrop has no NaN', () => {
   const nums = [...b.stars.flatMap((x) => [x.x, x.y, x.w, x.h]), ...[b.moon, b.bite].flatMap((c) => [c.x, c.y, c.r]), ...b.ridge.points, ...b.pines.flatMap((p) => p.points), ...b.ground.flatMap((x) => [x.x, x.y, x.w, x.h])]
   assert.ok(nums.length > 0 && nums.every((n) => Number.isFinite(n)))
 })
+
+test('between the buildings: the dog starts, wanders and is stopped inside [left, right]', () => {
+  const s = dogInit(1100, 0, 300)
+  assert.equal(dogX(s, 0), 500)
+  let d = s
+  for (let t = DOG_SETTLE_MS, i = 0; i < 40; i++, t += 7000) {
+    d = dogAdvance(d, t, seq(0.9, (i * 0.37) % 1, 0), 1100, 700, 300)
+    assert.ok(d.to >= 300 && d.to <= 1100, `to ${d.to}`)
+  }
+  // A building went up under it: it stops inside the new middle and settles
+  const moved = dogResize(dogInit(1600, 0), 10, 1300, 500)
+  assert.equal(dogX(moved, 10), 500)
+  assert.equal(moved.until, 10 + DOG_SETTLE_MS)
+  assert.equal(dogX(dogHalt(dogInit(1600, 0), 10, 1300, 500), 10), 500)
+  assert.equal(dogX(dogResize(dogInit(1600, 0), 10, 300, 0), 10), 300)
+  assert.equal(dogX(dogResize(dogInit(1600, 0), 10, 1600, 0), 10), 400, 'no reserve: as before')
+})

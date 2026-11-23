@@ -182,7 +182,7 @@ const LIGHTS_SWAG = 120
 const BULB_EVERY = 12
 
 export interface LightString {
-  /** 2×1 px pieces of the wire */
+  /** 2×1 px pieces of the wire (the last one narrower when it would pass `right`) */
   wire: Box[]
   /** 2×2 px bulbs, colors in turn */
   bulbs: Box[]
@@ -199,7 +199,7 @@ export function lightString(left: number, right: number): LightString {
     const u = ((x - left) % swagW) / swagW
     return Math.round(LIGHTS_Y + LIGHTS_SAG * 4 * u * (1 - u))
   }
-  for (let x = Math.ceil(left); x < right; x += 2) wire.push({ x, y: yAt(x), w: 2, h: 1, fill: WIRE })
+  for (let x = Math.ceil(left); x < right; x += 2) wire.push({ x, y: yAt(x), w: Math.min(2, right - x), h: 1, fill: WIRE })
   let i = 0
   for (let x = Math.ceil(left) + BULB_EVERY / 2; x < right - 1; x += BULB_EVERY) bulbs.push({ x, y: yAt(x) + 1, w: 2, h: 2, fill: BULB_COLORS[i++ % BULB_COLORS.length] })
   return { wire, bulbs }

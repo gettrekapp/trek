@@ -91,20 +91,22 @@ export interface DogTrip {
   restMs: number
 }
 
-export const dogStart = (width: number): number => Math.max(DOG_EDGE, Math.round(width / 4))
+/** Where it first sits: a quarter of the way into its range [left, right] (the middle, between the camp's buildings) */
+export const dogStart = (right: number, left = 0): number => Math.max(left + DOG_EDGE, Math.round(left + (right - left) / 4))
 
 /**
- * The dog's next run from `from` on a strip `width` wide: now and then to the fire (`fireX`, when it
- * is lit), otherwise anywhere. `rand` gives numbers in [0, 1) (three are taken).
+ * The dog's next run from `from` within its range [left, right] (the strip, or the middle between
+ * the camp's buildings): now and then to the fire (`fireX`, when it is lit), otherwise anywhere.
+ * `rand` gives numbers in [0, 1) (three are taken).
  */
-export function dogTrip(rand: () => number, from: number, width: number, fireX?: number): DogTrip {
+export function dogTrip(rand: () => number, from: number, right: number, fireX?: number, left = 0): DogTrip {
   const toFire = rand() < FIRE_ODDS
   const anywhere = rand()
   const restMs = Math.round(DOG_REST_MS[0] + rand() * (DOG_REST_MS[1] - DOG_REST_MS[0]))
-  const lo = DOG_EDGE
-  const hi = width - DOG_EDGE
-  // No room for a run either way from the middle: it stays, inside the strip
-  if (hi - lo < 2 * DOG_MIN_TRIP) return { x: Math.round(Math.min(Math.max(from, 0), Math.max(0, width))), runMs: 0, restMs }
+  const lo = left + DOG_EDGE
+  const hi = right - DOG_EDGE
+  // No room for a run either way from the middle: it stays, inside its range
+  if (hi - lo < 2 * DOG_MIN_TRIP) return { x: Math.round(Math.min(Math.max(from, left), Math.max(left, right))), runMs: 0, restMs }
   const at = Math.min(Math.max(from, lo), hi)
   let x = lo + anywhere * (hi - lo)
   if (toFire && fireX !== undefined) {

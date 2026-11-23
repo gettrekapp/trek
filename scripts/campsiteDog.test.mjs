@@ -78,3 +78,18 @@ test('a dog left outside by a resize runs back in', () => {
   assert.ok(t.x <= 1000 - DOG_EDGE)
   assert.ok(t.runMs > 0)
 })
+
+test('between the buildings: the dog starts and runs only in [left, right] (the middle)', () => {
+  assert.equal(dogStart(1100, 300), 500)
+  assert.ok(dogStart(400, 300) >= 300 + DOG_EDGE)
+  for (const at of [0, 0.1, 0.5, 0.9, 0.999]) {
+    for (const from of [0, 150, 320, 700, 1080, 1500]) {
+      const t = dogTrip(seq(0.9, at, 0.5), from, 1100, 700, 300)
+      assert.ok(t.x >= 300 + DOG_EDGE && t.x <= 1100 - DOG_EDGE, `from ${from}: x ${t.x}`)
+    }
+  }
+  // Too narrow a middle to run in: it stays, inside it
+  const t = dogTrip(seq(0.5), 100, 400, undefined, 300)
+  assert.equal(t.runMs, 0)
+  assert.ok(t.x >= 300 && t.x <= 400, `x ${t.x}`)
+})

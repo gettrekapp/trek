@@ -208,8 +208,9 @@ export interface DogState {
   left: boolean
 }
 
-export function dogInit(width: number, t: number): DogState {
-  const x = dogStart(width)
+/** `right` and `left` (here and below): the dog's range, the strip or the middle between the camp's buildings */
+export function dogInit(right: number, t: number, left = 0): DogState {
+  const x = dogStart(right, left)
   return { running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS, restMs: 0, happyUntil: 0, left: false }
 }
 
@@ -225,14 +226,14 @@ export const dogPoseAt = (s: DogState, t: number): DogPose => (s.running && t < 
  * The wander at t: a finished run sits for its rest; a finished sit starts the next trip (dogTrip:
  * `rand` gives three numbers). Before `until`, the same state.
  */
-export function dogAdvance(s: DogState, t: number, rand: () => number, width: number, fireX?: number): DogState {
+export function dogAdvance(s: DogState, t: number, rand: () => number, right: number, fireX?: number, left = 0): DogState {
   if (t < s.until) return s
   if (s.running) {
     const sat: DogState = { ...s, running: false, from: s.to, start: s.until, until: s.until + s.restMs }
     // Its rest already over too (the ticker was stopped): straight on to the next trip
-    return t < sat.until ? sat : dogAdvance(sat, t, rand, width, fireX)
+    return t < sat.until ? sat : dogAdvance(sat, t, rand, right, fireX, left)
   }
-  const trip = dogTrip(rand, s.to, width, fireX)
+  const trip = dogTrip(rand, s.to, right, fireX, left)
   if (trip.runMs === 0) return { ...s, from: trip.x, to: trip.x, start: t, until: t + trip.restMs }
   return { running: true, from: s.to, to: trip.x, start: t, until: t + trip.runMs, restMs: trip.restMs, happyUntil: s.happyUntil, left: trip.x < s.to }
 }
@@ -243,14 +244,14 @@ export function dogPet(s: DogState, t: number): DogState {
   return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_HAPPY_MS, happyUntil: t + DOG_HAPPY_MS }
 }
 
-/** The strip changed width: it sits where it is (inside the strip) and settles before running again */
-export function dogResize(s: DogState, t: number, width: number): DogState {
-  const x = Math.min(Math.max(dogX(s, t), 0), Math.max(0, width))
+/** The strip (or its middle) changed: it sits where it is (inside its range) and settles before running again */
+export function dogResize(s: DogState, t: number, right: number, left = 0): DogState {
+  const x = Math.min(Math.max(dogX(s, t), left), Math.max(left, right))
   return { ...s, running: false, from: x, to: x, start: t, until: t + DOG_SETTLE_MS }
 }
 
 /** The window was hidden or shown again: it stops where it is drawn and settles before running again */
-export const dogHalt = (s: DogState, t: number, width: number): DogState => dogResize(s, t, width)
+export const dogHalt = (s: DogState, t: number, right: number, left = 0): DogState => dogResize(s, t, right, left)
 
 /** Where hikers and the dog stand: 10 px above the strip's bottom; a hiker inside a tent, 14 */
 export const FEET_Y = STAGE_H - 10

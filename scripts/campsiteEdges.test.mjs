@@ -114,3 +114,79 @@ test('campLayout with a reserve: the fire in the middle region, every tent, the 
   for (const h of l.hikers) assert.ok(h.x - 18 >= 300 && h.x + 18 <= 1100, `hiker at ${h.x}`)
   assert.deepEqual(campLayout(sessions, 1200, { left: 0, right: 0 }), campLayout(sessions, 1200), 'no reserve: as before')
 })
+
+test("string lights: the wire's last piece stops at the right end", () => {
+  for (const [l, r] of [[100, 700], [100, 701], [101, 700], [37.5, 812.25]]) {
+    const { wire } = lightString(l, r)
+    const last = wire[wire.length - 1]
+    assert.ok(last.x + last.w <= r, `${l}–${r}: ends at ${last.x + last.w}`)
+    assert.ok(last.w > 0)
+    for (const b of wire) assert.ok(b.x >= l && b.x + b.w <= r)
+  }
+})
+
+test('placeBuildings at the thresholds: the middle keeps MIDDLE_MIN; each end keeps to a quarter', () => {
+  const one = built({ cabins: 1 })
+  // One cabin keeps 8 + 92 + 16 = 116 px: placed while 480 px are left between
+  assert.equal(placeBuildings(one, 116 + MIDDLE_MIN).left.length, 1)
+  assert.equal(placeBuildings(one, 116 + MIDDLE_MIN - 1).left.length, 0)
+  // Three cabins keep 16 + 300 = 316 px: all three from 4 × 316 wide, two below it
+  const three = built({ cabins: 3 })
+  assert.equal(placeBuildings(three, 4 * 316).left.length, 3)
+  assert.deepEqual(placeBuildings(three, 4 * 316 - 1).left.map((p) => p.key), ['cabin2', 'cabin3'])
+  // The lake and the garden keep 8 + 180 + 8 + 52 + 16 = 264 px
+  const water = built({ lake: 2, garden: 2 })
+  assert.equal(placeBuildings(water, 4 * 264).right.length, 2)
+  assert.deepEqual(placeBuildings(water, 4 * 264 - 1).right.map((p) => p.id), ['garden'])
+  // Too narrow a middle for both ends: the end keeping more gives way, outermost first. Two cabins
+  // keep 216 px, the lake 204: both while 480 px are left between (900 wide), a cabin fewer below
+  const pair = built({ cabins: 2, lake: 1 })
+  const at = (w) => placeBuildings(pair, w)
+  assert.deepEqual([at(900).left.length, at(900).right.length], [2, 1])
+  assert.deepEqual(at(899).left.map((p) => p.key), ['cabin2'], 'the left (216 > 204) drops its outermost cabin')
+  assert.equal(at(899).right.length, 1)
+  // (A tie, both ends keeping the same px, drops from the left; no two ends' sizes tie today)
+})
+
+test('placeBuildings: a sweep of widths keeps every building inside the strip, none overlapping', () => {
+  for (const b of [ALL, built({ cabins: 2, garden: 1 }), built({ lake: 1 }), built({ cabins: 1, lake: 2 })]) {
+    for (let w = 0; w <= 2600; w += 7) {
+      const e = placeBuildings(b, w)
+      const all = [...e.left, ...e.right].sort((x, y) => x.x - y.x)
+      for (const p of all) assert.ok(p.x >= 0 && p.x + p.w <= w, `${w}: ${p.key} at ${p.x}`)
+      for (let i = 1; i < all.length; i++) assert.ok(all[i - 1].x + all[i - 1].w <= all[i].x, `${w}: ${all[i - 1].key} overlaps ${all[i].key}`)
+      assert.ok(e.reserve.left + e.reserve.right <= w)
+    }
+  }
+})
+
+// The harness's "few" camp: two worktrees (api, web), two Global sessions on the log
+const FEW = [
+  s('api', { status: 'working' }),
+  s('api', { status: 'attention' }),
+  s('web', { status: 'done' }),
+  s(null, { status: 'idle' }),
+  s('web', { status: 'complete' }),
+  s(null, { status: 'working', decision: true })
+]
+
+test('camps beat buildings: a building that would hide a camp (or group them) is dropped instead', () => {
+  const bare = campLayout(FEW, 700)
+  assert.equal(bare.moreTents, 0)
+  assert.equal(bare.grouped, false)
+  const e = placeBuildings(ALL, 700, FEW)
+  const l = campLayout(FEW, 700, e.reserve)
+  assert.equal(l.moreTents, 0, 'no camp hidden')
+  assert.equal(l.grouped, false)
+  assert.equal(l.moreWaiting, 0)
+  assert.ok(e.left.length + e.right.length < placeBuildings(ALL, 700).left.length + placeBuildings(ALL, 700).right.length, 'buildings were dropped')
+  // Wide enough for both: as many as with nobody at camp
+  assert.deepEqual(placeBuildings(ALL, 1600, FEW), placeBuildings(ALL, 1600))
+  // Crowded already: buildings never hide more than the bare strip does
+  const crowd = Array.from({ length: 20 }, (_, i) => s(`wt${i % 6}`, { status: i % 5 === 0 ? 'attention' : 'working' }))
+  for (const w of [700, 1000, 1200, 1600, 2400]) {
+    const before = campLayout(crowd, w)
+    const after = campLayout(crowd, w, placeBuildings(ALL, w, crowd).reserve)
+    assert.ok(after.moreTents <= before.moreTents && after.moreWaiting <= before.moreWaiting && (!after.grouped || before.grouped), `${w}`)
+  }
+})
