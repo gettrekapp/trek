@@ -1,5 +1,6 @@
 // Claude Code's tool calls as they happen (campsite part 4): a session's transcript
-// (`historyFile(cwd, sessionId)`, ~/.claude/projects/<cwd>/<id>.jsonl) followed from the server.
+// (`transcriptFile(cwd, sessionId)`, ~/.claude/projects/<physical cwd>/<id>.jsonl, or under
+// $CLAUDE_CONFIG_DIR) followed from the server.
 // It polls every 2 s until the file exists, and wakes on fs.watch as well where it works (the poll
 // keeps going: fs.watch can miss changes). Only what is appended is read, at most 256 KB a wake-up
 // (more is read on the next turn); a file there when the watch starts is read from its end, so a
@@ -12,7 +13,7 @@ import { closeSync, fstatSync, openSync, readSync, statSync, watch as fsWatch } 
 import { StringDecoder } from 'node:string_decoder'
 import type { AgentActivity } from '../../../src/shared/plugins/agents.ts'
 import { toolsInLine } from '../shared/transcript.ts'
-import { historyFile } from './history.ts'
+import { transcriptFile } from './history.ts'
 
 /** How often the file is looked at while nothing wakes the watch */
 export const POLL_MS = 2000
@@ -188,7 +189,7 @@ export function claudeActivity(options: FollowOptions): AgentActivity {
   return {
     watch: (session, onTool) =>
       followLines(
-        historyFile(session.cwd, session.sessionId),
+        transcriptFile(session.cwd, session.sessionId),
         (line) => {
           for (const tool of toolsInLine(line)) onTool(tool)
         },

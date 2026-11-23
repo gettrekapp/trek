@@ -4,6 +4,7 @@
 // replaces every non-alphanumeric character with "-" (desktop main's importer keeps its own copy of
 // projectDir: keep the two the same). Resuming a session from another cwd (after a promote) works
 // only once its history is moved.
+import { realpathSync } from 'node:fs'
 import { access, mkdir, rename, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -11,8 +12,11 @@ import type { AgentHistory } from '../../../src/shared/plugins/agents.ts'
 
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** A cwd as Claude Code names its project folder: every non-alphanumeric character a dash */
+const encodeCwd = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, '-')
+
 export function projectDir(cwd: string): string {
-  return join(homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  return join(homedir(), '.claude', 'projects', encodeCwd(cwd))
 }
 
 function assertSessionId(sessionId: string): void {
@@ -23,6 +27,25 @@ function assertSessionId(sessionId: string): void {
 export function historyFile(cwd: string, sessionId: string): string {
   assertSessionId(sessionId)
   return join(projectDir(cwd), `${sessionId}.jsonl`)
+}
+
+/**
+ * Where a running session's transcript is (campsite part 4: its tool calls). Claude Code names the
+ * folder after its physical cwd (`process.cwd()`: symlinks resolved; the cwd as given when that
+ * fails) and keeps it under `$CLAUDE_CONFIG_DIR/projects` when the server's env sets it (the agent
+ * inherits it), else ~/.claude/projects. historyFile and the importer keep ~/.claude and the cwd as
+ * given, as they always have.
+ */
+export function transcriptFile(cwd: string, sessionId: string, env: Record<string, string | undefined> = process.env): string {
+  assertSessionId(sessionId)
+  let physical = cwd
+  try {
+    physical = realpathSync(cwd)
+  } catch {
+    // Not there (yet), or unreadable: the cwd as given
+  }
+  const root = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  return join(root, 'projects', encodeCwd(physical), `${sessionId}.jsonl`)
 }
 
 /**

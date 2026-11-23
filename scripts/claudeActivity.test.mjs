@@ -2,12 +2,12 @@
 // file that grows by appends, with a timer the test runs by hand.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs, { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import fs, { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FAILS_MAX, LINE_MAX, POLL_MS, READ_MAX, claudeActivity, followLines } from '../plugins/claude/server/activity.ts'
-import { projectDir } from '../plugins/claude/server/history.ts'
+import { historyFile, projectDir, transcriptFile } from '../plugins/claude/server/history.ts'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-claude-activity-'))
@@ -159,9 +159,10 @@ test('fs.watch wakes it early; stop ends the poll and the watch; an error is log
 test("claudeActivity: a session's tool calls from its transcript under HOME, in order; an id that is not Claude's throws", (t) => {
   const home = tempDir(t)
   // os.homedir() reads HOME (USERPROFILE on Windows) on each call
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }
   process.env.HOME = home
   process.env.USERPROFILE = home
+  delete process.env.CLAUDE_CONFIG_DIR
   t.after(() => {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
@@ -281,4 +282,59 @@ test('a file replaced while a long line is being skipped is read from its top, i
   appendFileSync(file, '{"third":3}\n')
   drain()
   assert.deepEqual(f.lines, ['{"first":1}', '{"second":2}', '{"third":3}'])
+})
+
+/** Sets these env variables for the test (undefined: unset), restored after */
+function withEnv(t, vars) {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+  const put = (entries) => {
+    for (const [key, value] of Object.entries(entries)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+  put(vars)
+  t.after(() => put(saved))
+}
+
+test("transcriptFile: Claude's physical cwd (symlinks resolved; as given when it isn't there), under $CLAUDE_CONFIG_DIR when set, else ~/.claude; historyFile unchanged", (t) => {
+  const root = realpathSync(tempDir(t))
+  const home = join(root, 'home')
+  withEnv(t, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: undefined })
+  const real = join(root, 'real', 'app')
+  mkdirSync(real, { recursive: true })
+  const link = join(root, 'link')
+  symlinkSync(join(root, 'real'), link, 'dir')
+  const id = '00000000-0000-4000-8000-000000000002'
+  const encoded = (p) => p.replace(/[^a-zA-Z0-9]/g, '-')
+  assert.equal(transcriptFile(join(link, 'app'), id), join(home, '.claude', 'projects', encoded(real), `${id}.jsonl`), 'the symlink resolved')
+  assert.equal(transcriptFile(join(root, 'nowhere'), id), join(home, '.claude', 'projects', encoded(join(root, 'nowhere')), `${id}.jsonl`), 'not there: as given')
+  assert.equal(historyFile(join(link, 'app'), id), join(projectDir(join(link, 'app')), `${id}.jsonl`), "historyFile keeps the cwd as given")
+  const config = join(root, 'config')
+  assert.equal(transcriptFile(real, id, { CLAUDE_CONFIG_DIR: config }), join(config, 'projects', encoded(real), `${id}.jsonl`))
+  assert.equal(transcriptFile(real, id, { CLAUDE_CONFIG_DIR: '' }), join(home, '.claude', 'projects', encoded(real), `${id}.jsonl`), 'empty: unset')
+  withEnv(t, { CLAUDE_CONFIG_DIR: config })
+  assert.ok(transcriptFile(real, id).startsWith(join(config, 'projects')), "the server's env by default")
+  assert.throws(() => transcriptFile(real, '../x'), /Invalid session id/)
+})
+
+test('claudeActivity: a session in a symlinked cwd with $CLAUDE_CONFIG_DIR set, its transcript starting with a BOM, end to end', (t) => {
+  const root = realpathSync(tempDir(t))
+  const config = join(root, 'config')
+  withEnv(t, { HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), CLAUDE_CONFIG_DIR: config })
+  const real = join(root, 'real', 'app')
+  mkdirSync(real, { recursive: true })
+  symlinkSync(join(root, 'real'), join(root, 'link'), 'dir')
+  const sessionId = '00000000-0000-4000-8000-000000000003'
+  const clock = manual()
+  const tools = []
+  const stop = claudeActivity({ schedule: clock.schedule, watchFile: () => null, warn: () => {} }).watch({ sessionId, cwd: join(root, 'link', 'app'), terminalId: 't1' }, (tool) => tools.push(tool))
+  t.after(stop)
+  // Where Claude writes it: the physical cwd, under the config dir
+  const dir = join(config, 'projects', real.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(dir, { recursive: true })
+  const edit = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Edit', input: { file_path: '/w/Campsite.tsx' } }] } })
+  writeFileSync(join(dir, `${sessionId}.jsonl`), `\uFEFF${edit}\n`)
+  clock.run()
+  assert.deepEqual(tools, [{ kind: 'edit', label: 'Campsite.tsx' }], 'the BOM line read whole')
 })

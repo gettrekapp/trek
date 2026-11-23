@@ -14,10 +14,13 @@ agent: an unknown agent id runs Claude. Claude's history (`~/.claude/projects`) 
 and a move carries a Claude session's history file to the other server. Claude reports its
 sessions' tool calls (campsite part 4: the agent's `activity`): `server/activity.ts` follows a
 running session's transcript (`~/.claude/projects/<cwd>/<id>.jsonl`, from its end, or from its top
-when it appears later), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
+when it appears later; the cwd with its symlinks resolved, as Claude names it, and under
+`$CLAUDE_CONFIG_DIR/projects` when the server's env sets it), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
 as a kind (read, edit, run, delegate, web, mcp, other) and a short label. Local reports none.
 A `/clear` starts a new transcript that isn't followed: its hiker thinks for two minutes after the
-last call it saw, then goes back to the random chores.
+last call it saw, then goes back to the random chores. Newer Claude versions may shorten a very
+long cwd's folder name with a hash (unverified); such a session's transcript isn't found, and its
+hiker does the random chores.
 
 Tests and smokes never run the real CLI: `scripts/fixtures/fake-claude.mjs` and the fake agents of
 `scripts/fakeAgent.mjs` stand in, through the server config's `command`.
