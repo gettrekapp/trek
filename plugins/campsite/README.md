@@ -96,10 +96,11 @@ is on and that is active (a working session, or activity in the last 10 minutes)
 open: a 1 in 20 chance while active, else 1 in 120; ranger tower II lifts both by a quarter. A quiet
 project with no window open doesn't roll, so a server left running doesn't fill the guide unseen. The species is drawn by weight
 among those the project's time of day, season and weather allow (by the windows' time zone and
-Seasons setting, which each window's `seen` ping reports; the Sky setting doesn't gate), and the
+Seasons setting, which each window's `seen` ping reports: one clock for the whole camp, the last
+ping wins, so windows in different zones take turns; the Sky setting doesn't gate), and the
 lake (swimmers) and the ranger tower (the rares, one draw in 80) let in; never the species just
 seen there. Each sighting goes into the field guide (how many, first and last), the last 30
-sightings and the away card ("2 new species: Great blue heron, Lynx · … · 12 sightings", the new
+sightings (`camp.sightings`, saved but not shown yet: kept for later use) and the away card ("2 new species: Great blue heron, Lynx · … · 12 sightings", the new
 species first so the one line never cuts them off), and the
 `sighting` event goes to that project's windows only. In an expanded, visible strip its animal
 crosses, one at a time (one arriving during a crossing is logged but not drawn): a walker on the
@@ -148,7 +149,7 @@ building dropped there.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared; a member's journal on request), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), a session's hiker look in its member's gear (`useHikerLook`: it listens for the session's kit alone, so a push that only moves the wood doesn't render the hikers again), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `?tower=1|2`, `?guide=some`, `?away=sightings`, `?animal=<species>&age=<ms>&dir=left|right` (an animal that far into its crossing) and `?sheet=1` (every species' two frames) show the wildlife; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `?tower=1|2`, `?guide=some`, `?away=sightings`, `?animal=<species>&age=<ms>&dir=left|right&r=<0–1>` (an animal that far into its crossing; `r` pins the crossing's die, its length, pause and spot, default 0.5) and `?sheet=1` (every species' two frames) show the wildlife; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has nine methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which

@@ -459,12 +459,20 @@ try {
   check('the counts button closes the popover', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
   // A sighting every minute (forced): an animal crosses the strip, its button named for it; a click
   // (dispatched: the button moves with the animal) opens the Guide tab at its card, focused
-  const animal = win.locator('.campsite .cs-animal')
-  const animalLabel = await first(async () => ((await animal.count()) > 0 ? await animal.first().getAttribute('aria-label') : null))
+  // The label is read from the very button clicked, in one step in the page, so a crossing that
+  // ends (and the next one's animal) between steps can't mismatch them
+  const clickAnimal = () =>
+    win.evaluate(() => {
+      const button = document.querySelector('.campsite .cs-animal')
+      if (!button) return null
+      const label = button.getAttribute('aria-label')
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      return label
+    })
+  const animalLabel = await first(clickAnimal)
   check('a sighting sends an animal across the strip, its button named for it', / — open the field guide$/.test(animalLabel ?? ''), true)
   const animalName = (animalLabel ?? '').split(' — ')[0]
   console.log(`     (the animal: ${animalName})`)
-  await animal.first().dispatchEvent('click')
   const guideOpen = async () => [
     await win.locator('.cs-camp-popover [role="tab"][aria-selected="true"]').innerText().then((t) => /^Guide \d+\/24$/.test(t)).catch(() => false),
     await win.evaluate((name) => document.activeElement?.closest('.cs-guide-card')?.getAttribute('aria-label')?.startsWith(`${name}, seen`) ?? false, animalName)

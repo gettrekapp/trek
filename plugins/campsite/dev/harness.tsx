@@ -206,14 +206,20 @@ if (animal) {
       } finally {
         Math.random = random
       }
-      setTimeout(() => {
+      // Once the animal's button is attached (the crossing has started on the page's clock), its clock moves on
+      const age_ = (): void => {
+        if (!document.querySelector('.cs-animal')) {
+          setTimeout(age_, 20)
+          return
+        }
         if (age > 0) {
           const was = performance.now.bind(performance)
           performance.now = () => was() + age
         }
         // The render waits for this before it checks and shoots the animal
         ;(window as unknown as { __animalAged: boolean }).__animalAged = true
-      }, 100)
+      }
+      age_()
     }, 200)
   }
   send()
