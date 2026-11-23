@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, kitKey, kitOf, lookFor, withKit } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, TOOL_CHORES, TOOL_FRESH_MS, choreFor, choreText, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle, toolWords } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -323,4 +323,59 @@ test('pixels (campsite part 4): binoculars over both eyes, a radio by the face w
   assert.equal(pixelAt(think, 9, 8), look.skin, 'a hand at the chin')
   assert.equal(pixelAt(think, 9, 10), shade(look.jacket), 'its arm')
   assert.deepEqual([pixelAt(think, 10, 3), pixelAt(think, 11, 1)], ['#b9b4c6', '#b9b4c6'], 'a thought rising')
+})
+
+test("choreFor (campsite part 4): a tool call younger than 8 s shows its kind's chore; an older one, thinking; none, the random chores", () => {
+  assert.equal(TOOL_FRESH_MS, 8000)
+  assert.deepEqual(TOOL_CHORES, { read: 'map', edit: 'chop', run: 'fire', delegate: 'tent', web: 'binoculars', mcp: 'radio', other: 'map' })
+  const at = 1_000_000
+  for (const [kind, chore] of Object.entries(TOOL_CHORES)) assert.equal(choreFor('t', at + 1000, { kind, label: 'x', at }), chore, kind)
+  assert.equal(choreFor('t', at, { kind: 'edit', label: '', at }), 'chop', 'just heard')
+  assert.equal(choreFor('t', at + 7999, { kind: 'edit', label: '', at }), 'chop', 'the last ms')
+  assert.equal(choreFor('t', at + 8000, { kind: 'edit', label: '', at }), 'think', 'from 8 s on')
+  assert.equal(choreFor('t', at + 600_000, { kind: 'web', label: '', at }), 'think')
+  assert.equal(choreFor('t', at + 1000, { kind: 'dance', label: '', at }), 'map', "a kind this version doesn't know is other's")
+  assert.equal(choreFor('t', at + 1000, { kind: 'constructor', label: '', at }), 'map')
+  // No tool (or null): the seeded random chores, as before
+  for (const t of [0, 25_000, 300_000]) {
+    assert.equal(choreFor('t-7', t, null), choreFor('t-7', t))
+    assert.equal(choreFor('t-7', t, undefined), choreFor('t-7', t))
+    assert.ok(CHORES.includes(choreFor('t-7', t)))
+  }
+  // A working hiker stands in the chore's pose: the new ones too
+  assert.equal(stanceFor(session(), 'binoculars').pose, 'binoculars')
+  assert.equal(stanceFor(session(), 'radio').pose, 'radio')
+  assert.equal(stanceFor(session(), 'think').pose, 'think')
+})
+
+test('toolWords and choreText (campsite part 4): each kind in words, with and without a label; thinking; a chore with no tool keeps its name', () => {
+  const words = (kind, label) => toolWords({ kind, label })
+  assert.equal(words('read', 'Campsite.tsx'), 'Reading Campsite.tsx')
+  assert.equal(words('edit', 'Campsite.tsx'), 'Editing Campsite.tsx')
+  assert.equal(words('run', 'npm test'), 'Running npm test')
+  assert.equal(words('delegate', 'Explore the trails'), 'Sending a scout: Explore the trails')
+  assert.equal(words('web', 'github.com'), 'Looking up github.com')
+  assert.equal(words('mcp', 'trek-dev list_worktrees'), 'On the radio: trek-dev list_worktrees')
+  assert.equal(words('other', 'TodoWrite'), 'Using TodoWrite')
+  assert.deepEqual(['read', 'edit', 'run', 'delegate', 'web', 'mcp', 'other'].map((k) => words(k, '')), ['Reading', 'Editing', 'Running a command', 'Sending a scout', 'Looking something up', 'On the radio', 'Busy'])
+  const tool = { kind: 'edit', label: 'Campsite.tsx', at: 0 }
+  assert.equal(choreText('chop', tool), 'Editing Campsite.tsx')
+  assert.equal(choreText('think', tool), 'Thinking')
+  assert.equal(choreText('think'), 'Thinking')
+  assert.equal(choreText('chop'), CHORE_NAMES.chop)
+  assert.equal(choreText('map', { kind: 'other', label: 'Skill', at: 0 }), 'Using Skill', "other's chore is the map")
+  assert.equal(choreText('fire', tool), CHORE_NAMES.fire, "not the tool's chore: the chore's name")
+})
+
+test("hikerDoing and hikerTooltip (campsite part 4): a working hiker says its tool call or Thinking; waiting and done keep today's words", () => {
+  const tool = { kind: 'run', label: 'npm test', at: 0 }
+  assert.equal(hikerDoing(session(), 'fire', tool), 'Running npm test')
+  assert.equal(hikerDoing(session(), 'think', tool), 'Thinking')
+  assert.equal(hikerDoing(session({ status: 'attention' }), 'fire', tool), 'needs your attention')
+  assert.equal(hikerDoing(session({ status: 'working', decision: true }), 'fire', tool), 'waiting on your decision')
+  assert.equal(hikerDoing(session({ status: 'done' }), 'think', tool), 'finished')
+  assert.equal(hikerTooltip(session(), 'fire', 'Aspen · Lv 2 Trailblazer', tool), 'Aspen · Lv 2 Trailblazer · Claude 2 · auth · working · Running npm test')
+  assert.equal(hikerTooltip(session(), 'think', undefined, tool), 'Claude 2 · auth · working · Thinking')
+  assert.equal(hikerTooltip(session({ status: 'idle' }), 'think', undefined, tool), 'Claude 2 · auth · idle')
+  assert.equal(hikerTooltip(session(), 'chop'), `Claude 2 · auth · working · ${CHORE_NAMES.chop}`, 'no tool: as before')
 })

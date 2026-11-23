@@ -1,27 +1,86 @@
 // What a hiker does for its session's status, the chore a working one does, and its words (aria
-// label, the tab's title, the camp's tooltip). Pure.
+// label, the tab's title, the camp's tooltip). A working hiker's chore follows its agent's latest
+// tool call when there is one (campsite part 4), else a seeded random one. Pure.
 import type { PluginSession, PluginSessionStatus } from '../../../src/shared/plugins/client.ts'
+import type { AgentToolKind } from '../../../src/shared/plugins/agents.ts'
 import { fnv1a, type Gear } from './hiker.ts'
 import type { Pose } from './pixels.ts'
 
+/** The chores a working hiker picks at random while its agent reports no tool calls */
 export const CHORES = ['map', 'chop', 'tent', 'fire'] as const
-export type Chore = (typeof CHORES)[number]
+/** Every chore: the random four, the web's binoculars, an MCP tool's radio, and thinking between tool calls */
+export type Chore = (typeof CHORES)[number] | 'binoculars' | 'radio' | 'think'
 export const CHORE_NAMES: Readonly<Record<Chore, string>> = {
   map: 'reading the map',
   chop: 'chopping wood',
   tent: 'pitching the tent',
-  fire: 'tending the fire'
+  fire: 'tending the fire',
+  binoculars: 'scanning the trail',
+  radio: 'on the radio',
+  think: 'thinking'
 }
 
+/** A session's latest tool call, as a window keeps it: its kind, its label, and when it was heard of (this window's ms) */
+export interface HikerTool {
+  kind: AgentToolKind
+  label: string
+  at: number
+}
+
+/** How long a tool call holds its chore; after it the hiker thinks until the next one */
+export const TOOL_FRESH_MS = 8000
+
+/** The chore each kind of tool call shows */
+export const TOOL_CHORES: Readonly<Record<AgentToolKind, Chore>> = {
+  read: 'map',
+  edit: 'chop',
+  run: 'fire',
+  delegate: 'tent',
+  web: 'binoculars',
+  mcp: 'radio',
+  other: 'map'
+}
+/** A kind's chore; a kind this version doesn't know is other's */
+const kindChore = (kind: string): Chore => (Object.hasOwn(TOOL_CHORES, kind) ? TOOL_CHORES[kind as AgentToolKind] : TOOL_CHORES.other)
+
 /**
- * A working hiker's chore at `now` (ms): a seeded pick that holds for a seeded 20–40 s. The hook
- * for activity detection later: only this changes.
+ * A working hiker's chore at `now` (ms): with a tool call younger than TOOL_FRESH_MS, its kind's
+ * chore; with an older one, thinking; with none, a seeded pick that holds for a seeded 20–40 s.
  */
-export function choreFor(terminalId: string, now: number): Chore {
+export function choreFor(terminalId: string, now: number, tool?: HikerTool | null): Chore {
+  if (tool) return now - tool.at < TOOL_FRESH_MS ? kindChore(tool.kind) : 'think'
   const seed = fnv1a(terminalId)
   const period = 20_000 + (seed % 20_001)
   const index = Math.floor((now + (seed % period)) / period)
   return CHORES[fnv1a(`${terminalId}:${index}`) % CHORES.length]
+}
+
+/** A tool call in words: "Editing Campsite.tsx", "Running npm test", "On the radio: trek-dev list_worktrees" */
+export function toolWords(tool: Pick<HikerTool, 'kind' | 'label'>): string {
+  const l = tool.label
+  switch (tool.kind) {
+    case 'read':
+      return l ? `Reading ${l}` : 'Reading'
+    case 'edit':
+      return l ? `Editing ${l}` : 'Editing'
+    case 'run':
+      return l ? `Running ${l}` : 'Running a command'
+    case 'delegate':
+      return l ? `Sending a scout: ${l}` : 'Sending a scout'
+    case 'web':
+      return l ? `Looking up ${l}` : 'Looking something up'
+    case 'mcp':
+      return l ? `On the radio: ${l}` : 'On the radio'
+    default:
+      return l ? `Using ${l}` : 'Busy'
+  }
+}
+
+/** A chore in words: thinking; the tool call it shows (its own chore, from choreFor with that tool); else the chore's name */
+export function choreText(chore: Chore, tool?: HikerTool | null): string {
+  if (chore === 'think') return 'Thinking'
+  if (tool && kindChore(tool.kind) === chore) return toolWords(tool)
+  return CHORE_NAMES[chore]
 }
 
 /** Waiting on the user: its bell rang, or it asked for a decision */
@@ -119,15 +178,15 @@ export function indicatorTitle(state: Pick<PluginSession, 'status' | 'decision'>
   return state.decision ? 'Agent is waiting on your decision' : statusTitle(state.status, clickable)
 }
 
-/** What a session's hiker is up to, in words: its chore while working, else its status */
-export function hikerDoing(session: Pick<PluginSession, 'status' | 'decision'>, chore: Chore): string {
-  return session.status === 'working' && !isWaiting(session) ? CHORE_NAMES[chore] : statusText(session)
+/** What a session's hiker is up to, in words: its chore while working (`tool`: the call it shows), else its status */
+export function hikerDoing(session: Pick<PluginSession, 'status' | 'decision'>, chore: Chore, tool?: HikerTool | null): string {
+  return session.status === 'working' && !isWaiting(session) ? choreText(chore, tool) : statusText(session)
 }
 
-/** The hiker's tooltip; `crew` (its crew member, or "Day hiker") leads once the camp's state is loaded */
-export function hikerTooltip(session: PluginSession, chore: Chore, crew?: string): string {
+/** The hiker's tooltip; `crew` (its crew member, or "Day hiker") leads once the camp's state is loaded; `tool`: the call its chore shows */
+export function hikerTooltip(session: PluginSession, chore: Chore, crew?: string, tool?: HikerTool | null): string {
   const where = session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? '')
   const parts = [crew, session.label, where, statusText(session)]
-  if (session.status === 'working' && !isWaiting(session)) parts.push(CHORE_NAMES[chore])
+  if (session.status === 'working' && !isWaiting(session)) parts.push(choreText(chore, tool))
   return parts.filter(Boolean).join(' · ')
 }
