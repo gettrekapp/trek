@@ -1,6 +1,6 @@
 // The "While you were away" tally (campsite part 3a): what the camp earned since a window last saw
 // it, by source, with markers and the crew's level-ups, and the sightings (part 3d-2). Due once nobody has seen the camp for longer
-// than AWAY_DUE_MS and it holds something to tell; `seen` starts it again only when it isn't due,
+// than AWAY_DUE_MS and it holds something to tell (sightings only with a new species); `seen` starts it again only when it isn't due,
 // `awaySeen` (the card's dismiss) always. The rules change the camp in place. Pure.
 import type { Camp } from './camp.ts'
 import { AWAY_DUE_MS, whole } from './catalog.ts'
@@ -55,8 +55,13 @@ export function noteLevelUp(camp: Pick<Camp, 'away'>, crewId: string, level: num
   else camp.away.levelUps.push({ crewId, level })
 }
 
-/** Something to tell: a whole wood from some source, a marker, a level-up or a sighting */
-export const awayHolds = (a: AwayTally): boolean => AWAY_SOURCES.some((k) => whole(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0 || a.sightings > 0
+/**
+ * Something to tell: a whole wood from some source, a marker, a level-up or a new species. Sightings
+ * of species already in the guide aren't enough on their own (nearly every long absence has one);
+ * they still show on a card that is due for something else
+ */
+export const awayHolds = (a: AwayTally): boolean =>
+  AWAY_SOURCES.some((k) => whole(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0 || a.newSpecies.some((id) => species(id) !== undefined)
 
 /** The new species' names, for the card (ids this version doesn't know are left out) */
 export const newSpeciesNames = (ids: readonly string[]): string[] => ids.flatMap((id) => species(id)?.name ?? [])
