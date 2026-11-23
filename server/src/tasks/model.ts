@@ -7,11 +7,11 @@ import { isRecord } from '../validate.ts'
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 /** Not in a one-line field */
-const LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+const LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
 /** Not in details (newlines and tabs are fine) */
 const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
 
-/** A checked `task.save` input; '' means "absent" for details and status. */
+/** A checked `task.save` input; '' means "absent" for details and status (sent as '', null or left out). */
 export interface CheckedTask {
   id?: string
   title: string
@@ -24,7 +24,7 @@ export function requireTasksOn(project: Pick<Project, 'settings'>): void {
 }
 
 function line(raw: unknown, field: string, max: number, required: boolean): string {
-  if (raw === undefined && !required) return ''
+  if ((raw === undefined || raw === null) && !required) return ''
   if (typeof raw !== 'string') throw bad(`${field} must be a string`)
   const value = raw.trim()
   if (required && value === '') throw bad(`${field} must not be empty`)
@@ -35,12 +35,13 @@ function line(raw: unknown, field: string, max: number, required: boolean): stri
 
 export function checkTaskInput(raw: unknown): CheckedTask {
   if (!isRecord(raw)) throw bad('task must be an object')
-  const out: CheckedTask = { title: line(raw.title, 'task.title', MAX_TASK_TITLE, true), details: '', status: '' }
+  let id: string | undefined
   if (raw.id !== undefined) {
     if (typeof raw.id !== 'string' || raw.id === '') throw bad('task.id must be a non-empty string')
-    out.id = raw.id
+    id = raw.id
   }
-  if (raw.details !== undefined) {
+  const out: CheckedTask = { ...(id !== undefined ? { id } : {}), title: line(raw.title, 'task.title', MAX_TASK_TITLE, true), details: '', status: '' }
+  if (raw.details !== undefined && raw.details !== null) {
     if (typeof raw.details !== 'string') throw bad('task.details must be a string')
     const details = raw.details.trim()
     if (details.length > MAX_TASK_DETAILS) throw bad(`task.details must be at most ${MAX_TASK_DETAILS} characters`)
@@ -48,8 +49,7 @@ export function checkTaskInput(raw: unknown): CheckedTask {
     out.details = details
   }
   out.status = line(raw.status, 'task.status', MAX_TASK_STATUS, false)
-  // Key order as the tests expect: id first when given.
-  return out.id === undefined ? out : { id: out.id, title: out.title, details: out.details, status: out.status }
+  return out
 }
 
 /** A time after `prev`: two changes in one millisecond still differ, so the conflict check sees both. */
@@ -96,8 +96,9 @@ export function saveTask(
   return { list: replace(list, prev.id, (t) => ({ ...withText(t, input), updatedAt })), id: prev.id, updatedAt }
 }
 
-/** Sets (keeping the first time) or clears `completedAt`. */
-export function setTaskCompleted(list: readonly Task[], id: string, completed: boolean, now: number): Task[] {
+/** Sets (keeping the first time) or clears `completedAt`. The value it already has returns `list` itself, updatedAt untouched. */
+export function setTaskCompleted(list: readonly Task[], id: string, completed: boolean, now: number): readonly Task[] {
+  if ((findTask(list, id).completedAt !== undefined) === completed) return list
   return replace(list, id, (t) => {
     const { completedAt, ...rest } = t
     const next: Task = { ...rest, updatedAt: bump(t.updatedAt, now) }
@@ -106,8 +107,9 @@ export function setTaskCompleted(list: readonly Task[], id: string, completed: b
   })
 }
 
-/** Sets (keeping the first time) or clears `archivedAt`. */
-export function setTaskArchived(list: readonly Task[], id: string, archived: boolean, now: number): Task[] {
+/** Sets (keeping the first time) or clears `archivedAt`. The value it already has returns `list` itself, updatedAt untouched. */
+export function setTaskArchived(list: readonly Task[], id: string, archived: boolean, now: number): readonly Task[] {
+  if ((findTask(list, id).archivedAt !== undefined) === archived) return list
   return replace(list, id, (t) => {
     const { archivedAt, ...rest } = t
     const next: Task = { ...rest, updatedAt: bump(t.updatedAt, now) }
@@ -126,7 +128,7 @@ export function deleteTask(list: readonly Task[], id: string): Task[] {
 export function reorderTasks(list: readonly Task[], ids: unknown): Task[] {
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw bad('taskIds must be a list of task ids')
   const byId = new Map(list.map((t) => [t.id, t]))
-  if (ids.length !== list.length || new Set(ids).size !== ids.length || ids.some((id) => !byId.has(id))) {
+  if (byId.size !== list.length || ids.length !== list.length || new Set(ids).size !== ids.length || ids.some((id) => !byId.has(id))) {
     throw bad("taskIds must list every one of the project's tasks once")
   }
   return ids.map((id) => byId.get(id)!)

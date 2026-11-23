@@ -29,12 +29,17 @@ function expectedUpdatedAt(value: unknown): number | undefined {
   return value
 }
 
-/** Changes the project's tasks after checking Tasks is on; an empty list removes the field. */
-export function withTasks<T>(ctx: V2Context, projectId: unknown, change: (list: readonly Task[]) => { list: Task[]; result: T }): T {
+/**
+ * Changes the project's tasks after checking Tasks is on; an empty list removes the field. A change
+ * that returns the list it was given leaves the project alone (apply then publishes and saves nothing).
+ */
+export function withTasks<T>(ctx: V2Context, projectId: unknown, change: (list: readonly Task[]) => { list: readonly Task[]; result: T }): T {
   return ctx.projects.apply(projectId as string, (d) => {
     requireTasksOn(d)
-    const { list, result } = change(d.tasks ?? [])
-    if (list.length > 0) d.tasks = list
+    const before = d.tasks ?? []
+    const { list, result } = change(before)
+    if (list === before) return result
+    if (list.length > 0) d.tasks = [...list]
     else delete d.tasks
     return result
   })

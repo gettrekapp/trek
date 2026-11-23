@@ -37,11 +37,20 @@ test('checkTaskInput refuses bad input with BAD_REQUEST', () => {
     { title: 'T', status: 'x'.repeat(81) },
     { title: 'T', status: 'a\nb' },
     { title: 'T', id: 7 },
-    { title: 'T', id: '' }
+    { title: 'T', id: '' },
+    { title: 'line\u2028separator' },
+    { title: 'para\u2029separator' },
+    { title: 'T', status: 'a\u2028b' }
   ]) {
     assert.equal(code(() => checkTaskInput(bad)), 'BAD_REQUEST', JSON.stringify(bad))
   }
   assert.equal(code(() => checkTaskInput({ title: 'T', details: 'line\nline\ttab' })), 'ok')
+})
+
+test('checkTaskInput: null details or status means clear, as empty or absent does', () => {
+  assert.deepEqual(checkTaskInput({ title: 'T', details: null, status: null }), { title: 'T', details: '', status: '' })
+  const { list } = saveTask([task({ details: 'd', status: 's' })], checkTaskInput({ id: 't', title: 'T', details: null, status: null }), 5, newId)
+  assert.deepEqual(['details' in list[0], 'status' in list[0]], [false, false])
 })
 
 test('saveTask creates at the end with createdAt = updatedAt = now; empty fields are absent', () => {
@@ -55,6 +64,13 @@ test('saveTask updates, clears empty fields, and bumps updatedAt even within one
   const { list, updatedAt } = saveTask([before], checkTaskInput({ id: 't', title: 'Renamed' }), 100, newId)
   assert.deepEqual(list[0], { id: 't', title: 'Renamed', createdAt: 1, updatedAt: 101 })
   assert.equal(updatedAt, 101)
+  // A clock behind the stored time still moves updatedAt forward.
+  assert.equal(saveTask([task({ updatedAt: 100 })], checkTaskInput({ id: 't', title: 'x' }), 40, newId).updatedAt, 101)
+})
+
+test('saveTask: a create ignores expectedUpdatedAt', () => {
+  const { list, updatedAt } = saveTask([], checkTaskInput({ title: 'New' }), 7, newId, 123)
+  assert.deepEqual([list.length, updatedAt], [1, 7])
 })
 
 test('saveTask: a stale expectedUpdatedAt is CONFLICT; a matching one saves; unknown id NOT_FOUND', () => {
@@ -83,6 +99,17 @@ test('setTaskCompleted and setTaskArchived set and clear their time and bump upd
   assert.equal(code(() => setTaskCompleted(list, 'zz', true, 1)), 'NOT_FOUND')
 })
 
+test('setTaskCompleted and setTaskArchived: the value a task already has changes nothing (same list, same updatedAt)', () => {
+  const done = [task({ completedAt: 10, updatedAt: 10 })]
+  assert.equal(setTaskCompleted(done, 't', true, 20), done)
+  const open = [task({ updatedAt: 10 })]
+  assert.equal(setTaskCompleted(open, 't', false, 20), open)
+  assert.equal(setTaskArchived(open, 't', false, 20), open)
+  const archived = [task({ archivedAt: 40, updatedAt: 40 })]
+  assert.equal(setTaskArchived(archived, 't', true, 50), archived)
+  assert.deepEqual([archived[0].archivedAt, archived[0].updatedAt], [40, 40], 'archiving again keeps the first time')
+})
+
 test('deleteTask: archived only', () => {
   assert.equal(code(() => deleteTask([task()], 't')), 'BAD_REQUEST')
   assert.deepEqual(deleteTask([task({ archivedAt: 1 }), task({ id: 'u' })], 't'), [task({ id: 'u' })])
@@ -95,6 +122,9 @@ test('reorderTasks: a permutation of every id', () => {
   for (const bad of [['a', 'b'], ['a', 'b', 'c', 'd'], ['a', 'a', 'b'], ['a', 'b', 'x'], 'abc', [1, 2, 3]]) {
     assert.equal(code(() => reorderTasks(list, bad)), 'BAD_REQUEST', JSON.stringify(bad))
   }
+  // A stored list with a repeated id cannot be reordered into one without it.
+  assert.equal(code(() => reorderTasks([task({ id: 'a' }), task({ id: 'a' })], ['a', 'b'])), 'BAD_REQUEST')
+  assert.equal(code(() => reorderTasks([task({ id: 'a' }), task({ id: 'a' }), task({ id: 'b' })], ['a', 'b', 'c'])), 'BAD_REQUEST')
 })
 
 test('recordTaskStart appends, keeps the newest 20, and bumps updatedAt', () => {
@@ -103,6 +133,9 @@ test('recordTaskStart appends, keeps the newest 20, and bumps updatedAt', () => 
   list = recordTaskStart(list, 't', start(99), 99)
   assert.equal(list[0].starts.length, 20)
   assert.deepEqual([list[0].starts[0].at, list[0].starts[19].at, list[0].updatedAt], [1, 99, 99])
+  // A task with no starts yet gets its first; an unknown id is NOT_FOUND.
+  assert.deepEqual(recordTaskStart([task()], 't', start(5), 5)[0].starts, [start(5)])
+  assert.equal(code(() => recordTaskStart([task()], 'zz', start(5), 5)), 'NOT_FOUND')
 })
 
 test('findTask and requireTasksOn', () => {
@@ -159,6 +192,14 @@ test('task.setCompleted, task.setArchived, task.delete, task.reorder', () => {
   v.call('task.delete', { taskId: 'b' })
   assert.equal(v.list(), undefined, 'the last task gone removes the field')
   assert.equal(v.call('task.setArchived', { taskId: 'zz', archived: true }).error.code, 'NOT_FOUND')
+})
+
+test('task.setCompleted on an already-completed task keeps its updatedAt and publishes nothing', () => {
+  const v = setupV2([task({ id: 'a', completedAt: 5, updatedAt: 5 })])
+  const before = v.projects.require('p1')
+  assert.deepEqual(v.call('task.setCompleted', { taskId: 'a', completed: true }), { ok: true, result: null })
+  assert.equal(v.list()[0].updatedAt, 5)
+  assert.equal(v.projects.require('p1'), before, 'the project was not replaced')
 })
 
 test('every task method refuses while Tasks is off', () => {
