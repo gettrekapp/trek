@@ -76,8 +76,8 @@ test('migrateCamp: version 2 gains the shed, no gear, no pins, empty journals, t
   delete v2.seenKinds
   const out = migrateCamp(v2)
   assert.ok(isCamp(out))
-  assert.equal(out.version, 5)
-  assert.deepEqual(out.built, { lights: 1, fire: 2, garden: 0, lake: 1, cabins: 1, shed: 0, signpost: 0 })
+  assert.equal(out.version, 6)
+  assert.deepEqual(out.built, { lights: 1, fire: 2, garden: 0, lake: 1, cabins: 1, shed: 0, signpost: 0, tower: 0 })
   assert.ok(out.crew.every((m) => m.xp === 120 && m.pin === null && m.journal.length === 0 && m.gear.hat === 0))
   assert.deepEqual(out.assignments.t1, { crew: 'c1', project: 'p', worktreeId: null, provider: '', projectName: 'p', place: '', start: T0 + 7, wood: 0 })
   assert.deepEqual(out.seenKinds, [])

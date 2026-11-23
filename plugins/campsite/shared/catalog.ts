@@ -1,4 +1,4 @@
-// The camp's shop (campsite parts 3a, 3b and 3c): every building's tiers with their cost and effect, and
+// The camp's shop (campsite parts 3a, 3b, 3c and 3d-2): every building's tiers with their cost and effect, and
 // the numbers behind the effects, bunks, hires, walk-ins and the away card; the crew's gear (four
 // slots × three tiers: names, prices, the shed and level each tier needs, its wood bonus). One
 // table, tunable. Pure.
@@ -6,7 +6,7 @@
 export const HOUR_MS = 3_600_000
 export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 
-export const BUILDING_IDS = ['lights', 'fire', 'garden', 'lake', 'cabins', 'shed', 'signpost'] as const
+export const BUILDING_IDS = ['lights', 'fire', 'garden', 'lake', 'cabins', 'shed', 'signpost', 'tower'] as const
 export type BuildingId = (typeof BUILDING_IDS)[number]
 
 export interface Cost {
@@ -81,7 +81,16 @@ export const CATALOG: readonly BuildingDef[] = [
       { name: 'Gear shed II', effect: 'The crew can buy gear tier 3', cost: c(800, 1) }
     ]
   },
-  { id: 'signpost', name: 'Trail signpost', start: 0, tiers: [{ name: 'Trail signpost', effect: "See every project's trails", cost: c(150) }] }
+  { id: 'signpost', name: 'Trail signpost', start: 0, tiers: [{ name: 'Trail signpost', effect: "See every project's trails", cost: c(150) }] },
+  {
+    id: 'tower',
+    name: 'Ranger tower',
+    start: 0,
+    tiers: [
+      { name: 'Ranger tower', effect: 'Rare animals can appear', cost: c(500, 2) },
+      { name: 'Ranger tower II', effect: 'More sightings; hints for unseen animals', cost: c(1200, 3) }
+    ]
+  }
 ]
 
 export const building = (id: BuildingId): BuildingDef => CATALOG.find((b) => b.id === id)!

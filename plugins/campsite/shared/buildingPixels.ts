@@ -1,8 +1,9 @@
-// The camp's buildings as pixels (campsite parts 3a, 3b and 3c), in the hikers' style: rects on a grid,
-// drawn at BUILDING_SCALE on the strip. Cabins (46×34), the gear shed (30×26: a plank shed, then
+// The camp's buildings as pixels (campsite parts 3a, 3b, 3c and 3d-2), in the hikers' style: rects on a
+// grid, drawn at BUILDING_SCALE on the strip. Cabins (46×34), the gear shed (30×26: a plank shed, then
 // with a sign, a lantern, skis and an axe at tier 2), the lake (90×10, with a 24×6 dock at tier 2),
-// the garden (26×14: a plot, then beds) and the trail signpost (30×28: a post with two arrow planks,
-// the top one blank for the DOM's "n trails") stand at the strip's ends; the fire ring's tiers are stones
+// the garden (26×14: a plot, then beds), the trail signpost (30×28: a post with two arrow planks,
+// the top one blank for the DOM's "n trails") and the ranger tower (16×34: a lookout cab on braced
+// legs, with a telescope and a flag at tier 2) stand at the strip's ends; the fire ring's tiers are stones
 // around today's hearth (strip px); the string lights sag across the middle (strip px). Small icons
 // of each for the popover. Pure.
 import type { BuildingId } from './catalog.ts'
@@ -10,7 +11,7 @@ import type { Rect } from './pixels.ts'
 import { FEET_Y, STAGE_H, type Box } from './stage.ts'
 
 /** The buildings placed at the strip's ends */
-export type PlacedId = 'cabins' | 'lake' | 'garden' | 'shed' | 'signpost'
+export type PlacedId = 'cabins' | 'lake' | 'garden' | 'shed' | 'signpost' | 'tower'
 export interface Art {
   w: number
   h: number
@@ -19,8 +20,8 @@ export interface Art {
 
 /** Grid px → strip px */
 export const BUILDING_SCALE = 2
-export const BUILDING_SIZE: Readonly<Record<PlacedId, { w: number; h: number }>> = { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 } }
-/** Where a building's bottom edge stands (strip px): cabins, the shed, the garden and the signpost on the tents' line; the lake on the strip's bottom */
+export const BUILDING_SIZE: Readonly<Record<PlacedId, { w: number; h: number }>> = { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 }, tower: { w: 16, h: 34 } }
+/** Where a building's bottom edge stands (strip px): cabins, the shed, the garden, the signpost and the tower on the tents' line; the lake on the strip's bottom */
 export const artBottom = (id: PlacedId): number => (id === 'lake' ? STAGE_H : STAGE_H - 12)
 
 const LOG = '#6b4a2b'
@@ -218,9 +219,58 @@ function signpostRects(): Rect[] {
   return out
 }
 
-/** A placed building's art: every cabin alike, the lake with its dock from tier 2, the garden's plot or beds, the shed, the signpost */
+/** The ranger tower, 16×34: a lookout cab (a hipped roof, lit windows all round, a catwalk with a rail) on two splayed legs braced in two bays, stones at their feet; at tier 2 a telescope out of the window and a flag on the roof (rows 0–4 are empty at tier 1) */
+function towerRects(tier: number): Rect[] {
+  const { out, r } = painter()
+  if (tier >= 2) {
+    r(7, 0, 1, 6, STEEL)
+    r(8, 0, 4, 1, SKI)
+    r(8, 1, 3, 1, SKI)
+    r(8, 2, 4, 1, SKI)
+  }
+  // The roof: rows 5–8 widen about the middle
+  r(6, 5, 4, 1, ROOF)
+  r(4, 6, 8, 1, ROOF)
+  r(2, 7, 12, 1, ROOF)
+  r(1, 8, 14, 1, ROOF_EDGE)
+  // The cab: plank walls, a band of lit windows with two mullions
+  r(2, 9, 12, 7, PLANK)
+  r(3, 10, 10, 3, LIT)
+  r(6, 10, 1, 3, LOG_END)
+  r(9, 10, 1, 3, LOG_END)
+  // The catwalk and its rail
+  r(0, 14, 16, 1, LOG_END)
+  r(0, 15, 1, 1, LOG_END)
+  r(15, 15, 1, 1, LOG_END)
+  r(0, 16, 16, 1, PLANK)
+  r(1, 17, 14, 1, LOG_DARK)
+  // Two legs, stepping out once on the way down, braced in two bays with a beam between
+  r(2, 18, 2, 8, LOG_DARK)
+  r(12, 18, 2, 8, LOG_DARK)
+  r(1, 26, 2, 8, LOG_DARK)
+  r(13, 26, 2, 8, LOG_DARK)
+  r(2, 25, 12, 1, LOG_DARK)
+  for (let i = 0; i < 7; i++) {
+    r(4 + i, 18 + i, 1, 1, LOG)
+    r(11 - i, 18 + i, 1, 1, LOG)
+    r(3 + Math.round((i * 9) / 6), 26 + i, 1, 1, LOG)
+    r(12 - Math.round((i * 9) / 6), 26 + i, 1, 1, LOG)
+  }
+  // Stones at its feet
+  r(0, 33, 4, 1, STONE)
+  r(12, 33, 4, 1, STONE)
+  if (tier >= 2) {
+    // A brass telescope out of the right-hand window
+    r(11, 11, 4, 1, BRASS)
+    r(15, 10, 1, 3, STEEL)
+  }
+  return out
+}
+
+/** A placed building's art: every cabin alike, the lake with its dock from tier 2, the garden's plot or beds, the shed, the signpost, the tower */
 export function buildingArt(id: PlacedId, tier: number): Art {
   const { w, h } = BUILDING_SIZE[id]
+  if (id === 'tower') return { w, h, rects: towerRects(tier) }
   if (id === 'cabins') return { w, h, rects: cabinRects() }
   if (id === 'lake') return { w, h, rects: lakeRects(tier >= 2) }
   if (id === 'shed') return { w, h, rects: shedRects(tier) }
@@ -319,7 +369,7 @@ function lightsIcon(): Rect[] {
   return out
 }
 
-/** A building's icon in the popover, for a tier (≥ 1): the cabin, the shed, the signpost, the lake's left 40 columns (with the dock from tier 2), the garden's plot or beds, the fire ring, the lights */
+/** A building's icon in the popover, for a tier (≥ 1): the cabin, the shed, the signpost, the tower, the lake's left 40 columns (with the dock from tier 2), the garden's plot or beds, the fire ring, the lights */
 export function iconArt(id: BuildingId, tier: number): Art {
   switch (id) {
     case 'cabins':
@@ -330,6 +380,8 @@ export function iconArt(id: BuildingId, tier: number): Art {
       return buildingArt('shed', tier)
     case 'signpost':
       return buildingArt('signpost', tier)
+    case 'tower':
+      return buildingArt('tower', tier)
     case 'lake':
       return { w: 40, h: 10, rects: lakeRects(tier >= 2).filter((r) => r.x < 40).map((r) => ({ ...r, w: Math.min(r.w, 40 - r.x) })) }
     case 'fire':

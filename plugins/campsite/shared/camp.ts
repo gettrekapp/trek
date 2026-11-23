@@ -1,6 +1,6 @@
-// The camp (campsite parts 2, 3a, 3b, 3c and 3d-1): one per server, shared by every project. What it
-// holds, a new one, versions 1 → 2 → 3 → 4 → 5, a shape check for what camp.json held, and the snapshot
-// windows see. Pure.
+// The camp (campsite parts 2, 3a, 3b, 3c, 3d-1 and 3d-2): one per server, shared by every project. What
+// it holds, a new one, versions 1 → 2 → 3 → 4 → 5 → 6, a shape check for what camp.json held, and the
+// snapshot windows see. Pure.
 import { AWAY_SOURCES, awayDue, newAway, noWood, type AwaySnapshot, type AwayTally } from './away.ts'
 import { BUILDING_IDS, GEAR_SLOTS, GEAR_TOP, HOUR_MS, building, gearBonus, hireCost, isRecord, noGear, startBuilt, whole, type BuildingId, type GearTiers } from './catalog.ts'
 import { NO_WHERE, levelFor, levelXp, liveKinds, newCrew, projectName, titleFor, type Where } from './crew.ts'
@@ -8,7 +8,7 @@ import type { JournalEntry } from './journal.ts'
 import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
 import type { Trail, TrailChecks, TrailRecord } from './trails.ts'
 
-export const CAMP_VERSION = 5
+export const CAMP_VERSION = 6
 
 /** A session type (its typeKey) or an agent (provider), as a window asks to pin it */
 export type PinRef = { kind: 'type' | 'provider'; id: string }
@@ -58,7 +58,7 @@ export interface Assignment {
 }
 
 export interface Camp {
-  version: 5
+  version: 6
   seed: number
   /** With fractions (the warmth factor, the garden, fishing); shown floored */
   wood: number
@@ -196,12 +196,13 @@ export function newCamp(seed: number, now: number): Camp {
 const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
 /**
- * camp.json as versions 1–4 wrote it, brought to version 5: version 1 gains version 2's fields
+ * camp.json as versions 1–5 wrote it, brought to version 6: version 1 gains version 2's fields
  * (seen at its last save); version 2 gains the shed (not built), each member no gear, no pin and an
  * empty journal, each trip its start (the last save) and no wood, and no seen kinds; a version 3 pin
  * without a name (from before pins carried one) is named; version 3 gains the signpost (not built),
  * no trails (the server's reconcile finds them), no history and no summits; version 4's trails gain
- * no checks (nor their time), and it gains no last activity (every project counts as active now). Anything else as it is.
+ * no checks (nor their time), and it gains no last activity (every project counts as active now); version 5 gains the
+ * ranger tower (not built). Anything else as it is.
  */
 export function migrateCamp(raw: unknown): unknown {
   if (!isRecord(raw)) return raw
@@ -214,9 +215,13 @@ export function migrateCamp(raw: unknown): unknown {
     const built = isRecord(v3.built) ? { ...v3.built, signpost: 0 } : v3.built
     out = { ...v3, version: 4, built, trails: {}, trailLog: {}, trailsDone: {}, summits: 0 }
   }
-  if (out.version !== 4) return out
-  const trails = isRecord(out.trails) ? Object.fromEntries(Object.entries(out.trails).map(([k, t]) => [k, isRecord(t) ? { ...t, checks: null, checksAt: null } : t])) : out.trails
-  return { ...out, version: 5, trails, lastActive: {} }
+  if (out.version === 4) {
+    const trails = isRecord(out.trails) ? Object.fromEntries(Object.entries(out.trails).map(([k, t]) => [k, isRecord(t) ? { ...t, checks: null, checksAt: null } : t])) : out.trails
+    out = { ...out, version: 5, trails, lastActive: {} }
+  }
+  if (out.version !== 5) return out
+  const built = isRecord(out.built) ? { ...out.built, tower: 0 } : out.built
+  return { ...out, version: 6, built }
 }
 
 /** Version 2 → 3 */

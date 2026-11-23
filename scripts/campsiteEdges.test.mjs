@@ -11,7 +11,7 @@ import { TENT_W, campLayout } from '../plugins/campsite/shared/layout.ts'
 const onGrid = (art) => art.rects.every((r) => r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 && r.x + r.w <= art.w && r.y + r.h <= art.h && /^#[0-9a-f]{6}$/.test(r.fill))
 
 test('building art: cabins 46×34, the lake 90×10 (its dock at tier 2), the garden 26×14 (plot, then beds); every rect on its grid', () => {
-  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 } })
+  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 }, tower: { w: 16, h: 34 } })
   for (const [id, tier] of [['cabins', 1], ['cabins', 3], ['lake', 1], ['lake', 2], ['garden', 1], ['garden', 2]]) {
     const art = buildingArt(id, tier)
     assert.deepEqual([art.w, art.h], [BUILDING_SIZE[id].w, BUILDING_SIZE[id].h], `${id} ${tier}`)
@@ -251,4 +251,28 @@ test('placeBuildings: the signpost stands inside the garden at the right end, an
   const now = campLayout(sessions, 1600, crowded.reserve)
   assert.ok(now.moreTents <= bare.moreTents && now.grouped === bare.grouped, 'every camp the bare strip shows')
   assert.deepEqual(crowded.right.map((p) => p.key), ['lake', 'garden'], 'the signpost went first; the lake and garden stay')
+})
+
+test('the ranger tower: 16×34 on the tents\' line, on its grid; tier 2 adds the flag and the telescope; its icon is its art', () => {
+  const one = buildingArt('tower', 1)
+  const two = buildingArt('tower', 2)
+  assert.deepEqual([one.w, one.h, two.w, two.h], [16, 34, 16, 34])
+  assert.ok(onGrid(one) && onGrid(two))
+  assert.ok(one.rects.every((r) => r.y >= 5), 'tier 1 leaves the flag\'s rows empty')
+  assert.ok(two.rects.some((r) => r.y === 0), 'tier 2 flies a flag')
+  assert.ok(two.rects.length > one.rects.length)
+  assert.equal(artBottom('tower'), 100)
+  assert.deepEqual(iconArt('tower', 2), two)
+})
+
+test('placeBuildings: the ranger tower stands at the left edge outside the cabins, and is the last building dropped on the left', () => {
+  const all = built({ cabins: 3, shed: 2, tower: 1 })
+  const wide = placeBuildings(all, 1600)
+  assert.deepEqual(wide.left.map((p) => [p.key, p.x]), [['tower', 8], ['cabin1', 8 + 32 + 8], ['cabin2', 8 + 32 + 8 + 92 + 8], ['cabin3', 8 + 32 + 8 + 2 * (92 + 8)]])
+  assert.deepEqual([wide.left[0].w, wide.left[0].h, wide.left[0].bottom, wide.left[0].tier], [32, 68, 100, 1])
+  assert.deepEqual(placeBuildings(all, 1200).left.map((p) => p.key), ['tower', 'cabin2', 'cabin3'], 'a quarter of 1200 is 300: the shed, then the outermost cabin go, the tower stays')
+  assert.deepEqual(placeBuildings(all, 700).left.map((p) => p.key), ['tower', 'cabin3'])
+  assert.deepEqual(placeBuildings(all, 600).left.map((p) => p.key), ['tower'], 'every cabin goes before it')
+  assert.deepEqual(placeBuildings(all, 500).left.map((p) => p.key), [], 'the middle keeps MIDDLE_MIN: at last the tower goes too')
+  assert.deepEqual(placeBuildings(built({ tower: 2 }), 1200).left.map((p) => [p.key, p.x, p.tier]), [['tower', 8, 2]], 'alone it stands against the edge')
 })
