@@ -28,7 +28,7 @@ const REEDS_START = 168
 /** A still walker keeps this far from the strip's ends */
 const EDGE = 8
 /** The fire ring's half width (its widest tier) */
-const FIRE_HALF = 40
+export const FIRE_HALF = 40
 
 /** A stretch of the strip, px (from ≤ to) */
 export interface Span {

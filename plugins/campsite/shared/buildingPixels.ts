@@ -5,7 +5,8 @@
 // the top one blank for the DOM's "n trails") and the ranger tower (16×34: a lookout cab on braced
 // legs, with a telescope and a flag at tier 2) stand at the strip's ends; the fire ring's tiers are stones
 // around today's hearth (strip px); the string lights sag across the middle (strip px). Small icons
-// of each for the popover. Pure.
+// of each for the popover. The noticeboard (part 5, 14×16: a roofed cork board on a post, two old
+// notes, and a fresh one with a red pin while something is unread) stands in the middle. Pure.
 import type { BuildingId } from './catalog.ts'
 import type { Rect } from './pixels.ts'
 import { FEET_Y, STAGE_H, type Box } from './stage.ts'
@@ -59,6 +60,12 @@ const SKI = '#c94f3d'
 const STEEL = '#c9ccd1'
 const WIRE = '#3a3540'
 const ICON_WIRE = '#6a6470'
+const CORK = '#a47e52'
+const CORK_DARK = '#8c6a44'
+const PAPER_OLD = '#b9ae94'
+const PAPER = '#f4ecd6'
+const INK = '#8a8070'
+const PIN = '#ff4d3d'
 export const BULB_COLORS: readonly string[] = ['#ffd27a', '#ff8a5c', '#9fd3ff', '#b8f28a']
 
 /** Collects rects */
@@ -389,4 +396,39 @@ export function iconArt(id: BuildingId, tier: number): Art {
     case 'lights':
       return { w: 24, h: 6, rects: lightsIcon() }
   }
+}
+
+/** The noticeboard's grid (part 5): on the strip at BUILDING_SCALE, its bottom on the tents' line */
+export const BOARD_SIZE = { w: 14, h: 16 } as const
+
+/** The noticeboard, 14×16: a little roof, a framed cork board with two faded notes on a post, stones at its foot; `unread`: a fresh white note over them with a red pin */
+export function boardArt(unread: boolean): Art {
+  const { out, r } = painter()
+  // The roof: a ridge row, then the full width with a darker eave
+  r(2, 0, 10, 1, SHED_ROOF)
+  r(0, 1, 14, 1, SHED_ROOF_EDGE)
+  // The frame and the cork inside it
+  r(1, 2, 12, 9, LOG_END)
+  r(2, 3, 10, 7, CORK)
+  r(2, 9, 10, 1, CORK_DARK)
+  // Two faded notes, each with a dull pin and a line of writing
+  r(3, 4, 3, 4, PAPER_OLD)
+  r(4, 4, 1, 1, STEEL)
+  r(3, 6, 3, 1, INK)
+  r(8, 5, 3, 3, PAPER_OLD)
+  r(9, 5, 1, 1, STEEL)
+  r(8, 7, 2, 1, INK)
+  if (unread) {
+    // A fresh note over them, lines of writing, its red pin standing out above the frame's top
+    r(5, 3, 5, 6, PAPER)
+    r(6, 5, 3, 1, INK)
+    r(6, 7, 2, 1, INK)
+    r(6, 2, 2, 2, PIN)
+  }
+  // The post and its shade, stones at its foot
+  r(6, 11, 2, 4, LOG)
+  r(6, 11, 1, 4, LOG_DARK)
+  r(4, 15, 3, 1, STONE)
+  r(7, 15, 3, 1, STONE_DARK)
+  return { w: BOARD_SIZE.w, h: BOARD_SIZE.h, rects: out }
 }

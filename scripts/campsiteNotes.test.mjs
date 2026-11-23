@@ -1,7 +1,7 @@
 // scripts/campsiteNotes.test.mjs — agents in the camp (campsite part 5): an agent's text cleaned and
 // measured, notes on a project's board (the newest 20), the one-a-minute limit, a report's journal
 // entry, and the words the noticeboard and the Trails tab show; camp v7: notes and trail reports kept,
-// migrated, restored, carried into the history and answered.
+// migrated, restored, carried into the history and answered; the board's art and its spot on the strip.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NOTES_MAX, NOTE_MAX, POST_EVERY_MS, REPORT_MAX, addNote, cleanText, dropBadNotes, isNote, isReport, noteAtOf, notesOf, takePost, textLength, whoLine } from '../plugins/campsite/shared/notes.ts'
@@ -10,6 +10,10 @@ import { NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, reportBy,
 import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { restore } from '../plugins/campsite/shared/economy.ts'
 import { postReport, trailEvent, trailKey, trailLogOf } from '../plugins/campsite/shared/trails.ts'
+import { BOARD_H, BOARD_W, boardSpot } from '../plugins/campsite/shared/board.ts'
+import { BOARD_SIZE, BUILDING_SCALE, artBottom, boardArt } from '../plugins/campsite/shared/buildingPixels.ts'
+import { placeBuildings } from '../plugins/campsite/shared/campEdges.ts'
+import { HIKER_W, LOG_W, TENT_W, campLayout } from '../plugins/campsite/shared/layout.ts'
 
 const T0 = 1_800_000_000_000
 
@@ -201,4 +205,57 @@ test('postReport: a worktree\'s open trail keeps its latest report; none without
   after.log[0].report.summary = 'changed'
   assert.equal(camp.trailLog.p[0].report.summary, 'second', 'the history\'s reports are copies too')
   assert.deepEqual(trailLogOf(camp, { projectId: 'other' }).reports, { z: { summary: 'elsewhere', at: T0 } })
+})
+
+test('the board\'s art: 14×16 at the buildings\' scale, inside its grid; unread adds the fresh note and its red pin', () => {
+  assert.deepEqual(BOARD_SIZE, { w: 14, h: 16 })
+  assert.deepEqual([BOARD_W, BOARD_H], [14 * BUILDING_SCALE, 16 * BUILDING_SCALE])
+  for (const unread of [false, true]) {
+    const art = boardArt(unread)
+    assert.deepEqual([art.w, art.h], [14, 16])
+    for (const r of art.rects) assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= 14 && r.y + r.h <= 16 && r.w > 0 && r.h > 0, JSON.stringify(r))
+  }
+  const read = boardArt(false).rects
+  const unread = boardArt(true).rects
+  assert.equal(read.some((r) => r.fill === '#ff4d3d'), false, 'no red pin when read')
+  assert.equal(unread.some((r) => r.fill === '#ff4d3d'), true)
+  assert.deepEqual(unread.slice(0, read.length - 4), read.slice(0, read.length - 4), 'the same board under the fresh note')
+})
+
+/** A session for the layout */
+const at = (n, worktreeId, status = 'working') => ({ terminalId: `t${n}`, label: `Agent ${n}`, provider: 'claude', status, decision: false, worktreeId, worktreeName: worktreeId, branch: worktreeId && `feature/${worktreeId}` })
+/** Whether a spot is clear of every span by 6 px */
+const clearOf = (spot, spans) => spans.every((s) => spot.x + spot.w + 6 <= s.from || spot.x - 6 >= s.to)
+
+test('boardSpot: on the tents\' line just left of the fire when that is free; clear of tents, the log, the fire, hikers and buildings; none when nothing fits', () => {
+  assert.equal(boardSpot(campLayout([], 0), []), null, 'not measured yet')
+  // An empty camp: just left of the fire
+  const empty = campLayout([], 1200)
+  const spot = boardSpot(empty, [])
+  assert.deepEqual(spot, { x: empty.fireX - 40 - 6 - BOARD_W, w: BOARD_W, h: BOARD_H, bottom: artBottom('signpost') })
+  // Global's log is just left of the fire: the board goes to the nearest free stretch, clear of everything
+  const sessions = [at(1, 'api'), at(2, 'api', 'attention'), at(3, 'web', 'done'), at(4, null, 'idle'), at(5, 'web', 'complete'), at(6, null)]
+  const edges = placeBuildings({ lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2, signpost: 1, tower: 0 }, 1600, sessions)
+  const layout = campLayout(sessions, 1600, edges.reserve)
+  const placed = [...edges.left, ...edges.right]
+  const busy = boardSpot(layout, placed)
+  assert.notEqual(busy, null)
+  const spans = [
+    { from: layout.fireX - 40, to: layout.fireX + 40 },
+    ...layout.tents.map((t) => ({ from: t.x - TENT_W / 2, to: t.x + TENT_W / 2 })),
+    { from: layout.log.x - LOG_W / 2, to: layout.log.x + LOG_W / 2 },
+    ...layout.hikers.map((h) => ({ from: h.x - HIKER_W / 2, to: h.x + HIKER_W / 2 })),
+    ...placed.map((p) => ({ from: p.x, to: p.x + p.w }))
+  ]
+  assert.ok(clearOf(busy, spans), JSON.stringify({ busy, spans }))
+  // Of the free stretches, the one nearest to just left of the fire: no free spot is nearer
+  const want = layout.fireX - 40 - 6 - BOARD_W
+  for (let x = 8; x + BOARD_W <= 1600 - 8; x++) if (clearOf({ x, w: BOARD_W }, spans)) assert.ok(Math.abs(x - want) >= Math.abs(busy.x - want), `${x} is nearer than ${busy.x}`)
+  // What the caller adds to avoid (the empty camp's line of text) is avoided too
+  const avoided = boardSpot(empty, [], [{ from: 400, to: 800 }])
+  assert.ok(avoided.x + BOARD_W + 6 <= 400, `left of the text: ${avoided.x}`)
+  // Its spot (426) taken: the nearest that fits, left of what is in the way (366, 60 px off), not right of the fire (546, 120 px off)
+  assert.equal(boardSpot({ width: 1000, fireX: 500, tents: [], log: null, hikers: [] }, [], [{ from: 400, to: 452 }]).x, 366)
+  assert.equal(boardSpot({ width: 400, fireX: 200, tents: [], log: null, hikers: [] }, [], [{ from: 8, to: 392 }]), null, 'no room at all')
+  assert.equal(boardSpot({ width: 100, fireX: 50, tents: [], log: null, hikers: [] }, []), null, 'the fire leaves no stretch wide enough')
 })
