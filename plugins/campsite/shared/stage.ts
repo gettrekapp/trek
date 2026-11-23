@@ -48,7 +48,7 @@ export function greyscale(rgba: Uint8ClampedArray): Uint8ClampedArray<ArrayBuffe
 
 /** What moves a pose (Hiker.tsx's CSS classes): a bob, a quicker bob for a wave, a hop, a breath, a step */
 export type Motion = 'bob' | 'wave' | 'hop' | 'breathe' | 'step'
-export const POSE_MOTION: Readonly<Partial<Record<Pose, Motion>>> = { stand: 'bob', map: 'bob', wave: 'wave', cheer: 'hop', sleep: 'breathe', walk: 'step' }
+export const POSE_MOTION: Readonly<Partial<Record<Pose, Motion>>> = { stand: 'bob', map: 'bob', wave: 'wave', cheer: 'hop', sleep: 'breathe', walk: 'step', binoculars: 'bob', think: 'breathe' }
 
 /** Where t (ms) is in a cycle of `ms`, in [0, 1) */
 const cycle = (t: number, ms: number): number => (((t % ms) + ms) % ms) / ms

@@ -11,7 +11,9 @@ const MOTION: Partial<Record<Pose, string>> = {
   wave: 'cs-wave',
   cheer: 'cs-hop',
   sleep: 'cs-breathe',
-  walk: 'cs-step'
+  walk: 'cs-step',
+  binoculars: 'cs-bob',
+  think: 'cs-breathe'
 }
 
 interface Props {

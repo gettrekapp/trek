@@ -301,3 +301,26 @@ test('pixels with gear: the tool is strapped to the pack, rising above it', () =
     assert.equal(pixelAt(px, 2, 2), '#c9ccd1')
   }
 })
+
+test('pixels (campsite part 4): binoculars over both eyes, a radio by the face whose light blinks, thinking sits with a hand at the chin and a thought', () => {
+  assert.deepEqual([FRAMES.binoculars, FRAMES.radio, FRAMES.think], [1, 2, 1])
+  const look = { ...bare, gear: 'mug' }
+  const bino = pixels(look, 'binoculars', 0)
+  assert.equal(pixelAt(bino, 4, 4), '#8fc4e8', 'a lens over the left eye')
+  assert.equal(pixelAt(bino, 7, 4), '#8fc4e8', 'a lens over the right eye')
+  assert.equal(pixelAt(bino, 5, 4), '#2b2d33', 'the bridge')
+  assert.equal(pixelAt(bino, 2, 4), look.skin, 'both hands up')
+  assert.equal(pixelAt(bino, 9, 4), look.skin)
+  assert.equal(top(bino), 2, 'standing')
+  assert.equal(bino.some((r) => r.fill === '#e6e1d3'), false, "the look's own gear is not held")
+  const radio = [0, 1].map((f) => pixels(look, 'radio', f))
+  assert.equal(pixelAt(radio[0], 9, 5), '#4a5560', 'the radio by the face')
+  assert.equal(pixelAt(radio[0], 10, 1), '#9aa0a8', 'its antenna')
+  assert.deepEqual([pixelAt(radio[0], 10, 0), pixelAt(radio[1], 10, 0)], ['#6e3a30', '#ff5a3c'], 'its light off, then on')
+  assert.equal(top(radio[1]), 0)
+  const think = pixels(look, 'think', 0)
+  assert.equal(top(think.filter((r) => r.fill !== '#b9b4c6')), 4, 'sitting, as sit does')
+  assert.equal(pixelAt(think, 9, 8), look.skin, 'a hand at the chin')
+  assert.equal(pixelAt(think, 9, 10), shade(look.jacket), 'its arm')
+  assert.deepEqual([pixelAt(think, 10, 3), pixelAt(think, 11, 1)], ['#b9b4c6', '#b9b4c6'], 'a thought rising')
+})

@@ -4,9 +4,9 @@
 // a tool strapped to the pack. Pure.
 import type { Gear, Look } from './hiker.ts'
 
-export const POSES = ['stand', 'walk', 'wave', 'cheer', 'sit', 'sleep', 'map', 'chop', 'tent', 'fire'] as const
+export const POSES = ['stand', 'walk', 'wave', 'cheer', 'sit', 'sleep', 'map', 'chop', 'tent', 'fire', 'binoculars', 'radio', 'think'] as const
 export type Pose = (typeof POSES)[number]
-export const FRAMES: Readonly<Record<Pose, 1 | 2>> = { stand: 1, walk: 2, wave: 2, cheer: 1, sit: 1, sleep: 2, map: 1, chop: 2, tent: 2, fire: 2 }
+export const FRAMES: Readonly<Record<Pose, 1 | 2>> = { stand: 1, walk: 2, wave: 2, cheer: 1, sit: 1, sleep: 2, map: 1, chop: 2, tent: 2, fire: 2, binoculars: 1, radio: 2, think: 1 }
 
 export interface Rect {
   x: number
@@ -34,6 +34,12 @@ const EMBER = '#ffd27a'
 const ROLL = '#d9c9a0'
 /** A sleeper's z, and a mug's steam */
 const ZED = '#b9b4c6'
+/** Binoculars and a radio (campsite part 4), their lenses and the radio's light */
+const OPTICS = '#2b2d33'
+const LENS = '#8fc4e8'
+const RADIO = '#4a5560'
+const LED = '#ff5a3c'
+const LED_OFF = '#6e3a30'
 
 // Gear by tier (1–3): packs tan, forest green, crimson; boots brown, black, black with red laces;
 // hats a bucket hat, a ranger hat, an alpine hat with a feather; tools a trekking pole, an ice axe, a
@@ -55,7 +61,7 @@ export function shade(hex: string): string {
 }
 
 /** Rows the upper body drops: sitting is clearly lower than standing; chores at the ground crouch */
-const DROP: Partial<Record<Pose, number>> = { sit: 2, tent: 1, fire: 1 }
+const DROP: Partial<Record<Pose, number>> = { sit: 2, tent: 1, fire: 1, think: 2 }
 
 /** `gear`: what the hands hold instead of the look's own ('none': empty-handed) */
 export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'): Rect[] {
@@ -222,6 +228,31 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
     r(10, 12, 2, 1, WOOD)
     r(11, 11, 1, 1, FLAME)
     if (frame === 1) r(11, 10, 1, 1, EMBER)
+  } else if (pose === 'binoculars') {
+    // Both hands up at the face, the binoculars over the eyes: two barrels, each with its lens
+    armUp(2)
+    armUp(9)
+    r(3, 4, 2, 2, OPTICS)
+    r(7, 4, 2, 2, OPTICS)
+    r(5, 4, 2, 1, OPTICS)
+    r(4, 4, 1, 1, LENS)
+    r(7, 4, 1, 1, LENS)
+  } else if (pose === 'radio') {
+    // A radio held up to the face, its antenna's light blinking
+    armDown(2)
+    r(9, 7, 1, 2, sleeve)
+    r(9, 6, 1, 1, look.skin)
+    r(9, 3, 2, 4, RADIO)
+    r(9, 4, 1, 1, OPTICS)
+    r(10, 1, 1, 2, POLE)
+    r(10, 0, 1, 1, frame === 1 ? LED : LED_OFF)
+  } else if (pose === 'think') {
+    // Sitting, a hand at the chin, and a thought rising
+    armDown(2)
+    r(9, 7 + d, 1, 3, sleeve)
+    r(9, 6 + d, 1, 1, look.skin)
+    r(10, 3, 1, 1, ZED)
+    r(11, 1, 1, 1, ZED)
   } else {
     armDown(2)
     armDown(9)
