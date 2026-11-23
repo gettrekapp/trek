@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
+import { SIGNPOST_HINT, cairnText, dayText, flagLabel, forText, historyText, meterLabel, signpostText, summitLine, trailGroups, trailStatus } from '../plugins/campsite/shared/campView.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
 import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagsKey, flagsOf, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
@@ -390,4 +391,30 @@ test("flagsKey: only the window's project's trails, the same string while none o
   assert.notEqual(flagsKey([{ ...trails[0], stage: 2 }, trails[1]], 'p'), key)
   assert.deepEqual(flagsOf(key), [{ worktreeId: 'a', branch: 'feature/a', stage: 1 }])
   assert.deepEqual(flagsOf(flagsKey([], 'p')), [])
+})
+
+const local = (y, m, d, h = 12) => new Date(y, m, d, h).getTime()
+
+test("the Trails tab's words: a flag's label, how long at a stage, the stage meter, today and yesterday, history lines", () => {
+  assert.equal(flagLabel({ branch: 'feature/x', stage: 2 }), 'feature/x — Ridge (PR open)')
+  assert.equal(flagLabel({ branch: 'b', stage: 4 }), 'b — Summit (merged)')
+  const now = local(2026, 10, 23, 15)
+  assert.deepEqual([forText(now, now), forText(now - 5 * 60_000, now), forText(now - 3 * H, now), forText(now - 50 * H, now)], ['for 1 m', 'for 5 m', 'for 3 h', 'for 2 d'])
+  assert.deepEqual([dayText(local(2026, 10, 23, 1), now), dayText(local(2026, 10, 22, 23), now), dayText(local(2026, 10, 3), now)], ['today', 'yesterday', 'Nov 3'])
+  assert.equal(trailStatus({ stage: 2, stageAt: now - 50 * H }, now), 'Ridge · for 2 d')
+  assert.equal(trailStatus({ stage: 4, stageAt: now - H }, now), 'Summited ✓ today')
+  assert.equal(meterLabel(2), 'Stage 3 of 5: Ridge')
+  assert.equal(historyText({ result: 'summited', end: local(2026, 10, 3) }, now), 'Summited Nov 3')
+  assert.equal(historyText({ result: 'turned-back', end: local(2026, 10, 22) }, now), 'Turned back yesterday')
+})
+
+test("trailGroups: this project's trails first, then every other project's by name; the signpost's and cairn's words", () => {
+  const e = (projectId, projectName, worktreeId) => ({ projectId, projectName, worktreeId, branch: worktreeId, stage: 0, start: T0, stageAt: T0 })
+  const { here, others } = trailGroups([e('q', 'zeta', 'a'), e('p', 'trek', 'b'), e('r', 'alpha', 'c'), e('q', 'zeta', 'd'), e('p', 'trek', 'e')], 'p')
+  assert.deepEqual(here.map((t) => t.worktreeId), ['b', 'e'])
+  assert.deepEqual(others.map((g) => [g.projectName, g.trails.map((t) => t.worktreeId)]), [['alpha', ['c']], ['zeta', ['a', 'd']]])
+  assert.equal(SIGNPOST_HINT, "Build the trail signpost to see your other projects' trails")
+  assert.deepEqual([signpostText(1), signpostText(3), signpostText(0)], ['1 trail', '3 trails', '0 trails'])
+  assert.deepEqual([cairnText(1), cairnText(12)], ['1 summit', '12 summits'])
+  assert.equal(summitLine('feature/x'), '⛳ Summited feature/x')
 })

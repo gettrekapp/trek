@@ -1,11 +1,14 @@
-// What the camp popover says (campsite parts 3a and 3b): a building's row, whether a hire can be
+// What the camp popover says (campsite parts 3a, 3b and 3c): a building's row, whether a hire can be
 // made, a member's status line, how far it is through its level, and a building's tooltip on the
-// strip; a member's view: its gear rows, its bonus, and the pin's choices. Pure.
-import type { CampSnapshot, CrewEntry, Pin, PinRef } from './camp.ts'
+// strip; a member's view: its gear rows, its bonus, and the pin's choices; the trails: a flag's
+// label, a trail's row and its history's lines, the Trails tab's groups, the signpost's and the
+// cairn's words, the summit's line. Pure.
+import type { CampSnapshot, CrewEntry, Pin, PinRef, TrailEntry } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
 import { providerName } from './journal.ts'
 import { shortfall } from './shop.ts'
+import { STAGES, STAGE_HINTS, SUMMIT, type TrailRecord } from './trails.ts'
 
 export interface ShopRow {
   id: BuildingId
@@ -137,3 +140,61 @@ export function pinOptions(snap: Pick<CampSnapshot, 'seenKinds'>, current: Pin |
   }
   return out
 }
+
+/** A flag's title and label: "feature/x — Ridge (PR open)" */
+export const flagLabel = (t: { branch: string; stage: number }): string => `${t.branch} — ${STAGE_HINTS[t.stage]}`
+
+/** How long since `at`: "for 5 m", "for 3 h", "for 2 d" (never below a minute) */
+export function forText(at: number, now: number): string {
+  const minutes = Math.max(1, Math.floor((now - at) / 60_000))
+  if (minutes < 60) return `for ${minutes} m`
+  const hours = Math.floor(minutes / 60)
+  return hours < 24 ? `for ${hours} h` : `for ${Math.floor(hours / 24)} d`
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** A day in the viewer's time: "today", "yesterday", else "Nov 3" */
+export function dayText(at: number, now: number): string {
+  const day = (t: number): number => {
+    const d = new Date(t)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  }
+  const days = Math.round((day(now) - day(at)) / 86_400_000)
+  if (days === 0) return 'today'
+  if (days === 1) return 'yesterday'
+  const d = new Date(at)
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`
+}
+
+/** A trail's row: its stage and how long it has been there ("Ridge · for 2 d"), or "Summited ✓ today" */
+export const trailStatus = (t: Pick<TrailEntry, 'stage' | 'stageAt'>, now: number): string => (t.stage === SUMMIT ? `Summited ✓ ${dayText(t.stageAt, now)}` : `${STAGES[t.stage]} · ${forText(t.stageAt, now)}`)
+
+/** The stage meter's label: "Stage 3 of 5: Ridge" */
+export const meterLabel = (stage: number): string => `Stage ${stage + 1} of ${STAGES.length}: ${STAGES[stage]}`
+
+/** A history line: "Summited Nov 3" or "Turned back yesterday" */
+export const historyText = (r: Pick<TrailRecord, 'result' | 'end'>, now: number): string => `${r.result === 'summited' ? 'Summited' : 'Turned back'} ${dayText(r.end, now)}`
+
+/** The Trails tab's groups: this window's project's trails, then each other project's (by name), each oldest first */
+export function trailGroups(trails: readonly TrailEntry[], projectId: string): { here: TrailEntry[]; others: { projectId: string; projectName: string; trails: TrailEntry[] }[] } {
+  const here = trails.filter((t) => t.projectId === projectId)
+  const others = new Map<string, { projectId: string; projectName: string; trails: TrailEntry[] }>()
+  for (const t of trails) {
+    if (t.projectId === projectId) continue
+    let g = others.get(t.projectId)
+    if (!g) others.set(t.projectId, (g = { projectId: t.projectId, projectName: t.projectName, trails: [] }))
+    g.trails.push(t)
+  }
+  return { here, others: [...others.values()].sort((a, b) => (a.projectName < b.projectName ? -1 : a.projectName > b.projectName ? 1 : 0)) }
+}
+
+/** Without the signpost, the Trails tab's line about the other projects */
+export const SIGNPOST_HINT = "Build the trail signpost to see your other projects' trails"
+/** No trails in this window's project */
+export const NO_TRAILS = 'No trails yet: a new worktree starts one.'
+/** The signpost's planks: "1 trail", "3 trails" (every project's) */
+export const signpostText = (n: number): string => (n === 1 ? '1 trail' : `${n} trails`)
+/** The cairn's label: "1 summit", "12 summits" */
+export const cairnText = (n: number): string => (n === 1 ? '1 summit' : `${n} summits`)
+/** The header's line while a summit is celebrated */
+export const summitLine = (branch: string): string => `⛳ Summited ${branch}`
