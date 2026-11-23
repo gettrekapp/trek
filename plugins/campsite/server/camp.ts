@@ -26,9 +26,10 @@
 // in the camp (part 5): two MCP tools, camp_note (a note on the project's noticeboard, sent as `note`
 // to its windows) and camp_trail_report (the latest report on a worktree's trail, in its member's
 // journal too), each at most once a minute per session (or project) and per trail, saved at once;
-// a session's worktree and agent come from the activity feed (kept in memory); `notes` answers a project's notes (the snapshot carries only each project's newest note's
-// time). New commits are counted with git (fast-forward only). Nothing here can stop the server:
-// errors are logged and pay nothing.
+// a session's worktree and agent come from the activity feed (kept in memory); `notes` answers a
+// project's notes (the snapshot carries only each project's newest note's time). New commits are
+// counted with git (fast-forward only). Nothing here can stop the server: errors are logged and pay
+// nothing.
 import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import type { AgentToolKind } from '../../../src/shared/plugins/agents.ts'

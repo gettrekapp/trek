@@ -44,12 +44,19 @@ export const whoLine = (agent: string | undefined, member: string | undefined): 
 export const textLength = (s: string): number => [...s].length
 
 /**
- * An agent's text as the camp keeps it: one line (control characters and line breaks become
- * spaces, runs of white space one space), trimmed, 1 to `max` code points; else why not.
+ * What becomes a space in an agent's text: C0 and C1 control characters, the line and paragraph
+ * separators, and the invisible ones that could hide or reorder what is shown (zero-width spaces and
+ * joiners, the bidi marks, embeddings, overrides and isolates, the word joiner, the BOM)
+ */
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g
+
+/**
+ * An agent's text as the camp keeps it: one line (control and invisible characters and line breaks
+ * become spaces, runs of white space one space), trimmed, 1 to `max` code points; else why not.
  */
 export function cleanText(value: unknown, max: number, what: 'note' | 'summary'): string | ShopRefusal {
   if (typeof value !== 'string') return { code: 'BAD_REQUEST', message: `The ${what} must be a string.` }
-  const text = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim()
+  const text = value.replace(INVISIBLE, ' ').replace(/\s+/g, ' ').trim()
   if (text === '') return { code: 'BAD_REQUEST', message: `The ${what} is empty.` }
   const n = textLength(text)
   if (n > max) return { code: 'BAD_REQUEST', message: `The ${what} is too long: ${n} characters (at most ${max}).` }

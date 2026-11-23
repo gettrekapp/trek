@@ -21,6 +21,11 @@ test('cleanText: one line, white space collapsed, trimmed; 1 to max code points'
   assert.equal(cleanText('  Tests are green.\r\n\tLeft the flaky one\u2028skipped.  ', NOTE_MAX, 'note'), 'Tests are green. Left the flaky one skipped.')
   assert.equal(cleanText('a\u0000b\u001bc\u009fd', NOTE_MAX, 'note'), 'a b c d', 'control characters become spaces')
   assert.deepEqual(cleanText(' \n\t ', NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note is empty.' })
+  // Invisible characters (zero-width, bidi controls, the word joiner, the BOM) become spaces; text of only those is empty
+  assert.deepEqual(cleanText('\u200b', NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note is empty.' })
+  assert.deepEqual(cleanText('\u200b\u200f\u202a\u202e\u2060\u2066\u2069\ufeff', NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note is empty.' })
+  assert.equal(cleanText('safe\u202egnp.exe', NOTE_MAX, 'note'), 'safe gnp.exe', 'the right-to-left override is gone')
+  assert.equal(cleanText('a\u200bb\u200dc\ufeffd\u2067e\u2069', NOTE_MAX, 'note'), 'a b c d e')
   assert.deepEqual(cleanText(42, NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note must be a string.' })
   assert.deepEqual(cleanText(undefined, REPORT_MAX, 'summary'), { code: 'BAD_REQUEST', message: 'The summary must be a string.' })
   assert.equal(cleanText('x'.repeat(NOTE_MAX), NOTE_MAX, 'note'), 'x'.repeat(NOTE_MAX))
@@ -99,8 +104,26 @@ test('a report in the journal: "Reported on <branch>: <summary>"; its branch cut
   note(member, { kind: 'report', at: T0, branch: 'b'.repeat(100), summary: 'done' })
   assert.equal(member.journal[0].branch.length, 80)
   assert.equal(member.journal[0].summary, 'done')
-  for (let i = 0; i < JOURNAL_MAX + 1; i++) note(member, { kind: 'report', at: T0 + i, branch: 'x', summary: 's' })
+  for (let i = 0; i < JOURNAL_MAX + 1; i++) note(member, { kind: 'report', at: T0 + i, branch: `x${i}`, summary: 's' })
   assert.equal(member.journal.length, JOURNAL_MAX)
+})
+
+test('a member keeps one report per branch: a new one replaces its last and moves to the newest, so reports leave its other entries be', () => {
+  const member = { journal: [] }
+  note(member, { kind: 'hired', at: T0 })
+  note(member, { kind: 'report', at: T0 + 1, branch: 'feature/x', summary: 'First.' })
+  note(member, { kind: 'level', at: T0 + 2, level: 2, title: 'Hiker' })
+  note(member, { kind: 'report', at: T0 + 3, branch: 'feature/y', summary: 'Other trail.' })
+  note(member, { kind: 'report', at: T0 + 4, branch: 'feature/x', summary: 'Second.' })
+  assert.deepEqual(member.journal.map((e) => [e.kind, e.at]), [['hired', T0], ['level', T0 + 2], ['report', T0 + 3], ['report', T0 + 4]])
+  assert.equal(member.journal.at(-1).summary, 'Second.')
+  // Many reports on one trail can't evict the rest of the journal
+  for (let i = 0; i < JOURNAL_MAX * 2; i++) note(member, { kind: 'report', at: T0 + 10 + i, branch: 'feature/x', summary: `#${i}` })
+  assert.deepEqual(member.journal.map((e) => e.kind), ['hired', 'level', 'report', 'report'])
+  // A long branch is matched as kept (cut): still one entry
+  note(member, { kind: 'report', at: T0 + 500, branch: 'b'.repeat(100), summary: 'a' })
+  note(member, { kind: 'report', at: T0 + 501, branch: 'b'.repeat(120), summary: 'b' })
+  assert.equal(member.journal.filter((e) => e.kind === 'report' && e.branch.startsWith('bbb')).length, 1)
 })
 
 test('noticeboard words: who and where, the button, unread notes, the seen time, a report excerpt', () => {

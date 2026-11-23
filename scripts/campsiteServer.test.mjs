@@ -1304,11 +1304,12 @@ function agentsCamp(t, hostOptions = {}) {
   const h = fakeHost(t, { sessions: new Set(['t1', 't2', 'g1']), globals: new Set(['g1']), ...hostOptions })
   const clock = manual()
   const time = { now: T0 }
-  const inst = createCampServer(h.host, { rand: noSightings, now: () => time.now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), minuteMs: 60_000 })
+  let ticker = () => {}
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => time.now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { ticker = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   const note = (args, projectId = 'p') => tool(inst, 'camp_note').call(args, { projectId })
   const report = (args, projectId = 'p') => tool(inst, 'camp_trail_report').call(args, { projectId })
-  return { h, clock, time, inst, note, report }
+  return { h, clock, time, inst, note, report, tick: () => ticker() }
 }
 
 test('agents (5): the tools and their instructions; the inputs: text or summary required, the ids optional strings', (t) => {
@@ -1399,6 +1400,52 @@ test("agents (5): camp_trail_report puts the session's report on its worktree's 
   const after = await inst.handlers.trailLog({ projectId: 'p' }, {})
   assert.deepEqual(after.reports, {})
   assert.deepEqual(after.log.at(-1).report, { summary: 'By id', at: T0 + 65_000 })
+})
+
+test('agents (5): a refused post uses up no minute: a refused camp_note or camp_trail_report is followed at once by a valid one', async (t) => {
+  const { h, inst, note, report } = agentsCamp(t)
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b' })
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  // t1 is p's: named from q it is NOT_FOUND, and its own minute is still free
+  assert.throws(() => note({ text: 'From q', terminalId: 't1' }, 'q'), (err) => err.code === 'NOT_FOUND')
+  assert.equal(note({ text: 'From p', terminalId: 't1' }), 'Pinned to the noticeboard.')
+  // A bad terminalId leaves the project's minute (no terminalId) free too
+  assert.throws(() => note({ text: 'Nobody', terminalId: 'nobody' }), (err) => err.code === 'NOT_FOUND')
+  assert.throws(() => note({ text: 'Bad', terminalId: 42 }), (err) => err.code === 'BAD_REQUEST')
+  assert.equal(note({ text: 'No id' }), 'Pinned to the noticeboard.')
+  assert.deepEqual((await inst.handlers.notes({ projectId: 'p' }, {})).notes.map((n) => n.text), ['From p', 'No id'])
+  // The trail's minute: a report naming an unknown session (or one too long) is refused, and the trail's next report goes through
+  assert.throws(() => report({ summary: 'Nobody', terminalId: 'nobody', worktreeId: 'w' }), (err) => err.code === 'NOT_FOUND')
+  assert.throws(() => report({ summary: 'y'.repeat(281), terminalId: 't1' }), (err) => err.code === 'BAD_REQUEST')
+  assert.equal(report({ summary: 'Done.', terminalId: 't1' }), 'Report posted on b.')
+  assert.throws(() => report({ summary: 'Again', worktreeId: 'w' }), { message: 'Please wait a minute before the next report.' })
+})
+
+test("agents (5): a session's facts go on session.closed, and at the minute tick once the session is gone: a later note with its terminalId names no agent or branch", async (t) => {
+  const sessions = new Set(['t1', 't2'])
+  const { h, inst, note, time, tick } = agentsCamp(t, { sessions })
+  const fact = (terminalId) => ({ projectId: 'p', at: T0, terminalId, worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  h.fire({ kind: 'session.started', ...fact('t1') })
+  h.fire({ kind: 'session.started', ...fact('t2') })
+  h.fire({ kind: 'session.closed', ...fact('t1') })
+  // The host still knows t1 (its terminal is there); the camp no longer knows its worktree or agent
+  note({ text: 'After closing', terminalId: 't1' })
+  // t2 vanishes without a word: the tick drops its facts; were it to come back, its notes name nobody
+  sessions.delete('t2')
+  time.now = T0 + 60_000
+  tick()
+  sessions.add('t2')
+  note({ text: 'After the tick', terminalId: 't2' })
+  const notes = (await inst.handlers.notes({ projectId: 'p' }, {})).notes
+  assert.deepEqual(notes.map(({ text, agent, branch }) => [text, agent, branch]), [['After closing', undefined, undefined], ['After the tick', undefined, undefined]])
+})
+
+test('agents (5): notes for a project named __proto__ (or another inherited key) is an empty list', async (t) => {
+  const { inst, note } = agentsCamp(t)
+  note({ text: 'Only in p' })
+  assert.deepEqual(await inst.handlers.notes({ projectId: '__proto__' }, {}), { notes: [] })
+  assert.deepEqual(await inst.handlers.notes({ projectId: 'constructor' }, {}), { notes: [] })
+  assert.deepEqual(await inst.handlers.notes({ projectId: 'toString' }, {}), { notes: [] })
 })
 
 test('agents (5): after dispose the tools refuse (the camp is closing)', (t) => {

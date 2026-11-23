@@ -29,11 +29,20 @@ export const providerName = (id: string): string => (Object.hasOwn(PROVIDER_NAME
 const NAME_MAX = 80
 const cut = (s: string): string => (s.length > NAME_MAX ? s.slice(0, NAME_MAX) : s)
 
-/** Adds an entry (its names cut to NAME_MAX), dropping the oldest past JOURNAL_MAX */
+/**
+ * Adds an entry (its names cut to NAME_MAX), dropping the oldest past JOURNAL_MAX. A member keeps
+ * one report per branch: a new one replaces its last (and moves to the newest), so reports can't
+ * push its trips, levels and summits out.
+ */
 export function note(member: { journal: JournalEntry[] }, entry: JournalEntry): void {
   if (entry.kind === 'trip') entry = { ...entry, project: cut(entry.project), place: cut(entry.place) }
   else if (entry.kind === 'summit') entry = { ...entry, branch: cut(entry.branch), project: cut(entry.project) }
-  else if (entry.kind === 'report') entry = { ...entry, branch: cut(entry.branch) }
+  else if (entry.kind === 'report') {
+    const branch = cut(entry.branch)
+    entry = { ...entry, branch }
+    const old = member.journal.findIndex((e) => e.kind === 'report' && e.branch === branch)
+    if (old !== -1) member.journal.splice(old, 1)
+  }
   member.journal.push(entry)
   if (member.journal.length > JOURNAL_MAX) member.journal.splice(0, member.journal.length - JOURNAL_MAX)
 }
