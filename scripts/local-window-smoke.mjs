@@ -520,7 +520,9 @@ try {
   const trekDev = JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers['trek-dev']
   const mcp = async (method, params) => {
     const res = await fetch(trekDev.url, { method: 'POST', headers: { ...trekDev.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
-    return (await res.json()).result
+    const json = await res.json().catch(() => null)
+    if (!res.ok || json?.result === undefined) throw new Error(`trek-dev MCP ${method} failed: HTTP ${res.status}${json?.error?.message ? `: ${json.error.message}` : ''}`)
+    return json.result
   }
   check('trek-dev MCP lists the camp tools where Campsite is on', (await mcp('tools/list', {})).tools.map((tool) => tool.name).filter((name) => name.startsWith('camp_')), ['camp_note', 'camp_trail_report'])
   const noted = await mcp('tools/call', { name: 'camp_note', arguments: { text: 'Tests are green; left the flaky one skipped.', terminalId: sessionId } })
