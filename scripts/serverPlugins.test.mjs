@@ -1331,8 +1331,9 @@ test("agentProviders (plugins A1): a plugin with a malformed agent, a taken id o
     agentPlugin('badefforts', [agent('pi', { efforts: [null] })]),
     agentPlugin('badmarkers', [agent('rho', { statusMarkers: ['esc', 3] })]),
     agentPlugin('badmodes', [agent('sigma', { approvalModes: ['auto'] })]),
+    agentPlugin('badactivity', [agent('upsilon', { activity: { follow: () => () => {} } })]),
     agentPlugin('okhooks', [
-      agent('tau', { globalPrompt: () => 'g', discoverSessionId: async () => undefined, history: { migrate: async () => ({ moved: false }) }, models: [{ id: 'm', label: 'M', efforts: ['low'] }], statusMarkers: ['esc'] })
+      agent('tau', { globalPrompt: () => 'g', discoverSessionId: async () => undefined, history: { migrate: async () => ({ moved: false }) }, models: [{ id: 'm', label: 'M', efforts: ['low'] }], statusMarkers: ['esc'], activity: { watch: () => () => {} } })
     ])
   ])
   assert.deepEqual(registry.agentProviders().map((a) => a.agent.id), ['alpha', 'tau'])
@@ -1355,7 +1356,8 @@ test("agentProviders (plugins A1): a plugin with a malformed agent, a taken id o
     ['badmodelefforts', /its agent "omicron" has a model whose efforts are not strings/],
     ['badefforts', /its agent "pi" has efforts that are not all strings/],
     ['badmarkers', /its agent "rho" has status markers that are not all strings/],
-    ['badmodes', /its agent "sigma" has an approval mode without a string value and label/]
+    ['badmodes', /its agent "sigma" has an approval mode without a string value and label/],
+    ['badactivity', /its agent "upsilon" has an activity without a watch function/]
   ]
   assert.equal(warnings.some((w) => w.includes('] okhooks not loaded')), false, 'well-formed hooks are taken')
   for (const [id, why] of expected) {

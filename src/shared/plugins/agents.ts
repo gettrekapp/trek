@@ -152,6 +152,56 @@ export interface ExternalMcpServer {
   invalid?: string
 }
 
+/**
+ * What a tool call is doing (campsite part 4): reading, editing, running a command, sending a
+ * subagent, the web, an MCP tool, or anything else.
+ */
+export const AGENT_TOOL_KINDS = ['read', 'edit', 'run', 'delegate', 'web', 'mcp', 'other'] as const
+export type AgentToolKind = (typeof AGENT_TOOL_KINDS)[number]
+/** A tool's label is cut to this many characters */
+export const AGENT_TOOL_LABEL_MAX = 40
+
+/** One tool call an agent made: its kind, and a short label (a file's base name, a command's first words, a host…) */
+export interface AgentTool {
+  kind: AgentToolKind
+  /** At most AGENT_TOOL_LABEL_MAX characters; may be empty */
+  label: string
+}
+
+/** The session an agent's activity is watched for */
+export interface AgentActivitySession {
+  /** The agent's own conversation id, as the session launched it */
+  sessionId: string
+  /** Where the session runs */
+  cwd: string
+  /** Trek's session id */
+  terminalId: string
+}
+
+/** How an agent reports its tool calls as they happen (campsite part 4: Claude Code's transcript). */
+export interface AgentActivity {
+  /**
+   * Starts following a running session: `onTool` for each tool call from now on. Returns the stop
+   * function, which core calls when the agent stops, exits or the session closes. Core catches a
+   * throw from either and logs it once; the session is never affected.
+   */
+  watch(session: AgentActivitySession, onTool: (tool: AgentTool) => void): () => void
+}
+
+/** Text cut to AGENT_TOOL_LABEL_MAX characters (one line, spaces collapsed; an ellipsis where cut) */
+export function toolLabel(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length <= AGENT_TOOL_LABEL_MAX ? line : `${line.slice(0, AGENT_TOOL_LABEL_MAX - 1).trimEnd()}…`
+}
+
+/** A tool as core passes it on: a known kind (else other) and a cut label; null when it is not a tool at all */
+export function agentTool(value: unknown): AgentTool | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as { kind?: unknown; label?: unknown }
+  const kind = (AGENT_TOOL_KINDS as readonly unknown[]).includes(v.kind) ? (v.kind as AgentToolKind) : 'other'
+  return { kind, label: typeof v.label === 'string' ? toolLabel(v.label) : '' }
+}
+
 export interface AgentProvider {
   /** AGENT_ID_RE; unique across the server's plugins; what `Session.llm.provider` holds */
   id: string
@@ -193,6 +243,8 @@ export interface AgentProvider {
   skills?(worktreePath: string): Promise<SkillInfo[]>
   /** The other MCP servers its own config names for these project paths (plugins A1b: Claude Code's) */
   externalMcpServers?(projectPaths: readonly string[]): Promise<ExternalMcpServer[]>
+  /** Its sessions' tool calls as they happen (campsite part 4: Claude Code's transcript); absent: none are reported */
+  activity?: AgentActivity
 }
 
 const CAPABILITY_KEYS = ['presetSessionId', 'resume', 'mcp', 'appendSystemPrompt', 'effort', 'addDirs', 'sessionMigration'] as const
@@ -227,6 +279,7 @@ export function agentProblem(value: unknown): string | null {
   for (const hook of ['globalPrompt', 'discoverSessionId'] as const) {
     if (a[hook] !== undefined && typeof a[hook] !== 'function') return `has a ${hook} that is not a function`
   }
+  if (a.activity !== undefined && typeof (a.activity as Partial<AgentActivity> | null)?.watch !== 'function') return 'has an activity without a watch function'
   if (a.history !== undefined) {
     const history = a.history as Partial<AgentHistory> | null
     if (typeof history?.migrate !== 'function') return 'has a history without a migrate function'
