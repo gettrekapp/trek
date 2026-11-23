@@ -94,7 +94,7 @@ export class CampStage {
     if (this.destroyed) return
     const t = performance.now()
     const width = s.layout.width
-    if (width !== this.width) this.resize(width, t)
+    if (width !== this.width) this.resize(width)
     this.hikers.sync(s, t)
     this.dog.sync(s, t)
     this.snapshot = s
@@ -140,11 +140,10 @@ export class CampStage {
     this.buildings.destroy()
   }
 
-  private resize(width: number, t: number): void {
+  private resize(width: number): void {
     this.width = width
     this.app.renderer.resize(Math.max(1, width), STAGE_H)
     drawBackdrop(this.backdrop, backdrop(width))
-    this.dog.resize(width, t)
   }
 
   /** The tents and Global's log */

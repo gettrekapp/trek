@@ -1,6 +1,6 @@
 // The camp dog on the Pixi strip: its wander (shared/stage.ts), its sprite, its overlay button, and
-// the hearts that float up when it is petted. It halts when the window is hidden or shown again and
-// settles after a resize.
+// the hearts that float up when it is petted. It wanders the middle, between the camp's buildings.
+// It halts when the window is hidden or shown again and settles after a resize.
 import 'pixi.js/unsafe-eval'
 import { Container, Sprite } from 'pixi.js'
 import { DOG_GRID, DOG_SCALE, DOG_W, dogPixels } from '../../../shared/dog.ts'
@@ -16,7 +16,9 @@ export class DogActor implements Actor {
   private target: HTMLElement | null = null
   private hearts: { start: number; sprite: Sprite }[] = []
   private snapshot: StageSnapshot | null = null
-  private width = 0
+  /** Its range: the middle, between the camp's buildings (NaN until the strip is measured) */
+  private left = NaN
+  private right = NaN
 
   constructor(textures: TextureCache) {
     this.textures = textures
@@ -29,15 +31,19 @@ export class DogActor implements Actor {
     return this.hearts.length > 0
   }
 
-  /** The strip's width changed: it sits where it is and settles (or starts, the first time) */
-  resize(width: number, t: number): void {
-    this.width = width
-    this.state = this.state ? dogResize(this.state, t, width) : dogInit(width, t)
-  }
-
   sync(s: StageSnapshot, t: number): void {
+    // A new width or reserve: it sits where it is (inside the middle) and settles (or starts, the first time)
+    if (s.layout.width > 0) {
+      const left = s.edges.reserve.left
+      const right = s.layout.width - s.edges.reserve.right
+      if (left !== this.left || right !== this.right) {
+        this.left = left
+        this.right = right
+        this.state = this.state ? dogResize(this.state, t, right, left) : dogInit(right, t, left)
+      }
+    }
     // Hidden or shown again: it stops where it is drawn (and doesn't run on unseen), then settles
-    if (this.snapshot && this.snapshot.paused !== s.paused && this.state) this.state = dogHalt(this.state, t, s.layout.width)
+    if (this.snapshot && this.snapshot.paused !== s.paused && this.state) this.state = dogHalt(this.state, t, this.right, this.left)
     this.snapshot = s
     this.root.visible = s.showDog && s.layout.width > 0
     if (this.target) this.target.style.visibility = this.root.visible ? '' : 'hidden'
@@ -70,7 +76,7 @@ export class DogActor implements Actor {
       return
     }
     const lit = s.sessions.length > 0
-    if (!still && !s.paused) this.state = dogAdvance(this.state, t, Math.random, this.width, lit ? s.layout.fireX : undefined)
+    if (!still && !s.paused) this.state = dogAdvance(this.state, t, Math.random, this.right, lit ? s.layout.fireX : undefined, this.left)
     const pose = dogPoseAt(this.state, t)
     const frame = still ? 0 : dogFrameAt(pose, t)
     this.sprite.texture = this.textures.get(`dog:${pose}:${frame}`, DOG_GRID.w, DOG_GRID.h, () => dogPixels(pose, frame))

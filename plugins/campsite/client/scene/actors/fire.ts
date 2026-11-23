@@ -28,7 +28,7 @@ export class FireActor implements Actor {
 
   sync(s: StageSnapshot): void {
     this.snapshot = s
-    const tier = s.built?.fire ?? 1
+    const tier = s.built.fire
     const hearthKey = `${s.layout.fireX}:${tier}`
     if (hearthKey !== this.hearthKey) {
       this.hearthKey = hearthKey

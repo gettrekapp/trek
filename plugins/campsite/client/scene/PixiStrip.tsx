@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../../shared/camp.ts'
 import type { Edges } from '../../shared/campEdges.ts'
+import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
@@ -17,6 +18,8 @@ interface Props {
   layout: CampLayout
   /** The buildings at the strip's ends (campEdges.ts) */
   edges: Edges
+  /** Each building's tier; the same object while the tiers are the same (a wood-only push doesn't redraw) */
+  built: Readonly<Record<BuildingId, number>>
   sessions: readonly PluginSession[]
   /** The camp's snapshot (its crew names the hikers' tooltips); null until it loads */
   camp: CampSnapshot | null
@@ -41,7 +44,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, sessions, camp, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -73,7 +76,6 @@ export function PixiStrip({ layout, edges, sessions, camp, now, selected, paused
   }, [])
 
   const stage = load.state === 'ready' ? load.stage : null
-  const built = camp?.built ?? null
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
     stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built })

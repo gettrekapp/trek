@@ -18,8 +18,8 @@ export interface StageSnapshot {
   showDog: boolean
   /** The buildings at the strip's ends, and the middle's reserve */
   edges: Edges
-  /** Each building's tier (the fire ring's, the lights'); null until the camp's state loads */
-  built: Readonly<Record<BuildingId, number>> | null
+  /** Each building's tier (the fire ring's, the lights'); nothing built until the camp's state loads */
+  built: Readonly<Record<BuildingId, number>>
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

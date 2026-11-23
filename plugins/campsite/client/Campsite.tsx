@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
-import { startBuilt } from '../shared/catalog.ts'
+import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel } from '../shared/crew.ts'
 import { campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -14,8 +14,15 @@ import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
 
-/** Before the camp's state loads (or from an older server): nothing built */
-const NOTHING_BUILT = startBuilt()
+/**
+ * The tiers as a string (before the camp's state loads, or from an older server: nothing built), so
+ * the tiers, the edges and the layout stay the same objects through a push that changes only the wood
+ */
+const tiersKey = (built: Readonly<Record<BuildingId, number>> | undefined): string => BUILDING_IDS.map((id) => built?.[id] ?? building(id).start).join(',')
+function tiersOf(key: string): Record<BuildingId, number> {
+  const tiers = key.split(',').map(Number)
+  return Object.fromEntries(BUILDING_IDS.map((id, i) => [id, tiers[i]])) as Record<BuildingId, number>
+}
 
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
@@ -30,9 +37,12 @@ export function Campsite(): React.JSX.Element | null {
   const [rowRef, rowWidth] = useWidth<HTMLDivElement>()
   const [openTent, setOpenTent] = useState<OpenTent | null>(null)
   const badge = useRef<HTMLButtonElement | null>(null)
-  const built = camp?.built ?? NOTHING_BUILT
-  const edges = useMemo(() => placeBuildings(built, width), [built, width])
-  const layout = useMemo(() => campLayout(sessions, width, edges.reserve), [sessions, width, edges.reserve])
+  const builtKey = tiersKey(camp?.built)
+  const built = useMemo(() => tiersOf(builtKey), [builtKey])
+  // Camps beat buildings: the ends give way until the middle shows every camp the bare strip would
+  const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
+  const { left: reserveLeft, right: reserveRight } = edges.reserve
+  const layout = useMemo(() => campLayout(sessions, width, { left: reserveLeft, right: reserveRight }), [sessions, width, reserveLeft, reserveRight])
   const closeTent = useCallback((refocus: boolean) => {
     setOpenTent(null)
     if (refocus) badge.current?.focus()
@@ -123,7 +133,7 @@ export function Campsite(): React.JSX.Element | null {
             />
           ))}
           {/* After the camps' badges in tab order, as the dog and hikers were; the canvas sits under everything (z-index 0) */}
-          <PixiStrip layout={layout} edges={edges} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
+          <PixiStrip layout={layout} edges={edges} built={built} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
       )}
