@@ -3,7 +3,7 @@
 // than AWAY_DUE_MS and it holds something to tell; `seen` starts it again only when it isn't due,
 // `awaySeen` (the card's dismiss) always. The rules change the camp in place. Pure.
 import type { Camp } from './camp.ts'
-import { AWAY_DUE_MS } from './catalog.ts'
+import { AWAY_DUE_MS, whole } from './catalog.ts'
 
 export const AWAY_SOURCES = ['work', 'outcomes', 'garden', 'fishing'] as const
 export type AwaySource = (typeof AWAY_SOURCES)[number]
@@ -28,7 +28,14 @@ export interface AwaySnapshot {
 
 type Seen = Pick<Camp, 'away' | 'seenAt'>
 
-export const newAway = (since: number): AwayTally => ({ since, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 0, levelUps: [] })
+/** A zero for every source */
+export function noWood(): Record<AwaySource, number> {
+  const out = {} as Record<AwaySource, number>
+  for (const k of AWAY_SOURCES) out[k] = 0
+  return out
+}
+
+export const newAway = (since: number): AwayTally => ({ since, wood: noWood(), markers: 0, levelUps: [] })
 
 export function addAway(camp: Pick<Camp, 'away'>, source: AwaySource, wood: number, markers: number): void {
   camp.away.wood[source] += wood
@@ -42,7 +49,7 @@ export function noteLevelUp(camp: Pick<Camp, 'away'>, crewId: string, level: num
 }
 
 /** Something to tell: a whole wood from some source, a marker or a level-up */
-export const awayHolds = (a: AwayTally): boolean => AWAY_SOURCES.some((k) => Math.floor(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0
+export const awayHolds = (a: AwayTally): boolean => AWAY_SOURCES.some((k) => whole(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0
 
 export const awayDue = (camp: Seen, now: number): boolean => now - camp.seenAt > AWAY_DUE_MS && awayHolds(camp.away)
 
@@ -62,6 +69,7 @@ export function awaySeen(camp: Seen, now: number): void {
 
 /** "While you were away (9 h): 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer" */
 export function awayText(a: AwaySnapshot): string {
+  // The sum of the floored parts, so the line adds up as shown
   const total = AWAY_SOURCES.reduce((sum, k) => sum + a.wood[k], 0)
   const out: string[] = []
   if (total > 0) out.push(`🪵 +${total} — ${AWAY_SOURCES.filter((k) => a.wood[k] > 0).map((k) => `${k} ${a.wood[k]}`).join(' · ')}`)

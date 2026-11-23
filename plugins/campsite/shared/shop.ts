@@ -3,7 +3,7 @@
 // camp, then change the camp in place (null) or say why not (a refusal the server half throws).
 // Purchases are final. Pure: the caller passes the time.
 import type { Camp, CrewMember } from './camp.ts'
-import { BUNKS_PER_CABIN, CANDIDATES_PER_DAY, CATALOG, START_BUNKS, TRAITS, building, costWords, hireCost, isBuildingId, type BuildingId, type Cost } from './catalog.ts'
+import { BUNKS_PER_CABIN, CANDIDATES_PER_DAY, CATALOG, START_BUNKS, TRAITS, building, costWords, hireCost, isBuildingId, isRecord, whole, type BuildingId, type Cost } from './catalog.ts'
 import { TRAIL_NAMES } from './crew.ts'
 import { fnv1a } from './hiker.ts'
 
@@ -24,7 +24,6 @@ export interface ShopRefusal {
   message: string
 }
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 const amount = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0
 const bad = (message: string): ShopRefusal => ({ code: 'BAD_REQUEST', message })
 const conflict = (message: string): ShopRefusal => ({ code: 'CONFLICT', message })
@@ -43,7 +42,7 @@ export const bunks = (camp: Pick<Camp, 'built'>): number => START_BUNKS + BUNKS_
 
 /** "Need 120 more wood", "Need 1 more marker", both joined by "and"; null when `have` covers it (wood counted whole) */
 export function shortfall(have: { wood: number; markers: number }, cost: Cost): string | null {
-  const wood = cost.wood - Math.floor(have.wood)
+  const wood = cost.wood - whole(have.wood)
   const markers = cost.markers - have.markers
   const parts: string[] = []
   if (wood > 0) parts.push(`${wood} more wood`)

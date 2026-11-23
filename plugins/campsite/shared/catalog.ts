@@ -1,27 +1,30 @@
 // The camp's shop (campsite part 3a): every building's tiers with their cost and effect, and the
 // numbers behind the effects, bunks, hires, walk-ins and the away card. One table, tunable. Pure.
 
+export const HOUR_MS = 3_600_000
+export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+
 export const BUILDING_IDS = ['lights', 'fire', 'garden', 'lake', 'cabins'] as const
 export type BuildingId = (typeof BUILDING_IDS)[number]
 
 export interface Cost {
-  wood: number
-  markers: number
+  readonly wood: number
+  readonly markers: number
 }
 export interface TierDef {
   /** The tier's own name ("Fire ring II") */
-  name: string
+  readonly name: string
   /** What it does, for the popover's row */
-  effect: string
-  cost: Cost
+  readonly effect: string
+  readonly cost: Cost
 }
 export interface BuildingDef {
-  id: BuildingId
-  name: string
+  readonly id: BuildingId
+  readonly name: string
   /** A new camp's tier: the fire ring 1 (today's ring), the rest 0 (not built) */
-  start: number
+  readonly start: number
   /** tiers[n - 1] is tier n; the start tier's entry is never bought */
-  tiers: readonly TierDef[]
+  readonly tiers: readonly TierDef[]
 }
 
 const c = (wood: number, markers = 0): Cost => ({ wood, markers })
@@ -116,7 +119,7 @@ export const TRAITS: readonly string[] = [
 ]
 
 /** The away card is due once nobody has seen the camp for longer than this */
-export const AWAY_DUE_MS = 4 * 3_600_000
+export const AWAY_DUE_MS = 4 * HOUR_MS
 
 /** "900 wood and 1 marker", for messages */
 export function costWords(cost: Cost): string {
@@ -127,3 +130,6 @@ export function costWords(cost: Cost): string {
 
 /** "🪵 900 · ⛳ 1", for the popover */
 export const costLabel = (cost: Cost): string => (cost.markers > 0 ? `🪵 ${cost.wood} · ⛳ ${cost.markers}` : `🪵 ${cost.wood}`)
+
+/** Wood (or a tally) as shown and checked: floored, forgiving the float drift of many small payments (30 × 2/60 is 0.9999999999999999) */
+export const whole = (x: number): number => Math.floor(x + 1e-6)

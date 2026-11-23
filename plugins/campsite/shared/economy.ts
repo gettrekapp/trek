@@ -6,7 +6,7 @@
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { addAway, type AwaySource } from './away.ts'
 import type { Camp } from './camp.ts'
-import { FISH_PER_HOUR, GARDEN_PER_HOUR, fireCeiling } from './catalog.ts'
+import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling } from './catalog.ts'
 import { assign, creditXp, release, restingCount } from './crew.ts'
 
 export interface Rules {
@@ -20,7 +20,6 @@ export const CAPS = { workPerHour: 30, commitsPerHour: 3, answersPerHour: 12, pr
 /** Answers within this many minutes pay answerFast, within the second answerSlow */
 const ANSWER_MINUTES: readonly [number, number] = [2, 10]
 export const LEDGER_MAX = 2000
-const HOUR_MS = 3_600_000
 /** Status changes only a running agent makes (pty output, the quiet timer, a bell, the user typing into it) */
 const LIVE_CAUSES: ReadonlySet<string> = new Set(['output', 'quiet', 'bell', 'input'])
 
@@ -194,6 +193,7 @@ export function applyCommits(camp: Camp, c: { worktreeId: string; head: string; 
 function passive(camp: Camp, minutes: number, out: Reward[]): void {
   const garden = GARDEN_PER_HOUR[camp.built.garden] ?? 0
   if (garden > 0) pay(camp, { wood: (garden / 60) * minutes, markers: 0, source: 'garden', reason: 'the garden' }, out)
+  // Over a long gap (a sleep, a stalled timer) this uses who rests now, on purpose: the gap's history isn't kept
   const fish = (FISH_PER_HOUR[camp.built.lake] ?? 0) * restingCount(camp)
   if (fish > 0) pay(camp, { wood: (fish / 60) * minutes, markers: 0, source: 'fishing', reason: 'fishing' }, out)
 }
