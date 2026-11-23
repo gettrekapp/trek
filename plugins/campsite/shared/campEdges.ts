@@ -1,10 +1,11 @@
-// Where the camp's buildings stand on the strip (campsite parts 3a and 3b): cabins at the left end
-// (side by side from the edge) with the gear shed inside them, the lake (with its dock) at the right
-// edge and the garden inside it. The fire ring's tiers are drawn at the fire and the lights across
-// the middle, so neither is placed. Each end takes at most END_SHARE of the width, and the middle
-// (where campLayout pitches the tents) keeps MIDDLE_MIN and room for every camp the bare strip would
-// show (camps beat buildings: a building never hides a camp, nor groups them): what doesn't fit is
-// dropped (still owned; the popover lists it), the shed first, then the outermost. Pure.
+// Where the camp's buildings stand on the strip (campsite parts 3a, 3b and 3c): cabins at the left
+// end (side by side from the edge) with the gear shed inside them, the lake (with its dock) at the
+// right edge, the garden inside it and the trail signpost inside that. The fire ring's tiers are
+// drawn at the fire and the lights across the middle, so neither is placed. Each end takes at most
+// END_SHARE of the width, and the middle (where campLayout pitches the tents) keeps MIDDLE_MIN and
+// room for every camp the bare strip would show (camps beat buildings: a building never hides a
+// camp, nor groups them): what doesn't fit is dropped (still owned; the popover lists it), the shed
+// first on the left and the signpost first on the right, then the outermost. Pure.
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { BUILDING_SCALE, BUILDING_SIZE, artBottom, type PlacedId } from './buildingPixels.ts'
 import type { BuildingId } from './catalog.ts'
@@ -13,7 +14,7 @@ import { campLayout, type CampLayout } from './layout.ts'
 export interface Placed {
   id: PlacedId
   tier: number
-  /** Unique on the strip: cabin1–cabin3, shed, lake, garden */
+  /** Unique on the strip: cabin1–cabin3, shed, lake, garden, signpost */
   key: string
   /** Left edge, strip px */
   x: number
@@ -44,10 +45,10 @@ const item = (id: PlacedId, tier: number, key: string): Item => ({ id, tier, key
 /** The px an end's items keep, outermost first: the edge's pad, the items and their gaps, the clear before the middle */
 const spanOf = (items: readonly Item[]): number => (items.length === 0 ? 0 : EDGE_PAD + items.reduce((sum, i) => sum + i.w, 0) + GAP * (items.length - 1) + MIDDLE_CLEAR)
 
-/** Drops one building from an end: the shed if it is there (the left end's innermost, the first to go), else the outermost */
+/** Drops one building from an end: the shed or the signpost if it is there (each end's innermost, the first to go), else the outermost */
 function drop(end: Item[]): void {
-  const shed = end.findIndex((i) => i.id === 'shed')
-  if (shed >= 0) end.splice(shed, 1)
+  const first = end.findIndex((i) => i.id === 'shed' || i.id === 'signpost')
+  if (first >= 0) end.splice(first, 1)
   else end.shift()
 }
 
@@ -62,6 +63,7 @@ export function placeBuildings(built: Readonly<Record<BuildingId, number>>, widt
   const right: Item[] = []
   if (built.lake > 0) right.push(item('lake', built.lake, 'lake'))
   if (built.garden > 0) right.push(item('garden', built.garden, 'garden'))
+  if (built.signpost > 0) right.push(item('signpost', built.signpost, 'signpost'))
   for (const end of [left, right]) while (end.length > 0 && spanOf(end) > width * END_SHARE) drop(end)
   const bare = sessions.length > 0 ? hides(campLayout(sessions, width)) : null
   /** The middle is too narrow: under MIDDLE_MIN, or it shows less of the camp than the bare strip does */

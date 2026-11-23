@@ -10,7 +10,7 @@ import type { Rect } from './pixels.ts'
 import { FEET_Y, STAGE_H, type Box } from './stage.ts'
 
 /** The buildings placed at the strip's ends */
-export type PlacedId = 'cabins' | 'lake' | 'garden' | 'shed'
+export type PlacedId = 'cabins' | 'lake' | 'garden' | 'shed' | 'signpost'
 export interface Art {
   w: number
   h: number
@@ -19,8 +19,8 @@ export interface Art {
 
 /** Grid px → strip px */
 export const BUILDING_SCALE = 2
-export const BUILDING_SIZE: Readonly<Record<PlacedId, { w: number; h: number }>> = { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 } }
-/** Where a building's bottom edge stands (strip px): cabins, the shed and the garden on the tents' line; the lake on the strip's bottom */
+export const BUILDING_SIZE: Readonly<Record<PlacedId, { w: number; h: number }>> = { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 } }
+/** Where a building's bottom edge stands (strip px): cabins, the shed, the garden and the signpost on the tents' line; the lake on the strip's bottom */
 export const artBottom = (id: PlacedId): number => (id === 'lake' ? STAGE_H : STAGE_H - 12)
 
 const LOG = '#6b4a2b'
@@ -188,8 +188,6 @@ function shedRects(tier: number): Rect[] {
   return out
 }
 
-/** The trail signpost's grid */
-export const SIGNPOST_SIZE = { w: 30, h: 28 } as const
 /** The plank the strip writes "n trails" on (grid cells of the signpost's art): left, top, width, height */
 export const SIGNPOST_PLANK = { x: 1, y: 3, w: 26, h: 10 } as const
 
@@ -220,12 +218,13 @@ function signpostRects(): Rect[] {
   return out
 }
 
-/** A placed building's art: every cabin alike, the lake with its dock from tier 2, the garden's plot or beds, the shed */
+/** A placed building's art: every cabin alike, the lake with its dock from tier 2, the garden's plot or beds, the shed, the signpost */
 export function buildingArt(id: PlacedId, tier: number): Art {
   const { w, h } = BUILDING_SIZE[id]
   if (id === 'cabins') return { w, h, rects: cabinRects() }
   if (id === 'lake') return { w, h, rects: lakeRects(tier >= 2) }
   if (id === 'shed') return { w, h, rects: shedRects(tier) }
+  if (id === 'signpost') return { w, h, rects: signpostRects() }
   return { w, h, rects: gardenRects(tier) }
 }
 
@@ -330,7 +329,7 @@ export function iconArt(id: BuildingId, tier: number): Art {
     case 'shed':
       return buildingArt('shed', tier)
     case 'signpost':
-      return { w: SIGNPOST_SIZE.w, h: SIGNPOST_SIZE.h, rects: signpostRects() }
+      return buildingArt('signpost', tier)
     case 'lake':
       return { w: 40, h: 10, rects: lakeRects(tier >= 2).filter((r) => r.x < 40).map((r) => ({ ...r, w: Math.min(r.w, 40 - r.x) })) }
     case 'fire':

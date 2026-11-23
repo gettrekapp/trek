@@ -3,7 +3,7 @@
 // middle that campLayout gets.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { BUILDING_SCALE, BUILDING_SIZE, LIGHTS_SAG, LIGHTS_Y, artBottom, buildingArt, bulbAlpha, fireRing, iconArt, lightString } from '../plugins/campsite/shared/buildingPixels.ts'
+import { BUILDING_SCALE, BUILDING_SIZE, LIGHTS_SAG, LIGHTS_Y, SIGNPOST_PLANK, artBottom, buildingArt, bulbAlpha, fireRing, iconArt, lightString } from '../plugins/campsite/shared/buildingPixels.ts'
 import { CATALOG } from '../plugins/campsite/shared/catalog.ts'
 import { MIDDLE_MIN, placeBuildings } from '../plugins/campsite/shared/campEdges.ts'
 import { TENT_W, campLayout } from '../plugins/campsite/shared/layout.ts'
@@ -11,7 +11,7 @@ import { TENT_W, campLayout } from '../plugins/campsite/shared/layout.ts'
 const onGrid = (art) => art.rects.every((r) => r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 && r.x + r.w <= art.w && r.y + r.h <= art.h && /^#[0-9a-f]{6}$/.test(r.fill))
 
 test('building art: cabins 46×34, the lake 90×10 (its dock at tier 2), the garden 26×14 (plot, then beds); every rect on its grid', () => {
-  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 } })
+  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 }, signpost: { w: 30, h: 28 } })
   for (const [id, tier] of [['cabins', 1], ['cabins', 3], ['lake', 1], ['lake', 2], ['garden', 1], ['garden', 2]]) {
     const art = buildingArt(id, tier)
     assert.deepEqual([art.w, art.h], [BUILDING_SIZE[id].w, BUILDING_SIZE[id].h], `${id} ${tier}`)
@@ -220,4 +220,35 @@ test('placeBuildings: the shed stands inside the cabins at the left end, and is 
   const now = campLayout(sessions, 1600, crowded.reserve)
   assert.ok(now.moreTents <= bare.moreTents && now.grouped === bare.grouped, 'every camp the bare strip shows')
   assert.deepEqual(crowded.left.map((p) => p.key), ['cabin2', 'cabin3'], 'the shed went first, then the outermost cabin')
+})
+
+test('the trail signpost: 30×28 on the tents\' line, its plank inside its grid; its icon is its art', () => {
+  const art = buildingArt('signpost', 1)
+  assert.deepEqual([art.w, art.h], [30, 28])
+  assert.ok(onGrid(art))
+  assert.ok(SIGNPOST_PLANK.x + SIGNPOST_PLANK.w <= art.w && SIGNPOST_PLANK.y + SIGNPOST_PLANK.h <= art.h)
+  assert.ok(art.rects.some((r) => r.x === SIGNPOST_PLANK.x && r.y === SIGNPOST_PLANK.y && r.w === SIGNPOST_PLANK.w && r.h === SIGNPOST_PLANK.h), 'the plank is one blank board')
+  assert.equal(artBottom('signpost'), 100)
+  assert.deepEqual(iconArt('signpost', 1), art)
+})
+
+const POSTED = built({ lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2, signpost: 1 })
+
+test('placeBuildings: the signpost stands inside the garden at the right end, and is the first building dropped there', () => {
+  const wide = placeBuildings(POSTED, 1600)
+  assert.deepEqual(wide.right.map((p) => p.key), ['lake', 'garden', 'signpost'])
+  const [lake, garden, post] = wide.right
+  assert.equal(post.x + post.w, garden.x - 8, 'inside the garden')
+  assert.deepEqual([post.w, post.h, post.bottom, post.tier], [60, 56, 100, 1])
+  assert.equal(lake.x + lake.w, 1600 - 8)
+  assert.equal(wide.reserve.right, 8 + 180 + 52 + 60 + 2 * 8 + 16)
+  assert.deepEqual(placeBuildings(POSTED, 1200).right.map((p) => p.key), ['lake', 'garden'], 'a quarter of 1200 is 300: the signpost goes, the lake and garden stay')
+  assert.deepEqual(placeBuildings(built({ signpost: 1 }), 1200).right.map((p) => [p.key, p.x]), [['signpost', 1200 - 8 - 60]], 'alone it stands against the edge')
+  // Camps beat buildings: a crowded middle drops the signpost before the garden or the lake
+  const sessions = Array.from({ length: 9 }, (_, i) => s(`p${i}`))
+  const crowded = placeBuildings(POSTED, 1600, sessions)
+  const bare = campLayout(sessions, 1600)
+  const now = campLayout(sessions, 1600, crowded.reserve)
+  assert.ok(now.moreTents <= bare.moreTents && now.grouped === bare.grouped, 'every camp the bare strip shows')
+  assert.deepEqual(crowded.right.map((p) => p.key), ['lake', 'garden'], 'the signpost went first; the lake and garden stay')
 })
