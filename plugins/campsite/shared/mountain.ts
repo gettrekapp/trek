@@ -183,3 +183,10 @@ export function cairnBox(fireX: number): { x: number; y: number; w: number; h: n
   const h = CAIRN_GRID.h * CAIRN_SCALE
   return { x: fireX - 24 - w, y: FEET_Y - h, w, h }
 }
+
+/** The window's project's trails as one string (JSON of [worktreeId, branch, stage], oldest first): the same while none of its flags change */
+export function flagsKey(trails: readonly (FlagTrail & { projectId: string })[], projectId: string): string {
+  return JSON.stringify(trails.filter((t) => t.projectId === projectId).map((t) => [t.worktreeId, t.branch, t.stage]))
+}
+/** The trails a flagsKey holds */
+export const flagsOf = (key: string): FlagTrail[] => (JSON.parse(key) as [string, string, number][]).map(([worktreeId, branch, stage]) => ({ worktreeId, branch, stage }))

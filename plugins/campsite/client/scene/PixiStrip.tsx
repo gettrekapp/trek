@@ -10,6 +10,7 @@ import { placedTitle } from '../../shared/campView.ts'
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { CampLayout } from '../../shared/layout.ts'
+import type { FlagTrail } from '../../shared/mountain.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
 import { STAGE_H } from '../../shared/stage.ts'
 import { useReducedMotion } from '../hooks.ts'
@@ -27,6 +28,12 @@ interface Props {
   camp: CampSnapshot | null
   /** terminalId → its member's kitKey (the same object while no one's gear changes) */
   kits: Readonly<Record<string, string>>
+  /** The window's project's trails (the same array while none of its flags change) */
+  trails: readonly FlagTrail[]
+  /** The camp's summits (the cairn) */
+  summits: number
+  /** The last summit to celebrate here */
+  summit: { worktreeId: string; seq: number } | null
   /** The chores' clock */
   now: number
   selected: string | null
@@ -50,7 +57,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, now, selected, paused, showDog, onPick, onBuilding }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, selected, paused, showDog, onPick, onBuilding }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -84,8 +91,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, now, sel
   const stage = load.state === 'ready' ? load.stage : null
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits })
-  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits])
+    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit })
+  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit])
 
   if (load.state === 'failed') {
     return (

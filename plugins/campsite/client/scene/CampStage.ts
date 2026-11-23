@@ -1,5 +1,6 @@
-// The campsite strip drawn by Pixi: the backdrop, tents and Global's log, and the actors (the
-// buildings and lights, the fire, the hikers, the camp dog; scene/actors/). It only draws: Campsite
+// The campsite strip drawn by Pixi: the backdrop (the trails' mountain between its sky and its
+// ridge), tents and Global's log, and the actors (the mountain's flags, the buildings and lights, the
+// fire and the cairn, the hikers, the camp dog; scene/actors/). It only draws: Campsite
 // lays the camp out (layout.ts) and hands it over with update(). The DOM overlay's buttons
 // (bindTarget, bindDog) are moved by the actors every frame to stand over their sprites, so names,
 // focus and clicks stay DOM. Timing and geometry come from shared/stage.ts.
@@ -11,6 +12,7 @@ import { BuildingsActor } from './actors/buildings.ts'
 import { DogActor } from './actors/dog.ts'
 import { FireActor } from './actors/fire.ts'
 import { HikersActor } from './actors/hikers.ts'
+import { MountainActor } from './actors/mountain.ts'
 import type { SignColors, StageSnapshot } from './actors/types.ts'
 import { drawBackdrop, drawShapes } from './draw.ts'
 import { TextureCache } from './textures.ts'
@@ -51,8 +53,11 @@ export class CampStage {
 
   private readonly app: Application
   private readonly textures = new TextureCache()
-  private readonly backdrop = new Graphics()
+  /** The stars and the moon; the ridge, the pines and the ground (the mountain stands between) */
+  private readonly sky = new Graphics()
+  private readonly land = new Graphics()
   private readonly camps = new Graphics()
+  private readonly mountain: MountainActor
   private readonly buildings: BuildingsActor
   private readonly fire: FireActor
   private readonly dog: DogActor
@@ -71,11 +76,12 @@ export class CampStage {
   private constructor(app: Application, parent: HTMLElement, colors: SignColors) {
     this.app = app
     parent.appendChild(app.canvas)
+    this.mountain = new MountainActor(this.textures)
     this.buildings = new BuildingsActor(this.textures)
     this.fire = new FireActor(this.textures)
     this.dog = new DogActor(this.textures)
     this.hikers = new HikersActor(this.textures, colors)
-    app.stage.addChild(this.backdrop, this.buildings.root, this.fire.glow, this.hikers.inside, this.camps, this.fire.root, this.dog.root, this.hikers.front)
+    app.stage.addChild(this.sky, this.mountain.root, this.land, this.buildings.root, this.fire.glow, this.hikers.inside, this.camps, this.fire.root, this.dog.root, this.hikers.front)
     // Pixel art at a few px a frame: 30 fps is plenty
     app.ticker.maxFPS = 30
     app.ticker.add(() => this.frame(performance.now()))
@@ -99,7 +105,8 @@ export class CampStage {
     this.dog.sync(s, t)
     this.snapshot = s
     this.drawCamps(s.layout)
-    this.fire.sync(s)
+    this.mountain.sync(s, t)
+    this.fire.sync(s, t)
     this.buildings.sync(s)
     // Hidden, or reduced motion with no heart rising: nothing moves, so no frames
     const idle = s.paused || (s.reduced && !this.dog.rising)
@@ -135,6 +142,7 @@ export class CampStage {
     this.app.destroy({ removeView: true }, { children: true })
     this.textures.destroy()
     this.hikers.destroy()
+    this.mountain.destroy()
     this.dog.destroy()
     this.fire.destroy()
     this.buildings.destroy()
@@ -143,7 +151,7 @@ export class CampStage {
   private resize(width: number): void {
     this.width = width
     this.app.renderer.resize(Math.max(1, width), STAGE_H)
-    drawBackdrop(this.backdrop, backdrop(width))
+    drawBackdrop(this.sky, this.land, backdrop(width))
   }
 
   /** The tents and Global's log */
@@ -162,6 +170,7 @@ export class CampStage {
     if (!s || this.destroyed) return
     const still = s.reduced
     this.hikers.frame(t, still)
+    this.mountain.frame(t, still)
     this.buildings.frame(t, still)
     this.fire.frame(t, still)
     this.dog.frame(t, still)

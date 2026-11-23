@@ -13,12 +13,13 @@ export function drawShapes(g: Graphics, shapes: readonly Shape[]): Graphics {
   return g
 }
 
-/** The whole backdrop, replacing what `g` held: stars, the moon and its bite, the ridge, the pines, the ground */
-export function drawBackdrop(g: Graphics, b: Backdrop): void {
-  g.clear()
-  drawBoxes(g, b.stars)
-  g.circle(b.moon.x, b.moon.y, b.moon.r).fill(b.moon.fill)
-  g.circle(b.bite.x, b.bite.y, b.bite.r).fill(b.bite.fill)
-  drawShapes(g, [b.ridge, ...b.pines])
-  drawBoxes(g, b.ground)
+/** The whole backdrop, replacing what the two held: the sky (stars, the moon and its bite) in `sky`; the ridge, the pines and the ground in `land` (the mountain goes between them) */
+export function drawBackdrop(sky: Graphics, land: Graphics, b: Backdrop): void {
+  sky.clear()
+  drawBoxes(sky, b.stars)
+  sky.circle(b.moon.x, b.moon.y, b.moon.r).fill(b.moon.fill)
+  sky.circle(b.bite.x, b.bite.y, b.bite.r).fill(b.bite.fill)
+  land.clear()
+  drawShapes(land, [b.ridge, ...b.pines])
+  drawBoxes(land, b.ground)
 }

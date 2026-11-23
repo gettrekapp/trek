@@ -4,6 +4,7 @@ import type { PluginSession } from '../../../../../src/shared/plugins/client.ts'
 import type { Edges } from '../../../shared/campEdges.ts'
 import type { BuildingId } from '../../../shared/catalog.ts'
 import type { CampLayout } from '../../../shared/layout.ts'
+import type { FlagTrail } from '../../../shared/mountain.ts'
 import type { Sign } from '../../../shared/pose.ts'
 
 export interface StageSnapshot {
@@ -22,6 +23,12 @@ export interface StageSnapshot {
   built: Readonly<Record<BuildingId, number>>
   /** terminalId → the kitKey of its member's gear (campsite part 3b), for the sessions whose member has any */
   kits: Readonly<Record<string, string>>
+  /** The window's project's trails, oldest first (campsite part 3c): its flags on the mountain */
+  trails: readonly FlagTrail[]
+  /** The camp's summits: the cairn's size */
+  summits: number
+  /** The last summit to celebrate in this window (its seq changes for each one); null: none yet */
+  summit: { worktreeId: string; seq: number } | null
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

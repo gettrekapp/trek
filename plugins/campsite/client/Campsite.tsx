@@ -10,6 +10,7 @@ import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
+import { flagsKey, flagsOf } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type OpenCamp } from './CampPopover.tsx'
@@ -49,6 +50,9 @@ export function Campsite(): React.JSX.Element | null {
   // The members' gear on the strip's hikers: a new object only when someone's gear or a geared member's session changes
   const kitsJson = camp ? kitsKey(camp) : '[]'
   const kits = useMemo(() => kitsOf(kitsJson), [kitsJson])
+  // This window's project's trails on the mountain: a new array only when one of its flags changes
+  const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
+  const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
   // Camps beat buildings: the ends give way until the middle shows every camp the bare strip would
   const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
   const { left: reserveLeft, right: reserveRight } = edges.reserve
@@ -204,6 +208,9 @@ export function Campsite(): React.JSX.Element | null {
             sessions={sessions}
             camp={camp}
             kits={kits}
+            trails={trails}
+            summits={camp?.summits ?? 0}
+            summit={null}
             now={now}
             selected={selected}
             paused={hidden}

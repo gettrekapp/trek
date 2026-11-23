@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
-import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, sparksAt } from '../plugins/campsite/shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagsKey, flagsOf, mountain, sparksAt } from '../plugins/campsite/shared/mountain.ts'
 import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
@@ -351,4 +351,16 @@ test('the cairn: nothing at size 0, then size n stacks n + 1 rows of stones; it 
   const box = cairnBox(500)
   assert.deepEqual(box, { x: 500 - 24 - 20, y: 102 - 28, w: 20, h: 28 })
   assert.ok(box.x >= 500 - 44 && box.x + box.w <= 500 - 23, "between the log's end and the hearth")
+})
+
+test("flagsKey: only the window's project's trails, the same string while none of its flags change; flagsOf reads it back", () => {
+  const trails = [
+    { projectId: 'p', projectName: 'Trek', worktreeId: 'a', branch: 'feature/a', stage: 1, start: T0, stageAt: T0 },
+    { projectId: 'q', projectName: 'Other', worktreeId: 'b', branch: 'feature/b', stage: 2, start: T0, stageAt: T0 }
+  ]
+  const key = flagsKey(trails, 'p')
+  assert.equal(flagsKey([{ ...trails[0], stageAt: T0 + 9, projectName: 'Renamed' }, trails[1]], 'p'), key, 'its clocks and names are not drawn')
+  assert.notEqual(flagsKey([{ ...trails[0], stage: 2 }, trails[1]], 'p'), key)
+  assert.deepEqual(flagsOf(key), [{ worktreeId: 'a', branch: 'feature/a', stage: 1 }])
+  assert.deepEqual(flagsOf(flagsKey([], 'p')), [])
 })
