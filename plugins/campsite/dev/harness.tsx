@@ -23,6 +23,10 @@
 // a second old, in the `state` answer as the server sends it (its chore and its tooltip's words);
 // ?tool=think, one 20 s old (thinking). ?sheet=hikers shows every hiker pose and frame at the tab's,
 // the terminal bar's and the strip's scales (1, 2, 3) instead of the strip.
+// Agents (campsite 5): ?notes=some pins three notes on the harness project's board (two since the
+// Noticeboard was last opened: the board's red pin) and, with ?trails=all, gives the api trail a
+// report and the oldest ended trail one; ?notes=read, the same notes all seen (no pin). The fake host
+// answers `notes` and `trailLog` as the server does.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -185,6 +189,20 @@ if (params.get('away') === '1') {
 if (params.get('away') === 'sightings') {
   state.seenAt = T - 9 * 3_600_000
   state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 0, levelUps: [], sightings: 12, newSpecies: ['heron', 'lynx'] }
+}
+// ?notes=some|read: three notes on the harness project's board, from three agents; with ?trails=all, reports on a trail and in the history
+const notesParam = params.get('notes')
+if (notesParam === 'some' || notesParam === 'read') {
+  state.notes.harness = [
+    { id: 'n1', text: 'Pinned the flaky auth test as skipped; the note in auth.test.ts says why.', at: T - 26 * 3_600_000, agent: 'codex', branch: 'feature/auth' },
+    { id: 'n2', text: 'Global sweep done: three worktrees idle, nothing left running.', at: T - 3 * 3_600_000, agent: 'gemini', branch: 'Global' },
+    { id: 'n3', text: 'Tests are green; left the flaky one skipped.', at: T - 12 * 60_000, agent: 'claude', branch: 'feature/api', member: 'Aspen' }
+  ]
+  prefs.notesSeenAt = notesParam === 'read' ? T : T - 4 * 3_600_000
+  const api = state.trails['harness:api']
+  if (api) api.report = { summary: 'Wrote the noticeboard section of the README and the MCP tools page; the screenshots are still to come, and the changelog waits for the release.', at: T - 20 * 60_000, by: 'Claude · Aspen' }
+  const ended = state.trailLog.harness?.[0]
+  if (ended) ended.report = { summary: 'Shipped the strip; the walk-in hire flow is next.', at: ended.end - 3_600_000, by: 'Codex' }
 }
 const camp = snapshot(state, T, { project: (id) => (id === 'harness' ? 'trek' : 'website') })
 // ?tool=<kind>: t1's latest tool call, a second old (?tool=think: 20 s old), as `state` answers it

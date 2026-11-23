@@ -97,7 +97,18 @@ const SHOTS = [
   { name: 'tool-delegate', scenario: 'few', tool: 'delegate', words: 'Sending a scout: Explore the trails' },
   { name: 'tool-web', scenario: 'few', tool: 'web', words: 'Looking up github.com' },
   { name: 'tool-mcp', scenario: 'few', tool: 'mcp', words: 'On the radio: trek-dev list_worktrees' },
-  { name: 'tool-think', scenario: 'few', tool: 'think', words: 'Thinking' }
+  { name: 'tool-think', scenario: 'few', tool: 'think', words: 'Thinking' },
+  // Agents (campsite 5): the noticeboard just left of the fire's camp, with its red pin (two notes
+  // unread), read (no pin), on an empty strip (clear of its line of text) and among every building and
+  // trail; its button opens the Noticeboard (the Camp tab's top); the Trails tab with a trail's report
+  // (one line and More) and an ended trail's. Each board shot fails unless the board's button says `board`
+  { name: 'board', scenario: 'few', notes: 'some', board: 'Noticeboard, 2 new notes' },
+  { name: 'board-read', scenario: 'few', notes: 'read', board: 'Noticeboard' },
+  { name: 'board-empty', scenario: 'empty', notes: 'some', board: 'Noticeboard, 2 new notes' },
+  { name: 'board-built', scenario: 'few', notes: 'some', built: 'out', trails: 'all', width: 1600, board: 'Noticeboard, 2 new notes' },
+  { name: 'noticeboard', scenario: 'few', notes: 'some', noticeboard: true, height: 720 },
+  { name: 'trails-report', scenario: 'few', notes: 'some', trails: 'all', built: 'out', trailsTab: true, flag: 'feature/api — Ridge (PR open)', height: 1000 },
+  { name: 'trails-report-history', scenario: 'few', notes: 'some', trails: 'all', built: 'out', trailsTab: true, flag: 'feature/api — Ridge (PR open)', history: true, height: 1000 }
 ]
 
 /**
@@ -168,7 +179,7 @@ try {
       await page.close()
       continue
     }
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? `&away=${shot.away === true ? 1 : shot.away}` : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${shot.tower ? `&tower=${shot.tower}` : ''}${shot.guide ? `&guide=${shot.guide}` : ''}${shot.tool ? `&tool=${shot.tool}` : ''}${shot.animal ? `&animal=${shot.animal}&age=${shot.age ?? 0}${shot.dir ? `&dir=${shot.dir}` : ''}${shot.r === undefined ? '' : `&r=${shot.r}`}` : ''}${freeze ? '&freeze=1' : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? `&away=${shot.away === true ? 1 : shot.away}` : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${shot.tower ? `&tower=${shot.tower}` : ''}${shot.guide ? `&guide=${shot.guide}` : ''}${shot.tool ? `&tool=${shot.tool}` : ''}${shot.notes ? `&notes=${shot.notes}` : ''}${shot.animal ? `&animal=${shot.animal}&age=${shot.age ?? 0}${shot.dir ? `&dir=${shot.dir}` : ''}${shot.r === undefined ? '' : `&r=${shot.r}`}` : ''}${freeze ? '&freeze=1' : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
@@ -183,6 +194,11 @@ try {
       const title = await page.getAttribute('.cs-camp-hiker[aria-label="Agent 1, working"]', 'title')
       if (!title?.endsWith(` · ${shot.words}`)) problems.push(`${shot.name}: the hiker's title is ${JSON.stringify(title)}, not ending in ${JSON.stringify(shot.words)}`)
     }
+    // The noticeboard's button names it (and how many notes are new)
+    if (shot.board) {
+      const label = await page.getAttribute('.campsite .cs-board', 'aria-label', { timeout: 5000 }).catch(() => null)
+      if (label !== shot.board) problems.push(`${shot.name}: the noticeboard's button says ${JSON.stringify(label)}, not ${JSON.stringify(shot.board)}`)
+    }
     // The stage skips Pixi's browser extras: no accessibility hook button (nor its global listeners)
     if (await page.evaluate(() => document.querySelector('button[title*="accessibility"]') !== null)) {
       problems.push(`${shot.name}: Pixi's accessibility button is on the page`)
@@ -192,7 +208,7 @@ try {
     // group's room and the end group's) and off the trails' buttons; an animal's button (3d-2) meets
     // no trail's, hiker's or building's button nor a header control (the shots catch it in the clear)
     const overlaps = await page.evaluate(() => {
-      const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker, .cs-building, .cs-animal')].map((el) => ({ el, r: el.getBoundingClientRect() })).filter((b) => getComputedStyle(b.el).visibility !== 'hidden')
+      const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker, .cs-building, .cs-animal, .cs-board')].map((el) => ({ el, r: el.getBoundingClientRect() })).filter((b) => getComputedStyle(b.el).visibility !== 'hidden')
       const name = (el) => el.getAttribute('aria-label') ?? el.className
       const found = []
       const is = (el, c) => el.classList.contains(c)
@@ -206,6 +222,15 @@ try {
           const lake = (x, y) => is(x.el, 'swimmer') && y.el.getAttribute('data-building') === 'lake'
           if (lake(a, b) || lake(b, a)) continue
           if (a.r.left < b.r.right && b.r.left < a.r.right && a.r.top < b.r.bottom && b.r.top < a.r.bottom) found.push(`${name(a.el)} / ${name(b.el)}`)
+        }
+      }
+      // The noticeboard (campsite 5) also meets no building, tent sign, camp badge, "+n waiting" or the empty camp's line
+      const board = document.querySelector('.cs-board')
+      if (board) {
+        const r = board.getBoundingClientRect()
+        for (const el of document.querySelectorAll('.cs-building, .cs-tent-sign, .cs-camp-badge, .cs-more, .cs-empty')) {
+          const o = el.getBoundingClientRect()
+          if (o.width > 0 && o.height > 0 && r.left < o.right && o.left < r.right && r.top < o.bottom && o.top < r.bottom) found.push(`${name(board)} / ${name(el)}`)
         }
       }
       // The animal's button takes a click at its middle (nothing over it there)
@@ -239,9 +264,13 @@ try {
       await page.waitForTimeout(700)
       await page.locator('.campsite').screenshot({ path, ...still })
     } else if (shot.trailsTab) {
-      // The first flag (the trailhead's oldest) opens the Trails tab at its row; its history is read
-      await page.locator('.cs-flag').first().click()
+      // The first flag (the trailhead's oldest), or the one named, opens the Trails tab at its row; its history is read (and, with `history`, scrolled to)
+      await (shot.flag ? page.locator(`.cs-flag[aria-label="${shot.flag}"]`) : page.locator('.cs-flag').first()).click()
       await page.waitForSelector('.cs-camp-popover .cs-trail-log', { timeout: 5000 })
+      if (shot.history) {
+        await page.locator('.cs-camp-popover .cs-trail-log').scrollIntoViewIfNeeded()
+        await page.waitForTimeout(200)
+      }
       await page.screenshot({ path, ...still })
     } else if (shot.guideFrom) {
       // From the animal's button (it moves: a dispatched click), or the counts and the Guide tab
@@ -253,6 +282,13 @@ try {
       await page.waitForSelector('.cs-camp-popover .cs-guide-card', { timeout: 5000 })
       if (shot.guideFrom === 'tab') await page.locator('.cs-camp-popover .cs-guide-card[data-species="moose"]').scrollIntoViewIfNeeded()
       await page.waitForTimeout(200)
+      await page.screenshot({ path, ...still })
+    } else if (shot.noticeboard) {
+      // The noticeboard's button opens the Camp tab at the Noticeboard, focused, its notes read
+      await page.locator('.campsite .cs-board').click()
+      await page.waitForSelector('.cs-camp-popover .cs-notes-list', { timeout: 5000 })
+      await page.waitForTimeout(200)
+      if (!(await page.evaluate(() => document.activeElement?.hasAttribute('data-noticeboard') ?? false))) problems.push(`${shot.name}: the Noticeboard did not take the focus`)
       await page.screenshot({ path, ...still })
     } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
