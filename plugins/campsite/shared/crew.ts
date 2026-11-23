@@ -3,8 +3,9 @@
 // and an automation's run tab always is one. A member comes back to camp when the agent stops
 // (exits, is stopped by Trek, or the session closes). A member earns XP equal to the wood its
 // session earns. Pure.
+import { noteLevelUp } from './away.ts'
 import type { Camp, CampSnapshot, CrewMember } from './camp.ts'
-import { fnv1a } from './hiker.ts'
+import { fnv1a, lookFor, type Look } from './hiker.ts'
 
 export const TRAIL_NAMES: readonly string[] = [
   'Aspen', 'Birch', 'Cedar', 'Juniper', 'Willow', 'Hazel', 'Rowan', 'Alder', 'Sage', 'Fern',
@@ -40,15 +41,32 @@ export function release(camp: Camp, terminalId: string, now: number): void {
   if (member) member.restedAt = now
 }
 
+/** Credits a session's member with XP; a level reached is noted for the away card */
 export function creditXp(camp: Camp, terminalId: string, xp: number): void {
   if (xp <= 0 || !Object.hasOwn(camp.assignments, terminalId)) return
   const member = camp.crew.find((m) => m.id === camp.assignments[terminalId].crew)
-  if (member) member.xp += xp
+  if (!member) return
+  const before = levelFor(member.xp)
+  member.xp += xp
+  const after = levelFor(member.xp)
+  if (after > before) noteLevelUp(camp, member.id, after)
 }
 
 /** Level n from 100 × (n − 1)² XP: 1 at 0, 2 at 100, 3 at 400, 4 at 900, 5 at 1600 */
 export const levelFor = (xp: number): number => Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1
 export const titleFor = (level: number): string => TITLES[Math.min(Math.max(level, 1), TITLES.length) - 1]
+
+/** The XP where level n starts (100 × (n − 1)²) */
+export const levelXp = (level: number): number => 100 * (Math.max(1, level) - 1) ** 2
+
+/** A member's look, from its seed (a neutral jacket: it belongs to no provider) */
+export const memberLook = (seed: number): Look => lookFor(`crew:${seed}`, 'crew')
+
+/** Members with no session: resting at camp */
+export function restingCount(camp: Pick<Camp, 'crew' | 'assignments'>): number {
+  const busy = new Set(Object.values(camp.assignments).map((a) => a.crew))
+  return camp.crew.filter((m) => !busy.has(m.id)).length
+}
 
 /** "Aspen · Lv 2 Trailblazer", or "Day hiker" for a session with no member */
 export function crewLabel(snap: CampSnapshot, terminalId: string): string {

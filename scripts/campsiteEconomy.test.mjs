@@ -47,9 +47,9 @@ test('snapshot: whole wood, crew with levels, assignments as crew ids; crewLabel
   camp.wood = 12.9
   camp.crew[0].xp = 150
   assign(camp, 't1', 'p', T0)
-  const snap = snapshot(camp)
+  const snap = snapshot(camp, T0)
   assert.equal(snap.wood, 12)
-  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, level: 2, title: 'Trailblazer' })
+  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 2, title: 'Trailblazer', xp: 150, next: 400 })
   assert.deepEqual(snap.assignments, { t1: camp.crew[0].id })
   assert.equal(crewLabel(snap, 't1'), `${camp.crew[0].name} · Lv 2 Trailblazer`)
   assert.equal(crewLabel(snap, 'nobody'), 'Day hiker')

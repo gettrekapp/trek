@@ -73,7 +73,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     if (disposed || pendingEmit) return
     pendingEmit = schedule(() => {
       pendingEmit = null
-      const snap = snapshot(camp)
+      const snap = snapshot(camp, now())
       const json = JSON.stringify(snap)
       if (json === lastJson) return
       lastJson = json
@@ -145,7 +145,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   }, rules.minuteMs)
 
   return {
-    handlers: { state: () => snapshot(camp) },
+    handlers: { state: () => snapshot(camp, now()) },
     dispose: () => {
       disposed = true
       off()
