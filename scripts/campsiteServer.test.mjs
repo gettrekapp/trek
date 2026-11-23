@@ -1092,3 +1092,53 @@ test('wildlife (3d-2): a removed project gets no sightings, heard from or asked 
   assert.deepEqual(snap.lastActive, { p: T0 - 5 }, "the removed project's last activity: pruned")
   assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastSeen.gone, undefined)
 })
+
+test("wildlife (3d-2): one project's roll that throws is logged; the tick still saves its paid minutes and rolls the other projects", async (t) => {
+  const h = fakeHost(t)
+  const camp = newCamp(7, T0)
+  camp.lastActive = { boom: T0 - 9, p: T0 - 5 }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const isEnabled = h.host.isEnabled
+  h.host.isEnabled = (projectId) => {
+    if (projectId === 'boom') throw new Error('no such project')
+    return isEnabled(projectId)
+  }
+  const clock = manual()
+  let now = T0
+  let tick
+  const inst = createCampServer(h.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', provider: 'claude' })
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', from: 'idle', to: 'working', cause: 'output' })
+  clock.run()
+  const woodBefore = JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).wood
+  now += 60_000
+  tick()
+  clock.run()
+  assert.ok(h.warnings.some((w) => w.includes('[campsite] sighting: no such project')), 'logged')
+  assert.ok(!h.warnings.some((w) => w.includes('[campsite] tick')), 'not the whole tick')
+  assert.deepEqual(h.sent.map(([p, e]) => [p, e]), [['p', 'sighting']], 'p still rolled')
+  const saved = JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8'))
+  assert.equal(saved.lastSeen.p, h.sent[0][2].species, "p's sighting saved")
+  assert.ok(saved.wood > woodBefore, 'the working minute paid and saved')
+})
+
+test("wildlife (3d-2): a window's project where the plugin is off (or unknown) is not remembered for the rolls; forced sightings log a warning at start-up", async (t) => {
+  const h = fakeHost(t)
+  let now = T0
+  let tick
+  h.off.add('x')
+  const inst = createCampServer(h.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  assert.ok(h.warnings.some((w) => w.includes('TREK_CAMPSITE_FORCE_SIGHTINGS')), 'warned at start-up')
+  inst.handlers.seen({}, { projectId: 'x', caller: 'c' })
+  await inst.handlers.state({}, { projectId: 'x', caller: 'c' })
+  h.off.delete('x')
+  now += 60_000
+  tick()
+  assert.equal(h.sent.length, 0, 'x was off when its window spoke: never remembered')
+  inst.handlers.seen({}, { projectId: 'x', caller: 'c' })
+  now += 60_000
+  tick()
+  assert.deepEqual(h.sent.map(([p]) => p), ['x'], 'remembered once on')
+})

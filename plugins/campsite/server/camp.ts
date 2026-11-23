@@ -131,6 +131,8 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const seedWood = o.seedWood ?? seedWoodFromEnv()
   const rand = o.rand ?? Math.random
   const forceSightings = o.forceSightings ?? forceSightingsFromEnv()
+  // Test-only: on a real camp it would fill the guide with a sighting every minute
+  if (forceSightings) host.log.warn('[campsite] TREK_CAMPSITE_FORCE_SIGHTINGS is on: every minute roll is a sighting (test-only)')
   const store = openCampStore(host.dataFile('camp.json'), {
     now,
     seed: o.seed ?? (() => Math.floor(Math.random() * 2 ** 32)),
@@ -184,6 +186,14 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const reconciled = new Set<string>()
   /** The projects whose windows asked for the state or pinged seen this run: rolled for sightings with those the camp has heard from */
   const windows = new Set<string>()
+  /** A window's project, kept only where the plugin is on (the id is the client's: an unknown one never grows the set) */
+  const remember = (projectId: string): void => {
+    try {
+      if (host.isEnabled(projectId)) windows.add(projectId)
+    } catch (err) {
+      warn('sighting', err)
+    }
+  }
   const startedAt = now()
   /** Whether a full reconcile has run since start-up (the first tick after TRAIL_GRACE_MS) */
   let fullYet = false
@@ -299,13 +309,18 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   // tick after the grace period reconciles fully, and then every 10 minutes.
   let trailsAt = now()
 
-  /** Each known project's minute roll (where the plugin is on): its sightings, logged in the camp; sent once the camp is saved */
+  /** Each known project's minute roll (where the plugin is on): its sightings, logged in the camp; sent after the camp is marked changed. One project's failure is logged and skips only its own roll */
   const rollSightings = (): { projectId: string; species: string; at: number }[] => {
     const out: { projectId: string; species: string; at: number }[] = []
     for (const projectId of new Set([...Object.keys(camp.lastActive), ...windows])) {
-      if (!host.isEnabled(projectId)) continue
-      const id = rollSighting(camp, projectId, now(), rand, forceSightings)
-      if (id !== null) out.push({ projectId, species: id, at: now() })
+      try {
+        if (!host.isEnabled(projectId)) continue
+        const t = now()
+        const id = rollSighting(camp, projectId, t, rand, forceSightings)
+        if (id !== null) out.push({ projectId, species: id, at: t })
+      } catch (err) {
+        warn('sighting', err)
+      }
     }
     return out
   }
@@ -339,7 +354,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     handlers: {
       // A window naming its project (part 3c): its trails are reconciled the first time this run (after the grace period)
       state: (_params, ctx) => {
-        if (!disposed && ctx?.projectId !== undefined) windows.add(ctx.projectId)
+        if (!disposed && ctx?.projectId !== undefined) remember(ctx.projectId)
         if (!disposed && ctx?.projectId !== undefined && firstHeard(ctx.projectId)) {
           try {
             if (reconcileProject(ctx.projectId)) changed()
@@ -380,7 +395,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       // A visible window saw the camp; its time zone and Seasons setting (part 3d-2) gate the wildlife
       seen: (params, ctx) => {
         open()
-        if (ctx?.projectId !== undefined) windows.add(ctx.projectId)
+        if (ctx?.projectId !== undefined) remember(ctx.projectId)
         const clock = setClock(camp, params)
         if (seen(camp, now()) || clock) changed()
         return { ok: true }
