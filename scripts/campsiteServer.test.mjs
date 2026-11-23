@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
-import { createCampServer, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
+import { TRAIL_EVERY_MS, createCampServer, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
 import { newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
@@ -61,7 +61,7 @@ test('an unreadable camp.json is moved to camp.json.bak and a new camp starts, w
   assert.equal(warnings.length, 1)
 })
 
-/** A server plugin host with what the campsite uses; `fire` sends an activity event. Project p is "Trek"; its worktree w is on branch b of repo r */
+/** A server plugin host with what the campsite uses; `fire` sends an activity event. Project p is "Trek"; its worktree w is on branch b of repo r (a trail: not the main checkout); `worktrees` lists them */
 function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true } } } = {}) {
   const dir = tempDir(t)
   const listeners = new Set()
@@ -93,6 +93,10 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
     worktree: (projectId, worktreeId) => {
       if (projectId !== 'p' || !Object.hasOwn(worktrees, worktreeId)) throw Object.assign(new Error('no worktree'), { code: 'NOT_FOUND' })
       return worktrees[worktreeId]
+    },
+    worktrees: (projectId) => {
+      if (projectId !== 'p') throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
+      return Object.values(worktrees)
     },
     log: { info: () => {}, warn: (m) => warnings.push(m) }
   }
@@ -675,4 +679,85 @@ test("the journal through the host: a trip names the project and the worktree's 
     // The merge's wood is the camp's, not the session's: the trip credited none
     { kind: 'trip', at: T0 + 3 * 60_000, minutes: 3, project: 'Trek', place: 'b', provider: 'claude', wood: 0 }
   ])
+})
+
+const MAIN_W = { id: 'm', repoId: 'r', repoPath: '/r', path: '/r', branch: 'main', present: true }
+const W = { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true }
+
+test("trails (3c): the first event from a project reconciles its worktrees (not the main checkout); the pull request's events move them; the merge first paid sends summit", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const clock = manual()
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null })
+  let snap = await inst.handlers.state({}, {})
+  assert.deepEqual(snap.trails, [{ projectId: 'p', projectName: 'Trek', worktreeId: 'w', branch: 'b', stage: 0, start: T0, stageAt: T0 }])
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
+  h.fire({ kind: 'pr.checks', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'passed', headSha: 's' })
+  assert.equal((await inst.handlers.state({}, {})).trails[0].stage, 3)
+  const merged = { kind: 'pr.ended', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'merged' }
+  h.fire(merged)
+  h.fire(merged)
+  snap = await inst.handlers.state({}, {})
+  assert.deepEqual([snap.trails[0].stage, snap.summits], [4, 1])
+  assert.deepEqual(h.emitted.filter(([e]) => e === 'summit'), [['summit', { projectId: 'p', worktreeId: 'w', branch: 'b' }]], 'once: the merge is paid once')
+  clock.run()
+  assert.equal(h.emitted.filter(([e]) => e === 'state').at(-1)[1].trails[0].stage, 4, 'pushed with the state')
+})
+
+test('trails (3c): a worktree event reconciles its project; a removed worktree turns back into the history, which trailLog answers (not the snapshot)', async (t) => {
+  const worktrees = { m: MAIN_W, w: W }
+  const h = fakeHost(t, { worktrees })
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  worktrees.x = { id: 'x', repoId: 'r', repoPath: '/r', path: '/r/app-x', branch: 'feature/x', present: true }
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
+  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId).sort(), ['w', 'x'])
+  now += 5
+  delete worktrees.x
+  h.fire({ kind: 'worktree.removed', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
+  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId), ['w'])
+  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'p' }, {}), { log: [{ branch: 'feature/x', result: 'turned-back', start: T0, end: T0 + 5 }] })
+  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'nope' }, {}), { log: [] })
+  assert.throws(() => inst.handlers.trailLog({}, {}), (err) => err.code === 'BAD_REQUEST')
+})
+
+test("trails (3c): a window's state naming its project reconciles it once; the 10-minute tick turns back a gone project's trails and leaves a project with the plugin off as it is", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  let now = T0
+  let tickFn = null
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  assert.deepEqual((await inst.handlers.state({}, {})).trails, [], 'no project named: nothing yet')
+  assert.equal((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.length, 1)
+  h.off.add('p')
+  h.host.worktrees = () => [MAIN_W]
+  now += TRAIL_EVERY_MS
+  tickFn()
+  assert.equal((await inst.handlers.state({}, {})).trails.length, 1, 'the plugin off there: left as it is')
+  h.off.delete('p')
+  h.host.worktrees = () => {
+    throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
+  }
+  now += TRAIL_EVERY_MS
+  tickFn()
+  assert.deepEqual((await inst.handlers.state({}, {})).trails, [], 'gone: turned back')
+  assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log.map((r) => r.result), ['turned-back'])
+})
+
+test('trails (3c): at start-up the projects with trails in camp.json are reconciled; the signpost builds for 150 wood', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const camp = newCamp(7, T0)
+  camp.wood = 200
+  camp.trails = { 'p:gone': { projectId: 'p', worktreeId: 'gone', repoId: 'r', branch: 'old', stage: 2, start: T0 - 9, stageAt: T0 - 5 } }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual(snap.trails.map((t) => t.worktreeId), ['w'])
+  assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, [{ branch: 'old', result: 'turned-back', start: T0 - 9, end: T0 }])
+  const built = await inst.handlers.build({ id: 'signpost', tier: 1, cost: { wood: 150, markers: 0 } }, {})
+  assert.deepEqual([built.built.signpost, built.wood], [1, 50])
+  assert.throws(() => inst.handlers.build({ id: 'signpost', tier: 2, cost: { wood: 150, markers: 0 } }, {}), (err) => err.code === 'CONFLICT')
 })

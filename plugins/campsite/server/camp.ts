@@ -4,20 +4,25 @@
 // walk-in; seen and awaySeen keep the "While you were away" card; gear and pin (part 3b) buy a
 // member's next item and pin it to a kind of session, and journal answers a member's journal (not
 // pushed with the snapshot). The host names projects and worktrees for the
-// crew's journals. A minute tick pays working minutes, cools the fire and forgets sessions that are
-// gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
+// crew's journals. Trails (part 3c) move with the activity feed and are reconciled against the
+// host's worktrees: at start-up (the projects with trails), the first time a project is heard from
+// (an event, or a window's `state` naming it), after each worktree event, and every 10 minutes; a
+// merge first paid sends `summit` for each trail it summits, and `trailLog` answers a project's
+// history (not pushed). A minute tick pays working minutes, cools the fire and forgets sessions that
+// are gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
-import { pluginError, type PluginInstance, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import { pluginError, type PluginInstance, type PluginWorktree, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { awaySeen, seen } from '../shared/away.ts'
 import { snapshot, type CampSnapshot } from '../shared/camp.ts'
 import { journalOf, pinMember, type Where } from '../shared/crew.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
 import { build, buyGear, recruit, type ShopRefusal } from '../shared/shop.ts'
+import { SUMMIT, reconcile, trailLogOf, trailProjects, trailsOn } from '../shared/trails.ts'
 import { openCampStore } from './store.ts'
 
-export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree'>
+export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree' | 'worktrees'>
 
 /** The host's names for the journal: a project's name (its id if the host can't say), a worktree's repository, branch and folder (null once it is gone). Never throws, as `Where` promises */
 export function hostWhere(host: Pick<CampHost, 'projectName' | 'worktree'>): Where {
@@ -52,6 +57,8 @@ export interface CampServerOptions {
 }
 
 const EMIT_EVERY_MS = 1000
+/** How often every known project's trails are reconciled against its worktrees */
+export const TRAIL_EVERY_MS = 10 * 60_000
 
 /** TREK_CAMPSITE_MINUTE_MS, read only when set (≥ 50 ms) */
 function minuteFromEnv(): number {
@@ -120,7 +127,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       pendingEmit = null
       // A timer: a camp that can't be shown (or a push that fails) is logged, never thrown
       try {
-        const snap = snapshot(camp, now())
+        const snap = snapshot(camp, now(), where)
         const json = JSON.stringify(snap)
         if (json === lastJson) return
         lastJson = json
@@ -145,7 +152,37 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     if (refusal) throw pluginError(refusal.code, refusal.message)
     store.flush()
     publish()
-    return snapshot(camp, now())
+    return snapshot(camp, now(), where)
+  }
+
+  /** The projects whose trails were reconciled this run */
+  const reconciled = new Set<string>()
+  /**
+   * A project's trails against the host's worktrees (no git refresh): a project that is gone
+   * (NOT_FOUND) turns its trails back; one where the plugin is off is left as it is. True when it ran.
+   */
+  const reconcileProject = (projectId: string): boolean => {
+    let worktrees: PluginWorktree[] | null
+    try {
+      worktrees = host.worktrees(projectId)
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'NOT_FOUND') {
+        warn('reading the worktrees', err)
+        return false
+      }
+      worktrees = null
+    }
+    if (worktrees !== null && !host.isEnabled(projectId)) return false
+    reconcile(camp, projectId, worktrees, now())
+    if (worktrees === null) reconciled.delete(projectId)
+    else reconciled.add(projectId)
+    return true
+  }
+  /** Every project with trails, and every one reconciled this run; true when a trail or the history changed */
+  const reconcileAll = (): boolean => {
+    const before = JSON.stringify([camp.trails, camp.trailLog])
+    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) reconcileProject(projectId)
+    return JSON.stringify([camp.trails, camp.trailLog]) !== before
   }
 
   /** Sessions that are gone without a `session.closed` (a project, repo or worktree removed; the plugin off in their project) stop earning and free their members */
@@ -168,8 +205,13 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
 
   const off = host.onActivity((e) => {
     try {
-      applyActivity(camp, e, now(), rules, where)
+      const paid = applyActivity(camp, e, now(), rules, where)
+      // A worktree event (its trail is moved first), or the first word from a project this run
+      if (e.kind.startsWith('worktree.') || !reconciled.has(e.projectId)) reconcileProject(e.projectId)
       changed()
+      if (e.kind === 'pr.ended' && e.result === 'merged' && paid.some((r) => r.key === `merged:${e.url}`)) {
+        for (const t of trailsOn(camp, e)) if (t.stage === SUMMIT) host.emitAll('summit', { projectId: t.projectId, worktreeId: t.worktreeId, branch: t.branch })
+      }
     } catch (err) {
       warn(e.kind, err)
     }
@@ -190,14 +232,26 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   /** What camp.json would hold, less the clocks: lastTick need not be saved (a restart starts it again; nobody waits across one) */
   const saved = (): string => JSON.stringify({ ...camp, lastTick: 0, savedAt: 0 })
 
+  // Start-up: the trails of the projects the camp has trails in (the tick does it again every 10 minutes)
+  let trailsAt = now()
+  try {
+    if (reconcileAll()) changed()
+  } catch (err) {
+    warn('trails', err)
+  }
+
   // The first tick prunes (and the camp starts out as restored, with no open spans). Saved only when
-  // something saved changed (paid minutes, cooling, a prune, an hour's caps dropped), and every
+  // something saved changed (paid minutes, cooling, a prune, an hour's caps dropped, a trail), and every
   // minute while a span is open, so a restart closes it near where it was; otherwise not rewritten.
   const ticker = (o.interval ?? defaultInterval)(() => {
     try {
       const before = saved()
       prune()
       tick(camp, now(), rules)
+      if (now() - trailsAt >= TRAIL_EVERY_MS) {
+        trailsAt = now()
+        reconcileAll()
+      }
       if (Object.keys(camp.spans).length > 0 || saved() !== before) changed()
       // Time alone can change the snapshot (the away card falling due, its hours, a new day's
       // walk-ins): pushed (publish skips an unchanged one), not saved
@@ -209,7 +263,17 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
 
   return {
     handlers: {
-      state: () => snapshot(camp, now()),
+      // A window naming its project (part 3c): its trails are reconciled the first time this run
+      state: (_params, ctx) => {
+        if (!disposed && ctx?.projectId !== undefined && !reconciled.has(ctx.projectId)) {
+          try {
+            if (reconcileProject(ctx.projectId)) changed()
+          } catch (err) {
+            warn('trails', err)
+          }
+        }
+        return snapshot(camp, now(), where)
+      },
       build: (params) => {
         open()
         return answer(build(camp, params))
@@ -229,6 +293,12 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       // A member's journal (part 3b): not in the pushed snapshot; a member view asks while it is open
       journal: (params) => {
         const out = journalOf(camp, params)
+        if ('code' in out) throw pluginError(out.code, out.message)
+        return out
+      },
+      // A project's ended trails (part 3c): not in the pushed snapshot; the Trails tab asks
+      trailLog: (params) => {
+        const out = trailLogOf(camp, params)
         if ('code' in out) throw pluginError(out.code, out.message)
         return out
       },

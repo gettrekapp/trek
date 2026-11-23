@@ -18,13 +18,13 @@ test('campsite: id, default on, no secrets or settings', () => {
   assert.equal(CAMPSITE_MANIFEST.projectSettings, undefined)
 })
 
-test('campsite: its server half answers state, build, recruit, gear, pin, journal, seen and awaySeen, and has no MCP tools', (t) => {
+test('campsite: its server half answers state, build, recruit, gear, pin, journal, trailLog, seen and awaySeen, and has no MCP tools', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-campsite-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const host = { id: 'campsite', dataFile: (n) => join(dir, n), onActivity: () => () => {}, emitAll: () => 0, session: () => ({}), checkedWorktree: async () => ({}), run: async () => '', isEnabled: () => true, projectName: () => 'P', worktree: () => ({}), log: { info() {}, warn() {} } }
+  const host = { id: 'campsite', dataFile: (n) => join(dir, n), onActivity: () => () => {}, emitAll: () => 0, session: () => ({}), checkedWorktree: async () => ({}), run: async () => '', isEnabled: () => true, projectName: () => 'P', worktree: () => ({}), worktrees: () => [], log: { info() {}, warn() {} } }
   const instance = campsiteServerPlugin.setup(host)
   t.after(() => instance.dispose?.())
-  assert.deepEqual(Object.keys(instance.handlers), ['state', 'build', 'recruit', 'gear', 'pin', 'journal', 'seen', 'awaySeen'])
+  assert.deepEqual(Object.keys(instance.handlers), ['state', 'build', 'recruit', 'gear', 'pin', 'journal', 'trailLog', 'seen', 'awaySeen'])
   assert.equal(instance.mcpTools, undefined)
 })
 
