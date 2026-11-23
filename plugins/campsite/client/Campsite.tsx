@@ -5,18 +5,20 @@
 // camp badges and their popover are DOM over it. Click a hiker to show its session. The header's
 // counts (and each building) open the camp's popover: build and hire; a flag, the cairn or the
 // signpost opens its Trails tab. A summit here (the server's `summit` event) climbs its flag,
-// raises sparks and says so in the header for a few seconds. Collapsed, it is one line: everyone at
-// tab size, those waiting first.
+// raises sparks and says so in the header for a few seconds. The world (part 3d-1): the sky follows
+// this window's clock and the seasons the month (both settings), and the weather this project's
+// trails and activity, with a glyph after the counts saying why. Collapsed, it is one line: everyone
+// at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
-import { summitLine } from '../shared/campView.ts'
+import { summitLine, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
-import { DUSK_WORLD } from '../shared/world.ts'
+import { seasonAt, weatherOf, worldAt, worldKey } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
@@ -94,6 +96,13 @@ export function Campsite(): React.JSX.Element | null {
   const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
   const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
   const { summit, shown: summitShown, fresh: summitFresh } = useSummit(host)
+  // The world (part 3d-1): this window's clock and prefs; this project's weather from its trails' checks and its last activity
+  const season = seasonAt(new Date(now), prefs.seasons)
+  const weather = useMemo(() => weatherOf(camp?.trails ?? [], camp?.lastActive ?? {}, host.projectId, now, season), [camp?.trails, camp?.lastActive, host.projectId, now, season])
+  const nextWorld = worldAt(now, prefs.sky, prefs.seasons, weather.kind)
+  const worldK = worldKey(nextWorld)
+  // The same object while the world looks the same (the 5 s clock ticks on): the stage redraws its backdrop only when it changes
+  const world = useMemo(() => nextWorld, [worldK]) // eslint-disable-line react-hooks/exhaustive-deps
   // Only while fresh: a stage's actors start with no summit seen and would celebrate an old one
   const stageSummit = useMemo(() => (summitFresh && summit ? { worktreeId: summit.worktreeId, seq: summit.seq } : null), [summit, summitFresh])
   // Camps beat buildings: the ends give way until the middle shows every camp the bare strip would
@@ -151,6 +160,13 @@ export function Campsite(): React.JSX.Element | null {
   }
   /** The Trails tab from `opener` (the signpost, a flag, a ledge's "+n" or the cairn), at a trail of this project or at its top */
   const openTrails = (el: HTMLElement, opener: string, trail?: string): void => openCamp(el, null, 'trails', trail, opener)
+  const sky = weatherBadge(weather)
+  // After the counts: why it rains, snows or is foggy over this project's camp
+  const weatherGlyph = sky && (
+    <span className="cs-weather" role="img" title={sky.text} aria-label={sky.text}>
+      {sky.glyph}
+    </span>
+  )
   const campButton = camp && (
     <button
       ref={countsButton}
@@ -196,6 +212,7 @@ export function Campsite(): React.JSX.Element | null {
         </button>
         <span className="cs-summary">{campSummary(sessions)}</span>
         {campButton}
+        {weatherGlyph}
         {summitNote}
         {waiting.length > 0 && (
           <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
@@ -235,12 +252,13 @@ export function Campsite(): React.JSX.Element | null {
         </div>
         <div className="cs-header-end" style={width > 0 ? { maxWidth: Math.max(0, width - 8 - clear.right) } : undefined}>
           {campButton}
+          {weatherGlyph}
           {summitNote}
           {awayCard}
         </div>
       </div>
       {width > 0 && (
-        <div className="cs-stage">
+        <div className="cs-stage" data-phase={world.phase} data-season={world.season ?? 'none'} data-weather={world.weather}>
           {layout.moreWaiting > 0 && (
             <button
               className="cs-more cs-more-waiting"
@@ -273,7 +291,7 @@ export function Campsite(): React.JSX.Element | null {
             summits={camp?.summits ?? 0}
             summit={stageSummit}
             now={now}
-            world={DUSK_WORLD}
+            world={world}
             selected={selected}
             paused={hidden}
             showDog={prefs.showDog}
