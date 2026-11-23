@@ -37,7 +37,9 @@ const SCENARIOS: Record<string, PluginSession[]> = {
 const params = new URLSearchParams(location.search)
 // ?freeze=1: both clocks stand still (Date.now at 2026-11-23 12:00 UTC, performance.now at 1 ms), so
 // a shot is the same pixels on every run: `campsite:render -- <dir> --freeze` before and after a
-// change that must not move anything, then compare the PNGs byte for byte
+// change that must not move anything, then compare the PNGs byte for byte. With --freeze the render
+// script has already frozen them (and `new Date()`) before any script ran, imports included; this is
+// for the page opened by hand, and sets the same values
 if (params.get('freeze') === '1') {
   const at = Date.UTC(2026, 10, 23, 12)
   Date.now = () => at

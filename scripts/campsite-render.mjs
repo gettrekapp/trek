@@ -3,9 +3,10 @@
 // without running the app. Not a test: it fails only if the page errors or Pixi can't start.
 // The page carries the app's CSP (no 'unsafe-eval'), so a render also proves Pixi starts under it.
 // Usage: node scripts/campsite-render.mjs [outDir] [--freeze]   (default .campsite-render, not out/:
-// the app packages out/**; CHROME_PATH picks the browser). --freeze stops the page's clocks
-// (the harness's ?freeze=1), so two runs write the same bytes: render before and after a change
-// that must not move anything and `cmp` the PNGs.
+// the app packages out/**; CHROME_PATH picks the browser). --freeze stops the page's clocks before
+// any of its scripts runs (FREEZE below; the harness's ?freeze=1 too) and screenshots with CSS
+// animations and transitions finished, so two runs write the same bytes: render before and after a
+// change that must not move anything and `cmp` the PNGs.
 import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,6 +53,27 @@ const SHOTS = [
   { name: 'trails-tab', scenario: 'few', trails: 'all', built: 'out', trailsTab: true, height: 1000 }
 ]
 
+/**
+ * --freeze, run in the page before any of its scripts: Date.now, an argument-less `new Date()` (and
+ * `Date()`) stand at the page's ?at= (a local time), else 2026-11-23 12:00 UTC, and performance.now
+ * at 1 ms. A Date with arguments, and Date's other statics, are the real ones
+ */
+function FREEZE() {
+  const q = new URLSearchParams(location.search)
+  const pinned = q.has('at') ? new Date(q.get('at') ?? '').getTime() : NaN
+  const at = Number.isFinite(pinned) ? pinned : Date.UTC(2026, 10, 23, 12)
+  const RealDate = Date
+  function FrozenDate(...a) {
+    if (!new.target) return new RealDate(at).toString()
+    return a.length === 0 ? new RealDate(at) : new RealDate(...a)
+  }
+  Object.setPrototypeOf(FrozenDate, RealDate)
+  FrozenDate.prototype = RealDate.prototype
+  FrozenDate.now = () => at
+  globalThis.Date = FrozenDate
+  performance.now = () => 1
+}
+
 mkdirSync(out, { recursive: true })
 const server = await createServer({
   root: join(root, 'plugins/campsite/dev'),
@@ -66,6 +88,8 @@ await server.listen()
 const url = server.resolvedUrls.local[0]
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? CHROME[process.platform], args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] })
 const problems = []
+/** Frozen shots finish CSS animations and transitions first (a normal render shoots them as they are) */
+const still = freeze ? { animations: 'disabled' } : {}
 try {
   for (const shot of SHOTS) {
     const page = await browser.newPage({
@@ -74,6 +98,7 @@ try {
       reducedMotion: shot.reduced ? 'reduce' : 'no-preference',
       ...(shot.touch ? { hasTouch: true, userAgent: TABLET_UA } : {})
     })
+    if (freeze) await page.addInitScript(FREEZE)
     page.on('pageerror', (e) => problems.push(`${shot.name}: ${e.message}`))
     page.on('console', (m) => {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
@@ -107,20 +132,20 @@ try {
     if (shot.summit) {
       await page.evaluate(() => window.__summit('ship', 'feature/ship'))
       await page.waitForTimeout(700)
-      await page.locator('.campsite').screenshot({ path })
+      await page.locator('.campsite').screenshot({ path, ...still })
     } else if (shot.trailsTab) {
       // The first flag (the trailhead's oldest) opens the Trails tab at its row; its history is read
       await page.locator('.cs-flag').first().click()
       await page.waitForSelector('.cs-camp-popover .cs-trail-log', { timeout: 5000 })
-      await page.screenshot({ path })
+      await page.screenshot({ path, ...still })
     } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
       await page.locator('.cs-camp-button').click()
       await page.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
       await page.locator('.cs-crew-member').nth(1).click()
       await page.waitForSelector('.cs-member .cs-journal', { timeout: 5000 })
-      await page.screenshot({ path })
-    } else await page.locator('.campsite').screenshot({ path })
+      await page.screenshot({ path, ...still })
+    } else await page.locator('.campsite').screenshot({ path, ...still })
     console.log(`wrote ${path}`)
     await page.close()
   }
