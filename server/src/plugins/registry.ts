@@ -397,6 +397,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         const found = findSession(options.projects.require(projectId), terminalId)
         return { sessionId: found.session.id, global: !found.worktree }
       },
+      projectName: (projectId) => options.projects.require(projectId).name,
       worktrees: (projectId) => options.projects.require(projectId).repositories.flatMap((r) => r.worktrees.map((w) => pluginWorktree(r, w))),
       worktree: (projectId, worktreeId) => {
         for (const repo of options.projects.require(projectId).repositories) {

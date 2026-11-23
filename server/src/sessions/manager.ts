@@ -34,7 +34,7 @@ import {
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
 import { commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
 import type { ServerAgents } from '../../../src/shared/protocolV2'
-import type { ActivityEvent, SessionCause } from '../../../src/shared/plugins/activity.ts'
+import type { ActivityEvent, ActivitySessionType, SessionCause } from '../../../src/shared/plugins/activity.ts'
 
 export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
@@ -139,6 +139,8 @@ interface SessionChange {
   worktreeId: string | null
   /** An automation's run tab */
   automation: boolean
+  provider: string
+  sessionType: ActivitySessionType | null
   from: SessionStatus
   to: SessionStatus
   had: boolean
@@ -150,12 +152,18 @@ interface SessionChange {
 /** Whether the session is an automation's run tab */
 const isAutomation = (s: Session): boolean => s.context?.kind === 'automation'
 
+/** The session's agent and type for the activity feed (campsite part 3b): the type named as the project's settings name it now; null with none, or one since removed */
+function kindOf(project: Pick<Project, 'settings'>, s: Session): { provider: string; sessionType: ActivitySessionType | null } {
+  const type = s.sessionTypeId === undefined ? undefined : project.settings.sessionTypes?.find((t) => t.id === s.sessionTypeId)
+  return { provider: s.llm.provider, sessionType: type ? { id: type.id, name: type.name } : null }
+}
+
 /**
  * A record whose agent was stopped (unload, suspend, stale Global sessions): no pty or exit code,
  * no decision (the agent that asked is gone; its question would outlive it), idle unless complete.
  * Returns what it changed, for the activity feed.
  */
-function stopRecord(s: Session, projectId: string, worktreeId: string | null): SessionChange {
+function stopRecord(s: Session, project: Project, worktreeId: string | null): SessionChange {
   const from = s.status
   const had = s.decision !== undefined
   const stopped = s.ptyId !== undefined
@@ -163,7 +171,7 @@ function stopRecord(s: Session, projectId: string, worktreeId: string | null): S
   delete s.exitCode
   delete s.decision
   if (s.status !== 'complete') s.status = 'idle'
-  return { projectId, id: s.id, worktreeId, automation: isAutomation(s), from, to: s.status, had, has: false, stopped }
+  return { projectId: project.id, id: s.id, worktreeId, automation: isAutomation(s), ...kindOf(project, s), from, to: s.status, had, has: false, stopped }
 }
 
 export class SessionManager {
@@ -393,7 +401,7 @@ export class SessionManager {
     this.stopDiscovery(found.session.id)
     this.killSession(found.session)
     this.removeSession(project.id, found.session.id)
-    this.emitActivity({ kind: 'session.closed', projectId: project.id, at: this.now(), terminalId: found.session.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(found.session) })
+    this.emitActivity({ kind: 'session.closed', projectId: project.id, at: this.now(), terminalId: found.session.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(found.session), ...kindOf(project, found.session) })
     this.since.delete(found.session.id)
     this.publishAttention()
     return null
@@ -644,7 +652,7 @@ export class SessionManager {
         for (const repo of d.repositories) {
           for (const worktree of repo.worktrees) {
             for (const s of worktree.sessions) {
-              if (ids.has(s.id)) changes.push(stopRecord(s, d.id, worktree.id))
+              if (ids.has(s.id)) changes.push(stopRecord(s, d, worktree.id))
             }
           }
         }
@@ -692,7 +700,7 @@ export class SessionManager {
       (d) => {
         const target = findWorktree(d, worktree.id).worktree
         target.loaded = false
-        for (const s of target.sessions) changes.push(stopRecord(s, d.id, target.id))
+        for (const s of target.sessions) changes.push(stopRecord(s, d, target.id))
       },
       { persist: false }
     )
@@ -728,7 +736,7 @@ export class SessionManager {
       this.deps.projects.apply(
         projectId,
         (d) => {
-          for (const s of d.globalSessions) changes.push(stopRecord(s, d.id, null))
+          for (const s of d.globalSessions) changes.push(stopRecord(s, d, null))
         },
         { persist: false }
       )
@@ -906,10 +914,10 @@ export class SessionManager {
       this.terminals.kill(ptyId)
       throw err
     }
-    const fact = { projectId, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, automation: isAutomation(session) }
+    const fact = { projectId, at: this.now(), terminalId: sessionId, worktreeId: worktree?.id ?? null, automation: isAutomation(session), ...kindOf(project, session) }
     if (revived) this.emitActivity({ kind: 'session.status', ...fact, from: 'exited', to: 'idle', cause: 'other' })
     // Every launch of the session's agent (start, restart, renew, a resume on load): one session.started
-    this.emitActivity({ kind: 'session.started', ...fact, provider: session.llm.provider })
+    this.emitActivity({ kind: 'session.started', ...fact })
     // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
     // not excluded. restart has the same race; automation runs are minutes apart.
@@ -942,7 +950,7 @@ export class SessionManager {
     this.dropActivity(owner.sessionId)
     // A Codex session that exited before its id was found is never bound (pickClaimant's rule).
     this.stopDiscovery(owner.sessionId)
-    let exited: { projectName: string; worktreeId: string | null; automation: boolean } | undefined
+    let exited: { projectName: string; worktreeId: string | null; automation: boolean; agent: ReturnType<typeof kindOf> } | undefined
     let from: SessionStatus | undefined
     try {
       this.deps.projects.apply(
@@ -955,7 +963,7 @@ export class SessionManager {
           from = s.status
           s.status = 'exited'
           s.exitCode = exitCode
-          exited = { projectName: d.name, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s) }
+          exited = { projectName: d.name, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s), agent: kindOf(d, s) }
         },
         { persist: false }
       )
@@ -963,7 +971,7 @@ export class SessionManager {
       // the project or session is gone
     }
     if (exited && from !== undefined && from !== 'exited') {
-      this.emitActivity({ kind: 'session.status', projectId: owner.projectId, at: this.now(), terminalId: owner.sessionId, worktreeId: exited.worktreeId, automation: exited.automation, from, to: 'exited', cause: 'other' })
+      this.emitActivity({ kind: 'session.status', projectId: owner.projectId, at: this.now(), terminalId: owner.sessionId, worktreeId: exited.worktreeId, automation: exited.automation, ...exited.agent, from, to: 'exited', cause: 'other' })
     }
     this.publishAttention()
     if (exited) {
@@ -1073,7 +1081,7 @@ export class SessionManager {
           const had = s.decision !== undefined
           s.status = status
           if (clearDecision) delete s.decision
-          c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s), from, to: s.status, had, has: s.decision !== undefined }
+          c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s), ...kindOf(d, s), from, to: s.status, had, has: s.decision !== undefined }
         },
         { persist: false }
       )
@@ -1132,7 +1140,7 @@ export class SessionManager {
 
   /** Reports a change: the status (with its cause), and a decision asked or cleared (`cleared`: how) */
   private reportChange(c: SessionChange, cause: SessionCause, cleared: 'answered' | 'dismissed'): void {
-    const base = { projectId: c.projectId, at: this.now(), terminalId: c.id, worktreeId: c.worktreeId, automation: c.automation }
+    const base = { projectId: c.projectId, at: this.now(), terminalId: c.id, worktreeId: c.worktreeId, automation: c.automation, provider: c.provider, sessionType: c.sessionType }
     if (c.from !== c.to) this.emitActivity({ kind: 'session.status', ...base, from: c.from, to: c.to, cause })
     if (!c.had && c.has) this.emitActivity({ kind: 'session.decision', ...base, state: 'asked' })
     if (c.had && !c.has) this.emitActivity({ kind: 'session.decision', ...base, state: cleared })
@@ -1157,7 +1165,7 @@ export class SessionManager {
         const from = s.status
         const had = s.decision !== undefined
         fn(s)
-        c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s), from, to: s.status, had, has: s.decision !== undefined }
+        c = { projectId: d.id, id: s.id, worktreeId: found.worktree?.id ?? null, automation: isAutomation(s), ...kindOf(d, s), from, to: s.status, had, has: s.decision !== undefined }
       },
       { persist }
     )

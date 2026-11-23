@@ -225,6 +225,8 @@ export interface ServerPluginHost {
   changed(): void
   /** The session `terminalId` names in the project; BAD_REQUEST without one, NOT_FOUND when there is none */
   session(projectId: string, terminalId: unknown): { sessionId: string; global: boolean }
+  /** The project's name (campsite part 3b); NOT_FOUND for a project that is not there */
+  projectName(projectId: string): string
   /** The project's worktrees, every repository's, in order (plugins E1); NOT_FOUND for a project that is not there */
   worktrees(projectId: string): PluginWorktree[]
   /** One of them; NOT_FOUND when there is none */

@@ -1807,3 +1807,37 @@ test('agents.models (plugins A1b): core passes listModels no signal, only the ag
   assert.equal(calls[0].length, 1, 'the config alone: no AbortSignal in A1b')
   assert.deepEqual(Object.keys(calls[0][0]).sort(), ['project', 'server'])
 })
+
+test("activity: every session event names the session's agent and its type (campsite part 3b), as the settings name it now", async (t) => {
+  const feed = recorder()
+  const s = setup(t, { activity: feed })
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.sessionTypes = [{ id: 'rev', name: 'Review', systemPrompt: '' }]
+  })
+  const typed = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', sessionTypeId: 'rev', ...size })
+  const plain = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+  for (const p of s.spawned) p.emit('Thinking… (esc to interrupt)')
+  await s.sessions.terminals.settledAll()
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.sessionTypes = [{ id: 'rev', name: 'Code review', systemPrompt: '' }]
+  })
+  s.spawned[0].exit(0)
+  await tick()
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.sessionTypes = []
+  })
+  s.sessions.close({ projectId: s.projectId, sessionId: typed.sessionId })
+  const of = (id) => feed.events.filter((e) => e.terminalId === id)
+  // Started, working, exited (after the rename), idle again (the unload), closed (after the type was removed)
+  assert.deepEqual(of(typed.sessionId).map((e) => [e.kind, e.provider, e.sessionType?.name ?? null]), [
+    ['session.started', 'claude', 'Review'],
+    ['session.status', 'claude', 'Review'],
+    ['session.status', 'claude', 'Code review'],
+    ['session.status', 'claude', 'Code review'],
+    ['session.closed', 'claude', null]
+  ])
+  assert.deepEqual(of(typed.sessionId)[0].sessionType, { id: 'rev', name: 'Review' })
+  assert.ok(of(plain.sessionId).length >= 3)
+  assert.ok(of(plain.sessionId).every((e) => e.provider === 'codex' && e.sessionType === null), 'no type: null')
+})

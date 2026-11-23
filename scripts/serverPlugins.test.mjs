@@ -1427,3 +1427,11 @@ test("session types (plugins A1b): a stored type whose agent the server lacks do
   assert.throws(() => applySettingsPatch({}, { sessionTypes: stored }, registry.settingRules), unknown)
   assert.throws(() => applySettingsPatch({ sessionTypes: [added] }, { sessionTypes: [{ ...added, llm: { provider: 'gone' } }] }, registry.settingRules), unknown)
 })
+
+test("the host reads a project's name (campsite part 3b)", (t) => {
+  let host
+  const look = { manifest: manifest('look'), setup: (h) => ((host = h), { handlers: {} }) }
+  setup(t, [look], { projects: { p1: { ...project('p1'), name: 'Trek' } } })
+  assert.equal(host.projectName('p1'), 'Trek')
+  assert.throws(() => host.projectName('gone'), (e) => e.code === 'NOT_FOUND')
+})

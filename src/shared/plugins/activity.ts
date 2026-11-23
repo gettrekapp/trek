@@ -23,6 +23,12 @@ export type ActivityStatus = 'working' | 'attention' | 'done' | 'complete' | 'id
 /** Why a status changed: pty output, the quiet timer, a bell, the user's input, the user looked at it, marked complete (or not), anything else */
 export type SessionCause = 'output' | 'quiet' | 'bell' | 'input' | 'seen' | 'marked' | 'other'
 
+/** A session type as the activity feed names it */
+export interface ActivitySessionType {
+  id: string
+  name: string
+}
+
 interface SessionFact {
   projectId: string
   at: number
@@ -32,6 +38,10 @@ interface SessionFact {
   worktreeId: string | null
   /** An automation's run tab (a Global session that runs the automation unattended) */
   automation: boolean
+  /** The session's agent (its provider's id) */
+  provider: string
+  /** The session's type, named as the project's settings name it now (campsite part 3b); null: none, or one since removed */
+  sessionType: ActivitySessionType | null
 }
 interface PrFact {
   projectId: string
@@ -50,7 +60,7 @@ interface WorktreeFact {
 }
 
 export type ActivityEvent = Readonly<
-  | (SessionFact & { kind: 'session.started'; provider: string })
+  | (SessionFact & { kind: 'session.started' })
   | (SessionFact & { kind: 'session.status'; from: ActivityStatus; to: ActivityStatus; cause: SessionCause })
   | (SessionFact & { kind: 'session.decision'; state: 'asked' | 'answered' | 'dismissed' })
   | (SessionFact & { kind: 'session.stopped' })
