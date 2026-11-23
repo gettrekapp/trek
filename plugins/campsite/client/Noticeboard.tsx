@@ -23,7 +23,7 @@ interface Props {
   onSeen: () => void
 }
 
-export function Noticeboard({ notes, onLoad, noteAt, seen, onSeen }: Props): React.JSX.Element {
+export function Noticeboard({ notes, onLoad, seen, onSeen }: Props): React.JSX.Element {
   const id = useId()
   const now = useNow()
   const ref = useRef<HTMLDivElement>(null)
@@ -37,9 +37,14 @@ export function Noticeboard({ notes, onLoad, noteAt, seen, onSeen }: Props): Rea
     onLoad()
   }, [])
   useEffect(() => {
+    // Marked seen only when a read this board saw go out is answered: a newer note's noteAt alone
+    // doesn't count (its reload follows, and a failed reload must leave the pin)
     if (status === 'loading') asked.current = true
-    else if (status === 'ready' && asked.current && seen) onSeen()
-  }, [status, noteAt, seen])
+    else if (status === 'ready' && asked.current && seen) {
+      asked.current = false
+      onSeen()
+    }
+  }, [status, seen])
   useEffect(() => {
     if (!refocus.current || status === 'failed') return
     refocus.current = false
