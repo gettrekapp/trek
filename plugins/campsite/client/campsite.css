@@ -809,3 +809,121 @@
   font-size: 12px;
   cursor: pointer;
 }
+
+/* The Trails tab (campsite 3c): a row per trail (its flag's colour, branch, stage and age, a five-dot meter) */
+.cs-trail-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px;
+  border-radius: 5px;
+}
+.cs-trail-row:focus {
+  outline: 1px solid #ffe680;
+  outline-offset: -1px;
+}
+.cs-trail-flag {
+  flex: none;
+  width: 8px;
+  height: 12px;
+  border-radius: 1px;
+}
+.cs-trail-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.cs-trail-meter {
+  flex: none;
+  display: flex;
+  gap: 3px;
+}
+.cs-trail-meter span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34343b;
+}
+.cs-trail-meter span.on {
+  background: #ffd27a;
+}
+.cs-trail-log li span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-trails-hint {
+  margin: 8px 6px 4px;
+  color: #6f6f78;
+  font-size: 11px;
+  font-style: italic;
+}
+.cs-trails-more {
+  font-family: inherit;
+  height: 20px;
+  margin: 2px 6px 6px;
+  padding: 0 8px;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #9a9aa2;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cs-trail-row .cs-shop-text {
+  gap: 1px;
+}
+/* The strip's trails (campsite 3c): a flag's button over its sprite on the mountain, a ledge's "+n",
+   the cairn's button, the signpost's planks; under the header (z-index 5) and the hikers' buttons */
+.cs-flag,
+.cs-cairn {
+  position: absolute;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 1;
+}
+.cs-flag-more {
+  position: absolute;
+  padding: 0 2px;
+  background: rgba(26, 22, 34, 0.85);
+  border: none;
+  color: #c9c2d6;
+  font: 9px/10px ui-monospace, 'SF Mono', Menlo, monospace;
+  cursor: pointer;
+  z-index: 1;
+}
+.cs-flag:focus-visible,
+.cs-cairn:focus-visible,
+.cs-flag-more:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 1px;
+}
+/* On the signpost's top plank (2× its grid cells), pointer-transparent: the building's button takes the click */
+.cs-signpost-text {
+  position: absolute;
+  display: block;
+  overflow: hidden;
+  color: #2a1c10;
+  font: 700 9px/20px ui-monospace, 'SF Mono', Menlo, monospace;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* The header's summit line, for a few seconds after a summit */
+.cs-summit-line {
+  /* In .cs-header-end (expanded): cut short rather than reach over the peak */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  background: rgba(26, 22, 34, 0.85);
+  color: #ffd27a;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
+  pointer-events: none;
+}
