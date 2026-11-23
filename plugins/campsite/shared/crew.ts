@@ -4,6 +4,7 @@
 // (exits, is stopped by Trek, or the session closes). A member earns XP equal to the wood its
 // session earns. Pure.
 import { noteLevelUp } from './away.ts'
+import { whole } from './catalog.ts'
 import type { Camp, CampSnapshot, CrewMember } from './camp.ts'
 import { fnv1a, lookFor, type Look } from './hiker.ts'
 
@@ -53,7 +54,7 @@ export function creditXp(camp: Camp, terminalId: string, xp: number): void {
 }
 
 /** Level n from 100 × (n − 1)² XP: 1 at 0, 2 at 100, 3 at 400, 4 at 900, 5 at 1600 */
-export const levelFor = (xp: number): number => Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1
+export const levelFor = (xp: number): number => Math.floor(Math.sqrt(Math.max(0, whole(xp)) / 100)) + 1
 export const titleFor = (level: number): string => TITLES[Math.min(Math.max(level, 1), TITLES.length) - 1]
 
 /** The XP where level n starts (100 × (n − 1)²) */

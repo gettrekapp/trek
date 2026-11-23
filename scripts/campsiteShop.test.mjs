@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { BUILDING_IDS, CATALOG, FISH_PER_HOUR, GARDEN_PER_HOUR, TRAITS, building, costLabel, costWords, fireCeiling, hireCost, isBuildingId, startBuilt } from '../plugins/campsite/shared/catalog.ts'
 import { addAway, awayDue, awayHolds, awaySeen, awayText, newAway, noteLevelUp, seen } from '../plugins/campsite/shared/away.ts'
 import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
-import { assign, creditXp, levelXp, memberLook } from '../plugins/campsite/shared/crew.ts'
+import { assign, creditXp, levelFor, levelXp, memberLook } from '../plugins/campsite/shared/crew.ts'
 import { TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
 import { bunks, build, candidates, dayOf, offers, recruit, shortfall, todaysCandidates } from '../plugins/campsite/shared/shop.ts'
 import { tick } from '../plugins/campsite/shared/economy.ts'
@@ -321,4 +321,29 @@ test('garden wood ticked minute by minute reaches whole numbers (no float drift 
   assert.equal(snapshot(camp, T0 + 8 * H).wood, 16)
   assert.equal(whole(0.9999999999999999), 1)
   assert.equal(whole(0.99), 0)
+})
+
+test('build and recruit: wood a hair under the price (float drift) pays it and leaves 0, never below', () => {
+  const camp = rich(25 - 1e-9, 0)
+  assert.equal(build(camp, { id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }), null)
+  assert.equal(camp.wood, 0)
+  camp.built.cabins = 1
+  camp.wood = 200 - 1e-9
+  const [walkIn] = todaysCandidates(camp, T0)
+  assert.equal(recruit(camp, { candidate: walkIn.name, cost: { wood: 200 } }, T0), null)
+  assert.equal(camp.wood, 0)
+})
+
+test("recruit: a refusal echoes at most 40 characters of the candidate's name", () => {
+  const camp = rich(1000, 0)
+  camp.built.cabins = 1
+  assert.deepEqual(recruit(camp, { candidate: 'x'.repeat(500), cost: { wood: 200 } }, T0), { code: 'CONFLICT', message: `${'x'.repeat(40)} isn't at camp today` })
+})
+
+test('XP drift: a level and the XP shown agree (both whole)', () => {
+  assert.equal(levelFor(400 - 1e-9), 3)
+  const camp = newCamp(1, T0)
+  camp.crew[0].xp = 400 - 1e-9
+  const entry = snapshot(camp, T0).crew[0]
+  assert.deepEqual([entry.level, entry.xp, entry.next], [3, 400, levelXp(4)])
 })

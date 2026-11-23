@@ -153,7 +153,7 @@ export function snapshot(camp: Camp, now: number): CampSnapshot {
     markers: camp.markers,
     crew: camp.crew.map((m) => {
       const level = levelFor(m.xp)
-      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: Math.floor(m.xp), next: levelXp(level + 1) }
+      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: whole(m.xp), next: whole(levelXp(level + 1)) }
     }),
     assignments,
     built: { ...camp.built },

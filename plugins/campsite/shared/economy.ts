@@ -66,15 +66,15 @@ function pay(camp: Camp, r: Reward, out: Reward[]): boolean {
 function payMinutes(camp: Camp, terminalId: string, now: number, rules: Rules, out: Reward[]): void {
   const span = Object.hasOwn(camp.spans, terminalId) ? camp.spans[terminalId] : undefined
   if (!span) return
-  const whole = Math.floor((now - span.start) / rules.minuteMs)
-  while (span.paid < whole) {
+  const finished = Math.floor((now - span.start) / rules.minuteMs)
+  while (span.paid < finished) {
     span.paid++
     camp.worked[terminalId] = (camp.worked[terminalId] ?? 0) + 1
     const at = span.start + span.paid * rules.minuteMs
     if (bump(camp, `work:${terminalId}`, CAPS.workPerHour, at)) pay(camp, { wood: WOOD.minute * warmthFactor(camp.warmth, camp.built.fire), markers: 0, source: 'work', terminalId, reason: 'working' }, out)
     else {
       // The hour's cap is spent: the rest of its minutes pay nothing, so skip them (still counted as worked)
-      const last = Math.min(whole, Math.ceil(((hourOf(at) + 1) * HOUR_MS - span.start) / rules.minuteMs) - 1)
+      const last = Math.min(finished, Math.ceil(((hourOf(at) + 1) * HOUR_MS - span.start) / rules.minuteMs) - 1)
       if (last > span.paid) {
         camp.worked[terminalId] += last - span.paid
         span.paid = last

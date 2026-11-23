@@ -490,3 +490,67 @@ test('a push that throws is logged, never thrown from its timer', async (t) => {
   assert.doesNotThrow(() => clock.run())
   assert.ok(h.warnings.some((m) => m.includes('boom')), JSON.stringify(h.warnings))
 })
+
+test('once disposed, build, recruit, seen and awaySeen are CONFLICT: the camp is closing', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
+  inst.dispose()
+  const closing = { code: 'CONFLICT', message: 'The camp is closing' }
+  await assert.rejects(async () => inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {}), closing)
+  await assert.rejects(async () => inst.handlers.recruit({ candidate: 'x', cost: { wood: 200 } }, {}), closing)
+  await assert.rejects(async () => inst.handlers.seen({}, {}), closing)
+  await assert.rejects(async () => inst.handlers.awaySeen({}, {}), closing)
+})
+
+test('a purchase is saved to camp.json at once, not after the debounce', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 100 })
+  t.after(() => inst.dispose?.())
+  await inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {})
+  const saved = JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8'))
+  assert.deepEqual([saved.built.lights, saved.wood], [1, 75])
+})
+
+test('an idle tick, twice, pushes nothing new', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let tickFn
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
+  clock.run()
+  const emits = h.emitted.length
+  tickFn()
+  clock.run()
+  tickFn()
+  clock.run()
+  assert.equal(h.emitted.length, emits)
+})
+
+test('seen while the card is not due: no push, and camp.json holds the new seenAt', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
+  clock.run()
+  const emits = h.emitted.length
+  now += 60_000
+  assert.deepEqual(inst.handlers.seen({}, {}), { ok: true })
+  clock.run()
+  assert.equal(h.emitted.length, emits)
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).seenAt, now)
+})
+
+test('a version 1 camp.json still malformed after migration is moved to camp.json.bak and a new camp starts', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const text = '{"version":1,"wood":"x"}'
+  writeFileSync(file, text)
+  const warnings = []
+  const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
+  assert.equal(store.camp.wood, 0)
+  assert.equal(store.camp.version, 2)
+  assert.equal(readFileSync(`${file}.bak`, 'utf8'), text)
+  assert.equal(warnings.length, 1)
+})

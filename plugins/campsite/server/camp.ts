@@ -109,10 +109,15 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     store.changed()
     publish()
   }
-  /** A purchase: refused with its code, or saved, pushed and answered with the new snapshot */
+  /** A request that would change the camp after dispose (its last save is done) */
+  const open = (): void => {
+    if (disposed) throw pluginError('CONFLICT', 'The camp is closing')
+  }
+  /** A purchase: refused with its code, or saved at once (it is final), pushed and answered with the new snapshot */
   const answer = (refusal: ShopRefusal | null): CampSnapshot => {
     if (refusal) throw pluginError(refusal.code, refusal.message)
-    changed()
+    store.flush()
+    publish()
     return snapshot(camp, now())
   }
 
@@ -178,13 +183,21 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   return {
     handlers: {
       state: () => snapshot(camp, now()),
-      build: (params) => answer(build(camp, params)),
-      recruit: (params) => answer(recruit(camp, params, now())),
+      build: (params) => {
+        open()
+        return answer(build(camp, params))
+      },
+      recruit: (params) => {
+        open()
+        return answer(recruit(camp, params, now()))
+      },
       seen: () => {
+        open()
         if (seen(camp, now())) changed()
         return { ok: true }
       },
       awaySeen: () => {
+        open()
         awaySeen(camp, now())
         changed()
         return { ok: true }

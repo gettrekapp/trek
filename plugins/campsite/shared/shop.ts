@@ -87,8 +87,9 @@ export function build(camp: Camp, params: Record<string, unknown>): ShopRefusal 
   if (cost.wood !== want.cost.wood || cost.markers !== want.cost.markers) return conflict(`The price changed: ${want.name} costs ${costWords(want.cost)}`)
   const short = shortfall(camp, want.cost)
   if (short) return conflict(short)
-  camp.wood -= want.cost.wood
-  camp.markers -= want.cost.markers
+  // Never below zero: whole wood forgives a hair of float drift
+  camp.wood = Math.max(0, camp.wood - want.cost.wood)
+  camp.markers = Math.max(0, camp.markers - want.cost.markers)
   camp.built[id] = next
   return null
 }
@@ -98,13 +99,13 @@ export function recruit(camp: Camp, params: Record<string, unknown>, now: number
   const { candidate, cost } = params
   if (typeof candidate !== 'string' || !isRecord(cost) || !amount(cost.wood)) return bad('A hire needs { candidate, cost: { wood } }')
   const walkIn = todaysCandidates(camp, now).find((c) => c.name === candidate)
-  if (!walkIn) return conflict(`${candidate} isn't at camp today`)
+  if (!walkIn) return conflict(`${candidate.slice(0, 40)} isn't at camp today`)
   if (camp.crew.length >= bunks(camp)) return conflict('No free bunk: build a cabin first')
   const price = hireCost(camp.crew.length)
   if (cost.wood !== price) return conflict(`The price changed: a hire costs ${price} wood`)
   const short = shortfall(camp, { wood: price, markers: 0 })
   if (short) return conflict(short)
-  camp.wood -= price
+  camp.wood = Math.max(0, camp.wood - price)
   camp.crew.push({ id: nextCrewId(camp.crew), name: walkIn.name, seed: walkIn.seed, xp: 0, restedAt: now })
   const day = dayOf(now)
   if (camp.hired.day !== day) camp.hired = { day, names: [] }
