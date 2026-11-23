@@ -1,5 +1,6 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
-// prefs, the camp's snapshot, the document's visibility, reduced motion and an element's width.
+// prefs, the camp's snapshot and the seen heartbeat, the document's visibility, reduced motion and
+// an element's width.
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../shared/camp.ts'
@@ -56,6 +57,26 @@ export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, (key: Campsite
 export function useCamp(host: ClientPluginHost): CampSnapshot | null {
   const store = campStore(host)
   return useSyncExternalStore(store.subscribe, store.snapshot)
+}
+
+/** How often a visible window tells the server the camp was seen */
+const SEEN_EVERY_MS = 5 * 60_000
+
+/** Tells the server this window saw the camp: on load, when the document becomes visible, and every 5 minutes while it is (campsite part 3a: the away card) */
+export function useSeen(host: ClientPluginHost): void {
+  useEffect(() => {
+    const store = campStore(host)
+    const ping = (): void => {
+      if (!document.hidden) store.seen()
+    }
+    ping()
+    const timer = setInterval(ping, SEEN_EVERY_MS)
+    document.addEventListener('visibilitychange', ping)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', ping)
+    }
+  }, [host])
 }
 
 function subscribeVisibility(listener: () => void): () => void {
