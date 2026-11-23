@@ -11,7 +11,11 @@ Claude Code in Trek's agent sessions (plugins A1; core before). It offers two ag
 It owns three project settings, stored under the names core used before: `claudeCommand`,
 `claudeArgs` (they replace `--permission-mode`) and `claudePermissionMode`. Claude is the fallback
 agent: an unknown agent id runs Claude. Claude's history (`~/.claude/projects`) follows a promote,
-and a move carries a Claude session's history file to the other server.
+and a move carries a Claude session's history file to the other server. Claude reports its
+sessions' tool calls (campsite part 4: the agent's `activity`): `server/activity.ts` follows a
+running session's transcript (`~/.claude/projects/<cwd>/<id>.jsonl`, from its end, or from its top
+when it appears later), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
+as a kind (read, edit, run, delegate, web, mcp, other) and a short label. Local reports none.
 
 Tests and smokes never run the real CLI: `scripts/fixtures/fake-claude.mjs` and the fake agents of
 `scripts/fakeAgent.mjs` stand in, through the server config's `command`.

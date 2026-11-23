@@ -48,6 +48,12 @@ test('MCP files: Claude and Local share .json, Gemini and Codex have their own; 
   assert.deepEqual(content('codex'), headers)
 })
 
+test('only Claude reports its tool calls (campsite part 4), from its transcript; Local and the others report none', () => {
+  const agents = agentPlugins.flatMap(agentsOf)
+  assert.equal(typeof agents.find((a) => a.id === 'claude').activity.watch, 'function')
+  for (const id of ['local', 'codex', 'gemini', 'grok']) assert.equal(agents.find((a) => a.id === id).activity, undefined, id)
+})
+
 test("Claude has its own Global role; the others get core's", () => {
   const agents = agentPlugins.flatMap(agentsOf)
   assert.match(agents.find((a) => a.id === 'claude').globalPrompt(), /^You are the global Claude session of Trek Dev/)
