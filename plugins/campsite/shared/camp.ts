@@ -1,8 +1,9 @@
 // The camp (campsite parts 2 and 3a): one per server, shared by every project. What it holds, a new
 // one, version 1 → 2, a shape check for what camp.json held, and the snapshot windows see. Pure.
 import { AWAY_SOURCES, awayDue, newAway, type AwaySnapshot, type AwayTally } from './away.ts'
-import { BUILDING_IDS, startBuilt, type BuildingId } from './catalog.ts'
+import { BUILDING_IDS, hireCost, startBuilt, type BuildingId } from './catalog.ts'
 import { levelFor, levelXp, newCrew, titleFor } from './crew.ts'
+import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
 
 export const CAMP_VERSION = 2
 const HOUR_MS = 3_600_000
@@ -70,6 +71,13 @@ export interface CampSnapshot {
   /** terminalId → crew id */
   assignments: Record<string, string>
   built: Record<BuildingId, number>
+  /** Each building's next tier, at its price */
+  offers: Offer[]
+  bunks: number
+  /** Today's walk-ins */
+  candidates: Candidate[]
+  /** The next hire's price */
+  recruitCost: number
   /** Only while the away card is due */
   away?: AwaySnapshot
 }
@@ -150,7 +158,11 @@ export function snapshot(camp: Camp, now: number): CampSnapshot {
       return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: Math.floor(m.xp), next: levelXp(level + 1) }
     }),
     assignments,
-    built: { ...camp.built }
+    built: { ...camp.built },
+    offers: offers(camp),
+    bunks: bunks(camp),
+    candidates: todaysCandidates(camp, now),
+    recruitCost: hireCost(camp.crew.length)
   }
   if (awayDue(camp, now)) snap.away = awaySnapshot(camp, now)
   return snap

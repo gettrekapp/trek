@@ -6,6 +6,8 @@ import { BUILDING_IDS, CATALOG, FISH_PER_HOUR, GARDEN_PER_HOUR, TRAITS, building
 import { addAway, awayDue, awayHolds, awaySeen, awayText, newAway, noteLevelUp, seen } from '../plugins/campsite/shared/away.ts'
 import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { assign, creditXp, levelXp, memberLook } from '../plugins/campsite/shared/crew.ts'
+import { TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
+import { bunks, build, candidates, dayOf, offers, recruit, shortfall, todaysCandidates } from '../plugins/campsite/shared/shop.ts'
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
@@ -157,4 +159,128 @@ test("awayText: the card's line, empty sources left out", () => {
     'While you were away (9 h): 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer'
   )
   assert.equal(awayText({ hours: 5, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 2, levelUps: [] }), 'While you were away (5 h): ⛳ +2')
+})
+
+const rich = (wood, markers) => {
+  const camp = newCamp(1, T0)
+  camp.wood = wood
+  camp.markers = markers
+  return camp
+}
+const offer = (camp, id) => offers(camp).find((o) => o.id === id)
+
+test("offers: each building's next tier at its catalog price; a fully built one has none", () => {
+  const camp = newCamp(1, T0)
+  assert.deepEqual(offers(camp), [
+    { id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } },
+    { id: 'fire', tier: 2, cost: { wood: 300, markers: 0 } },
+    { id: 'garden', tier: 1, cost: { wood: 150, markers: 0 } },
+    { id: 'lake', tier: 1, cost: { wood: 500, markers: 0 } },
+    { id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } }
+  ])
+  camp.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3 }
+  assert.deepEqual(offers(camp), [])
+})
+
+test('build: pays the catalog price and raises the tier; tiers in order', () => {
+  const camp = rich(1000, 2)
+  assert.equal(build(camp, offer(camp, 'fire')), null)
+  assert.equal(camp.built.fire, 2)
+  assert.equal(camp.wood, 700)
+  assert.deepEqual(offer(camp, 'fire'), { id: 'fire', tier: 3, cost: { wood: 900, markers: 1 } })
+  assert.equal(build(camp, { id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }), null)
+  assert.equal(camp.wood, 675)
+  assert.equal(offer(camp, 'lights'), undefined)
+  assert.equal(build(camp, { id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } }), null)
+  assert.deepEqual([camp.wood, camp.markers, camp.built.cabins], [275, 1, 1])
+})
+
+test('build refusals: bad input, not the next tier, a changed price, too little; a refusal changes nothing', () => {
+  const camp = rich(100, 0)
+  const before = JSON.stringify(camp)
+  assert.deepEqual(build(camp, { id: 'tower', tier: 1, cost: { wood: 0, markers: 0 } }), { code: 'BAD_REQUEST', message: 'Unknown building: tower' })
+  for (const bad of [{ id: 'lights' }, { id: 'lights', tier: '1', cost: { wood: 25, markers: 0 } }, { id: 'lights', tier: 1, cost: { wood: 25 } }, { id: 'lights', tier: 1, cost: null }, { id: 'lights', tier: 1, cost: { wood: -1, markers: 0 } }]) {
+    assert.equal(build(camp, bad)?.code, 'BAD_REQUEST', JSON.stringify(bad))
+  }
+  assert.deepEqual(build(camp, { id: 'fire', tier: 3, cost: { wood: 900, markers: 1 } }), { code: 'CONFLICT', message: "Fire ring's next tier is 2, not 3" })
+  assert.deepEqual(build(camp, { id: 'lights', tier: 1, cost: { wood: 20, markers: 0 } }), { code: 'CONFLICT', message: 'The price changed: String lights costs 25 wood' })
+  assert.deepEqual(build(camp, { id: 'garden', tier: 1, cost: { wood: 150, markers: 0 } }), { code: 'CONFLICT', message: 'Need 50 more wood' })
+  assert.deepEqual(build(camp, { id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } }), { code: 'CONFLICT', message: 'Need 300 more wood and 1 more marker' })
+  assert.equal(JSON.stringify(camp), before)
+  camp.built.lights = 1
+  assert.deepEqual(build(camp, { id: 'lights', tier: 2, cost: { wood: 0, markers: 0 } }), { code: 'CONFLICT', message: 'String lights is fully built' })
+})
+
+test('shortfall: what is missing, against whole wood', () => {
+  assert.equal(shortfall({ wood: 25, markers: 0 }, { wood: 25, markers: 0 }), null)
+  assert.equal(shortfall({ wood: 24.9, markers: 0 }, { wood: 25, markers: 0 }), 'Need 1 more wood')
+  assert.equal(shortfall({ wood: 1000, markers: 0 }, { wood: 900, markers: 1 }), 'Need 1 more marker')
+  assert.equal(shortfall({ wood: 0, markers: 0 }, { wood: 1000, markers: 2 }), 'Need 1000 more wood and 2 more markers')
+})
+
+test('bunks: 3, and 3 more per cabin tier', () => {
+  const camp = newCamp(1, T0)
+  assert.equal(bunks(camp), 3)
+  camp.built.cabins = 2
+  assert.equal(bunks(camp), 9)
+  camp.built.cabins = 3
+  assert.equal(bunks(camp), 12)
+})
+
+test("dayOf: the server's local date", () => {
+  assert.equal(dayOf(new Date(2026, 10, 23, 23, 59).getTime()), '2026-11-23')
+  assert.equal(dayOf(new Date(2026, 0, 5, 0, 0).getTime()), '2026-01-05')
+})
+
+test('candidates: three a day, deterministic for a seed and day, never a taken name; another day or seed, another list', () => {
+  const day = dayOf(T0)
+  const a = candidates(1, day, [])
+  assert.equal(a.length, 3)
+  assert.deepEqual(candidates(1, day, []), a)
+  assert.ok(a.every((c) => TRAIL_NAMES.includes(c.name) && TRAITS.includes(c.trait) && Number.isInteger(c.seed)))
+  const without = candidates(1, day, [a[0].name])
+  assert.deepEqual(without.slice(0, 2), a.slice(1), 'the others keep their places')
+  assert.ok(!without.some((c) => c.name === a[0].name))
+  assert.notDeepEqual(candidates(1, dayOf(T0 + 24 * H), []).map((c) => c.name), a.map((c) => c.name))
+  assert.notDeepEqual(candidates(2, day, []).map((c) => c.name), a.map((c) => c.name))
+})
+
+test("recruit: hires a walk-in into a free bunk at the rising price; it leaves the day's list; refusals", () => {
+  const camp = rich(1000, 0)
+  camp.built.cabins = 1
+  const crewNames = camp.crew.map((m) => m.name)
+  const list = todaysCandidates(camp, T0)
+  assert.equal(list.length, 3)
+  assert.ok(list.every((c) => !crewNames.includes(c.name)))
+  const [first, second, third] = list
+  assert.equal(recruit(camp, { candidate: first.name, cost: { wood: 200 } }, T0 + 1), null)
+  assert.equal(camp.wood, 800)
+  assert.deepEqual(camp.crew.at(-1), { id: 'c4', name: first.name, seed: first.seed, xp: 0, restedAt: T0 + 1 })
+  assert.deepEqual(camp.hired, { day: dayOf(T0), names: [first.name] })
+  assert.deepEqual(todaysCandidates(camp, T0 + 2), [second, third], 'the other two stay')
+  assert.deepEqual(recruit(camp, { candidate: first.name, cost: { wood: 250 } }, T0 + 3), { code: 'CONFLICT', message: `${first.name} isn't at camp today` })
+  assert.deepEqual(recruit(camp, { candidate: second.name, cost: { wood: 200 } }, T0 + 3), { code: 'CONFLICT', message: 'The price changed: a hire costs 250 wood' })
+  for (const bad of [{}, { candidate: 3, cost: { wood: 250 } }, { candidate: second.name }, { candidate: second.name, cost: { wood: 'x' } }]) {
+    assert.equal(recruit(camp, bad, T0 + 3)?.code, 'BAD_REQUEST', JSON.stringify(bad))
+  }
+  camp.wood = 100
+  assert.deepEqual(recruit(camp, { candidate: second.name, cost: { wood: 250 } }, T0 + 3), { code: 'CONFLICT', message: 'Need 150 more wood' })
+  camp.wood = 1000
+  assert.equal(recruit(camp, { candidate: second.name, cost: { wood: 250 } }, T0 + 3), null)
+  assert.equal(recruit(camp, { candidate: third.name, cost: { wood: 300 } }, T0 + 3), null)
+  assert.equal(camp.crew.length, 6)
+  assert.deepEqual(todaysCandidates(camp, T0 + 4), [], 'all three hired')
+  const tomorrow = todaysCandidates(camp, T0 + 24 * H)
+  assert.equal(tomorrow.length, 3, 'a new day, three new walk-ins')
+  assert.ok(tomorrow.every((c) => !camp.crew.some((m) => m.name === c.name)))
+  assert.deepEqual(recruit(camp, { candidate: tomorrow[0].name, cost: { wood: 350 } }, T0 + 24 * H), { code: 'CONFLICT', message: 'No free bunk: build a cabin first' })
+})
+
+test("snapshot: offers, bunks, the day's walk-ins and the next hire's price", () => {
+  const camp = newCamp(1, T0)
+  const snap = snapshot(camp, T0)
+  assert.deepEqual(snap.offers, offers(camp))
+  assert.equal(snap.bunks, 3)
+  assert.deepEqual(snap.candidates, todaysCandidates(camp, T0))
+  assert.equal(snap.recruitCost, 200)
 })
