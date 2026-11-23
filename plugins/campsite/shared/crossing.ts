@@ -2,10 +2,13 @@
 // walker crosses the treeline (just behind the tents and hikers) from its edge to the other in
 // 15–25 s, pausing once for 3 s; a flier crosses the sky between the header and the ridge (clear of
 // the peak's flags) in 8–12 s; a swimmer comes up at the lake, bobs for 20 s and goes (none without
-// a placed lake). Under reduced motion it stands still at one spot for 10 s. `r` (0–1) picks the
-// length and the spot, so the caller's dice decide. Strip px; the sprite is anchored at its bottom
-// middle. Pure.
-import { ANIMAL_SCALE, animalSize } from './animalPixels.ts'
+// a placed lake). Under reduced motion it stands still at one spot for 10 s (a walker in a gap
+// clear of the tents, the log, the fire and the buildings). `r` (0–1) picks the length and the spot,
+// so the caller's dice decide. Strip px; the sprite is anchored at its bottom middle. Also which
+// `sighting` events a window shows (`admit`). Pure.
+import { ANIMAL_SCALE, animalSize, hasArt } from './animalPixels.ts'
+import type { Placed } from './campEdges.ts'
+import { LOG_W, TENT_W, type CampLayout } from './layout.ts'
 import { GROUND_Y, STAGE_H } from './stage.ts'
 import { species, type Move } from './wildlife.ts'
 
@@ -19,6 +22,19 @@ export const PAUSE_MS = 3000
 export const STILL_MS = 10_000
 export const SWIM_MS = 20_000
 const FADE_MS = 1000
+/** The lake's dock (its first 48 px at tier 2) and its reeds (from 168 px): a swimmer's middle stays between, clear of both */
+const DOCK_END = 48
+const REEDS_START = 168
+/** A still walker keeps this far from the strip's ends */
+const EDGE = 8
+/** The fire ring's half width (its widest tier) */
+const FIRE_HALF = 40
+
+/** A stretch of the strip, px (from ≤ to) */
+export interface Span {
+  from: number
+  to: number
+}
 
 export interface Crossing {
   species: string
@@ -49,23 +65,87 @@ export interface AnimalPose {
   flip: boolean
 }
 
-/** A sighting's crossing on a strip `width` wide; `lake`: the placed lake's left and width (null: none). Null for a species this version can't draw, or a swimmer with no lake */
-export function crossing(id: string, dir: 'left' | 'right', width: number, lake: { x: number; w: number } | null, r: number, still: boolean): Crossing | null {
+/** What in front of a walker hides it: the tents, Global's log, the fire and the placed buildings */
+export function occupiedSpans(layout: Pick<CampLayout, 'width' | 'fireX' | 'tents' | 'log'>, placed: readonly Pick<Placed, 'x' | 'w'>[]): Span[] {
+  if (layout.width <= 0) return []
+  const out: Span[] = [{ from: layout.fireX - FIRE_HALF, to: layout.fireX + FIRE_HALF }]
+  for (const t of layout.tents) out.push({ from: t.x - TENT_W / 2, to: t.x + TENT_W / 2 })
+  if (layout.log) out.push({ from: layout.log.x - LOG_W / 2, to: layout.log.x + LOG_W / 2 })
+  for (const p of placed) out.push({ from: p.x, to: p.x + p.w })
+  return out
+}
+
+/** A still walker's middle (`w` wide) on a strip `width` wide, in a gap clear of `occupied`: `r` picks along every spot that fits; none fits: the widest gap's middle; no gap: null */
+export function stillSpot(width: number, w: number, occupied: readonly Span[], r: number): number | null {
+  const lo = EDGE
+  const hi = width - EDGE
+  if (hi <= lo) return null
+  const spans = occupied
+    .map((s) => ({ from: Math.max(lo, s.from), to: Math.min(hi, s.to) }))
+    .filter((s) => s.to > s.from)
+    .sort((a, b) => a.from - b.from)
+  const gaps: Span[] = []
+  let at = lo
+  for (const s of spans) {
+    if (s.from > at) gaps.push({ from: at, to: s.from })
+    at = Math.max(at, s.to)
+  }
+  if (hi > at) gaps.push({ from: at, to: hi })
+  // The middles that keep it whole in a gap
+  const fits = gaps.filter((g) => g.to - g.from >= w).map((g) => ({ from: g.from + w / 2, to: g.to - w / 2 }))
+  if (fits.length > 0) {
+    const total = fits.reduce((sum, f) => sum + (f.to - f.from), 0)
+    let left = Math.min(1, Math.max(0, r)) * total
+    for (const f of fits) {
+      if (left <= f.to - f.from) return Math.round(f.from + left)
+      left -= f.to - f.from
+    }
+    const last = fits[fits.length - 1]
+    return Math.round(last.to)
+  }
+  if (gaps.length === 0) return null
+  const widest = gaps.reduce((a, b) => (b.to - b.from > a.to - a.from ? b : a))
+  return Math.round((widest.from + widest.to) / 2)
+}
+
+/** What a window needs to know to show a sighting */
+export interface SightingView {
+  /** The window's project */
+  projectId: string
+  /** The strip is shown (loaded and on) */
+  shown: boolean
+  collapsed: boolean
+  /** The document is hidden */
+  hidden: boolean
+  width: number
+}
+
+/** A `sighting` event this window shows now (its species and the edge it comes from), else null: another project's, a bad edge, a species this version can't draw, an animal already crossing (`busy`), a hidden window, or no expanded strip */
+export function admit(e: { projectId?: unknown; species?: unknown; dir?: unknown }, view: SightingView, busy: boolean): { species: string; dir: 'left' | 'right' } | null {
+  if (e.projectId !== view.projectId || typeof e.species !== 'string' || (e.dir !== 'left' && e.dir !== 'right')) return null
+  if (!species(e.species) || !hasArt(e.species)) return null
+  if (busy || view.hidden || !view.shown || view.collapsed || !(view.width > 0)) return null
+  return { species: e.species, dir: e.dir }
+}
+
+/** A sighting's crossing on a strip `width` wide; `lake`: the placed lake's left and width (null: none); `occupied`: what hides a still walker. Null for a species this version can't draw, a swimmer with no lake, or a still walker with no room */
+export function crossing(id: string, dir: 'left' | 'right', width: number, lake: { x: number; w: number } | null, r: number, still: boolean, occupied: readonly Span[] = []): Crossing | null {
   const def = species(id)
-  if (!def) return null
+  if (!def || !hasArt(id)) return null
   const grid = animalSize(id)
   const w = grid.w * ANIMAL_SCALE
   const h = grid.h * ANIMAL_SCALE
   const base = { species: id, move: def.move, dir, w, h, still }
   if (def.move === 'swimmer') {
     if (!lake) return null
-    // Clear of the dock (the lake's inner quarter at tier 2) and the reeds (its outer end)
-    const x = Math.round(lake.x + lake.w * (0.35 + 0.35 * r))
+    // Clear of the dock (the lake's inner end at tier 2) and the reeds (its outer end)
+    const x = Math.round(Math.min(lake.x + REEDS_START - w / 2, Math.max(lake.x + DOCK_END + w / 2, lake.x + lake.w * (0.35 + 0.35 * r))))
     return { ...base, ms: still ? STILL_MS : SWIM_MS, fromX: x, toX: x, y: SWIM_Y, pauseAt: null }
   }
   const y = def.move === 'walker' ? WALK_Y : FLY_TOP + h
   if (still) {
-    const x = Math.round(width * (0.3 + 0.4 * r))
+    const x = def.move === 'walker' ? stillSpot(width, w, occupied, r) : Math.round(width * (0.3 + 0.4 * r))
+    if (x === null) return null
     return { ...base, ms: STILL_MS, fromX: x, toX: x, y, pauseAt: null }
   }
   const off = w / 2 + 4

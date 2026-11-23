@@ -15,7 +15,7 @@ import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
-import { crossing, type Crossing } from '../shared/crossing.ts'
+import { admit, crossing, occupiedSpans, type Crossing, type SightingView, type Span } from '../shared/crossing.ts'
 import { summitLine, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
@@ -107,20 +107,20 @@ function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktree
 }
 
 /** What a sighting needs to know of the strip when it arrives */
-interface StripView {
-  shown: boolean
-  width: number
+interface StripView extends SightingView {
   lake: { x: number; w: number } | null
   reduced: boolean
-  hidden: boolean
+  /** What hides a still walker (the tents, the log, the fire, the buildings) */
+  occupied: readonly Span[]
 }
 
 /**
- * The sighting's animal crossing the strip now (part 3d-2): a `sighting` event for this project
- * starts one (its crossing worked out for the strip as it is then) unless one is crossing, the strip
- * is collapsed or not shown, the window is hidden, the species is one this version doesn't know or a
- * swimmer has no lake: it is logged on the server either way. It goes once its crossing is over, or
- * at once when the strip collapses.
+ * The sighting's animal crossing the strip now (part 3d-2): a `sighting` event this window admits
+ * (shared/crossing.ts: this project's, a species it can draw, no animal up, the strip expanded and
+ * visible) starts one, its crossing worked out for the strip as it is then; it is logged on the
+ * server either way. It goes once its crossing is over, or at once when the strip collapses or is
+ * turned off, its width or the lake's place changes (the crossing would no longer fit it), or
+ * reduced motion is turned on or off.
  */
 function useAnimal(host: ReturnType<typeof usePluginHost>, view: StripView): { seq: number; crossing: Crossing } | null {
   const [animal, setAnimal] = useState<{ seq: number; crossing: Crossing } | null>(null)
@@ -131,9 +131,9 @@ function useAnimal(host: ReturnType<typeof usePluginHost>, view: StripView): { s
     () =>
       host.onEvent<{ projectId?: unknown; species?: unknown; dir?: unknown }>('sighting', (e) => {
         const { animal: now, view: v } = current.current
-        if (e.projectId !== host.projectId || typeof e.species !== 'string' || (e.dir !== 'left' && e.dir !== 'right')) return
-        if (now !== null || !v.shown || v.hidden || v.width <= 0) return
-        const c = crossing(e.species, e.dir, v.width, v.lake, Math.random(), v.reduced)
+        const ok = admit(e, v, now !== null)
+        if (!ok) return
+        const c = crossing(ok.species, ok.dir, v.width, v.lake, Math.random(), v.reduced, v.occupied)
         if (c) setAnimal({ seq: ++seq.current, crossing: c })
       }),
     [host]
@@ -143,9 +143,10 @@ function useAnimal(host: ReturnType<typeof usePluginHost>, view: StripView): { s
     const gone = setTimeout(() => setAnimal(null), animal.crossing.ms)
     return () => clearTimeout(gone)
   }, [animal])
+  const lakeKey = view.lake ? `${view.lake.x}:${view.lake.w}` : ''
   useEffect(() => {
-    if (!view.shown) setAnimal(null)
-  }, [view.shown])
+    setAnimal(null)
+  }, [view.shown, view.collapsed, view.width, lakeKey, view.reduced])
   return animal
 }
 
@@ -207,11 +208,14 @@ export function Campsite(): React.JSX.Element | null {
   const countsButton = useRef<HTMLButtonElement | null>(null)
   const lakeSpot = edges.right.find((p) => p.id === 'lake')
   const animal = useAnimal(host, {
-    shown: loaded && prefs.showCampsite && !prefs.campsiteCollapsed,
+    projectId: host.projectId,
+    shown: loaded && prefs.showCampsite,
+    collapsed: prefs.campsiteCollapsed,
+    hidden,
     width,
     lake: lakeSpot ? { x: lakeSpot.x, w: lakeSpot.w } : null,
     reduced,
-    hidden
+    occupied: occupiedSpans(layout, [...edges.left, ...edges.right])
   })
   // The expanded header's end group, and the least room it needs without the weather glyph (measured after each render)
   const headerEnd = useRef<HTMLDivElement | null>(null)

@@ -102,8 +102,9 @@ export class CampStage {
       this.camps,
       this.fire.root,
       this.dog.root,
-      this.hikers.front,
+      // Fliers pass under the waiting signs
       this.wildlife.sky,
+      this.hikers.front,
       this.world.fog,
       this.particles.root
     )
