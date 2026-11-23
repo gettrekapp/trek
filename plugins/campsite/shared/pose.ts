@@ -29,6 +29,12 @@ export interface HikerTool {
 
 /** How long a tool call holds its chore; after it the hiker thinks until the next one */
 export const TOOL_FRESH_MS = 8000
+/**
+ * How long a hiker thinks after its last tool call; after it the call is forgotten and the hiker
+ * goes back to the random chores (a `/clear` starts a transcript the reader doesn't follow, and an
+ * agent may stop reporting without a word: it shouldn't think forever)
+ */
+export const TOOL_STALE_MS = 120_000
 
 /** The chore each kind of tool call shows */
 export const TOOL_CHORES: Readonly<Record<AgentToolKind, Chore>> = {
@@ -43,12 +49,20 @@ export const TOOL_CHORES: Readonly<Record<AgentToolKind, Chore>> = {
 /** A kind's chore; a kind this version doesn't know is other's */
 const kindChore = (kind: string): Chore => (Object.hasOwn(TOOL_CHORES, kind) ? TOOL_CHORES[kind as AgentToolKind] : TOOL_CHORES.other)
 
+/** The tool call a hiker still shows at `now`: null once it is TOOL_STALE_MS old (or there is none) */
+export function liveTool(tool: HikerTool | null | undefined, now: number): HikerTool | null {
+  return tool && now - tool.at < TOOL_STALE_MS ? tool : null
+}
+
 /**
  * A working hiker's chore at `now` (ms): with a tool call younger than TOOL_FRESH_MS, its kind's
- * chore; with an older one, thinking; with none, a seeded pick that holds for a seeded 20–40 s.
+ * chore; with one up to TOOL_STALE_MS old, thinking; with none (or an older one), a seeded pick that
+ * holds for a seeded 20–40 s. Its words (choreText, hikerDoing, hikerTooltip) take `liveTool`'s call,
+ * so a stale call's kind never names a random chore.
  */
 export function choreFor(terminalId: string, now: number, tool?: HikerTool | null): Chore {
-  if (tool) return now - tool.at < TOOL_FRESH_MS ? kindChore(tool.kind) : 'think'
+  const live = liveTool(tool, now)
+  if (live) return now - live.at < TOOL_FRESH_MS ? kindChore(live.kind) : 'think'
   const seed = fnv1a(terminalId)
   const period = 20_000 + (seed % 20_001)
   const index = Math.floor((now + (seed % period)) / period)

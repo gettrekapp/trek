@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, kitKey, kitOf, lookFor, withKit } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
-import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, TOOL_CHORES, TOOL_FRESH_MS, choreFor, choreText, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle, toolWords } from '../plugins/campsite/shared/pose.ts'
+import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, TOOL_CHORES, TOOL_FRESH_MS, TOOL_STALE_MS, choreFor, choreText, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, liveTool, stanceFor, statusText, statusTitle, toolWords } from '../plugins/campsite/shared/pose.ts'
 
 test('fnv1a: the 32-bit FNV-1a of the text', () => {
   assert.equal(fnv1a(''), 0x811c9dc5)
@@ -333,7 +333,7 @@ test("choreFor (campsite part 4): a tool call younger than 8 s shows its kind's 
   assert.equal(choreFor('t', at, { kind: 'edit', label: '', at }), 'chop', 'just heard')
   assert.equal(choreFor('t', at + 7999, { kind: 'edit', label: '', at }), 'chop', 'the last ms')
   assert.equal(choreFor('t', at + 8000, { kind: 'edit', label: '', at }), 'think', 'from 8 s on')
-  assert.equal(choreFor('t', at + 600_000, { kind: 'web', label: '', at }), 'think')
+  assert.equal(choreFor('t', at + 60_000, { kind: 'web', label: '', at }), 'think')
   assert.equal(choreFor('t', at + 1000, { kind: 'dance', label: '', at }), 'map', "a kind this version doesn't know is other's")
   assert.equal(choreFor('t', at + 1000, { kind: 'constructor', label: '', at }), 'map')
   // No tool (or null): the seeded random chores, as before
@@ -342,6 +342,15 @@ test("choreFor (campsite part 4): a tool call younger than 8 s shows its kind's 
     assert.equal(choreFor('t-7', t, undefined), choreFor('t-7', t))
     assert.ok(CHORES.includes(choreFor('t-7', t)))
   }
+  // Two minutes on, the call is forgotten (a `/clear`'s new transcript isn't followed): the random chores again
+  assert.equal(TOOL_STALE_MS, 120_000)
+  assert.equal(choreFor('t-7', at + 119_999, { kind: 'web', label: '', at }), 'think', 'the last ms of thinking')
+  for (const t of [at + 120_000, at + 600_000]) assert.equal(choreFor('t-7', t, { kind: 'web', label: '', at }), choreFor('t-7', t), 'from 2 minutes on')
+  const tool = { kind: 'edit', label: 'a.ts', at }
+  assert.equal(liveTool(tool, at + 119_999), tool)
+  assert.equal(liveTool(tool, at + 120_000), null)
+  assert.equal(liveTool(null, at), null)
+  assert.equal(liveTool(undefined, at), null)
   // A working hiker stands in the chore's pose: the new ones too
   assert.equal(stanceFor(session(), 'binoculars').pose, 'binoculars')
   assert.equal(stanceFor(session(), 'radio').pose, 'radio')

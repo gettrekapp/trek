@@ -16,6 +16,8 @@ sessions' tool calls (campsite part 4: the agent's `activity`): `server/activity
 running session's transcript (`~/.claude/projects/<cwd>/<id>.jsonl`, from its end, or from its top
 when it appears later), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
 as a kind (read, edit, run, delegate, web, mcp, other) and a short label. Local reports none.
+A `/clear` starts a new transcript that isn't followed: its hiker thinks for two minutes after the
+last call it saw, then goes back to the random chores.
 
 Tests and smokes never run the real CLI: `scripts/fixtures/fake-claude.mjs` and the fake agents of
 `scripts/fakeAgent.mjs` stand in, through the server config's `command`.
