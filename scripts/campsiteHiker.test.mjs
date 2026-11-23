@@ -294,4 +294,10 @@ test('pixels with gear: the tool is strapped to the pack, rising above it', () =
   assert.equal(pixelAt(tool(3), 2, 2), '#e0b84a', 'gold')
   assert.equal(pixelAt(tool(3, 'sit'), 2, 4), '#e0b84a', 'it sits down with the hiker')
   for (const n of [1, 2, 3]) assert.ok(tool(n).filter((r) => r.y < 5 + 0 && r.x < 3).length > 0, `tier ${n} shows above the pack`)
+  // The axe's hook (2, 3) sits where the bucket and ranger brims reach: the tool is drawn over the hat
+  for (const hat of [1, 2, 3]) {
+    const px = pixels(withKit(look, { ...tiers(0), hat, tool: 2 }), 'stand')
+    assert.equal(pixelAt(px, 2, 3), '#c9ccd1', `the hook shows under a tier ${hat} hat`)
+    assert.equal(pixelAt(px, 2, 2), '#c9ccd1')
+  }
 })

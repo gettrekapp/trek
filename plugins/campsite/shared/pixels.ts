@@ -97,7 +97,7 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   const d = DROP[pose] ?? 0
   const held: Gear | 'none' = gear ?? (pose === 'stand' || pose === 'walk' ? look.gear : 'none')
 
-  // Pack (behind) with its bedroll (a geared one a column wider), the tool strapped to it, head, face
+  // Pack (behind) with its bedroll (a geared one a column wider), head, face
   if (kit && kit.pack > 0) {
     r(0, 6 + d, 3, 6, pack)
     r(0, 5 + d, 3, 1, ROLL)
@@ -105,15 +105,6 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   } else {
     r(1, 6 + d, 2, 6, pack)
     r(1, 5 + d, 2, 1, ROLL)
-  }
-  if (kit && kit.tool === 1) {
-    r(0, 2 + d, 1, 10, POLE)
-    r(0, 4 + d, 1, 1, BAND)
-  } else if (kit && kit.tool > 1) {
-    const head = kit.tool === 3 ? GOLD : STEEL
-    r(0, 3 + d, 1, 9, WOOD)
-    r(0, 2 + d, 3, 1, head)
-    r(2, 3 + d, 1, 1, head)
   }
   r(3, 3 + d, 6, 4, look.skin)
   if (pose === 'wave') {
@@ -164,6 +155,17 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
     r(3, 2 + d, 6, 1, look.hair)
     r(3, 3 + d, 1, 2, look.hair)
     r(8, 3 + d, 1, 2, look.hair)
+  }
+
+  // The tool strapped to the pack, rising past the head: after the hat, so a brim doesn't hide the axe's hook
+  if (kit && kit.tool === 1) {
+    r(0, 2 + d, 1, 10, POLE)
+    r(0, 4 + d, 1, 1, BAND)
+  } else if (kit && kit.tool > 1) {
+    const head = kit.tool === 3 ? GOLD : STEEL
+    r(0, 3 + d, 1, 9, WOOD)
+    r(0, 2 + d, 3, 1, head)
+    r(2, 3 + d, 1, 1, head)
   }
 
   // Jacket, its hem, and a pack strap
