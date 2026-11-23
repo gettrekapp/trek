@@ -12,6 +12,7 @@ import { tentColors } from './layout.ts'
 import type { Rect } from './pixels.ts'
 import { FEET_Y, STAGE_H, type Box, type Shape } from './stage.ts'
 import { SUMMIT } from './trails.ts'
+import { capsAbove, type Palette } from './world.ts'
 
 /** The peak's half-width at its foot (strip px), at full size */
 export const PEAK_HALF = 200
@@ -27,8 +28,10 @@ const FLAG_GAP = 1
 /** The most flags a ledge holds before "+n" */
 export const LEDGE_MAX = 6
 export const MOUNTAIN_FILL = '#2f2740'
-const LEDGE_FILL = '#463c5c'
-const PATH_FILL = '#3d3450'
+export const LEDGE_FILL = '#463c5c'
+export const PATH_FILL = '#3d3450'
+/** Winter's snow on the peak reaches down to this y */
+export const PEAK_SNOW_Y = PEAK_TOP + 8
 const POLE = '#b8b0c8'
 
 export interface Ledge {
@@ -93,6 +96,18 @@ export function mountain(fireX: number, room: number): Mountain {
     path.push({ x: x0, y: l.y, w: l.x + l.w + 1 - x0, h: 1, fill: LEDGE_FILL })
   }
   return { peak, path, ledges, cairn }
+}
+
+/**
+ * The peak and its path in the world's colours (part 3d-1), and winter's snow on its top (drawn
+ * over the peak, under the flags). The dusk palette with no season gives them back as they were
+ */
+export function mountainLook(m: Pick<Mountain, 'peak' | 'path'>, c: Pick<Palette, 'peak' | 'ledge' | 'path' | 'snow'>): { shapes: Shape[]; path: Box[] } {
+  const snow = c.snow
+  return {
+    shapes: [{ points: m.peak.points, fill: c.peak }, ...(snow === null ? [] : capsAbove(m.peak.points, PEAK_SNOW_Y).map((points) => ({ points, fill: snow })))],
+    path: m.path.map((b) => ({ ...b, fill: b.fill === LEDGE_FILL ? c.ledge : c.path }))
+  }
 }
 
 /** A ledge's "+n" button is at most this wide ("+99" at 9 px and its padding) */

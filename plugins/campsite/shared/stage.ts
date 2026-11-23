@@ -5,6 +5,7 @@ import { dogStart, dogTrip, type DogPose } from './dog.ts'
 import { FRAMES, type Pose, type Rect } from './pixels.ts'
 import { HIKER_W, LOG_W, TENT_W, tentColors, type CampHikerSpot } from './layout.ts'
 import { SIGN_GLYPHS, type Sign } from './pose.ts'
+import { PALETTES, capsAbove, type Palette } from './world.ts'
 
 /** The strip's height (px) */
 export const STAGE_H = 112
@@ -256,8 +257,8 @@ export const dogHalt = (s: DogState, t: number, right: number, left = 0): DogSta
 /** Where hikers and the dog stand: 10 px above the strip's bottom; a hiker inside a tent, 14 */
 export const FEET_Y = STAGE_H - 10
 export const INSIDE_FEET_Y = STAGE_H - 14
-/** The night sky, under everything */
-export const SKY = '#1a1622'
+/** The dusk sky, under everything (the world's palette changes it, part 3d-1) */
+export const SKY = PALETTES.dusk.sky
 
 export interface Box {
   x: number
@@ -280,6 +281,8 @@ export interface Circle {
 
 /** [left %, top px] */
 const STARS: readonly (readonly [number, number])[] = [[7, 14], [16, 8], [23, 30], [34, 18], [41, 10], [55, 16], [63, 22], [74, 8], [82, 26], [96, 20]]
+/** The night's extra stars, between the others */
+const MORE_STARS: readonly (readonly [number, number])[] = [[3, 24], [11, 30], [19, 12], [28, 6], [38, 26], [47, 10], [51, 28], [59, 8], [68, 14], [78, 30], [88, 12], [92, 32]]
 /** A treeline along the back, clear of the fire in the middle (nothing between 40% and 56%) */
 const PINES = [1, 3.5, 6.5, 10, 14, 19, 27, 36, 59, 66, 74, 81, 86, 90, 93.5, 97].map((left, i) => {
   const height = 28 + ((i * 17) % 24)
@@ -290,18 +293,30 @@ const RIDGE: readonly (readonly [number, number])[] = [[0, 100], [0, 60], [8, 30
 /** [x %, y %] of a pine's box */
 const PINE: readonly (readonly [number, number])[] = [[50, 0], [80, 40], [65, 40], [95, 78], [58, 78], [58, 100], [42, 100], [42, 78], [5, 78], [35, 40], [20, 40]]
 /** The ground line: the ridge's and the pines' feet */
-const GROUND_Y = STAGE_H - 14
+export const GROUND_Y = STAGE_H - 14
 const RIDGE_H = 46
+/** Winter's snow covers the ridge's tops above this y (its four highest) */
+export const RIDGE_SNOW_Y = 65
 
 /** A shape in a box, from percentages */
 const inBox = (pts: readonly (readonly [number, number])[], left: number, top: number, w: number, h: number): number[] => pts.flatMap(([px, py]) => [left + (px * w) / 100, top + (py * h) / 100])
 
 export interface Backdrop {
+  /** Behind everything (the canvas's clear colour too) */
+  sky: string
   stars: Box[]
+  /** The stars' alpha (0: none drawn) */
+  starAlpha: number
+  /** The night's extra stars, and their alpha */
+  moreStars: Box[]
+  moreStarAlpha: number
   moon: Circle
-  /** The sky-colored bite that makes the moon a crescent */
+  /** The sky-colored bite that makes the moon a crescent, and its alpha (0: a full disc, the day's sun) */
   bite: Circle
+  biteAlpha: number
   ridge: Shape
+  /** Winter: snow on the ridge's highest tops (none otherwise) */
+  snow: Shape[]
   pines: Shape[]
   /** The ground, its top edge and the trail, in drawing order */
   ground: Box[]
@@ -310,18 +325,31 @@ export interface Backdrop {
 /** The header's counts (and their margin) at the strip's right end: the moon stays left of them */
 const MOON_CLEAR = 180
 
-export function backdrop(width: number): Backdrop {
+/** The backdrop in a palette (part 3d-1; by default dusk: the strip as it always was). Autumn's rust takes every third pine */
+export function backdrop(width: number, p: Palette = PALETTES.dusk): Backdrop {
   const moonLeft = Math.min(Math.round(width - 0.09 * width) - 12, width - MOON_CLEAR)
+  const ridge: Shape = { points: inBox(RIDGE, 0, GROUND_Y - RIDGE_H, width, RIDGE_H), fill: p.ridge }
+  const snow = p.snow
+  const star = ([left, top]: readonly [number, number]): Box => ({ x: Math.round((left * width) / 100), y: top, w: 2, h: 2, fill: p.stars })
   return {
-    stars: STARS.map(([left, top]) => ({ x: Math.round((left * width) / 100), y: top, w: 2, h: 2, fill: '#5a5068' })),
-    moon: { x: moonLeft + 6, y: 18, r: 6, fill: '#f0c9a0' },
-    bite: { x: moonLeft + 10, y: 15, r: 5, fill: SKY },
-    ridge: { points: inBox(RIDGE, 0, GROUND_Y - RIDGE_H, width, RIDGE_H), fill: '#272031' },
-    pines: PINES.map((p) => ({ points: inBox(PINE, (p.left * width) / 100, GROUND_Y - p.height, p.width, p.height), fill: p.light ? '#1e1a27' : '#17141d' })),
+    sky: p.sky,
+    stars: STARS.map(star),
+    starAlpha: p.starAlpha,
+    moreStars: MORE_STARS.map(star),
+    moreStarAlpha: p.moreStars,
+    moon: { x: moonLeft + 6, y: 18, r: 6, fill: p.moon },
+    bite: { x: moonLeft + 10, y: 15, r: 5, fill: p.sky },
+    biteAlpha: p.bite,
+    ridge,
+    snow: snow === null ? [] : capsAbove(ridge.points, RIDGE_SNOW_Y).map((points) => ({ points, fill: snow })),
+    pines: PINES.map((pine, i) => ({
+      points: inBox(PINE, (pine.left * width) / 100, GROUND_Y - pine.height, pine.width, pine.height),
+      fill: p.pineRust !== null && i % 3 === 0 ? p.pineRust : pine.light ? p.pineLight : p.pineDark
+    })),
     ground: [
-      { x: 0, y: GROUND_Y, w: width, h: 14, fill: '#16141b' },
-      { x: 0, y: GROUND_Y, w: width, h: 2, fill: '#2c2536' },
-      { x: 0, y: STAGE_H - 6, w: width, h: 3, fill: '#221e2a' }
+      { x: 0, y: GROUND_Y, w: width, h: 14, fill: p.ground },
+      { x: 0, y: GROUND_Y, w: width, h: 2, fill: p.groundEdge },
+      { x: 0, y: STAGE_H - 6, w: width, h: 3, fill: p.trail }
     ]
   }
 }
