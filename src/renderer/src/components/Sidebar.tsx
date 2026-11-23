@@ -21,6 +21,7 @@ import { pluginWorktreeOf } from '../plugins/projectView'
 import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
+import { openTaskCount } from '../tasks'
 import { missedRows } from '../automations'
 import {
   ATTENTION_GROUP_LABELS,
@@ -111,11 +112,17 @@ function PrNoticeFlag({ title }: { title: string }): React.JSX.Element {
 }
 
 /** The footer rows' icons: one line weight and one column, in the row's own colour. */
-function NavIcon({ name }: { name: 'add' | 'notes' | 'automations' | 'settings' }): React.JSX.Element {
+function NavIcon({ name }: { name: 'add' | 'notes' | 'tasks' | 'automations' | 'settings' }): React.JSX.Element {
   return (
     <svg className="sidebar-nav-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === 'add' && <path d="M8 3v10M3 8h10" />}
       {name === 'notes' && <path d="M4 2.5h8v11H4zM6.2 5.8h3.6M6.2 8h3.6M6.2 10.2h2" />}
+      {name === 'tasks' && (
+        <>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+          <path d="M5.2 8.2l2 2 3.8-4.2" />
+        </>
+      )}
       {name === 'automations' && (
         <>
           <circle cx="8" cy="8" r="5.5" />
@@ -152,6 +159,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const projectPage = useAppStore((s) => s.projectPage)
   const toggleProjectPage = useAppStore((s) => s.toggleProjectPage)
   const automationCount = project.automations?.length ?? 0
+  // The Tasks page: the server has it, and the project has not switched it off.
+  const tasksOn = features.tasks && project.tasksEnabled !== false
+  const openTasks = openTaskCount(project.tasks)
   const noteCount = project.repositories.reduce((n, r) => n + Object.keys(r.branchNotes ?? {}).length, 0)
   const missedCount = missedRows(project.automations).length
   // The window's connection is down: its commands are disabled until it is back.
@@ -809,6 +819,17 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           <span className="sidebar-nav-label">All Notes</span>
           {noteCount > 0 && <span className="sidebar-nav-count">{noteCount}</span>}
         </button>
+        {tasksOn && (
+          <button
+            className={`sidebar-nav-row ${projectPage === 'tasks' ? 'active' : ''}`}
+            title="Tasks: this project's to-do list"
+            onClick={() => toggleProjectPage('tasks')}
+          >
+            <NavIcon name="tasks" />
+            <span className="sidebar-nav-label">Tasks</span>
+            {openTasks > 0 && <span className="sidebar-nav-count">{openTasks}</span>}
+          </button>
+        )}
         {features.automations && (
           <button
             className={`sidebar-nav-row ${projectPage === 'automations' ? 'active' : ''}`}

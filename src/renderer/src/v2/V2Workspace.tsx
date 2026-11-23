@@ -12,6 +12,7 @@ import { MissedRunsModal } from '../components/MissedRunsModal'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { AllNotesPanel } from '../components/AllNotesPanel'
 import { AutomationsPanel } from '../components/AutomationsPanel'
+import { TasksPanel } from '../components/TasksPanel'
 import { PluginSlot } from '../plugins/PluginHost'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 import { defaultTeardown, teardownBlocking } from '../../../shared/teardown'
@@ -35,6 +36,12 @@ export function V2Workspace(): React.JSX.Element {
   const offline = useAppStore((s) => s.serverOffline)
   const sidebarHidden = useAppStore((s) => s.sidebarHidden)
   const projectPage = useAppStore((s) => s.projectPage)
+  const tasksEnabled = useAppStore((s) => s.project?.tasksEnabled !== false)
+  const tasksOn = features.tasks && tasksEnabled
+  // Tasks switched off (here or in another window) while its page shows: back to the worktree.
+  useEffect(() => {
+    if (!tasksOn && projectPage === 'tasks') useAppStore.getState().closeProjectPage()
+  }, [tasksOn, projectPage])
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
   // promote_to_primary (5e): an agent's request shows this window's promote confirmation. Started
@@ -93,6 +100,7 @@ export function V2Workspace(): React.JSX.Element {
           <WorktreeDetail info={info} onWorktreesChanged={() => {}} />
           <AllNotesPanel visible={projectPage === 'notes'} worktrees={worktrees} />
           {features.settingsEdit && <SettingsPanel visible={projectPage === 'settings'} />}
+          {tasksOn && <TasksPanel visible={projectPage === 'tasks'} />}
           {features.automations && <AutomationsPanel visible={projectPage === 'automations'} />}
         </div>
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
