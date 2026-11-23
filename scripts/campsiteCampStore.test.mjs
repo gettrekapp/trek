@@ -55,11 +55,12 @@ test('recruit sends the candidate and the price; seen swallows an error; awaySee
   await store.recruit('Juniper', 200)
   assert.deepEqual(calls.at(-1), ['recruit', { candidate: 'Juniper', cost: { wood: 200 } }])
   assert.equal(store.snapshot().wood, 100)
-  store.seen()
+  store.seen({ tz: 'Europe/Oslo', seasons: 'south' })
   await flush()
   await store.awaySeen()
   await flush()
   assert.deepEqual(calls.slice(-3).map((c) => c[0]), ['seen', 'awaySeen', 'state'])
+  assert.deepEqual(calls.at(-3)[1], { tz: 'Europe/Oslo', seasons: 'south' }, "seen carries the window's time zone and Seasons setting")
   off()
 })
 

@@ -1,9 +1,10 @@
-// The camp's popover (campsite parts 3a, 3b and 3c), opened from the header's counts, a building on
-// the strip, or (at the Trails tab) a flag, the cairn or the signpost. Camp: each building's next
+// The camp's popover (campsite parts 3a, 3b, 3c and 3d-2), opened from the header's counts, a building on
+// the strip, (at the Trails tab) a flag, the cairn or the signpost, or (at the Guide tab) an animal. Camp: each building's next
 // tier with its effect and price, and Build when the camp can pay. Crew: the members (level, XP,
 // where they are, their gear's bonus), each a button that opens its view (MemberView: pin, gear,
 // journal; Back, or Escape, returns the focus to its row; another tab closes it), and today's
-// walk-ins to hire. Trails: the trails and their history (TrailsTab). DOM, fixed to the window above what opened it;
+// walk-ins to hire. Trails: the trails and their history (TrailsTab). Guide: the field guide's 24
+// species (GuideTab). DOM, fixed to the window above what opened it;
 // Escape (focus back to the opener) or a press outside closes it. A refusal shows on its row for 4 s
 // (the store has already reloaded); one for a walk-in who is gone shows under the walk-ins' heading.
 // One purchase at a time; a building's row takes the focus once it is built or refused.
@@ -11,27 +12,30 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { iconArt } from '../shared/buildingPixels.ts'
 import type { CampSnapshot, CrewEntry } from '../shared/camp.ts'
-import { crewLine, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
+import { crewLine, guideTab, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
 import { CATALOG, type BuildingId } from '../shared/catalog.ts'
 import { memberLook } from '../shared/crew.ts'
 import { kitKey, kitOf, withKit } from '../shared/hiker.ts'
 import type { Candidate } from '../shared/shop.ts'
 import type { CampStore } from './campStore.ts'
+import { GuideTab } from './GuideTab.tsx'
 import { Hiker } from './Hiker.tsx'
 import { MemberView } from './MemberView.tsx'
 import { TrailsTab } from './TrailsTab.tsx'
 
-export type CampTab = 'camp' | 'crew' | 'trails'
-const TABS: readonly CampTab[] = ['camp', 'crew', 'trails']
+export type CampTab = 'camp' | 'crew' | 'trails' | 'guide'
+const TABS: readonly CampTab[] = ['camp', 'crew', 'trails', 'guide']
 
-/** Where the popover opens (its opener's left and top, window px), the building row to show (null: the top), and the tab (default Camp) and trail (a worktree's id, in the Trails tab) */
+/** Where the popover opens (its opener's left and top, window px), the building row to show (null: the top), and the tab (default Camp) and trail (a worktree's id, in the Trails tab) or species (in the Guide tab) */
 export interface OpenCamp {
   left: number
   top: number
   focus: BuildingId | null
   tab?: CampTab
   trail?: string
-  /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn"): another one moves the popover rather than closing it */
+  /** A species to show in the Guide tab (an animal on the strip was clicked) */
+  species?: string
+  /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn", "animal"): another one moves the popover rather than closing it */
   opener?: string
 }
 
@@ -45,10 +49,13 @@ interface Props {
   /** The window's project (its trails come first) */
   projectId: string
   store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin' | 'journal' | 'trailLog'>
+  /** When the Guide tab was last opened (the prefs' guideSeenAt), and that it is opened now */
+  guideSeenAt: number
+  onGuideSeen: () => void
   onClose: (refocus: boolean) => void
 }
 
-export function CampPopover({ camp, at, sessions, projectId, store, onClose }: Props): React.JSX.Element {
+export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt, onGuideSeen, onClose }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [tab, setTab] = useState<CampTab>(at.tab ?? 'camp')
   const [left, setLeft] = useState(at.left)
@@ -92,10 +99,10 @@ export function CampPopover({ camp, at, sessions, projectId, store, onClose }: P
     const el = ref.current
     if (el) setLeft(Math.max(EDGE, Math.min(at.left, window.innerWidth - el.offsetWidth - EDGE)))
   })
-  // Opened from a building: its row; at a trail: the Trails tab focuses its row; else the open tab. (Campsite keys the popover by where it opens.)
+  // Opened from a building: its row; at a trail or a species: its tab focuses its row or card; else the open tab. (Campsite keys the popover by where it opens.)
   useEffect(() => {
     const el = ref.current
-    if (!el || at.trail !== undefined) return
+    if (!el || at.trail !== undefined || at.species !== undefined) return
     const row = at.focus ? el.querySelector<HTMLElement>(`[data-building="${at.focus}"]`) : null
     if (row) {
       row.scrollIntoView({ block: 'nearest' })
@@ -104,7 +111,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, onClose }: P
   }, [])
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
-      if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-popover, .cs-camp-button, .cs-building, .cs-flag, .cs-flag-more, .cs-cairn')) onClose(false)
+      if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-popover, .cs-camp-button, .cs-building, .cs-flag, .cs-flag-more, .cs-cairn, .cs-animal')) onClose(false)
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -192,7 +199,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, onClose }: P
             className={tab === t ? 'on' : ''}
             onClick={() => switchTab(t)}
           >
-            {t === 'camp' ? 'Camp' : t === 'crew' ? `Crew ${camp.crew.length}/${camp.bunks}` : 'Trails'}
+            {t === 'camp' ? 'Camp' : t === 'crew' ? `Crew ${camp.crew.length}/${camp.bunks}` : t === 'trails' ? 'Trails' : guideTab(camp)}
           </button>
         ))}
       </div>
@@ -241,6 +248,10 @@ export function CampPopover({ camp, at, sessions, projectId, store, onClose }: P
       ) : tab === 'trails' ? (
         <div role="tabpanel" id={panelId('trails')} aria-labelledby={tabId('trails')}>
           <TrailsTab camp={camp} projectId={projectId} store={store} focus={at.trail ?? null} />
+        </div>
+      ) : tab === 'guide' ? (
+        <div role="tabpanel" id={panelId('guide')} aria-labelledby={tabId('guide')}>
+          <GuideTab camp={camp} focus={at.species ?? null} since={guideSeenAt} onSeen={onGuideSeen} />
         </div>
       ) : (
         <div className="cs-crew" role="tabpanel" id={panelId('crew')} aria-labelledby={tabId('crew')}>

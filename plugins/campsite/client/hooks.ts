@@ -7,6 +7,7 @@ import type { CampSnapshot } from '../shared/camp.ts'
 import { sessionKit } from '../shared/crew.ts'
 import { kitOf, lookFor, withKit, type Look } from '../shared/hiker.ts'
 import type { CampsitePrefKey, CampsitePrefs } from '../shared/prefs.ts'
+import type { Hemisphere } from '../shared/world.ts'
 import { campStore } from './campStore.ts'
 import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
 
@@ -78,17 +79,27 @@ export function useHikerLook(host: ClientPluginHost, terminalId: string, provide
 /** How often a visible window tells the server the camp was seen */
 const SEEN_EVERY_MS = 5 * 60_000
 
+/** This computer's time zone ('' when the runtime can't say) */
+export function localTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? ''
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Tells the server this window saw the camp: on load, when the document becomes visible, and every
- * 5 minutes while it is (campsite part 3a: the away card). Only while `active` (the strip is shown):
- * a hidden strip is time away from the camp.
+ * 5 minutes while it is (campsite part 3a: the away card), with this computer's time zone and the
+ * Seasons setting (part 3d-2: they gate the wildlife; a new setting pings at once). Only while
+ * `active` (the strip is shown): a hidden strip is time away from the camp.
  */
-export function useSeen(host: ClientPluginHost, active: boolean): void {
+export function useSeen(host: ClientPluginHost, active: boolean, seasons: Hemisphere): void {
   useEffect(() => {
     if (!active) return
     const store = campStore(host)
     const ping = (): void => {
-      if (!document.hidden) store.seen()
+      if (!document.hidden) store.seen({ tz: localTimeZone(), seasons })
     }
     ping()
     const timer = setInterval(ping, SEEN_EVERY_MS)
@@ -97,7 +108,7 @@ export function useSeen(host: ClientPluginHost, active: boolean): void {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', ping)
     }
-  }, [host, active])
+  }, [host, active, seasons])
 }
 
 function subscribeVisibility(listener: () => void): () => void {

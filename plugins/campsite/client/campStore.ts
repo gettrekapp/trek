@@ -4,11 +4,13 @@
 // first answer (or if the server half is missing). Buying (build, recruit, gear) and pinning answer
 // the new snapshot; a refusal reloads the state and rethrows, its message saying why. A member's
 // journal and a project's trail history are asked for on their own (the snapshot carries neither).
-// `seen` and `awaySeen` keep the away card. No React.
+// `seen` and `awaySeen` keep the away card; `seen` also tells the server the window's time zone and
+// Seasons setting (part 3d-2: they gate the wildlife). No React.
 import type { ClientPluginHost } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot, PinRef } from '../shared/camp.ts'
 import type { GearSlot } from '../shared/catalog.ts'
 import type { JournalEntry } from '../shared/journal.ts'
+import type { Hemisphere } from '../shared/world.ts'
 import type { Offer } from '../shared/shop.ts'
 import type { TrailRecord } from '../shared/trails.ts'
 
@@ -28,8 +30,8 @@ export interface CampStore {
   journal(crewId: string): Promise<JournalEntry[]>
   /** A project's ended trails, oldest first (a refusal rethrows; nothing is reloaded) */
   trailLog(projectId: string): Promise<TrailRecord[]>
-  /** A visible window saw the camp (an older server without it is ignored) */
-  seen(): void
+  /** A visible window saw the camp, with its time zone and Seasons setting (an older server without it is ignored) */
+  seen(clock: { tz: string; seasons: Hemisphere }): void
   /** The away card was dismissed */
   awaySeen(): Promise<void>
 }
@@ -107,8 +109,8 @@ function createStore(host: CampHost): CampStore {
       if (!r || !Array.isArray(r.log)) throw new Error('The trail log came back in a shape this version cannot read')
       return r.log as TrailRecord[]
     },
-    seen: () => {
-      host.request('seen').catch(() => {
+    seen: (clock) => {
+      host.request('seen', { ...(host.projectId === undefined ? {} : { projectId: host.projectId }), tz: clock.tz, seasons: clock.seasons }).catch(() => {
         // An older server: no away card
       })
     },

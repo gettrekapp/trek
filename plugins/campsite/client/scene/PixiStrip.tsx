@@ -1,6 +1,6 @@
 // The expanded strip's stage: a Pixi canvas (CampStage, loaded on first use so the app and the
 // collapsed strip never pay for Pixi) under a DOM overlay of buttons over the buildings, the
-// mountain's flags (and a ledge's "+n"), the cairn, the hikers and the dog, which carry their names,
+// mountain's flags (and a ledge's "+n"), the cairn, the hikers, the dog and a sighting's animal (part 3d-2), which carry their names,
 // tooltips, focus and clicks; the signpost's planks say how many trails there are. If Pixi can't
 // start (no WebGL), a note and a plain row of tab-size hikers instead.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -8,7 +8,7 @@ import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import { BUILDING_SCALE, SIGNPOST_PLANK } from '../../shared/buildingPixels.ts'
 import type { CampSnapshot } from '../../shared/camp.ts'
 import type { Edges } from '../../shared/campEdges.ts'
-import { cairnText, flagLabel, placedTitle, signpostText } from '../../shared/campView.ts'
+import { animalLabel, cairnText, flagLabel, placedTitle, signpostText } from '../../shared/campView.ts'
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { Crossing } from '../../shared/crossing.ts'
@@ -56,6 +56,8 @@ interface Props {
   openTrail: string | null
   /** The sighting's animal crossing now (Campsite's; its seq changes for each one), else null */
   animal: { seq: number; crossing: Crossing } | null
+  /** The animal's button was clicked: open the field guide at its species */
+  onAnimal: (species: string, el: HTMLButtonElement) => void
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -70,7 +72,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -196,6 +198,19 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
           aria-haspopup="dialog"
           aria-expanded={openTrail === 'cairn'}
           onClick={(e) => onTrail(e.currentTarget, 'cairn')}
+        />
+      )}
+      {/* Under the camps' badges, the dog and the hikers (z-index 0): the stage moves it over the animal */}
+      {stage && animal && (
+        <button
+          key={animal.seq}
+          ref={(el) => stage.bindAnimal(el)}
+          className="cs-animal"
+          style={{ width: animal.crossing.w, height: animal.crossing.h }}
+          title={animalLabel(animal.crossing.species)}
+          aria-label={animalLabel(animal.crossing.species)}
+          aria-haspopup="dialog"
+          onClick={(e) => onAnimal(animal.crossing.species, e.currentTarget)}
         />
       )}
       {stage && showDog && <button ref={(el) => stage.bindDog(el)} className="cs-dog" title="Pet the dog" aria-label="Pet the dog" onClick={() => stage.petDog()} />}
