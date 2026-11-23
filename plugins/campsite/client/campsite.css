@@ -887,12 +887,17 @@
   z-index: 1;
 }
 .cs-flag-more {
+  /* Its box is moreBox's (shared/mountain.ts: 8 px tall, 5 px a character and 2 px either side), set inline */
   position: absolute;
-  padding: 0 2px;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 0;
   background: rgba(26, 22, 34, 0.85);
   border: none;
   color: #c9c2d6;
-  font: 9px/10px ui-monospace, 'SF Mono', Menlo, monospace;
+  font: 8px/8px ui-monospace, 'SF Mono', Menlo, monospace;
+  text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   z-index: 1;
 }

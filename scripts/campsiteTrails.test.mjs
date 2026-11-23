@@ -7,7 +7,7 @@ import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shar
 import { SIGNPOST_HINT, cairnText, dayText, flagLabel, forText, historyText, meterLabel, signpostText, summitLine, trailGroups, trailStatus } from '../plugins/campsite/shared/campView.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
-import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagsKey, flagsOf, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, FLAG_PAD, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagTargets, flagsKey, flagsOf, moreBox, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
 import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
@@ -417,4 +417,47 @@ test("trailGroups: this project's trails first, then every other project's by na
   assert.deepEqual([signpostText(1), signpostText(3), signpostText(0)], ['1 trail', '3 trails', '0 trails'])
   assert.deepEqual([cairnText(1), cairnText(12)], ['1 summit', '12 summits'])
   assert.equal(summitLine('feature/x'), '⛳ Summited feature/x')
+})
+
+const meets = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+const busy = (n) => [...Array.from({ length: n }, (_, i) => ft(`h${i}`, 0)), ...Array.from({ length: n }, (_, i) => ft(`w${i}`, 1)), ...Array.from({ length: n }, (_, i) => ft(`r${i}`, 2)), ...Array.from({ length: n }, (_, i) => ft(`f${i}`, 3)), ...Array.from({ length: n }, (_, i) => ft(`p${i}`, SUMMIT))]
+
+test("flagSpots places nothing where it meets a flag, a \"+n\" or the cairn (the false summit under planted flags; a narrow middle); from 360 px every ledge shows a flag and every trail is shown or counted", () => {
+  for (const [room, n] of [1600, 800, 440, 360, 200, 132, 40].flatMap((room) => [1, 2, 3, 6, 8].map((n) => [room, n]))) {
+    const m = mountain(room / 2, room)
+    const spots = flagSpots(m, busy(n))
+    const boxes = [cairnBox(m), ...spots.more.map(moreBox), ...spots.flags.map((f) => ({ ...flagBox(f), w: flagBox(f).w + 1 }))]
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(!meets(boxes[i], boxes[j]), `room ${room}: ${JSON.stringify(boxes[i])} meets ${JSON.stringify(boxes[j])}`)
+    if (room >= 360) {
+      assert.equal(spots.flags.length + spots.more.reduce((k, x) => k + x.count, 0), 5 * n, `room ${room}, ${n} a ledge: every trail is a flag or counted`)
+      assert.deepEqual([...new Set(spots.flags.map((f) => f.stage))], [0, 1, 2, 3, SUMMIT], `room ${room}, ${n} a ledge: every ledge shows a flag`)
+    }
+    assert.deepEqual(spots.flags.map((f) => f.stage), [...spots.flags.map((f) => f.stage)].sort((a, b) => a - b), 'in ledge order')
+  }
+  // Full width, two planted: the false summit's first spot is under the second, so its first flag moves along
+  const m = mountain(800, 1600)
+  const two = flagSpots(m, [ft('p1', SUMMIT), ft('p2', SUMMIT), ft('f1', 3)]).flags
+  const f1 = two.find((f) => f.worktreeId === 'f1')
+  assert.ok(f1.x > m.ledges[3].x, 'skipped past the planted flags')
+  // One planted (the usual case) changes nothing
+  assert.equal(flagSpots(m, [ft('p1', SUMMIT), ft('f1', 3)]).flags.find((f) => f.worktreeId === 'f1').x, m.ledges[3].x)
+})
+
+test("flagTargets: each flag's button is its sprite and the gap after it, up to FLAG_PAD px taller where nothing else is, and never meets another, a \"+n\" or the cairn", () => {
+  for (const room of [1600, 800, 360, 132]) {
+    const m = mountain(room / 2, room)
+    const spots = flagSpots(m, busy(8))
+    const t = flagTargets(m, spots)
+    assert.equal(t.length, spots.flags.length)
+    spots.flags.forEach((f, i) => {
+      const b = flagBox(f)
+      assert.ok(t[i].x === b.x && t[i].w === b.w + 1 && t[i].y <= b.y && t[i].y + t[i].h >= b.y + b.h && t[i].h <= b.h + 2 * FLAG_PAD, `room ${room}: ${f.worktreeId}`)
+    })
+    const all = [cairnBox(m), ...spots.more.map(moreBox), ...t]
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) assert.ok(!meets(all[i], all[j]), `room ${room}: ${JSON.stringify(all[i])} meets ${JSON.stringify(all[j])}`)
+  }
+  // A lone flag gets the whole pad
+  const m = mountain(800, 1600)
+  const [lone] = flagTargets(m, flagSpots(m, [ft('a', 2)]))
+  assert.equal(lone.h, FLAG.h + 2 * FLAG_PAD)
 })

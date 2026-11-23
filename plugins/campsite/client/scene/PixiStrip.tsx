@@ -12,7 +12,7 @@ import { cairnText, flagLabel, placedTitle, signpostText } from '../../shared/ca
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { CampLayout } from '../../shared/layout.ts'
-import { cairnBox, flagBox, flagSpots, mountain, type FlagTrail } from '../../shared/mountain.ts'
+import { cairnBox, flagSpots, flagTargets, moreBox, mountain, type FlagTrail } from '../../shared/mountain.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
 import { STAGE_H } from '../../shared/stage.ts'
 import { STAGES, cairnSize } from '../../shared/trails.ts'
@@ -49,9 +49,6 @@ interface Props {
   /** A flag (its worktree), a ledge's "+n" or the cairn was clicked: open the Trails tab (at that trail) */
   onTrail: (el: HTMLButtonElement, worktreeId?: string) => void
 }
-
-/** A flag's button reaches this far above and below its sprite; across, it is its sprite and the 1 px gap after it (neighbours side by side, never overlapping) */
-const FLAG_PAD = 3
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
 
@@ -106,6 +103,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
   const room = layout.width - edges.reserve.left - edges.reserve.right
   const m = useMemo(() => mountain(layout.fireX, room), [layout.fireX, room])
   const spots = useMemo(() => flagSpots(m, trails), [m, trails])
+  // Each flag's button: its sprite and the gap after it, a few px taller where nothing else is (never overlapping)
+  const targets = useMemo(() => flagTargets(m, spots), [m, spots])
   if (load.state === 'failed') {
     return (
       <div className="cs-fallback">
@@ -149,13 +148,13 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
         ))}
       {/* Over the mountain's flags (they move only while one climbs), the ledges' "+n" and the cairn */}
       {stage &&
-        spots.flags.map((f) => {
-          const box = flagBox(f)
+        spots.flags.map((f, i) => {
+          const box = targets[i]
           return (
             <button
               key={f.worktreeId}
               className="cs-flag"
-              style={{ left: box.x, bottom: STAGE_H - box.y - box.h - FLAG_PAD, width: box.w + 1, height: box.h + 2 * FLAG_PAD }}
+              style={{ left: box.x, bottom: STAGE_H - box.y - box.h, width: box.w, height: box.h }}
               title={flagLabel(f)}
               aria-label={flagLabel(f)}
               onClick={(e) => onTrail(e.currentTarget, f.worktreeId)}
@@ -164,7 +163,7 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
         })}
       {stage &&
         spots.more.map((m) => (
-          <button key={m.stage} className="cs-flag-more" style={{ left: m.x, bottom: STAGE_H - m.y }} title={`${m.count} more at ${STAGES[m.stage]}`} aria-label={`${m.count} more trails at ${STAGES[m.stage]}`} onClick={(e) => onTrail(e.currentTarget)}>
+          <button key={m.stage} className="cs-flag-more" style={{ left: m.x, bottom: STAGE_H - m.y, width: moreBox(m).w, height: moreBox(m).h }} title={`${m.count} more at ${STAGES[m.stage]}`} aria-label={`${m.count} more trails at ${STAGES[m.stage]}`} onClick={(e) => onTrail(e.currentTarget)}>
             +{m.count}
           </button>
         ))}

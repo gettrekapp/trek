@@ -2,7 +2,8 @@
 // zigzag path and a ledge per stage (all above the tents' signs and the waiting hikers' signs at the
 // fire, and the string lights, so none of them covers a flag),
 // each of the window's project's trails a flag in its worktree's tent colours on its stage's ledge
-// (side by side, "+n" past what a ledge holds; a larger, planted flag at the summit); a summit's
+// (side by side, "+n" past what a ledge shows; a larger, planted flag at the summit; nothing placed
+// over another flag, a "+n" or the cairn, and each flag's button kept clear of the others); a summit's
 // climb and the sparks that rise from the fire; and the cairn of summits at the trailhead, on a
 // shelf of the peak's left flank before the first ledge's flags. Narrow middles scale the peak
 // sideways; it is never dropped. The header's controls leave the peak's flags and the cairn clear
@@ -128,18 +129,123 @@ export interface FlagMore {
   y: number
 }
 
-/** The flags of `trails` (oldest first) on their ledges, side by side from each ledge's left end; what a ledge doesn't hold is counted */
+/** The flags of `trails` (oldest first) on their ledges, side by side from each ledge's left end; what a ledge doesn't show is counted ("+n" after its last flag).
+ * Ledges are 4–5 px apart and a flag 7 px tall (planted 11), so a ledge's spots can run under
+ * another's flags or "+n" (the false summit under two or more planted flags; neighbouring ledges in
+ * a narrow middle). Nothing is placed where it would meet anything placed: no flag (its sprite and
+ * the gap after it), "+n" or the cairn ever covers another. First every ledge with trails takes its
+ * first clear spot (and its "+n" after it, while it has more), the summit first and then each ledge
+ * down; then, a flag a ledge at a time and round, each shows its next trail in the next spot while
+ * that spot and its moved "+n" are clear. In a very narrow middle a ledge may find no clear spot: then
+ * its "+n" alone, in the first clear place along it (or nothing: the Trails tab lists them all). */
 export function flagSpots(m: Mountain, trails: readonly FlagTrail[]): { flags: FlagSpot[]; more: FlagMore[] } {
+  const taken: Box4[] = [cairnBox(m)]
+  const free = (box: Box4, except: readonly Box4[] = []): boolean => !taken.some((b) => !except.includes(b) && meets(b, box))
+  interface Row {
+    l: Ledge
+    on: FlagTrail[]
+    pitch: number
+    h: number
+    /** The shown flags' x, oldest first */
+    xs: number[]
+    /** Its "+n" while it shows fewer than it has (its box in `taken`) */
+    more: Box4 | null
+    /** No further spot to take */
+    done: boolean
+  }
+  const rows: Row[] = [...m.ledges].reverse().flatMap((l) => {
+    const on = trails.filter((t) => t.stage === l.stage)
+    if (on.length === 0) return []
+    const planted = l.stage === SUMMIT
+    return [{ l, on, pitch: (planted ? PLANTED.w : FLAG.w) + FLAG_GAP, h: planted ? PLANTED.h : FLAG.h, xs: [], more: null, done: false }]
+  })
+  const flagAt = (r: Row, x: number): Box4 => ({ x, y: r.l.y - r.h, w: r.pitch, h: r.h })
+  const moreAt = (r: Row, x: number, count: number): Box4 => moreBox({ x, y: r.l.y, count })
+  /** After a flag at x: where its "+n" goes */
+  const after = (r: Row, x: number): number => x + r.pitch + 2
+  for (const r of rows) {
+    for (let i = 0; i < r.l.holds; i++) {
+      const x = r.l.x + i * r.pitch
+      const flag = flagAt(r, x)
+      const more = r.on.length > 1 ? moreAt(r, after(r, x), r.on.length - 1) : null
+      if (!free(flag) || (more && !free(more))) continue
+      r.xs.push(x)
+      taken.push(flag)
+      if (more) taken.push((r.more = more))
+      break
+    }
+    if (r.xs.length === 0) {
+      r.done = true
+      for (let x = r.l.x; x <= r.l.x + r.l.w + 3; x++) {
+        const more = moreAt(r, x, r.on.length)
+        if (free(more)) {
+          taken.push((r.more = more))
+          break
+        }
+      }
+    }
+  }
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const r of rows) {
+      if (r.done || r.xs.length >= r.on.length) continue
+      const last = r.xs[r.xs.length - 1]
+      const x = last + r.pitch
+      const flag = flagAt(r, x)
+      const left = r.on.length - r.xs.length - 1
+      const more = left > 0 ? moreAt(r, after(r, x), left) : null
+      const own = r.more ? [r.more] : []
+      if (x + r.pitch - FLAG_GAP > r.l.x + r.l.w || !free(flag, own) || (more && !free(more, own))) {
+        r.done = true
+        continue
+      }
+      if (r.more) taken.splice(taken.indexOf(r.more), 1)
+      r.more = null
+      r.xs.push(x)
+      taken.push(flag)
+      if (more) taken.push((r.more = more))
+      grew = true
+    }
+  }
+  // In ledge order (the trailhead's first), oldest first on each
   const flags: FlagSpot[] = []
   const more: FlagMore[] = []
-  for (const l of m.ledges) {
-    const on = trails.filter((t) => t.stage === l.stage)
-    const planted = l.stage === SUMMIT
-    const pitch = (planted ? PLANTED.w : FLAG.w) + FLAG_GAP
-    on.slice(0, l.holds).forEach((t, i) => flags.push({ worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, x: l.x + i * pitch, y: l.y, planted }))
-    if (on.length > l.holds) more.push({ stage: l.stage, count: on.length - l.holds, x: l.x + l.w + 3, y: l.y })
+  for (const r of [...rows].reverse()) {
+    r.xs.forEach((x, i) => flags.push({ worktreeId: r.on[i].worktreeId, branch: r.on[i].branch, stage: r.l.stage, x, y: r.l.y, planted: r.l.stage === SUMMIT }))
+    if (r.more) more.push({ stage: r.l.stage, count: r.on.length - r.xs.length, x: r.more.x, y: r.l.y })
   }
   return { flags, more }
+}
+
+type Box4 = { x: number; y: number; w: number; h: number }
+const meets = (a: Box4, b: Box4): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+/** A ledge's "+n" button (strip px): 8 px tall (its 8 px line), 5 px a character and 2 px either side; never wider than MORE_W */
+const MORE_H = 8
+export const moreBox = (n: Pick<FlagMore, 'x' | 'y'> & { count?: number }): Box4 => ({ x: n.x, y: n.y - MORE_H, w: Math.min(MORE_W, 4 + 5 * (1 + String(n.count ?? 99).length)), h: MORE_H })
+/** How far a flag's button reaches above and below its sprite, where nothing else is */
+export const FLAG_PAD = 3
+
+/**
+ * Each flag's button (strip px): its sprite and the 1 px gap after it, grown up to FLAG_PAD px
+ * down and up, a pixel at a time and in turn, while it meets no other flag's button, "+n" or the
+ * cairn. Side by side, or a ledge above or below, the buttons never overlap.
+ */
+export function flagTargets(m: Mountain, spots: { flags: readonly FlagSpot[]; more: readonly FlagMore[] }): Box4[] {
+  const boxes = spots.flags.map((f) => {
+    const b = flagBox(f)
+    return { x: b.x, y: b.y, w: b.w + FLAG_GAP, h: b.h }
+  })
+  const fixed = [cairnBox(m), ...spots.more.map(moreBox)]
+  const clear = (i: number, b: Box4): boolean => !fixed.some((o) => meets(o, b)) && !boxes.some((o, j) => j !== i && meets(o, b))
+  for (let step = 0; step < FLAG_PAD; step++) {
+    for (let i = 0; i < boxes.length; i++) {
+      const down = { ...boxes[i], h: boxes[i].h + 1 }
+      if (clear(i, down)) boxes[i] = down
+      const up = { ...boxes[i], y: boxes[i].y - 1, h: boxes[i].h + 1 }
+      if (clear(i, up)) boxes[i] = up
+    }
+  }
+  return boxes
 }
 
 /** A flag's pixels on its own grid (5×7, or 7×11 planted): a pole, a cloth in its worktree's tent colours */
