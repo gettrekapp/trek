@@ -556,8 +556,16 @@ try {
   const csStage = win.locator('.campsite .cs-stage')
   const phase = () => csStage.getAttribute('data-phase')
   const season = () => csStage.getAttribute('data-season')
-  const PHASES = ['dawn', 'day', 'dusk', 'night']
-  check("the strip's sky follows the clock: a phase of the day", await until(async () => PHASES.includes(await phase()), true), true)
+  // The phase for the renderer's local time now (shared/world.ts's phaseAt: dawn 05:00, day 08:00, dusk 17:00, night 20:00),
+  // read in the page each poll so an hour turning over mid-check still matches
+  const clockPhase = () =>
+    win.evaluate(() => {
+      const d = new Date()
+      const m = d.getHours() * 60 + d.getMinutes()
+      return m >= 20 * 60 || m < 5 * 60 ? 'night' : m >= 17 * 60 ? 'dusk' : m >= 8 * 60 ? 'day' : 'dawn'
+    })
+  const onTheClock = async () => (await phase()) === (await clockPhase())
+  check("the strip's sky follows the clock: the phase of the renderer's local hour", await until(onTheClock, true), true)
   // The month's season, northern then southern (as shared/world.ts's seasonAt)
   const month = new Date().getMonth()
   const seasonOf = (m) => (m === 11 || m < 2 ? 'winter' : m < 5 ? 'spring' : m < 8 ? 'summer' : 'autumn')
@@ -570,7 +578,7 @@ try {
   check('Seasons off: no season on the strip', await until(season, 'none'), 'none')
   await skySelect.selectOption('clock')
   await seasonsSelect.selectOption('north')
-  check('back to the clock and the northern seasons', [await until(async () => PHASES.includes(await phase()), true), await until(season, seasonOf(month))], [true, seasonOf(month)])
+  check('back to the clock and the northern seasons', [await until(onTheClock, true), await until(season, seasonOf(month))], [true, seasonOf(month)])
   if (SERVER_HAS_ENVS) {
     const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
     await openSettingsTab(settings, 'Environments')
