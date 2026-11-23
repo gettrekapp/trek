@@ -39,6 +39,8 @@ export interface StageSnapshot {
   palette: Readonly<Palette>
   /** The sighting's animal on the strip (campsite part 3d-2; its seq changes for each one); null: none */
   animal: { seq: number; crossing: Crossing } | null
+  /** The noticeboard (campsite part 5): its left edge and bottom, and whether it shows the unread note; null: none (no notes, or no room) */
+  board: { x: number; bottom: number; unread: boolean } | null
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

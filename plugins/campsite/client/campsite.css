@@ -1123,3 +1123,16 @@
   font-style: italic;
   overflow-wrap: anywhere;
 }
+/* Over the noticeboard's sprite on the strip (campsite 5), like a building's: it opens the Noticeboard */
+.cs-board {
+  position: absolute;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 1;
+}
+.cs-board:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 2px;
+}

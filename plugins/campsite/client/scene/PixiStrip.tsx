@@ -1,8 +1,8 @@
 // The expanded strip's stage: a Pixi canvas (CampStage, loaded on first use so the app and the
 // collapsed strip never pay for Pixi) under a DOM overlay of buttons over the buildings, the
 // mountain's flags (and a ledge's "+n"), the cairn, the hikers, the dog and a sighting's animal (part 3d-2), which carry their names,
-// tooltips, focus and clicks; the signpost's planks say how many trails there are. If Pixi can't
-// start (no WebGL), a note and a plain row of tab-size hikers instead.
+// tooltips, focus and clicks; the signpost's planks say how many trails there are; the noticeboard
+// (part 5) has a button too. If Pixi can't start (no WebGL), a note and a plain row of tab-size hikers instead.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import { BUILDING_SCALE, SIGNPOST_PLANK } from '../../shared/buildingPixels.ts'
@@ -64,6 +64,12 @@ interface Props {
   animalOpen: boolean
   /** The animal's button went (its crossing ended) while it had the focus: the focus goes elsewhere (the counts) */
   onAnimalGone: () => void
+  /** The noticeboard (part 5): where it stands, whether a note is unread, its button's name; null: none (the same object while none of that changes) */
+  board: { x: number; w: number; h: number; bottom: number; unread: boolean; label: string } | null
+  /** The noticeboard's button was clicked: open the Noticeboard */
+  onBoard: (el: HTMLButtonElement) => void
+  /** The popover was opened by the noticeboard (its button's aria-expanded) */
+  boardOpen: boolean
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -78,7 +84,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, tools, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, tools, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone, board, onBoard, boardOpen }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -112,10 +118,15 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
   const stage = load.state === 'ready' ? load.stage : null
   // The backdrop's colours: worked out again only when the world looks different
   const palette = useMemo(() => worldPalette(world), [world])
+  // What the stage draws of the noticeboard: the same object while it stands in the same place, read or unread
+  const boardX = board?.x
+  const boardBottom = board?.bottom
+  const boardUnread = board?.unread
+  const stageBoard = useMemo(() => (boardX === undefined || boardBottom === undefined ? null : { x: boardX, bottom: boardBottom, unread: boardUnread === true }), [boardX, boardBottom, boardUnread])
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal })
-  }, [stage, layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal])
+    stage?.update({ layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal, board: stageBoard })
+  }, [stage, layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal, stageBoard])
 
   // The flags' buttons, where the stage draws them (before the fallback's early return: a hook)
   const room = layout.width - edges.reserve.left - edges.reserve.right
@@ -167,6 +178,18 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
             )}
           </button>
         ))}
+      {/* Over the noticeboard's sprite (part 5): it opens the Noticeboard */}
+      {stage && board && (
+        <button
+          className="cs-board"
+          style={{ left: board.x, width: board.w, height: board.h, bottom: STAGE_H - board.bottom }}
+          title={board.label}
+          aria-label={board.label}
+          aria-haspopup="dialog"
+          aria-expanded={boardOpen}
+          onClick={(e) => onBoard(e.currentTarget)}
+        />
+      )}
       {/* Over the mountain's flags (they move only while one climbs), the ledges' "+n" and the cairn */}
       {stage &&
         spots.flags.map((f, i) => {

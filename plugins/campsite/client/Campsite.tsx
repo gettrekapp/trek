@@ -10,15 +10,18 @@
 // trails and activity, with a glyph after the counts saying why. Wildlife (part 3d-2): a sighting
 // here (the server's `sighting` event) sends its animal across the expanded, visible strip, one at a
 // time; its button opens the field guide (the popover's Guide tab) at it. Agents (part 5): this
-// project's notes are read whenever its newest note's time changes; the Noticeboard (the popover's
-// Camp tab) marks them seen. Collapsed, it is one line: everyone at tab size, those waiting first.
+// project's notes are read whenever its newest note's time changes; once it has one, a noticeboard
+// stands on the expanded strip (a free spot near the fire; a red pin while one is unread) and opens
+// the Noticeboard (the popover's Camp tab), which marks them seen. Collapsed, it is one line:
+// everyone at tab size, those waiting first.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import { boardSpot } from '../shared/board.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { admit, crossing, occupiedSpans, type Crossing, type SightingView, type Span } from '../shared/crossing.ts'
-import { guideSeenNow, notesSeenNow, projectNoteAt, summitLine, weatherBadge } from '../shared/campView.ts'
+import { boardLabel, guideSeenNow, notesSeenNow, projectNoteAt, summitLine, unreadNotes, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -200,6 +203,14 @@ export function Campsite(): React.JSX.Element | null {
   const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
   const { left: reserveLeft, right: reserveRight } = edges.reserve
   const layout = useMemo(() => campLayout(sessions, width, { left: reserveLeft, right: reserveRight }), [sessions, width, reserveLeft, reserveRight])
+  // The noticeboard (part 5), once this project has a note: clear of the camps and buildings, and of the empty camp's line of text (centred, ~380 px of 11 px type)
+  const hasNotes = noteAt !== undefined
+  const empty = sessions.length === 0
+  const spot = useMemo(() => (hasNotes ? boardSpot(layout, [...edges.left, ...edges.right], empty ? [{ from: width / 2 - 200, to: width / 2 + 200 }] : []) : null), [hasNotes, layout, edges, empty, width])
+  const unread = noteAt !== undefined && noteAt > prefs.notesSeenAt
+  const counted = unreadNotes(notes.list, prefs.notesSeenAt)
+  const label = boardLabel(!unread ? 0 : counted > 0 ? counted : null)
+  const board = useMemo(() => (spot ? { ...spot, unread, label } : null), [spot, unread, label])
   // The header's controls stay off the peak: its ledges, their "+n" and the cairn (shared/mountain.ts)
   const clear = useMemo(() => peakClear(mountain(layout.fireX, width - reserveLeft - reserveRight)), [layout.fireX, width, reserveLeft, reserveRight])
   const closeTent = useCallback((refocus: boolean) => {
@@ -439,6 +450,9 @@ export function Campsite(): React.JSX.Element | null {
             onAnimal={(species, el) => openCamp(el, null, 'guide', undefined, 'animal', species)}
             animalOpen={campOpen?.opener === 'animal' && campOpen.species === animal?.crossing.species}
             onAnimalGone={() => countsButton.current?.focus()}
+            board={board}
+            onBoard={(el) => openCamp(el, null, 'camp', undefined, 'board')}
+            boardOpen={campOpen?.opener === 'board'}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>

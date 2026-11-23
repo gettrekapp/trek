@@ -2,10 +2,11 @@
 // the ends (campEdges.ts), kept by its key and tier and moved when the ends change, and the string
 // lights across the middle: the wire drawn once, and a sprite per bulb (one white texture, tinted)
 // whose alpha twinkles (still under reduced motion), lit from dusk to dawn (by day dark bulbs, part
-// 3d-1). Both are rebuilt only when what they show changes. A building whose texture can't be made is skipped: the strip still works.
+// 3d-1). Both are rebuilt only when what they show changes. The noticeboard (part 5) stands among
+// them, read or unread. A building whose texture can't be made is skipped: the strip still works.
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
-import { BUILDING_SCALE, buildingArt, bulbAlpha, lightString } from '../../../shared/buildingPixels.ts'
+import { BUILDING_SCALE, boardArt, buildingArt, bulbAlpha, lightString, type Art } from '../../../shared/buildingPixels.ts'
 import type { Placed } from '../../../shared/campEdges.ts'
 import { drawBoxes } from '../draw.ts'
 import type { TextureCache } from '../textures.ts'
@@ -24,6 +25,8 @@ export class BuildingsActor implements Actor {
   private readonly textures: TextureCache
   /** `${key}:${tier}` → its sprite */
   private readonly placed = new Map<string, Sprite>()
+  /** The noticeboard's sprite and which art it shows ('read' or 'unread') */
+  private board: { sprite: Sprite; art: string } | null = null
   private lightsKey = ''
   /** Each bulb's colour, lit */
   private fills: string[] = []
@@ -54,6 +57,7 @@ export class BuildingsActor implements Actor {
       }
       sprite.position.set(p.x, p.bottom)
     }
+    this.syncBoard(s.board)
     const left = s.edges.reserve.left
     const right = s.layout.width - s.edges.reserve.right
     const lit = s.built.lights >= 1 && s.layout.width > 0
@@ -93,17 +97,46 @@ export class BuildingsActor implements Actor {
 
   destroy(): void {
     this.placed.clear()
+    this.board = null
+  }
+
+  /** The noticeboard: made (or its art swapped) when it appears or its unread note comes or goes, moved with the layout, gone with null */
+  private syncBoard(board: StageSnapshot['board']): void {
+    const art = board === null ? '' : board.unread ? 'unread' : 'read'
+    if (this.board && this.board.art !== art) {
+      this.board.sprite.destroy()
+      this.board = null
+    }
+    if (board === null) return
+    if (!this.board) {
+      const sprite = this.art(`board:${art}`, boardArt(board.unread), 'the noticeboard')
+      if (!sprite) return
+      this.board = { sprite, art }
+      this.sprites.addChild(sprite)
+    }
+    this.board.sprite.position.set(board.x, board.bottom)
   }
 
   private sprite(p: Placed): Sprite | null {
+    let art: Art
     try {
-      const art = buildingArt(p.id, p.tier)
-      const sprite = new Sprite(this.textures.get(`building:${p.id}:${p.tier}`, art.w, art.h, () => art.rects))
+      art = buildingArt(p.id, p.tier)
+    } catch (err) {
+      console.warn('[campsite] a building could not be drawn', p.key, err)
+      return null
+    }
+    return this.art(`building:${p.id}:${p.tier}`, art, p.key)
+  }
+
+  /** A sprite of `art` at the buildings' scale, anchored at its bottom left; null (and a warning) when its texture can't be made */
+  private art(key: string, art: Art, what: string): Sprite | null {
+    try {
+      const sprite = new Sprite(this.textures.get(key, art.w, art.h, () => art.rects))
       sprite.anchor.set(0, 1)
       sprite.scale.set(BUILDING_SCALE)
       return sprite
     } catch (err) {
-      console.warn('[campsite] a building could not be drawn', p.key, err)
+      console.warn('[campsite] a building could not be drawn', what, err)
       return null
     }
   }
