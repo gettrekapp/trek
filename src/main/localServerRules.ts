@@ -204,6 +204,8 @@ const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_', 'npm_']
  * plugin's, read through its host's testEndpoint; the smokes' stubs; the server takes them only on
  * loopback), its gh (the smokes' stub, scripts/smokeGh.mjs), and the campsite's short working
  * minute, seed wood and forced sightings (the local window smoke's wood, shop and wildlife checks).
+ * Forced sightings pass only with the short minute (the smoke sets both): set alone, on an app a
+ * person runs, it would fill their camp's field guide.
  */
 const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL', 'TREK_SERVER_GH', 'TREK_CAMPSITE_MINUTE_MS', 'TREK_CAMPSITE_SEED_WOOD', 'TREK_CAMPSITE_FORCE_SIGHTINGS'])
 const DROPPED = new Set([
@@ -232,6 +234,7 @@ export function childEnv(env: Readonly<Record<string, string | undefined>>): Rec
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || DROPPED.has(key) || (!KEPT.has(key) && DROPPED_PREFIXES.some((p) => key.startsWith(p)))) continue
+    if (key === 'TREK_CAMPSITE_FORCE_SIGHTINGS' && (env.TREK_CAMPSITE_MINUTE_MS ?? '').trim() === '') continue
     out[key] = value
   }
   out.ELECTRON_RUN_AS_NODE = '1'

@@ -982,6 +982,8 @@ test("the world (3d-1): a removed project's last activity is dropped by the full
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
   const camp = newCamp(7, T0)
   camp.lastActive = { p: T0 - 5, gone: T0 - 9, off: T0 - 7 }
+  // The last species go with them (3d-2), one heard of only by its last species too
+  camp.lastSeen = { p: 'fox', gone: 'deer', off: 'elk', seenOnly: 'rabbit' }
   writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
   const worktrees = h.host.worktrees
   h.host.worktrees = (projectId) => (projectId === 'off' ? [] : worktrees(projectId))
@@ -991,6 +993,7 @@ test("the world (3d-1): a removed project's last activity is dropped by the full
   clock.run()
   assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { p: T0 - 5, off: T0 - 7 }, 'gone: dropped at the first full reconcile')
   assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastActive, { p: T0 - 5, off: T0 - 7 }, 'saved')
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastSeen, { p: 'fox', off: 'elk' }, 'the last species too')
   // p removed later: its last activity goes at the next full pass too
   h.host.worktrees = (projectId) => {
     if (projectId === 'off') return []
@@ -1000,6 +1003,7 @@ test("the world (3d-1): a removed project's last activity is dropped by the full
   c.tick()
   clock.run()
   assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { off: T0 - 7 })
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastSeen, { off: 'elk' }, "p's last species with its trails' reconcile")
   assert.deepEqual(h.emitted.filter(([e]) => e === 'state').at(-1)[1].lastActive, { off: T0 - 7 }, 'pushed')
 })
 
@@ -1059,8 +1063,10 @@ test("wildlife (3d-2): seen keeps a window's time zone and Seasons setting (save
   assert.equal(h.sent.length, 3, 'one a minute in the window\'s project')
   assert.ok(h.sent.every(([p, e]) => p === 'p' && e === 'sighting'))
   assert.notEqual(h.sent[1][2].species, h.sent[0][2].species, 'never twice running')
-  assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: '1' }), true)
-  for (const v of [undefined, '', '0', 'yes']) assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: v }), false, String(v))
+  assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: '1', TREK_CAMPSITE_MINUTE_MS: '200' }), true)
+  for (const v of [undefined, '', '0', 'yes']) assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: v, TREK_CAMPSITE_MINUTE_MS: '200' }), false, String(v))
+  // Only with the short minute set too (the smokes set both)
+  for (const minute of [undefined, '', ' ']) assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: '1', TREK_CAMPSITE_MINUTE_MS: minute }), false, String(minute))
 })
 
 test('wildlife (3d-2): only a project that is active or has a window open rolls; a quiet one nobody watches draws no die', async (t) => {
@@ -1091,6 +1097,27 @@ test('wildlife (3d-2): only a project that is active or has a window open rolls;
   now += 10 * 60_000
   tick2()
   assert.deepEqual(h2.sent.slice(1).map(([p]) => p), ['p'], 'p, once its window opens; q is quiet by now, with no window')
+})
+
+test('wildlife (3d-2): TREK_CAMPSITE_FORCE_SIGHTINGS without TREK_CAMPSITE_MINUTE_MS is ignored, with a warning at start-up', async (t) => {
+  const was = { force: process.env.TREK_CAMPSITE_FORCE_SIGHTINGS, minute: process.env.TREK_CAMPSITE_MINUTE_MS }
+  t.after(() => {
+    for (const [k, v] of [['TREK_CAMPSITE_FORCE_SIGHTINGS', was.force], ['TREK_CAMPSITE_MINUTE_MS', was.minute]]) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+  process.env.TREK_CAMPSITE_FORCE_SIGHTINGS = '1'
+  delete process.env.TREK_CAMPSITE_MINUTE_MS
+  const h = fakeHost(t)
+  h.open.add('p')
+  let tick
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  assert.ok(h.warnings.some((w) => w.includes('TREK_CAMPSITE_FORCE_SIGHTINGS is ignored without TREK_CAMPSITE_MINUTE_MS')), h.warnings.join('\n'))
+  await inst.handlers.state({}, { projectId: 'p', caller: 'c' })
+  tick()
+  assert.equal(h.sent.length, 0, 'the dice decide (and miss)')
 })
 
 test('wildlife (3d-2): build takes the ranger tower (500 wood and 2 markers, then 1,200 and 3); refusals are CONFLICT', async (t) => {

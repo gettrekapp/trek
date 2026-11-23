@@ -93,8 +93,12 @@ export function seedWoodFromEnv(env: Readonly<Record<string, string | undefined>
   const v = Number(raw)
   return Number.isFinite(v) && v >= 0 ? v : undefined
 }
-/** TREK_CAMPSITE_FORCE_SIGHTINGS (test-only): '1' makes every minute roll a sighting */
-export const forceSightingsFromEnv = (env: Readonly<Record<string, string | undefined>> = process.env): boolean => env.TREK_CAMPSITE_FORCE_SIGHTINGS === '1'
+/**
+ * TREK_CAMPSITE_FORCE_SIGHTINGS (test-only): '1' makes every minute roll a sighting, honoured only
+ * with TREK_CAMPSITE_MINUTE_MS set too (the smokes set both), so it can't fill a real camp's guide alone
+ */
+export const forceSightingsFromEnv = (env: Readonly<Record<string, string | undefined>> = process.env): boolean =>
+  env.TREK_CAMPSITE_FORCE_SIGHTINGS === '1' && (env.TREK_CAMPSITE_MINUTE_MS ?? '').trim() !== ''
 
 /** A seeded camp's markers: enough for a cabin or the dock in a smoke */
 const SEED_MARKERS = 3
@@ -133,6 +137,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const forceSightings = o.forceSightings ?? forceSightingsFromEnv()
   // Test-only: on a real camp it would fill the guide with a sighting every minute
   if (forceSightings) host.log.warn('[campsite] TREK_CAMPSITE_FORCE_SIGHTINGS is on: every minute roll is a sighting (test-only)')
+  else if (o.forceSightings === undefined && process.env.TREK_CAMPSITE_FORCE_SIGHTINGS === '1') host.log.warn('[campsite] TREK_CAMPSITE_FORCE_SIGHTINGS is ignored without TREK_CAMPSITE_MINUTE_MS (test-only)')
   const store = openCampStore(host.dataFile('camp.json'), {
     now,
     seed: o.seed ?? (() => Math.floor(Math.random() * 2 ** 32)),
@@ -201,10 +206,17 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const mode = (): ReconcileMode => (fullYet ? 'full' : 'open-only')
   /** The first time this run a project is heard from, after the grace period (in it, the host's listing may be stale) */
   const firstHeard = (projectId: string): boolean => fullYet && !reconciled.has(projectId)
+  /** A removed project's last activity and last species: dropped. Whether either was there */
+  const forgetProject = (projectId: string): boolean => {
+    const had = Object.hasOwn(camp.lastActive, projectId) || Object.hasOwn(camp.lastSeen, projectId)
+    delete camp.lastActive[projectId]
+    delete camp.lastSeen[projectId]
+    return had
+  }
   /**
    * A project's trails against the host's worktrees (no git refresh): a project that is gone
-   * (NOT_FOUND) turns its trails back and drops its last activity (fully only); one where the plugin
-   * is off is left as it is. True when a trail, the history, the done count or the last activity changed.
+   * (NOT_FOUND) turns its trails back and drops its last activity and last species (fully only); one where the plugin
+   * is off is left as it is. True when a trail, the history, the done count, the last activity or species changed.
    */
   const reconcileProject = (projectId: string, how: ReconcileMode = mode(), fresh?: Fresh): boolean => {
     let worktrees: PluginWorktree[] | null
@@ -221,20 +233,19 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     if (worktrees === null && how === 'open-only') return false
     const before = JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone])
     reconcile(camp, projectId, worktrees, now(), how, fresh)
-    // A removed project's last activity goes with it (nothing reads it again)
-    const forgot = worktrees === null && Object.hasOwn(camp.lastActive, projectId)
-    if (forgot) delete camp.lastActive[projectId]
+    // A removed project's last activity and last species go with it (nothing reads them again)
+    const forgot = worktrees === null && forgetProject(projectId)
     if (worktrees === null) reconciled.delete(projectId)
     else reconciled.add(projectId)
     return forgot || JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
-  /** Every project with trails, and every one reconciled this run; then (fully) the last activity of the other projects that are gone. True when a trail, the history, the done count or a last activity changed */
+  /** Every project with trails, and every one reconciled this run; then (fully) the last activity and species of the other projects that are gone. True when a trail, the history, the done count or a last activity changed */
   const reconcileAll = (how: ReconcileMode = mode()): boolean => {
     let any = false
     const projects = new Set([...trailProjects(camp), ...reconciled])
     for (const projectId of projects) if (reconcileProject(projectId, how)) any = true
     if (how !== 'full') return any
-    for (const projectId of Object.keys(camp.lastActive)) {
+    for (const projectId of new Set([...Object.keys(camp.lastActive), ...Object.keys(camp.lastSeen)])) {
       if (projects.has(projectId)) continue
       try {
         host.worktrees(projectId)
@@ -243,8 +254,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
           warn('reading the worktrees', err)
           continue
         }
-        delete camp.lastActive[projectId]
-        any = true
+        if (forgetProject(projectId)) any = true
       }
     }
     return any
