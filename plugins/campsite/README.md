@@ -55,7 +55,18 @@ the **trail signpost** (150 wood, at the right end inside the garden, the first 
 there) adds every other project's trails and counts them on its planks. The history is not pushed:
 the tab asks for it (`trailLog { projectId }`). The server reconciles a project's trails with its
 worktrees at start-up (the projects with trails), the first time it hears from a project (an event,
-or a window's `state`, which names its project), after each worktree event, and every 10 minutes.
+or a window's `state`, which names its project), after each worktree event, and every 10 minutes;
+before a commit or pull request event it opens any missing trail first (a worktree made outside Trek,
+`git worktree add -b feat`, has its trail before that event moves it). For 2 minutes after the server
+starts (the restart grace period) reconciles only open missing trails: until core's poller first
+refreshes, the worktrees' branches come from the saved project file and can be stale, so nothing is
+ended, turned back or restarted then; the first tick after the grace period reconciles fully.
+
+Some trails end as "Turned back" though their work goes on: promoting a worktree to primary, moving
+a worktree to another server, and removing a worktree before its merge is seen. The merge still
+counts as a summit (and grows the cairn) when it arrives later. A branch that summited and stays
+checked out in its worktree shows no trail (after its 24 hours at the peak) until that worktree
+changes branch.
 
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
 - `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 4; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear`, `pin` and `journal` (part 3b), `trailLog` and the `summit` event (part 3c); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
