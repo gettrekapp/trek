@@ -1,13 +1,14 @@
-// The camp (campsite parts 2, 3a and 3b): one per server, shared by every project. What it holds, a
-// new one, versions 1 → 2 → 3, a shape check for what camp.json held, and the snapshot windows see.
-// Pure.
+// The camp (campsite parts 2, 3a, 3b and 3c): one per server, shared by every project. What it
+// holds, a new one, versions 1 → 2 → 3 → 4, a shape check for what camp.json held, and the snapshot
+// windows see. Pure.
 import { AWAY_SOURCES, awayDue, newAway, noWood, type AwaySnapshot, type AwayTally } from './away.ts'
 import { BUILDING_IDS, GEAR_SLOTS, GEAR_TOP, HOUR_MS, building, gearBonus, hireCost, isRecord, noGear, startBuilt, whole, type BuildingId, type GearTiers } from './catalog.ts'
-import { levelFor, levelXp, liveKinds, newCrew, titleFor } from './crew.ts'
+import { NO_WHERE, levelFor, levelXp, liveKinds, newCrew, titleFor, type Where } from './crew.ts'
 import type { JournalEntry } from './journal.ts'
 import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
+import type { Trail, TrailRecord } from './trails.ts'
 
-export const CAMP_VERSION = 3
+export const CAMP_VERSION = 4
 
 /** A session type (its typeKey) or an agent (provider), as a window asks to pin it */
 export type PinRef = { kind: 'type' | 'provider'; id: string }
@@ -57,7 +58,7 @@ export interface Assignment {
 }
 
 export interface Camp {
-  version: 3
+  version: 4
   seed: number
   /** With fractions (the warmth factor, the garden, fishing); shown floored */
   wood: number
@@ -87,6 +88,14 @@ export interface Camp {
   hired: { day: string; names: string[] }
   /** Session types and agents sessions started with, for pinning (older than SEEN_KIND_MS are dropped) */
   seenKinds: SeenKind[]
+  /** Every project's open trails, by trailKey (project and worktree) */
+  trails: Record<string, Trail>
+  /** Each project's ended trails, newest last, at most TRAIL_LOG_MAX */
+  trailLog: Record<string, TrailRecord[]>
+  /** Worktrees whose branch summited and whose trail has ended (trailKey → that branch): they start no trail until they are on another branch */
+  trailsDone: Record<string, string>
+  /** Merges since part 3c (once per pull request): the cairn's size */
+  summits: number
   /** The last whole minute the tick has accounted for */
   lastTick: number
   savedAt: number
@@ -113,6 +122,17 @@ export interface CrewEntry {
   journalAt: number
 }
 
+/** An open trail as windows see it (every project's): its project by name now */
+export interface TrailEntry {
+  projectId: string
+  projectName: string
+  worktreeId: string
+  branch: string
+  stage: number
+  start: number
+  stageAt: number
+}
+
 /** What windows see (campsite.state) */
 export interface CampSnapshot {
   wood: number
@@ -130,6 +150,9 @@ export interface CampSnapshot {
   recruitCost: number
   /** The session types and agents a member can be pinned to (seen in the last 30 days): types first, then agents, by name */
   seenKinds: Omit<SeenKind, 'at'>[]
+  /** Every project's open trails, oldest first (not their history: a window asks for a project's, `trailLog`) */
+  trails: TrailEntry[]
+  summits: number
   /** Only while the away card is due */
   away?: AwaySnapshot
 }
@@ -153,6 +176,10 @@ export function newCamp(seed: number, now: number): Camp {
     seenAt: now,
     hired: { day: '', names: [] },
     seenKinds: [],
+    trails: {},
+    trailLog: {},
+    trailsDone: {},
+    summits: 0,
     lastTick: now,
     savedAt: now
   }
@@ -161,18 +188,26 @@ export function newCamp(seed: number, now: number): Camp {
 const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
 /**
- * camp.json as version 1 or 2 wrote it, brought to version 3: version 1 gains version 2's fields
+ * camp.json as versions 1–3 wrote it, brought to version 4: version 1 gains version 2's fields
  * (seen at its last save); version 2 gains the shed (not built), each member no gear, no pin and an
  * empty journal, each trip its start (the last save) and no wood, and no seen kinds; a version 3 pin
- * without a name (from before pins carried one) is named. Anything else as it is.
+ * without a name (from before pins carried one) is named; version 3 gains the signpost (not built),
+ * no trails (the server's reconcile finds them), no history and no summits. Anything else as it is.
  */
 export function migrateCamp(raw: unknown): unknown {
   if (!isRecord(raw)) return raw
   const at = num(raw.savedAt) ? raw.savedAt : 0
   let out: Record<string, unknown> = raw
   if (out.version === 1) out = { ...out, version: 2, built: startBuilt(), away: newAway(at), seenAt: at, hired: { day: '', names: [] } }
-  if (out.version === CAMP_VERSION) return namePins(out)
-  if (out.version !== 2) return out
+  if (out.version === 2) out = from2(out, at)
+  if (out.version !== 3) return out
+  const v3 = namePins(out)
+  const built = isRecord(v3.built) ? { ...v3.built, signpost: 0 } : v3.built
+  return { ...v3, version: 4, built, trails: {}, trailLog: {}, trailsDone: {}, summits: 0 }
+}
+
+/** Version 2 → 3 */
+function from2(out: Record<string, unknown>, at: number): Record<string, unknown> {
   const crew = Array.isArray(out.crew) ? out.crew.map((m: unknown) => (isRecord(m) ? { ...m, gear: noGear(), pin: null, journal: [] } : m)) : out.crew
   const assignments = isRecord(out.assignments)
     ? Object.fromEntries(
@@ -180,7 +215,7 @@ export function migrateCamp(raw: unknown): unknown {
       )
     : out.assignments
   const built = isRecord(out.built) ? { ...out.built, shed: 0 } : out.built
-  return namePins({ ...out, version: 3, crew, assignments, built, seenKinds: [] })
+  return { ...out, version: 3, crew, assignments, built, seenKinds: [] }
 }
 
 /** Version 3's pins from before a pin carried its name: named from its seen kind, else by its id (with none, the same object) */
@@ -229,7 +264,7 @@ export const isAssignment = (a: unknown): a is Assignment =>
   num(a.start) &&
   num(a.wood)
 
-/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries and assignments are checked one by one in restore, which drops the bad ones) */
+/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries, assignments, trails and history entries are checked one by one in restore, which drops the bad ones) */
 export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false
@@ -239,9 +274,10 @@ export function isCamp(x: unknown): x is Camp {
   const built = x.built
   if (!isRecord(built) || !BUILDING_IDS.every((id) => Number.isInteger(built[id]) && (built[id] as number) >= building(id).start && (built[id] as number) <= building(id).tiers.length)) return false
   if (!isAway(x.away)) return false
+  if (!Number.isInteger(x.summits) || (x.summits as number) < 0) return false
   const hired = x.hired
   if (!isRecord(hired) || typeof hired.day !== 'string' || !Array.isArray(hired.names) || !hired.names.every((n) => typeof n === 'string')) return false
-  return [x.assignments, x.spans, x.worked, x.waiting, x.caps].every(isRecord)
+  return [x.assignments, x.spans, x.worked, x.waiting, x.caps, x.trails, x.trailLog, x.trailsDone].every(isRecord)
 }
 
 function awaySnapshot(camp: Camp, now: number): AwaySnapshot {
@@ -255,7 +291,17 @@ function awaySnapshot(camp: Camp, now: number): AwaySnapshot {
   return { hours: Math.floor((now - camp.away.since) / HOUR_MS), wood, markers: camp.away.markers, levelUps }
 }
 
-export function snapshot(camp: Camp, now: number): CampSnapshot {
+/** `where.project`, the id if it throws */
+function nameOf(where: Pick<Where, 'project'>, projectId: string): string {
+  try {
+    return where.project(projectId)
+  } catch {
+    return projectId
+  }
+}
+
+/** What windows see; `where` names the trails' projects (by their ids without it) */
+export function snapshot(camp: Camp, now: number, where: Pick<Where, 'project'> = NO_WHERE): CampSnapshot {
   const assignments: Record<string, string> = {}
   for (const [id, a] of Object.entries(camp.assignments)) assignments[id] = a.crew
   const snap: CampSnapshot = {
@@ -271,7 +317,11 @@ export function snapshot(camp: Camp, now: number): CampSnapshot {
     bunks: bunks(camp),
     candidates: todaysCandidates(camp, now),
     recruitCost: hireCost(camp.crew.length),
-    seenKinds: liveKinds(camp, now)
+    seenKinds: liveKinds(camp, now),
+    trails: Object.values(camp.trails)
+      .sort((a, b) => a.start - b.start || (a.worktreeId < b.worktreeId ? -1 : a.worktreeId > b.worktreeId ? 1 : 0))
+      .map((t) => ({ projectId: t.projectId, projectName: nameOf(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt })),
+    summits: camp.summits
   }
   if (awayDue(camp, now)) snap.away = awaySnapshot(camp, now)
   return snap

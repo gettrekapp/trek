@@ -34,7 +34,7 @@ const params = new URLSearchParams(location.search)
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 const prefs = { showDog: params.get('dog') !== '0' }
 // The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;
-// ?built=out builds everything (all six buildings at their top tier)
+// ?built=out builds everything (all seven buildings at their top tier)
 const T = Date.now()
 const state = newCamp(7, T)
 state.wood = 340
@@ -42,7 +42,7 @@ state.markers = 2
 state.crew[0].name = 'Aspen'
 state.crew[0].xp = 150
 state.assignments.t1 = { crew: state.crew[0].id, project: 'harness', worktreeId: 'api', provider: 'codex', projectName: 'trek', place: 'feature/api', start: T - 3_600_000, wood: 12 }
-if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 }
+if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2, signpost: 1 }
 // ?crew=geared: the members out with t1, t2 and t3 wear tier 3 gear, mixed tiers (2, 2, 1 and none:
 // its view shows Buy and a gate) and tier 1; the second is pinned to Codex and has a journal
 if (params.get('crew') === 'geared') {

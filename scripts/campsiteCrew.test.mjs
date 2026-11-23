@@ -76,8 +76,8 @@ test('migrateCamp: version 2 gains the shed, no gear, no pins, empty journals, t
   delete v2.seenKinds
   const out = migrateCamp(v2)
   assert.ok(isCamp(out))
-  assert.equal(out.version, 3)
-  assert.deepEqual(out.built, { lights: 1, fire: 2, garden: 0, lake: 1, cabins: 1, shed: 0 })
+  assert.equal(out.version, 4)
+  assert.deepEqual(out.built, { lights: 1, fire: 2, garden: 0, lake: 1, cabins: 1, shed: 0, signpost: 0 })
   assert.ok(out.crew.every((m) => m.xp === 120 && m.pin === null && m.journal.length === 0 && m.gear.hat === 0))
   assert.deepEqual(out.assignments.t1, { crew: 'c1', project: 'p', worktreeId: null, provider: '', projectName: 'p', place: '', start: T0 + 7, wood: 0 })
   assert.deepEqual(out.seenKinds, [])
@@ -89,7 +89,8 @@ test('migrateCamp: a version 3 pin from before pins carried names gets its seen 
   camp.seenKinds = [{ kind: 'type', id: 'p:rev', name: 'Review', at: T0, project: 'trek' }]
   camp.crew[0].pin = { kind: 'type', id: 'p:rev' }
   camp.crew[1].pin = { kind: 'provider', id: 'grok' }
-  const raw = JSON.parse(JSON.stringify(camp))
+  const { trails, trailLog, trailsDone, summits, ...rest } = JSON.parse(JSON.stringify(camp))
+  const raw = { ...rest, version: 3, built: { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 } }
   assert.equal(isCamp(raw), false, 'not before the migration')
   const out = migrateCamp(raw)
   assert.ok(isCamp(out))
