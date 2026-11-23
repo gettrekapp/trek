@@ -2,7 +2,7 @@ import type { PluginSettingValues, ProjectPluginSettings } from './plugins/manif
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
-import type { Automation, ReviewDraft } from './model/types'
+import type { Automation, ReviewDraft, Task } from './model/types'
 import type { UpdateStatus } from './protocolV2.ts'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
@@ -400,6 +400,10 @@ export interface ProjectFile {
   globalSessions?: GlobalSession[]
   /** The server's automations for the project (projected; never saved in a project file) */
   automations?: Automation[]
+  /** The server's tasks for the project (projected; never saved in a project file) */
+  tasks?: Task[]
+  /** The Tasks page and the Tasks MCP tools (absent = on) */
+  tasksEnabled?: boolean
   /** Each plugin's on/off for this project (plugin system phase 1); a plugin not named uses its default */
   plugins?: ProjectPluginSettings
 }

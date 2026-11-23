@@ -190,6 +190,7 @@ function settingsOf(file: ProjectFile): ProjectSettings {
     servers: _s,
     globalSessions: _g,
     automations: _au,
+    tasks: _tk,
     // Legacy root keys a v3 file may still carry
     repositoryPath: _rp,
     worktrees: _w,

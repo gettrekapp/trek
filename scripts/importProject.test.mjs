@@ -168,6 +168,12 @@ test('a file carrying automations does not turn them into a project setting', ()
   for (const { project } of projects) assert.equal('automations' in project.settings, false)
 })
 
+test('a file carrying tasks does not turn them into a project setting', () => {
+  const file = { ...mixedFile(), tasks: [{ id: 't1', title: 'x', createdAt: 0, updatedAt: 0 }] }
+  const { projects } = splitProjectByServer(file, ids())
+  for (const { project } of projects) assert.equal('tasks' in project.settings, false)
+})
+
 test('branch data is folded per branch and copied to every copy of the repository', () => {
   const { projects } = splitProjectByServer(mixedFile(), ids())
   for (const { project } of projects) {

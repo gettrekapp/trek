@@ -196,7 +196,7 @@ export interface Repository {
  */
 export type ProjectSettings = Omit<
   ProjectFile,
-  'version' | 'name' | 'repositories' | 'servers' | 'globalSessions' | 'automations'
+  'version' | 'name' | 'repositories' | 'servers' | 'globalSessions' | 'automations' | 'tasks'
 >
 
 /** An automation's schedule: a 5-field cron read as wall-clock time in `tz` (src/shared/cron.ts). */
@@ -255,6 +255,43 @@ export interface AutomationInput {
   llm?: LlmSelection | null
 }
 
+/** One time a task was started in a new worktree (task.start). */
+export interface TaskStart {
+  /** ms since epoch */
+  at: number
+  repositoryId: string
+  worktreeId: string
+  branch: string
+  /** Absent when the worktree was made but its session failed to start */
+  sessionId?: string
+}
+
+/** A project task (the Tasks page; PROTOCOL.md, "Tasks"). */
+export interface Task {
+  id: string
+  /** 1–200 characters, one line */
+  title: string
+  /** Markdown, at most 20 000 characters; absent when empty */
+  details?: string
+  /** Free text, at most 80 characters, one line; absent when empty */
+  status?: string
+  createdAt: number
+  /** Bumped by every change; `task.save`'s `expectedUpdatedAt` is checked against it */
+  updatedAt: number
+  completedAt?: number
+  archivedAt?: number
+  /** Newest last, at most 20 */
+  starts?: TaskStart[]
+}
+
+/** `task.save`'s task: no id creates one. Empty or absent details/status clear them. */
+export interface TaskInput {
+  id?: string
+  title: string
+  details?: string
+  status?: string
+}
+
 export interface Project {
   id: string
   name: string
@@ -265,6 +302,8 @@ export interface Project {
   globalSessions: Session[]
   /** Scheduled prompts (absent = none) */
   automations?: Automation[]
+  /** The project's tasks, in list order (absent = none) */
+  tasks?: Task[]
   /**
    * E3's switch (plugins): the old `environments`/`env` fields are retired, so an env plugin copy
    * without its old field is not read as one an older Trek cleared (server/src/projects/legacyEnv.ts).
