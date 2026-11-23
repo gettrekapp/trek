@@ -237,6 +237,25 @@ test('reconcile: every listed worktree on a branch is a trail except the main ch
   assert.deepEqual(trailProjects(camp), ['q'])
 })
 
+test("reconcile open-only: adds the missing trails and ends, turns back, restarts and forgets nothing; a worktree summited on another branch waits for a full one", () => {
+  const camp = fresh()
+  reconcile(camp, 'p', [MAIN, wt('a'), wt('gone')], T0)
+  trailEvent(camp, ev('pr.linked', { branch: 'feature/a', url: 'u' }), T0 + 1)
+  camp.trails['p:held'] = trail({ worktreeId: 'held', branch: 'feature/held', stage: SUMMIT, stageAt: T0 })
+  camp.trailsDone['p:done'] = 'feature/done'
+  camp.trailsDone['p:old'] = 'feature/old'
+  const before = JSON.parse(JSON.stringify(camp))
+  // a's listed branch is stale, gone is gone, held is past its hold, done is listed on another branch, n is new
+  reconcile(camp, 'p', [MAIN, wt('a', { branch: 'feature/stale' }), wt('held'), wt('done', { branch: 'feature/next' }), wt('n')], T0 + 2 * SUMMIT_HOLD_MS, 'open-only')
+  assert.deepEqual(Object.keys(camp.trails).sort(), ['p:a', 'p:gone', 'p:held', 'p:n'])
+  for (const key of ['p:a', 'p:gone', 'p:held']) assert.deepEqual(camp.trails[key], before.trails[key], key)
+  assert.deepEqual(camp.trails['p:n'], trail({ worktreeId: 'n', branch: 'feature/n', start: T0 + 2 * SUMMIT_HOLD_MS, stageAt: T0 + 2 * SUMMIT_HOLD_MS }))
+  assert.deepEqual(camp.trailLog, before.trailLog, 'no history')
+  assert.deepEqual(camp.trailsDone, before.trailsDone, 'nothing forgotten')
+  reconcile(camp, 'p', null, T0 + 3 * SUMMIT_HOLD_MS, 'open-only')
+  assert.equal(Object.keys(camp.trails).length, 4, 'a gone project is left for a full reconcile')
+})
+
 test('history: newest last, the last 20 per project', () => {
   const camp = fresh()
   for (let i = 0; i < 25; i++) {

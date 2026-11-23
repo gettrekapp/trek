@@ -152,15 +152,31 @@ export function trailEvent(camp: Trails, e: ActivityEvent, now: number): void {
 export const isTrailWorktree = (w: PluginWorktree): boolean => w.present && w.branch !== null && w.path !== w.repoPath
 
 /**
+ * How far a reconcile goes: `full` opens, ends and restarts trails; `open-only` only opens the
+ * missing ones (the host's branches may still be stale, as right after a restart)
+ */
+export type ReconcileMode = 'full' | 'open-only'
+
+/**
  * A project's trails against its worktrees now (null: the project is gone): a qualifying worktree
  * without one starts at the trailhead (unless its branch already summited); one whose worktree is
  * gone or no longer qualifies ends; one whose branch changed turns back and starts again on the new
  * branch; a summited one ends after SUMMIT_HOLD_MS. A summited branch is forgotten once its worktree
- * is gone or on another branch.
+ * is gone or on another branch. `open-only` only starts trails for listed worktrees that have none,
+ * and skips a worktree remembered as summited on another branch (its listed branch may be stale):
+ * it never ends, turns back or restarts a trail, nor forgets a summited branch.
  */
-export function reconcile(camp: Trails, projectId: string, worktrees: readonly PluginWorktree[] | null, now: number): void {
+export function reconcile(camp: Trails, projectId: string, worktrees: readonly PluginWorktree[] | null, now: number, mode: ReconcileMode = 'full'): void {
   const listed = new Map<string, PluginWorktree & { branch: string }>()
   for (const w of worktrees ?? []) if (isTrailWorktree(w)) listed.set(w.id, w as PluginWorktree & { branch: string })
+  if (mode === 'open-only') {
+    for (const w of listed.values()) {
+      const key = trailKey(projectId, w.id)
+      if (Object.hasOwn(camp.trailsDone, key) && camp.trailsDone[key] !== w.branch) continue
+      open(camp, projectId, w.id, w.repoId, w.branch, now)
+    }
+    return
+  }
   for (const [key, t] of Object.entries(camp.trails)) {
     if (t.projectId !== projectId) continue
     const w = listed.get(t.worktreeId)

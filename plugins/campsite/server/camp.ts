@@ -6,9 +6,12 @@
 // pushed with the snapshot). The host names projects and worktrees for the
 // crew's journals. Trails (part 3c) move with the activity feed and are reconciled against the
 // host's worktrees: at start-up (the projects with trails), the first time a project is heard from
-// (an event, or a window's `state` naming it), after each worktree event, and every 10 minutes; a
-// merge first paid sends `summit` for each trail it summits, and `trailLog` answers a project's
-// history (not pushed). A minute tick pays working minutes, cools the fire and forgets sessions that
+// (an event, or a window's `state` naming it), after each worktree event, and every 10 minutes;
+// before a commit or pull request event, only the missing trails are opened (a worktree made outside
+// Trek). For TRAIL_GRACE_MS after start-up every reconcile only opens missing trails (the host's
+// branches come from the saved project file until its poller's first refresh); the first full one is
+// the first tick after it. A merge first paid sends `summit` for each trail it summits, and
+// `trailLog` answers a project's history (not pushed). A minute tick pays working minutes, cools the fire and forgets sessions that
 // are gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
@@ -19,7 +22,7 @@ import { snapshot, type CampSnapshot } from '../shared/camp.ts'
 import { journalOf, pinMember, type Where } from '../shared/crew.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
 import { build, buyGear, recruit, type ShopRefusal } from '../shared/shop.ts'
-import { SUMMIT, reconcile, trailLogOf, trailProjects, trailsOn } from '../shared/trails.ts'
+import { SUMMIT, reconcile, trailLogOf, trailProjects, trailsOn, type ReconcileMode } from '../shared/trails.ts'
 import { openCampStore } from './store.ts'
 
 export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree' | 'worktrees'>
@@ -59,6 +62,11 @@ export interface CampServerOptions {
 const EMIT_EVERY_MS = 1000
 /** How often every known project's trails are reconciled against its worktrees */
 export const TRAIL_EVERY_MS = 10 * 60_000
+/**
+ * After start-up, reconciles only open missing trails for this long: until core's poller first
+ * refreshes, host.worktrees can report a branch from the saved project file that is no longer checked out
+ */
+export const TRAIL_GRACE_MS = 2 * 60_000
 
 /** TREK_CAMPSITE_MINUTE_MS, read only when set (≥ 50 ms) */
 function minuteFromEnv(): number {
@@ -155,14 +163,19 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     return snapshot(camp, now(), where)
   }
 
-  /** The projects whose trails were reconciled this run */
+  /** The projects whose trails were reconciled this run (fully, or open-only in the grace period) */
   const reconciled = new Set<string>()
+  const startedAt = now()
+  /** Whether a full reconcile has run since start-up (the first tick after TRAIL_GRACE_MS) */
+  let fullYet = false
+  /** Full once the grace period is over (and its first full pass has run), else open-only */
+  const mode = (): ReconcileMode => (fullYet ? 'full' : 'open-only')
   /**
    * A project's trails against the host's worktrees (no git refresh): a project that is gone
-   * (NOT_FOUND) turns its trails back; one where the plugin is off is left as it is. True when a trail,
-   * the history or the done count changed.
+   * (NOT_FOUND) turns its trails back (fully only); one where the plugin is off is left as it is. True
+   * when a trail, the history or the done count changed.
    */
-  const reconcileProject = (projectId: string): boolean => {
+  const reconcileProject = (projectId: string, how: ReconcileMode = mode()): boolean => {
     let worktrees: PluginWorktree[] | null
     try {
       worktrees = host.worktrees(projectId)
@@ -174,16 +187,17 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       worktrees = null
     }
     if (worktrees !== null && !host.isEnabled(projectId)) return false
+    if (worktrees === null && how === 'open-only') return false
     const before = JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone])
-    reconcile(camp, projectId, worktrees, now())
+    reconcile(camp, projectId, worktrees, now(), how)
     if (worktrees === null) reconciled.delete(projectId)
     else reconciled.add(projectId)
     return JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
   /** Every project with trails, and every one reconciled this run; true when a trail, the history or the done count changed */
-  const reconcileAll = (): boolean => {
+  const reconcileAll = (how: ReconcileMode = mode()): boolean => {
     let any = false
-    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) if (reconcileProject(projectId)) any = true
+    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) if (reconcileProject(projectId, how)) any = true
     return any
   }
 
@@ -209,8 +223,10 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     try {
       // The first word from a project this run: its trails exist before the event moves them
       if (!reconciled.has(e.projectId)) reconcileProject(e.projectId)
+      // A commit or a pull request's event: a worktree made outside Trek (no worktree.created) has its trail before the event moves it
+      else if (e.kind === 'worktree.head' || e.kind.startsWith('pr.')) reconcileProject(e.projectId, 'open-only')
       const paid = applyActivity(camp, e, now(), rules, where)
-      // A worktree event: the worktrees changed, so the trails follow
+      // A worktree event: the worktrees changed, so the trails follow (open-only in the grace period)
       if (e.kind.startsWith('worktree.')) reconcileProject(e.projectId)
       changed()
       if (e.kind === 'pr.ended' && e.result === 'merged' && paid.some((r) => r.key === `merged:${e.url}`)) {
@@ -236,10 +252,11 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   /** What camp.json would hold, less the clocks: lastTick need not be saved (a restart starts it again; nobody waits across one) */
   const saved = (): string => JSON.stringify({ ...camp, lastTick: 0, savedAt: 0 })
 
-  // Start-up: the trails of the projects the camp has trails in (the tick does it again every 10 minutes)
+  // Start-up: the trails of the projects the camp has trails in, open-only (the first tick after the
+  // grace period reconciles them fully, and then every 10 minutes)
   let trailsAt = now()
   try {
-    if (reconcileAll()) changed()
+    if (reconcileAll('open-only')) changed()
   } catch (err) {
     warn('trails', err)
   }
@@ -252,9 +269,10 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       const before = saved()
       prune()
       tick(camp, now(), rules)
-      if (now() - trailsAt >= TRAIL_EVERY_MS) {
+      if (fullYet ? now() - trailsAt >= TRAIL_EVERY_MS : now() - startedAt >= TRAIL_GRACE_MS) {
+        fullYet = true
         trailsAt = now()
-        reconcileAll()
+        reconcileAll('full')
       }
       if (Object.keys(camp.spans).length > 0 || saved() !== before) changed()
       // Time alone can change the snapshot (the away card falling due, its hours, a new day's
