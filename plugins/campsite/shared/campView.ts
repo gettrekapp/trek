@@ -287,7 +287,8 @@ const times = (n: number): string => (n === 1 ? 'once' : `${n} times`)
  * before the tab was opened
  */
 export function guideSeenNow(guide: Readonly<Record<string, GuideEntry>> | undefined, now: number): number {
-  return Object.values(guide ?? {}).reduce((at, page) => Math.max(at, page.first), now)
+  // A server clock far ahead (or a hand-edited camp.json) can't push the seen time more than a day past now
+  return Math.min(now + 86_400_000, Object.values(guide ?? {}).reduce((at, page) => Math.max(at, page.first), now))
 }
 
 /** The field guide's cards: the 20 commons, then the 4 rares; `since`: when the tab was last opened (ms), for the new dot */

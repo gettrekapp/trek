@@ -422,7 +422,7 @@ export function Campsite(): React.JSX.Element | null {
             openTrail={campOpen?.tab === 'trails' ? (campOpen.opener ?? null) : null}
             animal={animal}
             onAnimal={(species, el) => openCamp(el, null, 'guide', undefined, 'animal', species)}
-            animalOpen={campOpen?.opener === 'animal'}
+            animalOpen={campOpen?.opener === 'animal' && campOpen.species === animal?.crossing.species}
             onAnimalGone={() => countsButton.current?.focus()}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}

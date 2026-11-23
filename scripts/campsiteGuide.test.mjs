@@ -88,3 +88,8 @@ test("guideSeenNow: opening the tab marks the guide seen now, or at the newest f
   assert.equal(guideSeenNow(ahead, 1000), 1500)
   assert.ok(guideCards({ guide: ahead, built: {} }, guideSeenNow(ahead, 1000)).commons.every((c) => !c.isNew), 'no dot comes back on the next visit')
 })
+
+test('guideSeenNow: a first sighting far in the future moves the seen time at most a day past now', () => {
+  const DAY = 86_400_000
+  assert.equal(guideSeenNow({ fox: { count: 1, first: 1000 + 365 * DAY, last: 1000 + 365 * DAY } }, 1000), 1000 + DAY)
+})
