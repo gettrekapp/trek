@@ -19,10 +19,14 @@
 // window's time zone and Seasons setting (the camp's clock); each minute tick rolls a sighting for
 // every project the camp knows (its last activity, or a window that asked for the state or pinged
 // seen this run) where the plugin is on and that is active or has a window open, logs it and sends `sighting` to that project's windows
-// only; `build` takes the ranger tower. New commits are counted with git (fast-forward only). Nothing here can stop the server:
+// only; `build` takes the ranger tower. Real chores (part 4): each session's latest tool call
+// (session.tool) is kept in memory only (never in camp.json, and it pays nothing), sent as `tool` to
+// that project's windows, and dropped (sent as null) when the session's agent starts again, stops,
+// exits or the session closes; `state` answers a window's project's tools with the snapshot. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
+import type { AgentToolKind } from '../../../src/shared/plugins/agents.ts'
 import { pluginError, type PluginInstance, type PluginWorktree, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { awaySeen, seen } from '../shared/away.ts'
 import { snapshot, type CampSnapshot } from '../shared/camp.ts'
@@ -70,6 +74,15 @@ export interface CampServerOptions {
   /** Every minute roll is a sighting (the smokes); default TREK_CAMPSITE_FORCE_SIGHTINGS=1 */
   forceSightings?: boolean
 }
+
+/** A session's latest tool call as `tool` sends it (`at`: the server's ms) */
+export interface ToolNote {
+  kind: AgentToolKind
+  label: string
+  at: number
+}
+/** A window's project's tools as `state` answers them: by session, with their age (ms), so a window on another clock can place them */
+export type ToolAges = Record<string, { kind: AgentToolKind; label: string; age: number }>
 
 const EMIT_EVERY_MS = 1000
 /** How often every known project's trails are reconciled against its worktrees */
@@ -278,7 +291,39 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     }
   }
 
+  /** Each session's latest tool call (part 4), with its project: in memory only */
+  const tools = new Map<string, ToolNote & { projectId: string }>()
+  /** `tool` to the project's windows: a session's latest call, or null when it went */
+  const sendTool = (projectId: string, terminalId: string, tool: ToolNote | null): void => {
+    try {
+      host.emit(projectId, 'tool', { terminalId, tool })
+    } catch (err) {
+      warn('tool', err)
+    }
+  }
+  const dropTool = (terminalId: string): void => {
+    const had = tools.get(terminalId)
+    if (!had) return
+    tools.delete(terminalId)
+    sendTool(had.projectId, terminalId, null)
+  }
+  const toolsOf = (projectId: string): ToolAges => {
+    const out: ToolAges = {}
+    for (const [terminalId, t] of tools) if (t.projectId === projectId) out[terminalId] = { kind: t.kind, label: t.label, age: Math.max(0, now() - t.at) }
+    return out
+  }
+
   const off = host.onActivity((e) => {
+    // A tool call is the hiker's chore only: not the camp's (no pay, no last activity, no save)
+    if (e.kind === 'session.tool') {
+      if (disposed) return
+      const tool: ToolNote = { kind: e.tool.kind, label: e.tool.label, at: now() }
+      tools.set(e.terminalId, { ...tool, projectId: e.projectId })
+      sendTool(e.projectId, e.terminalId, tool)
+      return
+    }
+    // A new run of the agent, or no agent running: its last tool call goes
+    if (e.kind === 'session.started' || e.kind === 'session.stopped' || e.kind === 'session.closed' || (e.kind === 'session.status' && e.to === 'exited')) dropTool(e.terminalId)
     try {
       // The first word from a project this run (after the grace period): its trails exist before the event moves them
       if (firstHeard(e.projectId)) reconcileProject(e.projectId, 'full')
@@ -342,6 +387,15 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     try {
       const before = saved()
       prune()
+      // A session gone without a word (its project, repo or worktree removed; the plugin off there) drops its tool call
+      for (const [terminalId, t] of [...tools]) {
+        try {
+          if (!host.isEnabled(t.projectId)) dropTool(terminalId)
+          else host.session(t.projectId, terminalId)
+        } catch (err) {
+          if ((err as { code?: string }).code === 'NOT_FOUND') dropTool(terminalId)
+        }
+      }
       tick(camp, now(), rules)
       if (fullYet ? now() - trailsAt >= TRAIL_EVERY_MS : now() - startedAt >= TRAIL_GRACE_MS) {
         fullYet = true
@@ -372,7 +426,9 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
             warn('trails', err)
           }
         }
-        return snapshot(camp, now(), where)
+        const snap = snapshot(camp, now(), where)
+        // The window's project's tool calls (part 4) ride on its answer only: the pushed state goes to every project
+        return ctx?.projectId === undefined || disposed ? snap : { ...snap, tools: toolsOf(ctx.projectId) }
       },
       build: (params) => {
         open()
@@ -420,6 +476,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     dispose: () => {
       disposed = true
       off()
+      tools.clear()
       ticker.clear()
       pendingEmit?.cancel()
       store.dispose()

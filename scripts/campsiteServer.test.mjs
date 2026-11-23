@@ -1204,3 +1204,75 @@ test("wildlife (3d-2): a window's project where the plugin is off (or unknown) i
   tick()
   assert.deepEqual(h.sent.map(([p]) => p), ['x'], 'remembered once on')
 })
+
+/** A session.tool event (campsite part 4) */
+const toolEvent = (projectId, terminalId, kind, label, at = T0) => ({ kind: 'session.tool', projectId, at, terminalId, worktreeId: 'w', automation: false, provider: 'claude', sessionType: null, tool: { kind, label } })
+
+test("real chores (4): a session's tool call goes to that project's windows as `tool`; state answers the window's project's tools with their age; nothing is saved or paid", async (t) => {
+  const h = fakeHost(t, { sessions: new Set(['t1', 't2', 't3']) })
+  const clock = manual()
+  let now = T0
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  clock.run()
+  const saves = () => (existsSync(h.host.dataFile('camp.json')) ? readFileSync(h.host.dataFile('camp.json'), 'utf8') : '')
+  const before = saves()
+  const emits = h.emitted.length
+  h.sent.length = 0
+  h.fire(toolEvent('p', 't1', 'edit', 'Campsite.tsx'))
+  now += 3000
+  h.fire(toolEvent('q', 't2', 'web', 'github.com'))
+  h.fire(toolEvent('p', 't3', 'run', 'npm test'))
+  assert.deepEqual(h.sent, [
+    ['p', 'tool', { terminalId: 't1', tool: { kind: 'edit', label: 'Campsite.tsx', at: T0 } }],
+    ['q', 'tool', { terminalId: 't2', tool: { kind: 'web', label: 'github.com', at: T0 + 3000 } }],
+    ['p', 'tool', { terminalId: 't3', tool: { kind: 'run', label: 'npm test', at: T0 + 3000 } }]
+  ])
+  clock.run()
+  assert.equal(h.emitted.length, emits, 'no state push')
+  assert.equal(saves(), before, 'nothing saved')
+  // A later call replaces the session's; state answers the window's project's only, with ages
+  now += 1000
+  h.fire(toolEvent('p', 't1', 'read', 'pose.ts'))
+  now += 500
+  const snap = await inst.handlers.state({}, { projectId: 'p', caller: 'c' })
+  assert.deepEqual(snap.tools, { t1: { kind: 'read', label: 'pose.ts', age: 500 }, t3: { kind: 'run', label: 'npm test', age: 1500 } })
+  assert.deepEqual((await inst.handlers.state({}, { projectId: 'q', caller: 'c' })).tools, { t2: { kind: 'web', label: 'github.com', age: 1500 } })
+  assert.equal('tools' in (await inst.handlers.state({}, {})), false, 'no project, no tools')
+  assert.equal(JSON.parse(saves() || '{}').tools, undefined)
+  // The pushed state (to every project's windows) never carries them
+  h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null, from: 'idle', to: 'working', cause: 'output' })
+  clock.run()
+  assert.equal('tools' in h.emitted.filter(([e]) => e === 'state').at(-1)[1], false)
+})
+
+test("real chores (4): a session's tool call goes when its agent starts again, stops, exits or it closes (sent as null), and at the tick once the session is gone", async (t) => {
+  const sessions = new Set(['t1', 't2', 't3', 't4', 't5'])
+  const h = fakeHost(t, { sessions })
+  let tick
+  let now = T0
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  for (const id of sessions) h.fire(toolEvent('p', id, 'read', id))
+  h.sent.length = 0
+  const fact = (terminalId) => ({ projectId: 'p', at: now, terminalId, worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  h.fire({ kind: 'session.started', ...fact('t1') })
+  h.fire({ kind: 'session.stopped', ...fact('t2') })
+  h.fire({ kind: 'session.status', ...fact('t3'), from: 'working', to: 'exited', cause: 'other' })
+  h.fire({ kind: 'session.status', ...fact('t4'), from: 'working', to: 'done', cause: 'quiet' })
+  h.fire({ kind: 'session.closed', ...fact('t4') })
+  h.fire({ kind: 'session.closed', ...fact('t4') })
+  assert.deepEqual(h.sent, ['t1', 't2', 't3', 't4'].map((id) => ['p', 'tool', { terminalId: id, tool: null }]), 'once each; a done session keeps its last call')
+  assert.deepEqual(Object.keys((await inst.handlers.state({}, { projectId: 'p', caller: 'c' })).tools), ['t5'])
+  // t5's session is gone without a word: the tick drops it
+  sessions.delete('t5')
+  now += 60_000
+  tick()
+  assert.deepEqual(h.sent.at(-1), ['p', 'tool', { terminalId: 't5', tool: null }])
+  assert.deepEqual((await inst.handlers.state({}, { projectId: 'p', caller: 'c' })).tools, {})
+  // After dispose a tool call is ignored
+  inst.dispose()
+  h.fire(toolEvent('p', 't1', 'edit', 'late'))
+  assert.equal(h.sent.at(-1)[2].terminalId, 't5')
+})
