@@ -124,6 +124,8 @@ export function trailEvent(camp: Trails, e: ActivityEvent, now: number): void {
     case 'worktree.removed': {
       const key = trailKey(e.projectId, e.worktreeId)
       if (Object.hasOwn(camp.trails, key)) close(camp, key, now)
+      // The worktree is gone: a summited branch's memory of it goes too
+      delete camp.trailsDone[key]
       break
     }
     case 'pr.linked':

@@ -178,6 +178,48 @@ test('a summited trail stays at the peak until its worktree goes (summited in th
   assert.deepEqual(camp.trailsDone, {})
 })
 
+test('trailEvent: a commit and failed checks leave a summited trail at the summit; a repeated merge does not reset its clock', () => {
+  const camp = fresh()
+  trailEvent(camp, ev('worktree.created', { worktreeId: 'a', branch: 'feature/a' }), T0)
+  trailEvent(camp, ev('pr.ended', { branch: 'feature/a', url: 'u', result: 'merged' }), T0 + 1)
+  trailEvent(camp, ev('pr.ended', { branch: 'feature/a', url: 'u', result: 'merged' }), T0 + 50)
+  trailEvent(camp, ev('worktree.head', { worktreeId: 'a', branch: 'feature/a', from: 'x', to: 'y' }), T0 + 60)
+  trailEvent(camp, ev('pr.checks', { branch: 'feature/a', url: 'u', result: 'failed', headSha: 's' }), T0 + 70)
+  assert.deepEqual([stageOf(camp), camp.trails['p:a'].stageAt], [SUMMIT, T0 + 1], 'still at the summit; the 24 h hold is not extended')
+})
+
+test('trailEvent: a branch change on a summited trail logs it summited, starts a new trail at the trailhead and clears its memory; removing a worktree clears it too', () => {
+  const camp = fresh()
+  trailEvent(camp, ev('worktree.created', { worktreeId: 'a', branch: 'feature/a' }), T0)
+  trailEvent(camp, ev('pr.ended', { branch: 'feature/a', url: 'u', result: 'merged' }), T0 + 1)
+  reconcile(camp, 'p', [MAIN, wt('a')], T0 + 1 + SUMMIT_HOLD_MS)
+  assert.deepEqual(camp.trailsDone, { 'p:a': 'feature/a' })
+  trailEvent(camp, ev('worktree.created', { worktreeId: 'b', branch: 'feature/b' }), T0 + 2)
+  trailEvent(camp, ev('pr.ended', { branch: 'feature/b', url: 'v', result: 'merged' }), T0 + 3)
+  trailEvent(camp, ev('worktree.head', { worktreeId: 'b', branch: 'feature/b2', from: 'x', to: 'y' }), T0 + 4)
+  assert.deepEqual(camp.trailLog.p.at(-1), { branch: 'feature/b', result: 'summited', start: T0 + 2, end: T0 + 4 })
+  assert.deepEqual([camp.trails['p:b'].branch, camp.trails['p:b'].stage], ['feature/b2', 0])
+  assert.deepEqual(camp.trailsDone, { 'p:a': 'feature/a' }, 'a was kept, b has none (it is on a new branch)')
+  trailEvent(camp, ev('worktree.removed', { worktreeId: 'a', branch: 'feature/a' }), T0 + 5)
+  assert.deepEqual(camp.trailsDone, {}, 'the worktree is gone: no memory of it lingers')
+})
+
+test('reconcile: a project that is gone clears its summited memory; worktree.head on a done worktree that moved to a new branch starts no trail until the next reconcile', () => {
+  const camp = fresh()
+  trailEvent(camp, ev('worktree.created', { worktreeId: 'a', branch: 'feature/a' }), T0)
+  trailEvent(camp, ev('pr.ended', { branch: 'feature/a', url: 'u', result: 'merged' }), T0 + 1)
+  reconcile(camp, 'p', [MAIN, wt('a')], T0 + 1 + SUMMIT_HOLD_MS)
+  trailEvent(camp, ev('worktree.head', { worktreeId: 'a', branch: 'feature/next', from: 'x', to: 'y' }), T0 + 2 + SUMMIT_HOLD_MS)
+  assert.deepEqual(camp.trails, {}, 'no trail yet')
+  reconcile(camp, 'p', [MAIN, wt('a', { branch: 'feature/next' })], T0 + 3 + SUMMIT_HOLD_MS)
+  assert.equal(camp.trails['p:a'].branch, 'feature/next')
+  assert.deepEqual(camp.trailsDone, {})
+  camp.trailsDone['p:z'] = 'feature/z'
+  camp.trailsDone['q:z'] = 'feature/z'
+  reconcile(camp, 'p', null, T0 + 4 + SUMMIT_HOLD_MS)
+  assert.deepEqual(camp.trailsDone, { 'q:z': 'feature/z' }, "that project's memory goes; another's stays")
+})
+
 test('reconcile: every listed worktree on a branch is a trail except the main checkout, detached and missing ones; no duplicates; gone ones turn back; a changed branch restarts', () => {
   const camp = fresh()
   reconcile(camp, 'p', [MAIN, wt('a'), wt('b', { branch: null }), wt('c', { present: false }), wt('d')], T0)
@@ -235,7 +277,7 @@ test("mountain: a peak behind the fire, five ledges above the waiting hikers' si
   assert.deepEqual(m.ledges.map((l) => l.y), [...LEDGE_Y])
   assert.ok(LEDGE_Y.every((y, i) => y <= 30 && (i === 0 || y < LEDGE_Y[i - 1])), "at or above the signs at the fire (y 30), climbing")
   assert.ok(LEDGE_Y[SUMMIT] - PLANTED.h >= 0, 'a planted flag stays on the strip')
-  assert.ok(m.ledges[0].x + m.ledges[0].w <= 600 && m.ledges[1].x >= 600 - m.ledges[1].w, 'left, then right')
+  assert.ok([0, 2].every((i) => m.ledges[i].x + m.ledges[i].w <= 600) && m.ledges[1].x >= 600, 'the zigzag: left of the middle, then right, then left')
   const summit = m.ledges[SUMMIT]
   assert.ok(Math.abs(summit.x + summit.w / 2 - 600) <= 1, 'the summit in the middle')
   assert.deepEqual(m.ledges.slice(0, 4).map((l) => l.holds), [6, 6, 6, 6])

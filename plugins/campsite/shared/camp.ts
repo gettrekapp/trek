@@ -3,7 +3,7 @@
 // windows see. Pure.
 import { AWAY_SOURCES, awayDue, newAway, noWood, type AwaySnapshot, type AwayTally } from './away.ts'
 import { BUILDING_IDS, GEAR_SLOTS, GEAR_TOP, HOUR_MS, building, gearBonus, hireCost, isRecord, noGear, startBuilt, whole, type BuildingId, type GearTiers } from './catalog.ts'
-import { NO_WHERE, levelFor, levelXp, liveKinds, newCrew, titleFor, type Where } from './crew.ts'
+import { NO_WHERE, levelFor, levelXp, liveKinds, newCrew, projectName, titleFor, type Where } from './crew.ts'
 import type { JournalEntry } from './journal.ts'
 import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
 import type { Trail, TrailRecord } from './trails.ts'
@@ -291,15 +291,6 @@ function awaySnapshot(camp: Camp, now: number): AwaySnapshot {
   return { hours: Math.floor((now - camp.away.since) / HOUR_MS), wood, markers: camp.away.markers, levelUps }
 }
 
-/** `where.project`, the id if it throws */
-function nameOf(where: Pick<Where, 'project'>, projectId: string): string {
-  try {
-    return where.project(projectId)
-  } catch {
-    return projectId
-  }
-}
-
 /** What windows see; `where` names the trails' projects (by their ids without it) */
 export function snapshot(camp: Camp, now: number, where: Pick<Where, 'project'> = NO_WHERE): CampSnapshot {
   const assignments: Record<string, string> = {}
@@ -320,7 +311,7 @@ export function snapshot(camp: Camp, now: number, where: Pick<Where, 'project'> 
     seenKinds: liveKinds(camp, now),
     trails: Object.values(camp.trails)
       .sort((a, b) => a.start - b.start || (a.worktreeId < b.worktreeId ? -1 : a.worktreeId > b.worktreeId ? 1 : 0))
-      .map((t) => ({ projectId: t.projectId, projectName: nameOf(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt })),
+      .map((t) => ({ projectId: t.projectId, projectName: projectName(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt })),
     summits: camp.summits
   }
   if (awayDue(camp, now)) snap.away = awaySnapshot(camp, now)

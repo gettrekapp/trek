@@ -61,7 +61,7 @@ export interface Where {
 export const NO_WHERE: Where = { project: (id) => id, worktree: () => null }
 
 /** `where.project`, the id if it throws */
-function projectName(where: Where, projectId: string): string {
+export function projectName(where: Pick<Where, 'project'>, projectId: string): string {
   try {
     return where.project(projectId)
   } catch {
