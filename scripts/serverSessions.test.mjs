@@ -1842,3 +1842,135 @@ test("activity: every session event names the session's agent and its type (camp
   assert.ok(of(plain.sessionId).length >= 3)
   assert.ok(of(plain.sessionId).every((e) => e.provider === 'codex' && e.sessionType === null), 'no type: null')
 })
+
+/**
+ * The built-in agents with a fake `activity` on Claude (campsite part 4): `watches` records each
+ * watch (its session, its onTool, how often it was stopped)
+ */
+function fakeToolAgents({ throwOnWatch = false, throwOnStop = false } = {}) {
+  const watches = []
+  const activity = {
+    watch(session, onTool) {
+      if (throwOnWatch) throw new Error('no transcript')
+      const w = { session, onTool, stopped: 0 }
+      watches.push(w)
+      return () => {
+        w.stopped++
+        if (throwOnStop) throw new Error('stuck')
+      }
+    }
+  }
+  const agents = (store) =>
+    createAgentRegistry({
+      agents: builtinAgentEntries().map((e) => (e.agent.id === 'claude' ? { ...e, agent: { ...e.agent, activity } } : e)),
+      serverConfig: (id) => store.agentServerConfig(id)
+    })
+  return { watches, agents }
+}
+const toolEvents = (feed) => feed.events.filter((e) => e.kind === 'session.tool')
+
+test("activity (campsite part 4): an agent's tool calls are followed from each launch until it stops; each is a session.tool with the session's facts", async (t) => {
+  const feed = recorder()
+  const fake = fakeToolAgents()
+  const s = setup(t, { activity: feed, agents: fake.agents })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.equal(fake.watches.length, 1)
+  assert.deepEqual(fake.watches[0].session, { sessionId: s.wx().sessions[0].agentSessionId, cwd: s.wx().path, terminalId: sessionId })
+  fake.watches[0].onTool({ kind: 'edit', label: 'Campsite.tsx' })
+  const [event] = toolEvents(feed)
+  assert.deepEqual(event, { kind: 'session.tool', projectId: s.projectId, at: s.clock.t, terminalId: sessionId, worktreeId: 'wx', automation: false, provider: 'claude', sessionType: null, tool: { kind: 'edit', label: 'Campsite.tsx' } })
+  assert.ok(Object.isFrozen(event.tool), "a listener can't change the tool another one hears")
+  // The agent ends by itself: its watch is stopped, and its calls are dropped
+  s.spawned[0].exit(0)
+  await tick()
+  assert.deepEqual(fake.watches.map((w) => w.stopped), [1])
+  s.clock.t += 5000
+  fake.watches[0].onTool({ kind: 'run', label: 'after exit' })
+  assert.equal(toolEvents(feed).length, 1)
+  // A restart follows the new run
+  s.sessions.restart({ projectId: s.projectId, sessionId, ...size })
+  assert.deepEqual(fake.watches.map((w) => w.stopped), [1, 0])
+  fake.watches[1].onTool({ kind: 'run', label: 'npm test' })
+  assert.deepEqual(toolEvents(feed).map((e) => e.tool.label), ['Campsite.tsx', 'npm test'])
+  // An unload and a close stop theirs; a Codex session (no activity) is not followed
+  const other = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+  assert.equal(fake.watches.length, 3)
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.equal(fake.watches[2].stopped, 1)
+  s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.equal(fake.watches.length, 5, 'a resume on load follows each Claude session again')
+  s.sessions.close({ projectId: s.projectId, sessionId: other.sessionId })
+  assert.equal(fake.watches.find((w) => w.session.terminalId === other.sessionId && w.stopped === 0), undefined)
+})
+
+test('activity (campsite part 4): tool calls are throttled per session, one each 2 s; the latest is sent when the wait ends', (t) => {
+  const feed = recorder()
+  const fake = fakeToolAgents()
+  const s = setup(t, { activity: feed, agents: fake.agents })
+  const a = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const [wa, wb] = fake.watches
+  const sent = () => toolEvents(feed).map((e) => `${e.terminalId === a.sessionId ? 'a' : 'b'}:${e.tool.label}`)
+  wa.onTool({ kind: 'read', label: 'one' })
+  wb.onTool({ kind: 'read', label: 'b1' })
+  s.clock.t += 500
+  wa.onTool({ kind: 'read', label: 'two' })
+  wa.onTool({ kind: 'edit', label: 'three' })
+  assert.deepEqual(sent(), ['a:one', 'b:b1'], 'each session has its own 2 s')
+  const held = s.scheduled.filter((j) => j.ms === 1500 && !j.cancelled)
+  assert.equal(held.length, 1, 'one send held, for the rest of the 2 s')
+  s.clock.t += 1500
+  held[0].fn()
+  assert.deepEqual(sent(), ['a:one', 'b:b1', 'a:three'], 'the latest wins')
+  s.clock.t += 2000
+  wa.onTool({ kind: 'run', label: 'four' })
+  assert.deepEqual(sent().at(-1), 'a:four', '2 s after the last send: at once')
+  // A call held when the agent stops is dropped
+  s.clock.t += 100
+  wa.onTool({ kind: 'run', label: 'five' })
+  const job = s.scheduled.at(-1)
+  assert.equal(job.ms, 1900)
+  s.sessions.close({ projectId: s.projectId, sessionId: a.sessionId })
+  assert.equal(job.cancelled, true)
+  job.fn()
+  assert.equal(sent().length, 4)
+})
+
+test('activity (campsite part 4): a throwing watch, stop or feed, and a call that is not a tool, are contained; no feed, no watch', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {})
+  const throwing = fakeToolAgents({ throwOnWatch: true })
+  const feed = recorder()
+  const s = setup(t, { activity: feed, agents: throwing.agents })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.equal(s.wx().sessions[0].id, sessionId)
+  assert.ok(s.wx().sessions[0].ptyId, 'the session runs')
+  assert.deepEqual(feed.kinds(), ['session.started'])
+  assert.equal(warn.mock.callCount(), 1)
+  assert.match(String(warn.mock.calls[0].arguments[0]), /tool calls of session/)
+  // A stop that throws is logged once; the close goes through. Calls that are not tools are ignored
+  const stuck = fakeToolAgents({ throwOnStop: true })
+  const s2 = setup(t, { activity: feed, agents: stuck.agents })
+  const second = s2.sessions.start({ projectId: s2.projectId, worktreeId: 'wx', ...size })
+  stuck.watches[0].onTool(null)
+  stuck.watches[0].onTool('edit')
+  assert.equal(toolEvents(feed).length, 0)
+  s2.sessions.close({ projectId: s2.projectId, sessionId: second.sessionId })
+  assert.equal(stuck.watches[0].stopped, 1)
+  assert.equal(warn.mock.callCount(), 2)
+  // A feed that throws on the call: the agent's onTool never sees it
+  const loud = fakeToolAgents()
+  const s3 = setup(t, { activity: { emit: (e) => { if (e.kind === 'session.tool') throw new Error('boom') } }, agents: loud.agents })
+  s3.sessions.start({ projectId: s3.projectId, worktreeId: 'wx', ...size })
+  assert.doesNotThrow(() => loud.watches[0].onTool({ kind: 'read', label: 'a' }))
+  assert.equal(warn.mock.callCount(), 3)
+  // Without a feed nothing is followed; stopAll stops what is
+  const quiet = fakeToolAgents()
+  const s4 = setup(t, { agents: quiet.agents })
+  s4.sessions.start({ projectId: s4.projectId, worktreeId: 'wx', ...size })
+  assert.equal(quiet.watches.length, 0)
+  const s5 = setup(t, { activity: recorder(), agents: quiet.agents })
+  s5.sessions.start({ projectId: s5.projectId, worktreeId: 'wx', ...size })
+  s5.sessions.stopAll()
+  assert.deepEqual(quiet.watches.map((w) => w.stopped), [1])
+})

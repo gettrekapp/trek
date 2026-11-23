@@ -7,7 +7,7 @@ import type { Project, Session, SessionContext, SessionStatus, Worktree } from '
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { resolveGlobalAgent, resolveNewSessionLlm, sanitizeAgentSelection, sessionLaunch, type AgentLookup } from '../../../src/shared/agents/selection.ts'
 import type { AgentRegistry } from '../agents/registry.ts'
-import { DEFAULT_AGENT_ID, type AgentModel } from '../../../src/shared/plugins/agents.ts'
+import { DEFAULT_AGENT_ID, agentTool, type AgentActivitySession, type AgentModel, type AgentProvider, type AgentTool } from '../../../src/shared/plugins/agents.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
@@ -44,6 +44,8 @@ const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 const copyModel = (m: AgentModel): AgentModel => ({ ...m, ...(m.efforts ? { efforts: [...m.efforts] } : {}) })
 /** How long agents.models keeps an endpoint's answer (a picker opened twice asks once). */
 const MODELS_TTL_MS = 10_000
+/** A session's tool calls reach the activity feed at most this often (campsite part 4): the latest wins, sent when the wait ends */
+export const TOOL_EVERY_MS = 2000
 
 export interface ScheduledJob {
   cancel(): void
@@ -149,6 +151,19 @@ interface SessionChange {
   stopped?: boolean
 }
 
+/** An agent's tool calls being followed for one session's run (campsite part 4) */
+interface ToolWatch {
+  /** The agent's stop function */
+  stop: () => void
+  /** When this run's last session.tool was sent */
+  sentAt: number
+  /** The latest call held back until TOOL_EVERY_MS has passed */
+  pending?: AgentTool
+  timer?: ScheduledJob
+  /** A failure was logged (once per run) */
+  warned: boolean
+}
+
 /** Whether the session is an automation's run tab */
 const isAutomation = (s: Session): boolean => s.context?.kind === 'automation'
 
@@ -193,6 +208,8 @@ export class SessionManager {
   private readonly blocked = new Map<string, number>()
   /** sessionId → live activity (marker scan) and its quiet timer */
   private readonly activity = new Map<string, { activity: Activity; quiet?: ScheduledJob }>()
+  /** sessionId → its agent's tool calls being followed (campsite part 4: an agent with `activity`, while the feed is on) */
+  private readonly toolWatches = new Map<string, ToolWatch>()
   /** Sessions whose current pty run has printed live output */
   private readonly outputSeen = new Set<string>()
   /** sessionId → when it entered attention or done */
@@ -753,6 +770,7 @@ export class SessionManager {
     this.pending.clear()
     for (const entry of this.activity.values()) entry.quiet?.cancel()
     this.activity.clear()
+    for (const id of [...this.toolWatches.keys()]) this.stopTools(id)
     this.outputSeen.clear()
     this.since.clear()
     this.terminals.disposeAll()
@@ -928,6 +946,7 @@ export class SessionManager {
     if (revived) this.emitActivity({ kind: 'session.status', ...fact, from: 'exited', to: 'idle', cause: 'other' })
     // Every launch of the session's agent (start, restart, renew, a resume on load): one session.started
     this.emitActivity({ kind: 'session.started', ...fact })
+    this.watchTools(provider, projectId, { sessionId: launch.sessionId, cwd, terminalId: sessionId })
     // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
     // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
     // not excluded. restart has the same race; automation runs are minutes apart.
@@ -1117,10 +1136,11 @@ export class SessionManager {
     }
   }
 
-  /** The session's pty ended or was dropped: forget its activity, output flag, quiet timer and `since`. */
+  /** The session's pty ended or was dropped: forget its activity, output flag, quiet timer and `since`; stop following its tool calls. */
   private dropActivity(sessionId: string): void {
     this.activity.get(sessionId)?.quiet?.cancel()
     this.activity.delete(sessionId)
+    this.stopTools(sessionId)
     this.outputSeen.delete(sessionId)
     this.since.delete(sessionId)
   }
@@ -1146,6 +1166,84 @@ export class SessionManager {
 
   private emitActivity(event: ActivityEvent): void {
     this.deps.activity?.emit(event)
+  }
+
+  /**
+   * Follows a launched agent's tool calls (campsite part 4): only an agent with `activity`, and only
+   * while the server has an activity feed. A throwing `watch` is logged once; the session runs on.
+   */
+  private watchTools(provider: AgentProvider, projectId: string, run: AgentActivitySession): void {
+    this.stopTools(run.terminalId)
+    if (!this.deps.activity || !provider.activity) return
+    const watch: ToolWatch = { stop: () => {}, sentAt: -Infinity, warned: false }
+    this.toolWatches.set(run.terminalId, watch)
+    try {
+      const stop = provider.activity.watch({ ...run }, (tool) => {
+        try {
+          this.onTool(projectId, run.terminalId, watch, tool)
+        } catch (err) {
+          this.warnTools(watch, run.terminalId, err)
+        }
+      })
+      if (typeof stop === 'function') watch.stop = stop
+    } catch (err) {
+      if (this.toolWatches.get(run.terminalId) === watch) this.toolWatches.delete(run.terminalId)
+      this.warnTools(watch, run.terminalId, err)
+    }
+  }
+
+  private warnTools(watch: ToolWatch, sessionId: string, err: unknown): void {
+    if (watch.warned) return
+    watch.warned = true
+    console.warn(`following the tool calls of session ${sessionId} failed`, err)
+  }
+
+  /** One tool call: sent at once, or held as the latest until TOOL_EVERY_MS after the last one sent */
+  private onTool(projectId: string, sessionId: string, watch: ToolWatch, value: unknown): void {
+    if (this.stopped || this.toolWatches.get(sessionId) !== watch) return
+    const tool = agentTool(value)
+    if (!tool) return
+    const wait = watch.sentAt + TOOL_EVERY_MS - this.now()
+    if (wait <= 0 && !watch.timer) {
+      this.sendTool(projectId, sessionId, watch, tool)
+      return
+    }
+    watch.pending = tool
+    watch.timer ??= this.schedule(() => {
+      watch.timer = undefined
+      const latest = watch.pending
+      watch.pending = undefined
+      if (latest && !this.stopped && this.toolWatches.get(sessionId) === watch) this.sendTool(projectId, sessionId, watch, latest)
+    }, Math.max(0, wait))
+  }
+
+  /** A session.tool with the session's facts as they are now (none once the session is gone) */
+  private sendTool(projectId: string, sessionId: string, watch: ToolWatch, tool: AgentTool): void {
+    watch.sentAt = this.now()
+    let found: ReturnType<typeof findSession>
+    let project: Project
+    try {
+      project = this.deps.projects.require(projectId)
+      found = findSession(project, sessionId)
+    } catch {
+      return
+    }
+    const fact = { projectId, at: this.now(), terminalId: sessionId, worktreeId: found.worktree?.id ?? null, automation: isAutomation(found.session), ...kindOf(project, found.session) }
+    this.emitActivity({ kind: 'session.tool', ...fact, tool: Object.freeze(tool) })
+  }
+
+  /** Stops following the session's tool calls (a held one is dropped); a throwing stop is logged */
+  private stopTools(sessionId: string): void {
+    const watch = this.toolWatches.get(sessionId)
+    if (!watch) return
+    this.toolWatches.delete(sessionId)
+    watch.timer?.cancel()
+    watch.pending = undefined
+    try {
+      watch.stop()
+    } catch (err) {
+      this.warnTools(watch, sessionId, err)
+    }
   }
 
   /** Reports a change: the status (with its cause), and a decision asked or cleared (`cleared`: how) */

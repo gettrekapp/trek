@@ -10,6 +10,9 @@
 //   ends the wait.
 // - session.started: every launch of the session's agent (a start, restart, renew, or a resume when
 //   its worktree loads).
+// - session.tool (campsite part 4): a tool call the session's agent made, from an agent that reports
+//   them (its provider's `activity`: Claude's, from its transcript). At most one each 2 s per session:
+//   the latest wins, sent when the 2 s are up. None after the agent stops.
 // - session.stopped: Trek stopped a running agent and kept the session's record, idle (its worktree
 //   unloaded, a promote moving it, a Global session stopped because the project's repositories
 //   changed). An agent that ends by itself is session.status to 'exited'; a session removed is
@@ -17,6 +20,8 @@
 // - pr.linked: a branch's pull request link set or changed. Unlinking is not reported.
 // - worktree.created / worktree.removed: worktrees made or removed through Trek, not ones git's own
 //   commands add or remove outside it (those only show up as the poller lists them).
+
+import type { AgentTool } from './agents.ts'
 
 /** A session's status on the server (core's SessionStatus) */
 export type ActivityStatus = 'working' | 'attention' | 'done' | 'complete' | 'idle' | 'exited'
@@ -63,6 +68,7 @@ export type ActivityEvent = Readonly<
   | (SessionFact & { kind: 'session.started' })
   | (SessionFact & { kind: 'session.status'; from: ActivityStatus; to: ActivityStatus; cause: SessionCause })
   | (SessionFact & { kind: 'session.decision'; state: 'asked' | 'answered' | 'dismissed' })
+  | (SessionFact & { kind: 'session.tool'; tool: Readonly<AgentTool> })
   | (SessionFact & { kind: 'session.stopped' })
   | (SessionFact & { kind: 'session.closed' })
   | (PrFact & { kind: 'pr.linked' })

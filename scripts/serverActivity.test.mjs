@@ -140,3 +140,15 @@ test('events are frozen: a listener cannot change what the next one hears', () =
   feed.emit({ kind: 'session.closed', projectId: 'p', at: 1, terminalId: 't', worktreeId: null, automation: false })
   assert.deepEqual(seen, ['p'])
 })
+
+test("session.tool (campsite part 4) reaches a plugin's onActivity as it was sent, frozen, only where the plugin is on", (t) => {
+  const feed = createActivityFeed()
+  const { host } = registryWith(t, feed)
+  const got = []
+  host.onActivity((e) => got.push(e))
+  const tool = (projectId) => ({ kind: 'session.tool', projectId, at: 5, terminalId: 't', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null, tool: Object.freeze({ kind: 'edit', label: 'Campsite.tsx' }) })
+  feed.emit(tool('p1'))
+  feed.emit(tool('p2'))
+  assert.deepEqual(got, [tool('p1')])
+  assert.ok(Object.isFrozen(got[0]) && Object.isFrozen(got[0].tool))
+})
