@@ -2,7 +2,10 @@
 // sessions of the scenario named in ?scenario= (default "few"); ?dog=0 hides the dog.
 // ?built=out builds every building; ?away=1 shows the away card; ?crew=geared gives t1–t3's members
 // gear (t1's tier 3 in every slot, t2's mixed, t3's tier 1) and the second a pin and a journal (which
-// the fake host answers to `journal`, as the server does).
+// the fake host answers to `journal`, as the server does). ?trails=all (campsite 3c) puts the harness
+// project's trails on every stage (three at the trailhead, eight on the switchbacks: "+2", two planted), another
+// project's two, 12 summits (the cairn) and both projects' histories (the fake host answers
+// `trailLog`); window.__summit(worktreeId, branch) sends the summit event, as the server does.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -68,12 +71,42 @@ if (params.get('crew') === 'geared') {
     { kind: 'pinned', at: T - 3_600_000, name: 'Codex' }
   ]
 }
+if (params.get('trails') === 'all') {
+  const D = 86_400_000
+  const trail = (projectId: string, worktreeId: string, branch: string, stage: number, ago: number) => ({ projectId, worktreeId, repoId: 'r', branch, stage, start: T - ago, stageAt: T - ago / 2 })
+  const all = [
+    trail('harness', 'docs', 'feature/docs', 0, 3 * 3_600_000),
+    trail('harness', 'auth', 'feature/auth', 0, 2 * 3_600_000),
+    trail('harness', 'lint', 'chore/lint', 0, 3_600_000),
+    ...Array.from({ length: 8 }, (_, i) => trail('harness', `s${i}`, `feature/step-${i}`, 1, (i + 1) * D)),
+    trail('harness', 'api', 'feature/api', 2, 2 * D),
+    trail('harness', 'web', 'feature/web', 3, 5 * D),
+    trail('harness', 'ship', 'feature/ship', 4, 4 * 3_600_000),
+    // A second planted flag: the false summit's flag steps clear of the planted row
+    trail('harness', 'release', 'chore/release', 4, 9 * 3_600_000),
+    trail('site', 'blog', 'feature/blog', 2, D),
+    trail('site', 'nav', 'fix/nav', 0, 3_600_000)
+  ]
+  state.trails = Object.fromEntries(all.map((t) => [`${t.projectId}:${t.worktreeId}`, t]))
+  state.summits = 12
+  state.trailLog = {
+    harness: [
+      { branch: 'feature/campsite-strip', result: 'summited', start: T - 9 * D, end: T - 2 * D },
+      { branch: 'spike/old-idea', result: 'turned-back', start: T - 6 * D, end: T - D }
+    ],
+    site: [{ branch: 'feature/landing', result: 'summited', start: T - 4 * D, end: T - 3 * D }]
+  }
+}
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {
   state.seenAt = T - 9 * 3_600_000
   state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ crewId: state.crew[1].id, level: 3 }] }
 }
-const camp = snapshot(state, T)
+const camp = snapshot(state, T, { project: (id) => (id === 'harness' ? 'trek' : 'website') })
+const listeners = new Map<string, Set<(data: unknown) => void>>()
+;(window as unknown as { __summit: (worktreeId: string, branch: string) => void }).__summit = (worktreeId, branch) => {
+  for (const l of listeners.get('summit') ?? []) l({ projectId: 'harness', worktreeId, branch })
+}
 const host = {
   id: 'campsite',
   projectId: 'harness',
@@ -82,13 +115,19 @@ const host = {
   selectedTerminalId: () => sessions[0]?.terminalId ?? null,
   focusSession: (id: string) => console.log('[harness] focus', id),
   prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} },
-  request: async (method: string, params?: { crewId?: string }) => {
+  request: async (method: string, params?: { crewId?: string; projectId?: string }) => {
     if (method === 'state') return camp
     if (method === 'journal') return { journal: state.crew.find((m) => m.id === params?.crewId)?.journal ?? [] }
+    if (method === 'trailLog') return { log: state.trailLog[params?.projectId ?? ''] ?? [] }
     if (method === 'seen' || method === 'awaySeen') return { ok: true }
     throw new Error(`[harness] no method ${method}`)
   },
-  onEvent: () => () => {},
+  onEvent: (event: string, listener: (data: unknown) => void) => {
+    const set = listeners.get(event) ?? new Set()
+    listeners.set(event, set)
+    set.add(listener)
+    return () => set.delete(listener)
+  },
   onChanged: () => () => {}
 } as unknown as ClientPluginHost
 

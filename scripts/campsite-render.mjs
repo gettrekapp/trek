@@ -36,7 +36,16 @@ const SHOTS = [
   // Crew depth (campsite 3b): t1–t3's members wear tier 3, mixed and tier 1 gear on the strip, the shed built out
   { name: 'geared-crew', scenario: 'few', crew: 'geared', built: 'out', width: 1600 },
   // The camp popover's member view: portrait, bonus, pin, gear rows (Buy and a gate) and journal (the whole page, taller)
-  { name: 'member-view', scenario: 'few', crew: 'geared', built: 'out', member: true, height: 720 }
+  { name: 'member-view', scenario: 'few', crew: 'geared', built: 'out', member: true, height: 720 },
+  // Trails (campsite 3c): flags on every ledge ("+2" on the switchbacks), the planted summit, the cairn at 12 summits, the signpost
+  { name: 'trails', scenario: 'few', trails: 'all', built: 'out', width: 1600 },
+  // A middle narrower than the peak (440 px) scales it sideways (never dropped): only a window this
+  // narrow has one, since the buildings give way before the camps and the middle never drops below ~500 px
+  { name: 'trails-narrow', scenario: 'few', trails: 'all', width: 360 },
+  // A summit mid-celebration: the planted flag climbing, sparks over the fire, the header's line (caught 700 ms in)
+  { name: 'summit', scenario: 'few', trails: 'all', built: 'out', width: 1600, summit: true },
+  // The Trails tab, opened from a flag: this project's rows and history, the other project (the signpost is built)
+  { name: 'trails-tab', scenario: 'few', trails: 'all', built: 'out', trailsTab: true, height: 1000 }
 ]
 
 mkdirSync(out, { recursive: true })
@@ -66,7 +75,7 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
@@ -74,8 +83,33 @@ try {
     if (await page.evaluate(() => document.querySelector('button[title*="accessibility"]') !== null)) {
       problems.push(`${shot.name}: Pixi's accessibility button is on the page`)
     }
+    // The trails' buttons (flags, a ledge's "+n", the cairn) overlap neither each other nor a hiker's
+    const overlaps = await page.evaluate(() => {
+      const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker')].map((el) => ({ el, r: el.getBoundingClientRect() }))
+      const name = (el) => el.getAttribute('aria-label') ?? el.className
+      const found = []
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i]
+          const b = boxes[j]
+          if (a.el.classList.contains('cs-camp-hiker') && b.el.classList.contains('cs-camp-hiker')) continue
+          if (a.r.left < b.r.right && b.r.left < a.r.right && a.r.top < b.r.bottom && b.r.top < a.r.bottom) found.push(`${name(a.el)} / ${name(b.el)}`)
+        }
+      }
+      return found
+    })
+    for (const o of overlaps) problems.push(`${shot.name}: trail buttons overlap: ${o}`)
     const path = join(out, `${shot.name}.png`)
-    if (shot.member) {
+    if (shot.summit) {
+      await page.evaluate(() => window.__summit('ship', 'feature/ship'))
+      await page.waitForTimeout(700)
+      await page.locator('.campsite').screenshot({ path })
+    } else if (shot.trailsTab) {
+      // The first flag (the trailhead's oldest) opens the Trails tab at its row; its history is read
+      await page.locator('.cs-flag').first().click()
+      await page.waitForSelector('.cs-camp-popover .cs-trail-log', { timeout: 5000 })
+      await page.screenshot({ path })
+    } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
       await page.locator('.cs-camp-button').click()
       await page.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()

@@ -14,7 +14,10 @@
 //     session works (a working minute shortened to 200 ms); with the camp seeded with 400 wood
 //     (TREK_CAMPSITE_SEED_WOOD), the counts button opens the camp's popover, string lights are built
 //     from it (the row says Built, the wood drops by 25), then the gear shed, and a member's view in the
-//     Crew tab buys a canvas pack ("+2% wood"), reads its journal, and goes Back to the list (its row focused); the button closes it again; a bell puts the row in attention (on the server too); showing the session
+//     Crew tab buys a canvas pack ("+2% wood"), reads its journal, and goes Back to the list (its row focused);
+//     the trail signpost is built (its planks count both feature-auth trails); the button closes it again;
+//     the mountain carries a flag for each feature-auth worktree (api's on the ridge: its PR is linked),
+//     and a flag opens the Trails tab at its row, with the history read; a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -204,9 +207,9 @@ try {
     TREK_NO_UPDATE_CHECK: '1',
     // The campsite's working minute, so a few seconds of work earn the camp wood
     TREK_CAMPSITE_MINUTE_MS: '200',
-    // A fresh camp starts with 400 wood (and 3 markers), so the shop checks can build string lights
-    // (25) and the gear shed (250), and buy a member a canvas pack (60)
-    TREK_CAMPSITE_SEED_WOOD: '400'
+    // A fresh camp starts with 600 wood (and 3 markers), so the shop checks can build string lights
+    // (25), the gear shed (250) and the trail signpost (150), and buy a member a canvas pack (60)
+    TREK_CAMPSITE_SEED_WOOD: '600'
   }
   stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
@@ -421,9 +424,25 @@ try {
   check("the member view reads its journal (not in the snapshot): it was hired, then bought a canvas pack", await until(() => win.locator('.cs-camp-popover .cs-journal li').allInnerTexts().then((t) => t.map((x) => x.split('\n')[0])), ['Bought a canvas pack', 'Joined the camp']), ['Bought a canvas pack', 'Joined the camp'])
   await win.locator('.cs-camp-popover .cs-member-back').click()
   check('Back lists the crew again, the focus on its row', await until(async () => [(await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, await win.evaluate(() => document.activeElement?.hasAttribute('data-crew') ?? false)], [true, true]), [true, true])
+  // Trails (campsite 3c): the trail signpost from the Camp tab; its planks on the strip count every project's trails
+  await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Camp' }).click()
+  const signpostRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="signpost"]')
+  await signpostRow.locator('.cs-shop-build').click()
+  check('the camp popover builds the trail signpost', await until(() => signpostRow.locator('.cs-shop-built').count(), 1), 1)
+  check("the signpost's planks count both feature-auth trails", await until(() => win.locator('.campsite .cs-signpost-text').innerText().catch(() => null), '2 trails'), '2 trails')
   // The counts button again closes it
   await win.locator('.campsite .cs-camp-button').click()
   check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  // Each feature-auth worktree is a trail: a flag on the mountain; api's PR is linked, so its flag is on the ridge
+  const flags = win.locator('.campsite .cs-flag')
+  const flagLabels = async () => (await flags.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))).sort()
+  check('the mountain carries a flag for each feature-auth worktree, api\'s on the ridge', await until(flagLabels, ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead']), ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead'])
+  await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
+  const trailRow = win.locator('.cs-camp-popover .cs-trail-row[data-trail]')
+  check('a flag opens the Trails tab at its row, focused', await until(async () => [await trailRow.count(), await win.evaluate(() => document.activeElement?.closest('.cs-trail-row')?.textContent?.includes('feature-auth') ?? false)], [2, true]), [2, true])
+  check('the Trails tab reads the history (none ended yet)', await until(() => win.locator('.cs-camp-popover .cs-trails').innerText().then((t) => t.includes('No ended trails yet.')), true), true)
+  await win.keyboard.press('Escape')
+  check('Escape closes the Trails tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 
