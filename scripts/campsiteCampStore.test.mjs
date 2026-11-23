@@ -138,3 +138,17 @@ test("journal (campsite part 3b) asks for a member's journal and answers its ent
   await assert.rejects(store.journal('c9'), /Nobody/)
   assert.equal(calls.filter((c) => c[0] === 'state').length, 0, 'no reload: nothing changed')
 })
+
+test("state names the window's project (its trails are reconciled); trailLog asks for a project's history, and rethrows a refusal without reloading", async () => {
+  const { host, calls } = fakeHost({ state: { wood: 1 }, trailLog: (p) => (p.projectId === 'p' ? { log: [{ branch: 'b', result: 'summited', start: 1, end: 2 }] } : Promise.reject(new Error('boom'))) })
+  host.projectId = 'p'
+  const store = campStore(host)
+  const off = store.subscribe(() => {})
+  await flush()
+  assert.deepEqual(calls[0], ['state', { projectId: 'p' }])
+  assert.deepEqual(await store.trailLog('p'), [{ branch: 'b', result: 'summited', start: 1, end: 2 }])
+  assert.deepEqual(calls.at(-1), ['trailLog', { projectId: 'p' }])
+  await assert.rejects(store.trailLog('q'), /boom/)
+  assert.equal(calls.filter((c) => c[0] === 'state').length, 1)
+  off()
+})

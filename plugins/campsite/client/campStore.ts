@@ -1,16 +1,18 @@
-// The camp's snapshot (campsite parts 2, 3a and 3b), one store per host shared by every component:
-// one `state` request and one event feed while anything listens; reloaded when the connection comes
-// back. null until the first answer (or if the server half is missing). Buying (build, recruit,
-// gear) and pinning answer the new snapshot; a refusal reloads the state and rethrows, its message
-// saying why. A member's journal is asked for on its own (the snapshot doesn't carry it). `seen` and
-// `awaySeen` keep the away card. No React.
+// The camp's snapshot (campsite parts 2, 3a, 3b and 3c), one store per host shared by every
+// component: one `state` request (naming the window's project, so the server reconciles its trails)
+// and one event feed while anything listens; reloaded when the connection comes back. null until the
+// first answer (or if the server half is missing). Buying (build, recruit, gear) and pinning answer
+// the new snapshot; a refusal reloads the state and rethrows, its message saying why. A member's
+// journal and a project's trail history are asked for on their own (the snapshot carries neither).
+// `seen` and `awaySeen` keep the away card. No React.
 import type { ClientPluginHost } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot, PinRef } from '../shared/camp.ts'
 import type { GearSlot } from '../shared/catalog.ts'
 import type { JournalEntry } from '../shared/journal.ts'
 import type { Offer } from '../shared/shop.ts'
+import type { TrailRecord } from '../shared/trails.ts'
 
-type CampHost = Pick<ClientPluginHost, 'request' | 'onEvent' | 'onChanged'>
+type CampHost = Pick<ClientPluginHost, 'request' | 'onEvent' | 'onChanged'> & Partial<Pick<ClientPluginHost, 'projectId'>>
 export interface CampStore {
   subscribe(listener: () => void): () => void
   snapshot(): CampSnapshot | null
@@ -24,6 +26,8 @@ export interface CampStore {
   pin(crewId: string, pin: PinRef | null): Promise<void>
   /** A member's journal, oldest first (a refusal rethrows; nothing is reloaded) */
   journal(crewId: string): Promise<JournalEntry[]>
+  /** A project's ended trails, oldest first (a refusal rethrows; nothing is reloaded) */
+  trailLog(projectId: string): Promise<TrailRecord[]>
   /** A visible window saw the camp (an older server without it is ignored) */
   seen(): void
   /** The away card was dismissed */
@@ -49,7 +53,7 @@ function createStore(host: CampHost): CampStore {
   }
   const load = (): void => {
     const asked = version
-    host.request<CampSnapshot>('state').then(
+    host.request<CampSnapshot>('state', host.projectId === undefined ? {} : { projectId: host.projectId }).then(
       (snap) => {
         if (asked === version) set(snap)
       },
@@ -97,6 +101,7 @@ function createStore(host: CampHost): CampStore {
     gear: (crewId, slot, tier, cost) => buy('gear', { crewId, slot, tier, cost: { wood: cost } }),
     pin: (crewId, pin) => buy('pin', { crewId, pin: pin && { kind: pin.kind, id: pin.id } }),
     journal: async (crewId) => (await host.request<{ journal: JournalEntry[] }>('journal', { crewId })).journal,
+    trailLog: async (projectId) => (await host.request<{ log: TrailRecord[] }>('trailLog', { projectId })).log,
     seen: () => {
       host.request('seen').catch(() => {
         // An older server: no away card
