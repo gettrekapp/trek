@@ -6,10 +6,11 @@
 // the wood credited to its session. Pure.
 import type { ActivitySessionType } from '../../../src/shared/plugins/activity.ts'
 import { noteLevelUp } from './away.ts'
-import { SEEN_KIND_MS, noGear, whole } from './catalog.ts'
+import { SEEN_KIND_MS, isRecord, noGear, whole } from './catalog.ts'
 import type { Camp, CampSnapshot, CrewMember, SeenKind } from './camp.ts'
 import { fnv1a, lookFor, type Look } from './hiker.ts'
 import { note, providerName } from './journal.ts'
+import type { ShopRefusal } from './shop.ts'
 
 export const TRAIL_NAMES: readonly string[] = [
   'Aspen', 'Birch', 'Cedar', 'Juniper', 'Willow', 'Hazel', 'Rowan', 'Alder', 'Sage', 'Fern',
@@ -156,6 +157,26 @@ export function liveKinds(camp: Pick<Camp, 'seenKinds'>, now: number): Omit<Seen
     .filter((k) => now - k.at <= SEEN_KIND_MS)
     .sort((a, b) => (a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === 'type' ? -1 : 1))
     .map(({ kind, id, name }) => ({ kind, id, name }))
+}
+
+/**
+ * Pins `{ crewId, pin }`: to a session type or an agent the camp saw start a session in the last 30
+ * days, or null (any session). The same pin again changes nothing; a change goes in the journal.
+ */
+export function pinMember(camp: Camp, params: Record<string, unknown>, now: number): ShopRefusal | null {
+  const { crewId, pin } = params
+  const shaped = pin === null || (isRecord(pin) && (pin.kind === 'type' || pin.kind === 'provider') && typeof pin.id === 'string')
+  if (typeof crewId !== 'string' || !shaped) return { code: 'BAD_REQUEST', message: 'A pin needs { crewId, pin: { kind, id } or null }' }
+  const member = camp.crew.find((m) => m.id === crewId)
+  if (!member) return { code: 'CONFLICT', message: `Nobody in the crew is ${crewId.slice(0, 40)}` }
+  const want = pin === null ? null : liveKinds(camp, now).find((k) => k.kind === pin.kind && k.id === pin.id)
+  if (want === undefined) return { code: 'CONFLICT', message: 'No session of that type or agent started here in the last 30 days' }
+  const was = member.pin
+  if (was?.kind === want?.kind && was?.id === want?.id) return null
+  member.pin = want && { kind: want.kind, id: want.id }
+  if (want) note(member, { kind: 'pinned', at: now, name: want.name })
+  else if (was) note(member, { kind: 'unpinned', at: now, name: camp.seenKinds.find((k) => k.kind === was.kind && k.id === was.id)?.name ?? (was.kind === 'provider' ? providerName(was.id) : was.id) })
+  return null
 }
 
 /** Members with no session: resting at camp */

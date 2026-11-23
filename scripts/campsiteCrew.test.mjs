@@ -4,8 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { GEAR, GEAR_BONUS, GEAR_COST, GEAR_NEEDS, GEAR_SLOTS, SEEN_KIND_MS, gearBonus, gearGate, gearItem, isGearSlot, noGear } from '../plugins/campsite/shared/catalog.ts'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
-import { assign, creditXp, liveKinds, noteKinds, release } from '../plugins/campsite/shared/crew.ts'
-import { applyActivity } from '../plugins/campsite/shared/economy.ts'
+import { assign, creditXp, liveKinds, noteKinds, pinMember, release } from '../plugins/campsite/shared/crew.ts'
+import { applyActivity, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
+import { buyGear } from '../plugins/campsite/shared/shop.ts'
 import { JOURNAL_MAX, note, providerName } from '../plugins/campsite/shared/journal.ts'
 
 const T0 = 1_800_000_000_000
@@ -224,4 +225,114 @@ test('applyActivity: a merge puts a summit in the journal of each member out in 
   applyActivity(camp, { ...merged, url: 'https://example.test/pr/2', repoId: 'r2' }, T0 + 7, undefined, where)
   applyActivity(camp, { ...merged, url: 'https://example.test/pr/3', result: 'closed' }, T0 + 8, undefined, where)
   assert.equal(camp.crew[0].journal.filter((e) => e.kind === 'summit').length, 1, 'another repository, or closed: none')
+})
+
+test('the bonus: wood credited to a geared member\'s session grows by its percent, and XP is the wood credited', () => {
+  const camp = newCamp(1, T0)
+  camp.crew[0].gear = { pack: 3, boots: 3, hat: 3, tool: 3 }
+  applyActivity(camp, ev('session.started', 't1'), T0)
+  const S = (from, to, cause, at) => ev('session.status', 't1', { from, to, cause, at })
+  applyActivity(camp, S('idle', 'working', 'output'), T0)
+  const paid = applyActivity(camp, S('working', 'done', 'quiet'), T0 + 10 * M)
+  const minute = warmthFactor(0.5, 1)
+  assert.equal(paid.length, 10)
+  assert.ok(Math.abs(paid[0].wood - minute * 1.24) < 1e-9, `${paid[0].wood}`)
+  assert.ok(Math.abs(camp.wood - 10 * minute * 1.24) < 1e-9)
+  assert.ok(Math.abs(camp.crew[0].xp - camp.wood) < 1e-9, 'XP = the wood credited, bonus included')
+  assert.ok(Math.abs(camp.assignments.t1.wood - camp.wood) < 1e-9, 'the trip counts it too')
+  const marked = applyActivity(camp, S('done', 'complete', 'marked'), T0 + 11 * M)
+  assert.equal(marked[0].wood, 12.4, 'an outcome credited to the session: 10 + 24%')
+})
+
+test('the bonus: not for day hikers, automations, the garden or fishing, nor for pull requests (no session)', () => {
+  const camp = newCamp(1, T0)
+  for (const m of camp.crew) m.gear = { pack: 3, boots: 3, hat: 3, tool: 3 }
+  for (const id of ['t1', 't2', 't3']) applyActivity(camp, ev('session.started', id), T0)
+  applyActivity(camp, ev('session.started', 'day'), T0)
+  applyActivity(camp, ev('session.status', 'day', { from: 'idle', to: 'working', cause: 'output' }), T0)
+  assert.equal(applyActivity(camp, ev('session.status', 'day', { from: 'working', to: 'done', cause: 'quiet' }), T0 + M)[0].wood, warmthFactor(0.5, 1), 'a day hiker')
+  applyActivity(camp, ev('session.started', 'run', { automation: true, worktreeId: null }), T0)
+  applyActivity(camp, ev('session.status', 'run', { automation: true, worktreeId: null, from: 'idle', to: 'working', cause: 'output' }), T0)
+  assert.equal(applyActivity(camp, ev('session.status', 'run', { automation: true, worktreeId: null, from: 'working', to: 'done', cause: 'quiet' }), T0 + M)[0].wood, warmthFactor(0.5, 1), 'an automation')
+  assert.equal(applyActivity(camp, { kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r1', branch: 'feature/x', url: 'u' }, T0)[0].wood, 20)
+  const rested = newCamp(2, T0)
+  for (const m of rested.crew) m.gear = { pack: 3, boots: 3, hat: 3, tool: 3 }
+  rested.built.garden = 1
+  rested.built.lake = 1
+  const passive = tick(rested, T0 + 60 * M)
+  assert.deepEqual(passive.map((r) => [r.source, r.wood]), [['garden', 2], ['fishing', 3]])
+})
+
+const geared = (wood = 1000) => {
+  const camp = newCamp(1, T0)
+  camp.wood = wood
+  camp.built.shed = 1
+  return camp
+}
+const buy = (camp, slot, tier, wood, crewId = 'c1') => buyGear(camp, { crewId, slot, tier, cost: { wood } }, T0 + 9)
+
+test('buyGear: the slot\'s next tier at its price; the wood goes, the tier rises, the journal says so', () => {
+  const camp = geared(300.5)
+  assert.equal(buy(camp, 'pack', 1, 60), null)
+  assert.equal(camp.wood, 240.5)
+  assert.deepEqual(camp.crew[0].gear, { pack: 1, boots: 0, hat: 0, tool: 0 })
+  assert.deepEqual(camp.crew[0].journal.at(-1), { kind: 'gear', at: T0 + 9, slot: 'pack', tier: 1 })
+  camp.crew[0].xp = 400
+  assert.equal(buy(camp, 'pack', 2, 200), null, 'Lv 3 and the shed: tier 2')
+  assert.equal(camp.crew[0].gear.pack, 2)
+})
+
+test('buyGear: refusals — malformed, nobody, out of order, the shed, the level, the price, the wood, the top', () => {
+  const camp = geared(100)
+  const bad = { code: 'BAD_REQUEST', message: 'Gear needs { crewId, slot, tier, cost: { wood } }' }
+  assert.deepEqual(buyGear(camp, { crewId: 'c1', slot: 'cape', tier: 1, cost: { wood: 60 } }, T0), bad)
+  assert.deepEqual(buyGear(camp, { crewId: 'c1', slot: 'hat', tier: 1, cost: { wood: -1 } }, T0), bad)
+  assert.deepEqual(buyGear(camp, { slot: 'hat', tier: 1, cost: { wood: 60 } }, T0), bad)
+  assert.deepEqual(buy(camp, 'hat', 1, 60, 'c9'), { code: 'CONFLICT', message: 'Nobody in the crew is c9' })
+  const name = camp.crew[0].name
+  assert.deepEqual(buy(camp, 'hat', 2, 200), { code: 'CONFLICT', message: `${name}'s next hat is tier 1, not 2` })
+  camp.built.shed = 0
+  assert.deepEqual(buy(camp, 'hat', 1, 60), { code: 'CONFLICT', message: 'Needs the gear shed' })
+  camp.built.shed = 1
+  assert.deepEqual(buy(camp, 'hat', 1, 50), { code: 'CONFLICT', message: 'The price changed: Bucket hat costs 60 wood' })
+  camp.crew[0].gear.hat = 1
+  assert.deepEqual(buy(camp, 'hat', 2, 200), { code: 'CONFLICT', message: 'Needs Lv 3' })
+  camp.crew[0].xp = 1600
+  assert.deepEqual(buy(camp, 'hat', 2, 200), { code: 'CONFLICT', message: 'Need 100 more wood' })
+  camp.crew[0].gear.hat = 2
+  assert.deepEqual(buy(camp, 'hat', 3, 500), { code: 'CONFLICT', message: 'Needs gear shed II' })
+  camp.crew[0].gear.hat = 3
+  assert.deepEqual(buy(camp, 'hat', 4, 500), { code: 'CONFLICT', message: `${name}'s hat is the best there is` })
+  assert.equal(camp.wood, 100, 'nothing taken')
+})
+
+test('pinMember: to a kind seen in the last 30 days, or null; the journal notes it; the same pin again is nothing', () => {
+  const camp = newCamp(1, T0)
+  noteKinds(camp, launch('codex', REVIEW), T0)
+  const m = camp.crew[0]
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'rev' } }, T0 + 1), null)
+  assert.deepEqual(m.pin, { kind: 'type', id: 'rev' })
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'rev' } }, T0 + 2), null)
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'provider', id: 'codex' } }, T0 + 3), null)
+  assert.equal(pinMember(camp, { crewId: m.id, pin: null }, T0 + 4), null)
+  assert.equal(m.pin, null)
+  assert.deepEqual(m.journal.slice(1), [
+    { kind: 'pinned', at: T0 + 1, name: 'Review' },
+    { kind: 'pinned', at: T0 + 3, name: 'Codex' },
+    { kind: 'unpinned', at: T0 + 4, name: 'Codex' }
+  ])
+})
+
+test('pinMember: refusals — malformed, nobody, a kind not seen (or seen too long ago)', () => {
+  const camp = newCamp(1, T0)
+  noteKinds(camp, launch('codex'), T0)
+  const bad = { code: 'BAD_REQUEST', message: 'A pin needs { crewId, pin: { kind, id } or null }' }
+  assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: 'codex' }, T0), bad)
+  assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'agent', id: 'codex' } }, T0), bad)
+  assert.deepEqual(pinMember(camp, { crewId: 'c1' }, T0), bad)
+  assert.deepEqual(pinMember(camp, { crewId: 'c9', pin: null }, T0), { code: 'CONFLICT', message: 'Nobody in the crew is c9' })
+  const unseen = { code: 'CONFLICT', message: 'No session of that type or agent started here in the last 30 days' }
+  assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'provider', id: 'claude' } }, T0), unseen)
+  assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'provider', id: 'codex' } }, T0 + SEEN_KIND_MS + 1), unseen)
+  assert.equal(camp.crew[0].pin, null)
 })

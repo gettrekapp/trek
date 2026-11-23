@@ -1,11 +1,33 @@
-// The camp's shop (campsite part 3a): a building's next tier, and one of the day's three walk-ins
-// hired into a free bunk. `build` and `recruit` check what a window sent against the catalog and the
-// camp, then change the camp in place (null) or say why not (a refusal the server half throws).
-// Purchases are final. Pure: the caller passes the time.
+// The camp's shop (campsite parts 3a and 3b): a building's next tier, one of the day's three walk-ins
+// hired into a free bunk, and a member's next item of gear. `build`, `recruit` and `buyGear` check
+// what a window sent against the catalog and the camp, then change the camp in place (null) or say
+// why not (a refusal the server half throws). Purchases are final. Pure: the caller passes the time.
 import type { Camp, CrewMember } from './camp.ts'
-import { BUNKS_PER_CABIN, CANDIDATES_PER_DAY, CATALOG, START_BUNKS, TRAITS, building, costWords, hireCost, isBuildingId, isRecord, noGear, whole, type BuildingId, type Cost } from './catalog.ts'
-import { TRAIL_NAMES } from './crew.ts'
+import {
+  BUNKS_PER_CABIN,
+  CANDIDATES_PER_DAY,
+  CATALOG,
+  GEAR_COST,
+  GEAR_TOP,
+  SLOT_NAMES,
+  START_BUNKS,
+  TRAITS,
+  building,
+  costWords,
+  gearGate,
+  gearItem,
+  hireCost,
+  isBuildingId,
+  isGearSlot,
+  isRecord,
+  noGear,
+  whole,
+  type BuildingId,
+  type Cost
+} from './catalog.ts'
+import { TRAIL_NAMES, levelFor } from './crew.ts'
 import { fnv1a } from './hiker.ts'
+import { note } from './journal.ts'
 
 /** A building's next tier, at its price */
 export interface Offer {
@@ -110,6 +132,27 @@ export function recruit(camp: Camp, params: Record<string, unknown>, now: number
   const day = dayOf(now)
   if (camp.hired.day !== day) camp.hired = { day, names: [] }
   camp.hired.names.push(walkIn.name)
+  return null
+}
+
+/** Buys `{ crewId, slot, tier, cost: { wood } }`: a member's next item in a slot at the catalog's price, if the gear shed and the member's level allow it and the camp can pay */
+export function buyGear(camp: Camp, params: Record<string, unknown>, now: number): ShopRefusal | null {
+  const { crewId, slot, tier, cost } = params
+  if (typeof crewId !== 'string' || !isGearSlot(slot) || !Number.isInteger(tier) || !isRecord(cost) || !amount(cost.wood)) return bad('Gear needs { crewId, slot, tier, cost: { wood } }')
+  const member = camp.crew.find((m) => m.id === crewId)
+  if (!member) return conflict(`Nobody in the crew is ${crewId.slice(0, 40)}`)
+  const next = member.gear[slot] + 1
+  if (next > GEAR_TOP) return conflict(`${member.name}'s ${SLOT_NAMES[slot].toLowerCase()} is the best there is`)
+  if (tier !== next) return conflict(`${member.name}'s next ${SLOT_NAMES[slot].toLowerCase()} is tier ${next}, not ${String(tier)}`)
+  const gate = gearGate(camp.built.shed, levelFor(member.xp), next)
+  if (gate) return conflict(gate)
+  const price = GEAR_COST[next - 1]
+  if (cost.wood !== price) return conflict(`The price changed: ${gearItem(slot, next).name} costs ${price} wood`)
+  const short = shortfall(camp, { wood: price, markers: 0 })
+  if (short) return conflict(short)
+  camp.wood = Math.max(0, camp.wood - price)
+  member.gear[slot] = next
+  note(member, { kind: 'gear', at: now, slot, tier: next })
   return null
 }
 

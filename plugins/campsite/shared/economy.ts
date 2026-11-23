@@ -6,8 +6,8 @@
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { addAway, type AwaySource } from './away.ts'
 import type { Camp } from './camp.ts'
-import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling } from './catalog.ts'
-import { NO_WHERE, assign, creditXp, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
+import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus } from './catalog.ts'
+import { NO_WHERE, assign, creditXp, memberOf, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
 
 export interface Rules {
   /** A working minute (shorter in tests and smokes) */
@@ -47,18 +47,25 @@ function bump(camp: Camp, cap: string, limit: number, at: number): boolean {
   return true
 }
 
-/** Adds a reward (at `at`) unless its key was paid before; credits the member's XP */
+/**
+ * Adds a reward (at `at`) unless its key was paid before. One credited to a session's member grows
+ * by its gear's bonus first, and the member's XP is the wood credited (day hikers, automations, the
+ * garden and fishing have no member, so no bonus).
+ */
 function pay(camp: Camp, r: Reward, out: Reward[], at: number): boolean {
   if (r.key !== undefined) {
     if (camp.ledger.includes(r.key)) return false
     camp.ledger.push(r.key)
     if (camp.ledger.length > LEDGER_MAX) camp.ledger.splice(0, camp.ledger.length - LEDGER_MAX)
   }
-  camp.wood += r.wood
-  camp.markers += r.markers
-  addAway(camp, r.source, r.wood, r.markers)
-  if (r.terminalId !== undefined) creditXp(camp, r.terminalId, r.wood, at)
-  out.push(r)
+  const member = r.terminalId === undefined ? undefined : memberOf(camp, r.terminalId)
+  const bonus = member ? gearBonus(member.gear) : 0
+  const paid = bonus > 0 ? { ...r, wood: r.wood * (1 + bonus / 100) } : r
+  camp.wood += paid.wood
+  camp.markers += paid.markers
+  addAway(camp, paid.source, paid.wood, paid.markers)
+  if (paid.terminalId !== undefined) creditXp(camp, paid.terminalId, paid.wood, at)
+  out.push(paid)
   return true
 }
 
