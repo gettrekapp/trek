@@ -6,6 +6,7 @@
 // project's trails on every stage (three at the trailhead, eight on the switchbacks: "+2", two planted), another
 // project's two, 12 summits (the cairn) and both projects' histories (the fake host answers
 // `trailLog`); window.__summit(worktreeId, branch) sends the summit event, as the server does.
+// ?freeze=1 stops both clocks (below).
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -34,6 +35,14 @@ const SCENARIOS: Record<string, PluginSession[]> = {
 }
 
 const params = new URLSearchParams(location.search)
+// ?freeze=1: both clocks stand still (Date.now at 2026-11-23 12:00 UTC, performance.now at 1 ms), so
+// a shot is the same pixels on every run: `campsite:render -- <dir> --freeze` before and after a
+// change that must not move anything, then compare the PNGs byte for byte
+if (params.get('freeze') === '1') {
+  const at = Date.UTC(2026, 10, 23, 12)
+  Date.now = () => at
+  performance.now = () => 1
+}
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 const prefs = { showDog: params.get('dog') !== '0' }
 // The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;

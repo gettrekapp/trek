@@ -2,8 +2,10 @@
 // plugins/campsite/dev/) in headless Chrome, one PNG per scenario, to look at the Pixi scene
 // without running the app. Not a test: it fails only if the page errors or Pixi can't start.
 // The page carries the app's CSP (no 'unsafe-eval'), so a render also proves Pixi starts under it.
-// Usage: node scripts/campsite-render.mjs [outDir]   (default .campsite-render, not out/: the app
-// packages out/**; CHROME_PATH picks the browser)
+// Usage: node scripts/campsite-render.mjs [outDir] [--freeze]   (default .campsite-render, not out/:
+// the app packages out/**; CHROME_PATH picks the browser). --freeze stops the page's clocks
+// (the harness's ?freeze=1), so two runs write the same bytes: render before and after a change
+// that must not move anything and `cmp` the PNGs.
 import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +13,9 @@ import { chromium } from 'playwright-core'
 import { createServer } from 'vite'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const out = resolve(process.argv[2] ?? join(root, '.campsite-render'))
+const args = process.argv.slice(2)
+const freeze = args.includes('--freeze')
+const out = resolve(args.find((a) => !a.startsWith('--')) ?? join(root, '.campsite-render'))
 const CHROME = {
   darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   linux: '/usr/bin/google-chrome',
@@ -75,7 +79,7 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${freeze ? '&freeze=1' : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
