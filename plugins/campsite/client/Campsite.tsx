@@ -1,14 +1,18 @@
 // The campsite strip along the bottom of the window: a night scene with the fire in the middle, a
-// tent per worktree with sessions, Global on a log, every session's hiker, the camp dog and the
-// camp's buildings at the two ends, drawn by Pixi (scene/PixiStrip.tsx). Tent signs, camp badges
-// and their popover are DOM over it. Click a hiker to show its session. The header's counts (and
-// each building) open the camp's popover: build and hire. Collapsed, it is one line: everyone at
+// tent per worktree with sessions, Global on a log, every session's hiker, the camp dog, the
+// camp's buildings at the two ends, and behind the fire the trails' mountain with a flag for each of
+// this project's trails and the cairn of summits, drawn by Pixi (scene/PixiStrip.tsx). Tent signs,
+// camp badges and their popover are DOM over it. Click a hiker to show its session. The header's
+// counts (and each building) open the camp's popover: build and hire; a flag, the cairn or the
+// signpost opens its Trails tab. A summit here (the server's `summit` event) climbs its flag,
+// raises sparks and says so in the header for a few seconds. Collapsed, it is one line: everyone at
 // tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
+import { summitLine } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -28,6 +32,31 @@ const tiersKey = (built: Readonly<Record<BuildingId, number>> | undefined): stri
 function tiersOf(key: string): Record<BuildingId, number> {
   const tiers = key.split(',').map(Number)
   return Object.fromEntries(BUILDING_IDS.map((id, i) => [id, tiers[i]])) as Record<BuildingId, number>
+}
+
+/** How long the header says "⛳ Summited …" */
+const SUMMIT_LINE_MS = 5000
+
+/** The last summit of this window's project (the server's `summit` event), numbered so each one is celebrated; whether the header still says so */
+function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktreeId: string; branch: string; seq: number } | null; shown: boolean } {
+  const [summit, setSummit] = useState<{ worktreeId: string; branch: string; seq: number } | null>(null)
+  const [shown, setShown] = useState(false)
+  useEffect(
+    () =>
+      host.onEvent<{ projectId?: unknown; worktreeId?: unknown; branch?: unknown }>('summit', (e) => {
+        if (e.projectId !== host.projectId || typeof e.worktreeId !== 'string' || typeof e.branch !== 'string') return
+        const { worktreeId, branch } = e
+        setSummit((s) => ({ worktreeId, branch, seq: (s?.seq ?? 0) + 1 }))
+      }),
+    [host]
+  )
+  useEffect(() => {
+    if (!summit) return
+    setShown(true)
+    const timer = setTimeout(() => setShown(false), SUMMIT_LINE_MS)
+    return () => clearTimeout(timer)
+  }, [summit])
+  return { summit, shown }
 }
 
 export function Campsite(): React.JSX.Element | null {
@@ -53,6 +82,8 @@ export function Campsite(): React.JSX.Element | null {
   // This window's project's trails on the mountain: a new array only when one of its flags changes
   const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
   const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
+  const { summit, shown: summitShown } = useSummit(host)
+  const stageSummit = useMemo(() => summit && { worktreeId: summit.worktreeId, seq: summit.seq }, [summit])
   // Camps beat buildings: the ends give way until the middle shows every camp the bare strip would
   const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
   const { left: reserveLeft, right: reserveRight } = edges.reserve
@@ -122,6 +153,11 @@ export function Campsite(): React.JSX.Element | null {
   )
   // Fixed to the window, so neither the collapsed bar nor the stage clips it
   const campPopover = camp && campOpen && <CampPopover key={openKey(campOpen)} camp={camp} at={campOpen} sessions={sessions} projectId={host.projectId} store={campStore(host)} onClose={closeCamp} />
+  const summitNote = summitShown && summit && (
+    <span className="cs-summit-line" role="status">
+      {summitLine(summit.branch)}
+    </span>
+  )
   const awayCard = camp?.away && (
     <AwayCard
       away={camp.away}
@@ -147,6 +183,7 @@ export function Campsite(): React.JSX.Element | null {
         </button>
         <span className="cs-summary">{campSummary(sessions)}</span>
         {campButton}
+        {summitNote}
         {waiting.length > 0 && (
           <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
             {waiting.length} waiting
@@ -175,7 +212,7 @@ export function Campsite(): React.JSX.Element | null {
   }
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
-      {/* Left of the peak, the toggle and the summary (cut short); right of it, at the header's end, the counts and the away card (the header starts 6 px in, ends 8 px in) */}
+      {/* Left of the peak, the toggle and the summary (cut short); right of it, at the header's end, the counts, the summit's line and the away card (the header starts 6 px in, ends 8 px in) */}
       <div className="cs-header">
         <div className="cs-header-start" style={width > 0 ? { maxWidth: Math.max(0, clear.left - 6) } : undefined}>
           <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
@@ -185,6 +222,7 @@ export function Campsite(): React.JSX.Element | null {
         </div>
         <div className="cs-header-end" style={width > 0 ? { maxWidth: Math.max(0, width - 8 - clear.right) } : undefined}>
           {campButton}
+          {summitNote}
           {awayCard}
         </div>
       </div>
@@ -220,13 +258,14 @@ export function Campsite(): React.JSX.Element | null {
             kits={kits}
             trails={trails}
             summits={camp?.summits ?? 0}
-            summit={null}
+            summit={stageSummit}
             now={now}
             selected={selected}
             paused={hidden}
             showDog={prefs.showDog}
             onPick={(id) => host.focusSession(id)}
             onBuilding={(id, el) => (id === 'signpost' ? openTrails(el) : openCamp(el, id))}
+            onTrail={(el, worktreeId) => openTrails(el, worktreeId)}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
