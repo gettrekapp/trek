@@ -8,6 +8,7 @@ import { addAway, type AwaySource } from './away.ts'
 import { isAssignment, type Camp } from './camp.ts'
 import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus, isRecord } from './catalog.ts'
 import { isEntry } from './journal.ts'
+import { dropBadNotes } from './notes.ts'
 import { NO_WHERE, assign, creditXp, memberOf, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
 import { dropBadTrails, trailEvent } from './trails.ts'
 import { dropBadWildlife } from './wildlife.ts'
@@ -250,13 +251,14 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
  * paying their whole minutes; nobody is waiting; every member is back in camp from the last save. The
  * fire's clock starts at `now`: nobody waited through the down time, and quiet minutes before it were
  * not saved, so the last save can be long before it. Journal entries, assignments, trails, history
- * entries, last activity times and wildlife (guide pages, sightings, last species, the clock, the away
- * tally's sightings) this version can't read are dropped first (camp.json is otherwise kept).
+ * entries (and their reports), last activity times, wildlife (guide pages, sightings, last species, the clock, the away
+ * tally's sightings) and notes this version can't read are dropped first (camp.json is otherwise kept).
  */
 export function restore(camp: Camp, rules: Rules = RULES, now: number = camp.savedAt): void {
   for (const m of camp.crew) m.journal = m.journal.filter(isEntry)
   dropBadTrails(camp)
   dropBadWildlife(camp)
+  dropBadNotes(camp)
   if (!isRecord(camp.lastActive)) camp.lastActive = {}
   for (const [projectId, at] of Object.entries(camp.lastActive)) if (typeof at !== 'number' || !Number.isFinite(at)) delete camp.lastActive[projectId]
   for (const [id, a] of Object.entries(camp.assignments)) if (!isAssignment(a)) delete camp.assignments[id]

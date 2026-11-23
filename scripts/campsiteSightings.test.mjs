@@ -190,7 +190,7 @@ test('migrateCamp: version 5 gains the ranger tower (not built), an empty guide,
   assert.equal(isCamp(v5), false, 'not before the migration')
   const out = migrateCamp(v5)
   assert.ok(isCamp(out))
-  assert.equal(out.version, 6)
+  assert.equal(out.version, 7)
   assert.equal(out.built.tower, 0)
   assert.deepEqual([out.guide, out.sightings, out.lastSeen, out.clock], [{}, [], {}, { tz: null, seasons: 'north' }])
   assert.deepEqual([out.away.sightings, out.away.newSpecies], [0, []])
@@ -219,14 +219,14 @@ function older(v) {
   return out
 }
 
-test('migrateCamp: versions 2, 3, 4 and 5 go straight to 6, with the wildlife defaults and their wood kept', () => {
+test('migrateCamp: versions 2, 3, 4 and 5 go straight to 7, with the wildlife defaults and their wood kept', () => {
   for (const v of [2, 3, 4, 5]) {
     const raw = older(v)
     assert.equal(raw.version, v)
     assert.equal(isCamp(raw), false, `version ${v} is not a camp before the migration`)
     const out = migrateCamp(raw)
     assert.ok(isCamp(out), `version ${v} migrates to a camp`)
-    assert.equal(out.version, 6)
+    assert.equal(out.version, 7)
     assert.equal(out.wood, 77)
     assert.equal(out.built.tower, 0)
     assert.deepEqual([out.guide, out.sightings, out.lastSeen, out.clock], [{}, [], {}, { tz: null, seasons: 'north' }], `version ${v}`)

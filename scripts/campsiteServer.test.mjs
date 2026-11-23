@@ -179,7 +179,7 @@ test('valid JSON of the wrong shape is moved to camp.json.bak', (t) => {
 
 test('a camp.json from a newer version is left alone: no .bak, a fresh camp in memory, never saved', (t) => {
   const file = join(tempDir(t), 'camp.json')
-  const text = '{"version":7,"wood":99}'
+  const text = '{"version":8,"wood":99}'
   writeFileSync(file, text)
   const warnings = []
   const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
@@ -401,7 +401,7 @@ test('a version 1 camp.json is migrated on load: its wood kept, the new fields a
   const warnings = []
   const store = openCampStore(file, { now: () => T0 + 60_000, seed: () => 9, warn: (m) => warnings.push(m), schedule: manual().schedule })
   assert.deepEqual(warnings, [])
-  assert.equal(store.camp.version, 6)
+  assert.equal(store.camp.version, 7)
   assert.equal(store.camp.wood, 42)
   assert.equal(store.camp.seed, 7)
   // Seen at its last save, then shifted by the downtime: seen now
@@ -409,7 +409,7 @@ test('a version 1 camp.json is migrated on load: its wood kept, the new fields a
   assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0, signpost: 0, tower: 0 })
   assert.equal(existsSync(`${file}.bak`), false)
   store.flush()
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 6)
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 7)
 })
 
 test('a restart after 9 hours down: the unpaid minute is paid, but the seen clocks move by the downtime, so no away card', (t) => {
@@ -602,12 +602,12 @@ test('a version 1 camp.json still malformed after migration is moved to camp.jso
   const warnings = []
   const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
   assert.equal(store.camp.wood, 0)
-  assert.equal(store.camp.version, 6)
+  assert.equal(store.camp.version, 7)
   assert.equal(readFileSync(`${file}.bak`, 'utf8'), text)
   assert.equal(warnings.length, 1)
 })
 
-test('a version 2 camp.json is migrated on load: the shed not built, no gear, pins or journals, version 6 saved', (t) => {
+test('a version 2 camp.json is migrated on load: the shed not built, no gear, pins or journals, version 7 saved', (t) => {
   const file = join(tempDir(t), 'camp.json')
   const { seenKinds, ...v3 } = newCamp(7, T0)
   const v2 = { ...v3, version: 2, wood: 42, savedAt: T0, built: { lights: 1, fire: 1, garden: 0, lake: 0, cabins: 0 }, crew: v3.crew.map(({ gear, pin, journal, ...m }) => m) }
@@ -615,12 +615,12 @@ test('a version 2 camp.json is migrated on load: the shed not built, no gear, pi
   const warnings = []
   const store = openCampStore(file, { now: () => T0 + 60_000, seed: () => 9, warn: (m) => warnings.push(m), schedule: manual().schedule })
   assert.deepEqual(warnings, [])
-  assert.equal(store.camp.version, 6)
+  assert.equal(store.camp.version, 7)
   assert.equal(store.camp.wood, 42)
   assert.equal(store.camp.built.shed, 0)
   assert.ok(store.camp.crew.every((m) => m.pin === null && m.journal.length === 0 && m.gear.pack === 0))
   store.flush()
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 6)
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 7)
 })
 
 test('hostWhere: the host\'s project name and a worktree\'s repository, branch and folder; ids and null when the host can\'t say', (t) => {
@@ -745,8 +745,8 @@ test('trails (3c): a worktree event reconciles its project; a removed worktree t
   delete worktrees.x
   h.fire({ kind: 'worktree.removed', projectId: 'p', at: c.now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId), ['w'])
-  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'p' }, {}), { log: [{ branch: 'feature/x', result: 'turned-back', start: T0, end: T0 + 5 }] })
-  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'nope' }, {}), { log: [] })
+  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'p' }, {}), { log: [{ branch: 'feature/x', result: 'turned-back', start: T0, end: T0 + 5 }], reports: {} })
+  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'nope' }, {}), { log: [], reports: {} })
   assert.throws(() => inst.handlers.trailLog({}, {}), (err) => err.code === 'BAD_REQUEST')
 })
 

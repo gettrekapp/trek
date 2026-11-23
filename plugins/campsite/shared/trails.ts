@@ -1,11 +1,13 @@
 // Trails and summits (campsite part 3c): every worktree with a branch (not a repository's main
 // checkout) is a trail on its project's mountain, at one of five stages that only real milestones
 // move (a commit, the pull request, green checks, the merge). Ended trails go to their project's
-// history; merges count toward the camp's cairn. Pure.
+// history; merges count toward the camp's cairn. A trail keeps its agent's latest report (part 5),
+// and its history entry keeps it when it ends. Pure.
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import type { PluginWorktree } from '../../../src/shared/plugins/server.ts'
 import type { Camp } from './camp.ts'
 import { HOUR_MS, isRecord } from './catalog.ts'
+import { isReport, type TrailReport } from './notes.ts'
 import type { ShopRefusal } from './shop.ts'
 
 /** The stages' names, by stage (0–4) */
@@ -35,6 +37,8 @@ export interface Trail {
   checks: TrailChecks
   /** When `checks` was last set by a result (ms); null with `checks` (the weather's rain lasts CHECKS_RAIN_MS from it) */
   checksAt: number | null
+  /** Its agent's latest report (part 5; camp_trail_report): a new one replaces it */
+  report?: TrailReport
 }
 export type TrailChecks = 'passed' | 'failed' | null
 export type TrailResult = 'summited' | 'turned-back'
@@ -44,6 +48,8 @@ export interface TrailRecord {
   result: TrailResult
   start: number
   end: number
+  /** The trail's last report, when it had one */
+  report?: TrailReport
 }
 
 /** A trail's key in the camp: its project and worktree */
@@ -59,19 +65,26 @@ export const isTrail = (x: unknown): x is Trail =>
 /** A history entry this version can read */
 export const isTrailRecord = (x: unknown): x is TrailRecord => isRecord(x) && str(x.branch) && (x.result === 'summited' || x.result === 'turned-back') && num(x.start) && num(x.end)
 
-/** Drops what camp.json held that this version can't read: trails (or ones under another key), histories that aren't lists, history entries, summited branches that aren't names; past TRAIL_LOG_MAX, the oldest. A trail's checks it can't read (or without a time it can read) become null, with their time (the trail stays) */
+/** Drops what camp.json held that this version can't read: trails (or ones under another key), histories that aren't lists, history entries, summited branches that aren't names; past TRAIL_LOG_MAX, the oldest. A trail's checks it can't read (or without a time it can read) become null, with their time (the trail stays); a report it can't read goes (the trail or history entry stays) */
 export function dropBadTrails(camp: { trails: Record<string, unknown>; trailLog: Record<string, unknown>; trailsDone: Record<string, unknown> }): void {
   for (const [key, t] of Object.entries(camp.trails)) {
     if (!isTrail(t) || key !== trailKey(t.projectId, t.worktreeId)) delete camp.trails[key]
-    else if ((t.checks !== 'passed' && t.checks !== 'failed') || !num(t.checksAt)) {
-      t.checks = null
-      t.checksAt = null
+    else {
+      if ((t.checks !== 'passed' && t.checks !== 'failed') || !num(t.checksAt)) {
+        t.checks = null
+        t.checksAt = null
+      }
+      if (t.report !== undefined && !isReport(t.report)) delete t.report
     }
   }
   for (const [key, branch] of Object.entries(camp.trailsDone)) if (!str(branch)) delete camp.trailsDone[key]
   for (const [projectId, log] of Object.entries(camp.trailLog)) {
     if (!Array.isArray(log)) delete camp.trailLog[projectId]
-    else camp.trailLog[projectId] = log.filter(isTrailRecord).slice(-TRAIL_LOG_MAX)
+    else {
+      const kept = log.filter(isTrailRecord).slice(-TRAIL_LOG_MAX)
+      for (const r of kept) if (r.report !== undefined && !isReport(r.report)) delete r.report
+      camp.trailLog[projectId] = kept
+    }
   }
 }
 
@@ -91,7 +104,7 @@ function close(camp: Trails, key: string, now: number): void {
   delete camp.trails[key]
   if (t.stage === SUMMIT) camp.trailsDone[key] = t.branch
   const log = Object.hasOwn(camp.trailLog, t.projectId) ? camp.trailLog[t.projectId] : (camp.trailLog[t.projectId] = [])
-  log.push({ branch: t.branch, result: t.stage === SUMMIT ? 'summited' : 'turned-back', start: t.start, end: now })
+  log.push({ branch: t.branch, result: t.stage === SUMMIT ? 'summited' : 'turned-back', start: t.start, end: now, ...(t.report ? { report: t.report } : {}) })
   if (log.length > TRAIL_LOG_MAX) log.splice(0, log.length - TRAIL_LOG_MAX)
 }
 
@@ -226,10 +239,21 @@ export const trailProjects = (camp: Pick<Camp, 'trails'>): string[] => [...new S
 /** The cairn's size, 0 (none yet) to 6, for a count of summits */
 export const cairnSize = (summits: number): number => CAIRN_AT.filter((n) => summits >= n).length
 
-/** `trailLog { projectId }`: that project's ended trails, oldest first (copies; none for a project the camp doesn't know) */
-export function trailLogOf(camp: Pick<Camp, 'trailLog'>, params: Record<string, unknown>): ShopRefusal | { log: TrailRecord[] } {
+/** `trailLog { projectId }`: that project's ended trails, oldest first, and its open trails' reports by worktree (part 5) (copies; none for a project the camp doesn't know) */
+export function trailLogOf(camp: Pick<Camp, 'trailLog' | 'trails'>, params: Record<string, unknown>): ShopRefusal | { log: TrailRecord[]; reports: Record<string, TrailReport> } {
   const { projectId } = params
   if (typeof projectId !== 'string') return { code: 'BAD_REQUEST', message: 'A trail log needs { projectId }' }
   const log = Object.hasOwn(camp.trailLog, projectId) ? camp.trailLog[projectId] : []
-  return { log: log.map((r) => ({ ...r })) }
+  const reports: Record<string, TrailReport> = {}
+  for (const t of Object.values(camp.trails)) if (t.projectId === projectId && t.report) reports[t.worktreeId] = { ...t.report }
+  return { log: log.map((r) => (r.report ? { ...r, report: { ...r.report } } : { ...r })), reports }
+}
+
+/** A report on a worktree's open trail (part 5): it replaces the trail's last one; NOT_FOUND when the worktree has no open trail */
+export function postReport(camp: Pick<Camp, 'trails'>, projectId: string, worktreeId: string, report: TrailReport): ShopRefusal | Trail {
+  const key = trailKey(projectId, worktreeId)
+  if (!Object.hasOwn(camp.trails, key)) return { code: 'NOT_FOUND', message: 'That worktree has no trail.' }
+  const t = camp.trails[key]
+  t.report = { ...report }
+  return t
 }

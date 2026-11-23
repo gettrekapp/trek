@@ -1,15 +1,16 @@
-// The camp (campsite parts 2, 3a, 3b, 3c, 3d-1 and 3d-2): one per server, shared by every project. What
-// it holds, a new one, versions 1 → 2 → 3 → 4 → 5 → 6, a shape check for what camp.json held, and the
+// The camp (campsite parts 2, 3a, 3b, 3c, 3d-1, 3d-2 and 5): one per server, shared by every project. What
+// it holds, a new one, versions 1 → 2 → 3 → 4 → 5 → 6 → 7, a shape check for what camp.json held, and the
 // snapshot windows see. Pure.
 import { AWAY_SOURCES, awayDue, newAway, newSpeciesNames, noWood, type AwaySnapshot, type AwayTally } from './away.ts'
 import { BUILDING_IDS, GEAR_SLOTS, GEAR_TOP, HOUR_MS, building, gearBonus, hireCost, isRecord, noGear, startBuilt, whole, type BuildingId, type GearTiers } from './catalog.ts'
 import { NO_WHERE, levelFor, levelXp, liveKinds, newCrew, projectName, titleFor, type Where } from './crew.ts'
 import type { JournalEntry } from './journal.ts'
+import { noteAtOf, type Note } from './notes.ts'
 import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
 import type { Trail, TrailChecks, TrailRecord } from './trails.ts'
 import { DEFAULT_CLOCK, type CampClock, type GuideEntry, type Sighting } from './wildlife.ts'
 
-export const CAMP_VERSION = 6
+export const CAMP_VERSION = 7
 
 /** A session type (its typeKey) or an agent (provider), as a window asks to pin it */
 export type PinRef = { kind: 'type' | 'provider'; id: string }
@@ -59,7 +60,7 @@ export interface Assignment {
 }
 
 export interface Camp {
-  version: 6
+  version: 7
   seed: number
   /** With fractions (the warmth factor, the garden, fishing); shown floored */
   wood: number
@@ -107,6 +108,8 @@ export interface Camp {
   lastSeen: Record<string, string>
   /** The windows' time zone and seasons (the last `seen` ping's), which gate the species */
   clock: CampClock
+  /** Each project's noticeboard (part 5): agents' notes, newest last, at most NOTES_MAX */
+  notes: Record<string, Note[]>
   /** The last whole minute the tick has accounted for */
   lastTick: number
   savedAt: number
@@ -171,6 +174,8 @@ export interface CampSnapshot {
   lastActive: Record<string, number>
   /** The field guide (part 3d-2; an older server: absent) */
   guide?: Record<string, GuideEntry>
+  /** Each project's newest note's time (part 5: the noticeboard and its unread dot; not the notes, a window asks for them); an older server: absent */
+  noteAt?: Record<string, number>
   /** Only while the away card is due */
   away?: AwaySnapshot
 }
@@ -203,6 +208,7 @@ export function newCamp(seed: number, now: number): Camp {
     sightings: [],
     lastSeen: {},
     clock: { ...DEFAULT_CLOCK },
+    notes: {},
     lastTick: now,
     savedAt: now
   }
@@ -211,14 +217,14 @@ export function newCamp(seed: number, now: number): Camp {
 const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
 /**
- * camp.json as versions 1–5 wrote it, brought to version 6: version 1 gains version 2's fields
+ * camp.json as versions 1–6 wrote it, brought to version 7: version 1 gains version 2's fields
  * (seen at its last save); version 2 gains the shed (not built), each member no gear, no pin and an
  * empty journal, each trip its start (the last save) and no wood, and no seen kinds; a version 3 pin
  * without a name (from before pins carried one) is named; version 3 gains the signpost (not built),
  * no trails (the server's reconcile finds them), no history and no summits; version 4's trails gain
  * no checks (nor their time), and it gains no last activity (every project counts as active now); version 5 gains the
  * ranger tower (not built), an empty field guide, no sightings and no last species, the default clock (the server's
- * zone, northern seasons), and the away tally no sightings. Anything else as it is.
+ * zone, northern seasons), and the away tally no sightings; version 6 gains no notes (and its trails no reports). Anything else as it is.
  */
 export function migrateCamp(raw: unknown): unknown {
   if (!isRecord(raw)) return raw
@@ -235,10 +241,13 @@ export function migrateCamp(raw: unknown): unknown {
     const trails = isRecord(out.trails) ? Object.fromEntries(Object.entries(out.trails).map(([k, t]) => [k, isRecord(t) ? { ...t, checks: null, checksAt: null } : t])) : out.trails
     out = { ...out, version: 5, trails, lastActive: {} }
   }
-  if (out.version !== 5) return out
-  const built = isRecord(out.built) ? { ...out.built, tower: 0 } : out.built
-  const away = isRecord(out.away) ? { ...out.away, sightings: 0, newSpecies: [] } : out.away
-  return { ...out, version: 6, built, away, guide: {}, sightings: [], lastSeen: {}, clock: { ...DEFAULT_CLOCK } }
+  if (out.version === 5) {
+    const built = isRecord(out.built) ? { ...out.built, tower: 0 } : out.built
+    const away = isRecord(out.away) ? { ...out.away, sightings: 0, newSpecies: [] } : out.away
+    out = { ...out, version: 6, built, away, guide: {}, sightings: [], lastSeen: {}, clock: { ...DEFAULT_CLOCK } }
+  }
+  if (out.version !== 6) return out
+  return { ...out, version: 7, notes: {} }
 }
 
 /** Version 2 → 3 */
@@ -299,7 +308,7 @@ export const isAssignment = (a: unknown): a is Assignment =>
   num(a.start) &&
   num(a.wood)
 
-/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries, assignments, trails, history entries, last activity, the guide, sightings, last species and the clock are checked one by one in restore, which drops the bad ones; a missing or unreadable last activity or wildlife doesn't make it no camp: restore makes it empty) */
+/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries, assignments, trails (and their reports), history entries, last activity, the guide, sightings, last species, the clock and the notes are checked one by one in restore, which drops the bad ones; a missing or unreadable last activity, wildlife or notes don't make it no camp: restore makes them empty) */
 export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false
@@ -349,7 +358,8 @@ export function snapshot(camp: Camp, now: number, where: Pick<Where, 'project'> 
       .map((t) => ({ projectId: t.projectId, projectName: projectName(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt, checks: t.checks, checksAt: t.checksAt })),
     summits: camp.summits,
     lastActive: { ...camp.lastActive },
-    guide: Object.fromEntries(Object.entries(camp.guide).map(([id, page]) => [id, { ...page }]))
+    guide: Object.fromEntries(Object.entries(camp.guide).map(([id, page]) => [id, { ...page }])),
+    noteAt: noteAtOf(camp)
   }
   if (awayDue(camp, now)) snap.away = awaySnapshot(camp, now)
   return snap

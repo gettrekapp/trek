@@ -1,11 +1,15 @@
 // scripts/campsiteNotes.test.mjs — agents in the camp (campsite part 5): an agent's text cleaned and
 // measured, notes on a project's board (the newest 20), the one-a-minute limit, a report's journal
-// entry, and the words the noticeboard and the Trails tab show.
+// entry, and the words the noticeboard and the Trails tab show; camp v7: notes and trail reports kept,
+// migrated, restored, carried into the history and answered.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NOTES_MAX, NOTE_MAX, POST_EVERY_MS, REPORT_MAX, addNote, cleanText, dropBadNotes, isNote, isReport, noteAtOf, notesOf, takePost, textLength, whoLine } from '../plugins/campsite/shared/notes.ts'
 import { JOURNAL_MAX, entryText, isEntry, note } from '../plugins/campsite/shared/journal.ts'
 import { NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, reportBy, reportExcerpt, unreadNotes } from '../plugins/campsite/shared/campView.ts'
+import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
+import { restore } from '../plugins/campsite/shared/economy.ts'
+import { postReport, trailEvent, trailKey, trailLogOf } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
 
@@ -125,4 +129,76 @@ test('noticeboard words: who and where, the button, unread notes, the seen time,
   assert.equal(reportExcerpt('🔥'.repeat(REPORT_EXCERPT + 5)).text, `${'🔥'.repeat(REPORT_EXCERPT - 1)}…`, 'code points: never half an emoji')
   assert.equal(reportBy({ by: 'Claude · Juniper', at: T0 - 5 * 60_000 }, T0), 'Claude · Juniper, 5 m ago')
   assert.equal(reportBy({ at: T0 }, T0), 'An agent, just now')
+})
+
+/** An open trail of project p on worktree `w` */
+const openTrail = (camp, worktreeId, branch = `feature/${worktreeId}`) => {
+  camp.trails[trailKey('p', worktreeId)] = { projectId: 'p', worktreeId, repoId: 'r', branch, stage: 1, start: T0, stageAt: T0, checks: null, checksAt: null }
+}
+
+test('camp v7: a new camp has no notes; version 6 migrates with none (its trails as they were); the snapshot carries each project\'s newest note time only', () => {
+  assert.equal(CAMP_VERSION, 7)
+  const camp = newCamp(1, T0)
+  assert.deepEqual(camp.notes, {})
+  const { notes, ...v6body } = camp
+  openTrail(v6body, 'w')
+  const v7 = migrateCamp({ ...v6body, version: 6 })
+  assert.equal(v7.version, 7)
+  assert.deepEqual(v7.notes, {})
+  assert.deepEqual(Object.keys(v7.trails), ['p:w'])
+  assert.equal(v7.trails['p:w'].report, undefined)
+  assert.ok(isCamp(v7))
+  assert.deepEqual(snapshot(camp, T0).noteAt, {})
+  addNote(camp, 'p', { text: 'hi', at: T0 + 7 })
+  const snap = snapshot(camp, T0 + 8)
+  assert.deepEqual(snap.noteAt, { p: T0 + 7 })
+  assert.equal(JSON.stringify(snap).includes('"hi"'), false, 'not the notes')
+})
+
+test('restore: notes, trail reports and history reports it cannot read are dropped; the camp survives', () => {
+  const camp = newCamp(1, T0)
+  openTrail(camp, 'a')
+  openTrail(camp, 'b')
+  camp.trails['p:a'].report = { summary: 'fine', at: T0 }
+  camp.trails['p:b'].report = { summary: 7, at: T0 }
+  camp.trailLog.p = [{ branch: 'x', result: 'summited', start: T0, end: T0 + 1, report: { summary: 'kept', at: T0 } }, { branch: 'y', result: 'turned-back', start: T0, end: T0 + 1, report: 'bad' }]
+  camp.notes = { p: [{ id: '1', text: 'ok', at: T0 }, { id: 2 }], q: null }
+  const raw = JSON.parse(JSON.stringify(camp))
+  assert.ok(isCamp(raw))
+  restore(raw, undefined, T0)
+  assert.deepEqual(raw.trails['p:a'].report, { summary: 'fine', at: T0 })
+  assert.equal(Object.hasOwn(raw.trails['p:b'], 'report'), false, 'the trail stays, its report goes')
+  assert.deepEqual(raw.trailLog.p.map((r) => r.report), [{ summary: 'kept', at: T0 }, undefined])
+  assert.equal(raw.trailLog.p.length, 2)
+  assert.deepEqual(raw.notes, { p: [{ id: '1', text: 'ok', at: T0 }] })
+  const noNotes = JSON.parse(JSON.stringify(newCamp(1, T0)))
+  delete noNotes.notes
+  assert.ok(isCamp(noNotes), 'a camp without notes is still a camp')
+  restore(noNotes, undefined, T0)
+  assert.deepEqual(noNotes.notes, {})
+})
+
+test('postReport: a worktree\'s open trail keeps its latest report; none without a trail; it goes into the history when the trail ends; trailLog answers the open trails\' reports', () => {
+  const camp = newCamp(1, T0)
+  openTrail(camp, 'w')
+  openTrail(camp, 'v')
+  camp.trails['other:z'] = { projectId: 'other', worktreeId: 'z', repoId: 'r', branch: 'feature/z', stage: 0, start: T0, stageAt: T0, checks: null, checksAt: null, report: { summary: 'elsewhere', at: T0 } }
+  assert.deepEqual(postReport(camp, 'p', 'nope', { summary: 's', at: T0 }), { code: 'NOT_FOUND', message: 'That worktree has no trail.' })
+  const t = postReport(camp, 'p', 'w', { summary: 'first', at: T0, by: 'Claude' })
+  assert.equal(t.worktreeId, 'w')
+  postReport(camp, 'p', 'w', { summary: 'second', at: T0 + 1, by: 'Claude · Ash' })
+  assert.deepEqual(camp.trails['p:w'].report, { summary: 'second', at: T0 + 1, by: 'Claude · Ash' }, 'a new one replaces it')
+  const out = trailLogOf(camp, { projectId: 'p' })
+  assert.deepEqual(out, { log: [], reports: { w: { summary: 'second', at: T0 + 1, by: 'Claude · Ash' } } })
+  out.reports.w.summary = 'changed'
+  assert.equal(camp.trails['p:w'].report.summary, 'second', 'copies')
+  trailEvent(camp, { kind: 'worktree.removed', projectId: 'p', at: T0 + 5, repoId: 'r', worktreeId: 'w', branch: 'feature/w' }, T0 + 5)
+  assert.deepEqual(camp.trailLog.p, [{ branch: 'feature/w', result: 'turned-back', start: T0, end: T0 + 5, report: { summary: 'second', at: T0 + 1, by: 'Claude · Ash' } }])
+  trailEvent(camp, { kind: 'worktree.removed', projectId: 'p', at: T0 + 6, repoId: 'r', worktreeId: 'v', branch: 'feature/v' }, T0 + 6)
+  assert.equal(Object.hasOwn(camp.trailLog.p[1], 'report'), false, 'no report, none in its entry')
+  const after = trailLogOf(camp, { projectId: 'p' })
+  assert.deepEqual(after.reports, {})
+  after.log[0].report.summary = 'changed'
+  assert.equal(camp.trailLog.p[0].report.summary, 'second', 'the history\'s reports are copies too')
+  assert.deepEqual(trailLogOf(camp, { projectId: 'other' }).reports, { z: { summary: 'elsewhere', at: T0 } })
 })

@@ -188,7 +188,7 @@ test('migrateCamp: version 4 gains no checks on each trail and no last activity'
   assert.equal(isCamp(raw), false, 'not before the migration')
   const out = migrateCamp(raw)
   assert.ok(isCamp(out))
-  assert.equal(out.version, 6)
+  assert.equal(out.version, 7)
   assert.deepEqual(out.trails['p:w'], { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: null, checksAt: null })
   assert.deepEqual(out.lastActive, {})
   assert.equal(migrateCamp({ version: 4, trails: 'x' }).trails, 'x', 'a malformed one is left for isCamp to refuse')
