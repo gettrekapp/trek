@@ -11,9 +11,10 @@
 //     the row's dot run and the footer count it; quiet, it is done; with the campsite plugin off
 //     for the project, a click on the core badge marks it complete (and another resumes); back on,
 //     a click on the tab's hiker marks it complete; the strip's header counts the camp's wood, which rises while the
-//     session works (a working minute shortened to 200 ms); with the camp seeded with 100 wood
+//     session works (a working minute shortened to 200 ms); with the camp seeded with 400 wood
 //     (TREK_CAMPSITE_SEED_WOOD), the counts button opens the camp's popover, string lights are built
-//     from it (the row says Built, the wood drops by 25), and the button closes it again; a bell puts the row in attention (on the server too); showing the session
+//     from it (the row says Built, the wood drops by 25), then the gear shed, and a member's view in the
+//     Crew tab buys a canvas pack ("+2% wood") and goes Back to the list; the button closes it again; a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -203,8 +204,9 @@ try {
     TREK_NO_UPDATE_CHECK: '1',
     // The campsite's working minute, so a few seconds of work earn the camp wood
     TREK_CAMPSITE_MINUTE_MS: '200',
-    // A fresh camp starts with 100 wood (and 3 markers), so the shop check can build string lights (25)
-    TREK_CAMPSITE_SEED_WOOD: '100'
+    // A fresh camp starts with 400 wood (and 3 markers), so the shop checks can build string lights
+    // (25) and the gear shed (250), and buy a member a canvas pack (60)
+    TREK_CAMPSITE_SEED_WOOD: '400'
   }
   stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
@@ -403,6 +405,21 @@ try {
   const drop = woodBeforeBuild - woodAfterBuild
   check('the camp popover builds string lights: the row says Built and the wood drops by 25', [builtRow, drop >= 25 && drop <= 30], [1, true])
   console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${woodAfterBuild} after)`)
+  // Crew depth (campsite 3b): the gear shed from the Camp tab (its row then offers tier 2); the Crew
+  // tab's first member opens its view, which buys a canvas pack (+2% wood); Back lists the crew again
+  const shedRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="shed"]')
+  await shedRow.locator('.cs-shop-build').click()
+  check('the camp popover builds the gear shed (its row offers Gear shed II next)', await until(() => shedRow.locator('.cs-shop-tier').innerText(), 'Tier 2 of 2'), 'Tier 2 of 2')
+  await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
+  const firstMember = win.locator('.cs-camp-popover .cs-crew-member').first()
+  check('the Crew tab lists its members as buttons', await until(() => firstMember.count(), 1), 1)
+  await firstMember.click()
+  const packRow = win.locator('.cs-camp-popover .cs-gear-row[data-slot="pack"]')
+  check("a member's view offers a canvas pack to buy", await until(() => packRow.locator('.cs-gear-buy').count(), 1), 1)
+  await packRow.locator('.cs-gear-buy').click()
+  check('buying it shows the bonus on the member: +2% wood', await until(() => win.locator('.cs-camp-popover .cs-member-bonus').innerText(), '+2% wood'), '+2% wood')
+  await win.locator('.cs-camp-popover .cs-member-back').click()
+  check('Back lists the crew again', await until(async () => (await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, true), true)
   // The counts button again closes it
   await win.locator('.campsite .cs-camp-button').click()
   check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)

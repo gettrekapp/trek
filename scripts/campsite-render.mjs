@@ -32,7 +32,11 @@ const SHOTS = [
   // A narrow window: the outermost buildings are dropped (one cabin; the garden without the lake)
   { name: 'narrow', scenario: 'few', built: 'out', width: 700 },
   // The "While you were away" card over the strip
-  { name: 'away', scenario: 'few', away: true }
+  { name: 'away', scenario: 'few', away: true },
+  // Crew depth (campsite 3b): t1–t3's members wear tier 3, 2 and 1 gear on the strip, the shed built out
+  { name: 'geared-crew', scenario: 'few', crew: 'geared', built: 'out', width: 1600 },
+  // The camp popover's member view: portrait, bonus, pin, gear rows and journal (the whole page, taller)
+  { name: 'member-view', scenario: 'few', crew: 'geared', built: 'out', member: true, height: 720 }
 ]
 
 mkdirSync(out, { recursive: true })
@@ -52,7 +56,7 @@ const problems = []
 try {
   for (const shot of SHOTS) {
     const page = await browser.newPage({
-      viewport: { width: shot.width ?? 1200, height: 200 },
+      viewport: { width: shot.width ?? 1200, height: shot.height ?? 200 },
       deviceScaleFactor: 2,
       reducedMotion: shot.reduced ? 'reduce' : 'no-preference',
       ...(shot.touch ? { hasTouch: true, userAgent: TABLET_UA } : {})
@@ -62,7 +66,7 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
@@ -71,7 +75,14 @@ try {
       problems.push(`${shot.name}: Pixi's accessibility button is on the page`)
     }
     const path = join(out, `${shot.name}.png`)
-    await page.locator('.campsite').screenshot({ path })
+    if (shot.member) {
+      // The counts button, the Crew tab, the first member
+      await page.locator('.cs-camp-button').click()
+      await page.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
+      await page.locator('.cs-crew-member').first().click()
+      await page.waitForSelector('.cs-member', { timeout: 5000 })
+      await page.screenshot({ path })
+    } else await page.locator('.campsite').screenshot({ path })
     console.log(`wrote ${path}`)
     await page.close()
   }

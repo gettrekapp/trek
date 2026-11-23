@@ -27,27 +27,39 @@ camp only while its strip is shown (expanded or collapsed): with the strip turne
 from the camp, so the card may cover a long time when you turn it back on. A server restart or
 upgrade is not time away (the seen clock moves on by the downtime).
 
+The crew has depth (part 3b). The **gear shed** (250 wood, then 800 wood and a marker) stands inside
+the cabins at the strip's left end (the first building a narrow window drops) and lets members buy
+gear: a pack, boots, a hat and a tool, three tiers each (60, 200 and 500 wood; tier 2 needs Lv 3,
+tier 3 the shed's second tier and Lv 5). Each item adds 2, 4 or 6% to the wood credited to that
+member's sessions (+24% fully geared; day hikers, automations, the garden and fishing get none), and
+shows on its hiker everywhere: the strip, the tab and the terminal bar. In the Crew tab each member is
+a button that opens its view: its portrait, its bonus, what it goes out on (any session, or a session
+type or agent the camp saw start a session in the last 30 days: a pinned member goes out only on
+those, and rests otherwise), its gear, and its trail journal (joined, trips of a minute or more,
+summits when a pull request of its worktree's branch merges, levels, gear, pins; the last 40).
+
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
-- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
+- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 3; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear` and `pin` (part 3b); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
 - `shared/`: pure, tested in `scripts/campsite*.test.mjs`
-  - `hiker.ts`: a look from the session id (provider = jacket color)
-  - `pixels.ts`: the 12×16 pixels of each pose
+  - `hiker.ts`: a look from the session id (provider = jacket color); `withKit` dresses it in a member's gear
+  - `pixels.ts`: the 12×16 pixels of each pose, with the gear's pack, boots, hat and tool
   - `pose.ts`: the stance for a status, the rotating chores (`choreFor` is where activity detection would go), labels
   - `layout.ts`: where tents, the log and hikers stand; grouped mode when crowded (`moreWaiting` and `moreTents` count what does not fit); badge wording and color, tent colors, which way a camp's list opens, the header line, the collapsed row
   - `dog.ts`: the camp dog's pixels, and where it runs next
   - `stage.ts`: the Pixi strip's pure half: pixels to RGBA, the motions' timing, walks in and off (`reconcileMovers`), the dog's wander, and where the backdrop, fire, tents, log and signs go
   - `prefs.ts`: the per-app switches
   - `camp.ts`: the camp and its snapshot
-  - `crew.ts`: names, assignment, levels
+  - `crew.ts`: names, assignment (pins first), trips, levels, summits, pinning, the seen session types and agents, each session's gear for its hiker
+  - `journal.ts`: a member's journal entries and their words
   - `economy.ts`: what earns what (minutes × warmth, answers, completions, pull requests, commits); caps and the ledger; the fire ring's ceiling, the garden and fishing
-  - `catalog.ts`: the buildings' tiers, costs and effects, and the numbers behind them (tunable)
-  - `shop.ts`: offers, bunks, the day's walk-ins, build and recruit
+  - `catalog.ts`: the buildings' tiers, costs and effects, and the numbers behind them; gear (slots, tiers, prices, bonuses, gates) (tunable)
+  - `shop.ts`: offers, bunks, the day's walk-ins, build, recruit and buyGear
   - `away.ts`: the "While you were away" tally, when it is due, and its line
-  - `campView.ts`: what the camp popover's rows say
+  - `campView.ts`: what the camp popover's rows say, and a member's view (gear rows, the pin's choices, the bonus)
   - `campEdges.ts`: where buildings stand at the strip's ends, and the middle left for the tents
   - `buildingPixels.ts`: the buildings' pixels, the fire ring's stones, the string lights, the popover's icons
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
-  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `AwayCard.tsx` (While you were away)
+  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `MemberView.tsx` (a member: pin, gear, journal), `AwayCard.tsx` (While you were away)
   - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the backdrop, tents and log; `scene/actors/` (hikers, dog, fire, buildings) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), width, reduced motion)
@@ -55,6 +67,6 @@ upgrade is not time away (the seen clock moves on by the downtime).
 - `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages)
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
-`focusSession`), it has five methods (`state`, the camp's snapshot; `build` and `recruit`, which
+`focusSession`), it has seven methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which
 answer the new snapshot; `seen`, sent on load and every 5 minutes while a window and its strip are shown;
 `awaySeen`, the card's dismiss) and one event (`state`, sent when the snapshot changes).
