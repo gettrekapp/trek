@@ -2,8 +2,10 @@
 // strip. Camp: each building's next tier with its effect and price, and Build when the camp can
 // pay. Crew: the members (level, XP, where they are) and today's walk-ins to hire. DOM, fixed to
 // the window above what opened it; Escape (focus back to the opener) or a press outside closes it.
-// A refusal shows on its row for 4 s (the store has already reloaded).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// A refusal shows on its row for 4 s (the store has already reloaded); one for a walk-in who is
+// gone shows under the walk-ins' heading. One purchase at a time; a building's row takes the focus
+// once it is built.
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { iconArt } from '../shared/buildingPixels.ts'
 import type { CampSnapshot, CrewEntry } from '../shared/camp.ts'
@@ -39,6 +41,12 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
+  // Unmounted: no more timers or state; a purchase in flight: no second one (a double click)
+  const alive = useRef(true)
+  const inFlight = useRef(false)
+  const ids = useId()
+  const tabId = (t: 'camp' | 'crew'): string => `${ids}-tab-${t}`
+  const panelId = (t: 'camp' | 'crew'): string => `${ids}-panel-${t}`
   const labels = useMemo(() => new Map(sessions.map((s) => [s.terminalId, s.label])), [sessions])
 
   // Inside the window once its width is known (before paint)
@@ -74,17 +82,25 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
     }
   }, [onClose])
   useEffect(() => {
+    alive.current = true
     const pending = timers.current
     return () => {
+      alive.current = false
       for (const t of pending) clearTimeout(t)
     }
   }, [])
 
-  /** Runs a purchase; a refusal's message shows under `key` for ERROR_MS */
-  const act = (key: string, run: () => Promise<void>): void => {
+  /** Runs a purchase (one at a time); `done` after it succeeds; a refusal's message shows under `key` for ERROR_MS */
+  const act = (key: string, run: () => Promise<void>, done?: () => void): void => {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     run()
+      .then(() => {
+        if (alive.current) done?.()
+      })
       .catch((err: unknown) => {
+        if (!alive.current) return
         const message = err instanceof Error ? err.message : String(err)
         setErrors((e) => ({ ...e, [key]: message }))
         const timer = setTimeout(() => {
@@ -97,27 +113,52 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
         }, ERROR_MS)
         timers.current.add(timer)
       })
-      .finally(() => setBusy(false))
+      .finally(() => {
+        inFlight.current = false
+        if (alive.current) setBusy(false)
+      })
+  }
+  /** After a build: its row (the Build button may be gone) */
+  const focusRow = (id: BuildingId): void => {
+    ref.current?.querySelector<HTMLElement>(`[data-building="${id}"]`)?.focus()
+  }
+  /** Left and Right switch the tabs (focus follows) */
+  const onTabKey = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const next = tab === 'camp' ? 'crew' : 'camp'
+    setTab(next)
+    document.getElementById(tabId(next))?.focus()
   }
 
   const hire = hireState(camp)
+  // Refusals for walk-ins no longer listed (hired elsewhere, or the day turned)
+  const goneErrors = Object.keys(errors).filter((k) => k.startsWith('hire:') && !camp.candidates.some((c) => `hire:${c.name}` === k))
   return (
     <div ref={ref} className="cs-camp-popover" role="dialog" aria-label="The camp" style={{ left, top: at.top - 4 }}>
-      <div className="cs-camp-tabs" role="tablist">
-        <button role="tab" aria-selected={tab === 'camp'} className={tab === 'camp' ? 'on' : ''} onClick={() => setTab('camp')}>
-          Camp
-        </button>
-        <button role="tab" aria-selected={tab === 'crew'} className={tab === 'crew' ? 'on' : ''} onClick={() => setTab('crew')}>
-          Crew {camp.crew.length}/{camp.bunks}
-        </button>
+      <div className="cs-camp-tabs" role="tablist" aria-label="The camp" onKeyDown={onTabKey}>
+        {(['camp', 'crew'] as const).map((t) => (
+          <button
+            key={t}
+            id={tabId(t)}
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={panelId(t)}
+            tabIndex={tab === t ? 0 : -1}
+            className={tab === t ? 'on' : ''}
+            onClick={() => setTab(t)}
+          >
+            {t === 'camp' ? 'Camp' : `Crew ${camp.crew.length}/${camp.bunks}`}
+          </button>
+        ))}
       </div>
       {tab === 'camp' ? (
-        <div className="cs-shop" role="tabpanel">
+        <div className="cs-shop" role="tabpanel" id={panelId('camp')} aria-labelledby={tabId('camp')}>
           {CATALOG.map((b) => {
             const row = shopRow(camp, b.id)
             const offer = row.offer
             return (
-              <div key={b.id} className="cs-shop-row" data-building={b.id} tabIndex={-1}>
+              <div key={b.id} className="cs-shop-row" data-building={b.id} tabIndex={-1} role="group" aria-label={row.name}>
                 <BuildingIcon id={b.id} tier={offer?.tier ?? camp.built[b.id]} />
                 <div className="cs-shop-text">
                   <span className="cs-shop-name">
@@ -138,7 +179,12 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
                     {row.short ? (
                       <span className="cs-shop-short">{row.short}</span>
                     ) : (
-                      <button className="cs-shop-build" disabled={busy} onClick={() => act(b.id, () => store.build({ id: b.id, tier: offer.tier, cost: offer.cost }))}>
+                      <button
+                        className="cs-shop-build"
+                        aria-label={`Build ${row.name}`}
+                        disabled={busy}
+                        onClick={() => act(b.id, () => store.build({ id: b.id, tier: offer.tier, cost: offer.cost }), () => focusRow(b.id))}
+                      >
                         Build
                       </button>
                     )}
@@ -149,11 +195,16 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
           })}
         </div>
       ) : (
-        <div className="cs-crew" role="tabpanel">
+        <div className="cs-crew" role="tabpanel" id={panelId('crew')} aria-labelledby={tabId('crew')}>
           {camp.crew.map((m) => (
             <CrewRow key={m.id} member={m} status={memberStatus(camp, m.id, labels)} />
           ))}
           <div className="cs-crew-heading">Walk-ins today</div>
+          {goneErrors.map((k) => (
+            <div key={k} className="cs-shop-error cs-crew-gone" role="alert">
+              {errors[k]}
+            </div>
+          ))}
           {camp.candidates.length === 0 && <div className="cs-crew-empty">Nobody else came by today.</div>}
           {camp.candidates.map((c) => (
             <WalkIn key={c.name} candidate={c} cost={camp.recruitCost} hire={hire} busy={busy} error={errors[`hire:${c.name}`]} onHire={() => act(`hire:${c.name}`, () => store.recruit(c.name, camp.recruitCost))} />
@@ -181,6 +232,7 @@ function BuildingIcon({ id, tier }: { id: BuildingId; tier: number }): React.JSX
 
 function CrewRow({ member, status }: { member: CrewEntry; status: string }): React.JSX.Element {
   const look = useMemo(() => memberLook(member.seed), [member.seed])
+  const pct = Math.round(xpProgress(member) * 100)
   return (
     <div className="cs-crew-row">
       <Hiker look={look} pose="stand" scale={2} label={member.name} decorative />
@@ -188,8 +240,17 @@ function CrewRow({ member, status }: { member: CrewEntry; status: string }): Rea
         <span className="cs-crew-name">
           {member.name} <span className="cs-crew-level">Lv {member.level} {member.title}</span>
         </span>
-        <span className="cs-xp" title={`${member.xp} / ${member.next} XP`}>
-          <span style={{ width: `${Math.round(xpProgress(member) * 100)}%` }} />
+        <span
+          className="cs-xp"
+          title={`${member.xp} / ${member.next} XP`}
+          role="progressbar"
+          aria-label={`${member.name}'s XP to Lv ${member.level + 1}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          aria-valuetext={`${member.xp} / ${member.next} XP`}
+        >
+          <span style={{ width: `${pct}%` }} />
         </span>
         <span className="cs-crew-status">{status}</span>
       </div>
@@ -221,7 +282,7 @@ function WalkIn({ candidate, cost, hire, busy, error, onHire }: WalkInProps): Re
           </span>
         )}
       </div>
-      <button className="cs-shop-build" disabled={busy || hire.disabled} title={hire.reason ?? undefined} onClick={onHire}>
+      <button className="cs-shop-build" aria-label={`Hire ${candidate.name} for ${cost} wood`} disabled={busy || hire.disabled} title={hire.reason ?? undefined} onClick={onHire}>
         Hire · 🪵 {cost}
       </button>
     </div>

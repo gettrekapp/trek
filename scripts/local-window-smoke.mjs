@@ -378,7 +378,8 @@ try {
     await until(() => tabHiker.getAttribute('title'), 'Marked complete — status tracking paused — click to resume tracking')
   ], ['complete', 'complete', 'Marked complete — status tracking paused — click to resume tracking'])
   // The camp's shop (campsite 3a): the counts button opens the popover; string lights (25 wood) are
-  // built from it. The session is complete, so nothing earns now: wait for the wood to settle first.
+  // built from it. The session is complete, so nothing earns now: wait for the wood to settle first
+  // (and say so if it never does). Only lights are built, so no garden or lake earns while it runs.
   const steadyWood = async () => {
     let last = await wood()
     for (let i = 0; i < 10; i++) {
@@ -387,17 +388,21 @@ try {
       if (n === last) return n
       last = n
     }
-    return last
+    throw new Error(`the camp's wood never settled (still changing after 15 s, last ${last}): the build check can't measure the drop`)
   }
-  const woodBeforeBuild = await steadyWood()
+  await steadyWood()
   await win.locator('.campsite .cs-camp-button').click()
   const lightsRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="lights"]')
+  check('the counts button opens the camp popover, with string lights to build', await until(() => lightsRow.locator('.cs-shop-build').count(), 1), 1)
+  // Read right before the click; the drop is 25, give or take a stray minute's wood (≤ 5)
+  const woodBeforeBuild = await wood()
   await lightsRow.locator('.cs-shop-build').click()
-  check('the camp popover builds string lights: the row says Built and the wood drops by 25', [
-    await until(() => lightsRow.locator('.cs-shop-built').count(), 1),
-    await until(async () => (await wood()) === woodBeforeBuild - 25, true)
-  ], [1, true])
-  console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${await wood()} after)`)
+  const builtRow = await until(() => lightsRow.locator('.cs-shop-built').count(), 1)
+  await until(async () => (await wood()) < woodBeforeBuild, true)
+  const woodAfterBuild = await wood()
+  const drop = woodBeforeBuild - woodAfterBuild
+  check('the camp popover builds string lights: the row says Built and the wood drops by 25', [builtRow, drop >= 25 && drop <= 30], [1, true])
+  console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${woodAfterBuild} after)`)
   // The counts button again closes it
   await win.locator('.campsite .cs-camp-button').click()
   check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
