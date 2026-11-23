@@ -55,7 +55,7 @@ test('isActive: a working session in the project, or activity within ACTIVE_MS (
   assert.equal(isActive(camp, 'q', T0), true)
 })
 
-test('rollSighting: about 1 in 20 minutes while active, 1 in 120 quiet, ×1.25 with tower II (seeded); a hit is logged and never repeats the last species', () => {
+test('rollSighting: about 1 in 20 minutes while active, 1 in 120 quiet with a window open, ×1.25 with tower II (seeded); a hit is logged and never repeats the last species', () => {
   const minutes = 24_000
   const count = (setup, seed) => {
     const camp = newCamp(1, T0)
@@ -64,7 +64,7 @@ test('rollSighting: about 1 in 20 minutes while active, 1 in 120 quiet, ×1.25 w
     let hits = 0
     let last = null
     for (let i = 0; i < minutes; i++) {
-      const id = rollSighting(camp, 'p', T0, rand)
+      const id = rollSighting(camp, 'p', T0, rand, { open: true })
       if (id === null) continue
       assert.notEqual(id, last, 'never twice running')
       last = id
@@ -84,9 +84,24 @@ test('rollSighting: about 1 in 20 minutes while active, 1 in 120 quiet, ×1.25 w
   assert.ok(Math.abs(towerActive - (minutes / 20) * 1.25) < 100, `tower II ${towerActive}`)
   // force (the smokes' TREK_CAMPSITE_FORCE_SIGHTINGS): every roll hits, no dice for the chance
   const camp = newCamp(1, T0)
-  assert.equal(rollSighting(camp, 'p', T0, seq(0), true), 'deer')
-  assert.equal(rollSighting(camp, 'p', T0, seq(0.99), false), null, 'a miss logs nothing more')
+  assert.equal(rollSighting(camp, 'p', T0, seq(0), { open: true, force: true }), 'deer')
+  assert.equal(rollSighting(camp, 'p', T0, seq(0.99), { open: true }), null, 'a miss logs nothing more')
   assert.equal(camp.guide.deer.count, 1)
+})
+
+test('rollSighting: a quiet project with no window open never rolls (no die drawn, even forced); an active one rolls without a window', () => {
+  const camp = newCamp(1, T0)
+  let draws = 0
+  const counted = () => {
+    draws++
+    return 0
+  }
+  assert.equal(rollSighting(camp, 'p', T0, counted), null)
+  assert.equal(rollSighting(camp, 'p', T0, counted, { force: true }), null)
+  assert.equal(draws, 0)
+  assert.deepEqual(camp.guide, {})
+  camp.lastActive.p = T0
+  assert.equal(rollSighting(camp, 'p', T0, seq(0)), 'deer', 'active: rolls with no window open')
 })
 
 test("contextFor: the time of day and season by the windows' clock (another time zone, the hemisphere), the project's weather, the lake and the tower", () => {

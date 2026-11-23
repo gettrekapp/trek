@@ -195,12 +195,24 @@ export function recordSighting(camp: Pick<Camp, 'guide' | 'sightings' | 'lastSee
   camp.away.sightings++
 }
 
+/** What the server knows of a project beyond the camp, for its roll */
+export interface RollOptions {
+  /** A window of the project is open (the host has a subscriber for it) */
+  open?: boolean
+  /** Every roll hits (the smokes' TREK_CAMPSITE_FORCE_SIGHTINGS); the project must still be active or open */
+  force?: boolean
+}
+
 /**
- * A project's minute roll: a sighting with sightingChance (one rand() call; `force` skips it, for the
- * smokes), its species by pickSpecies, logged. The species, or null (no sighting, or nothing allowed)
+ * A project's minute roll: only an active project, or one with a window open, rolls (a quiet
+ * project nobody watches doesn't, so a server left running doesn't fill the guide unseen); a
+ * sighting with sightingChance (one rand() call; `force` skips it, for the smokes), its species by
+ * pickSpecies, logged. The species, or null (no roll, no sighting, or nothing allowed)
  */
-export function rollSighting(camp: Camp, projectId: string, now: number, rand: () => number, force = false): string | null {
-  if (!force && rand() >= sightingChance(isActive(camp, projectId, now), camp.built.tower)) return null
+export function rollSighting(camp: Camp, projectId: string, now: number, rand: () => number, o: RollOptions = {}): string | null {
+  const active = isActive(camp, projectId, now)
+  if (!active && o.open !== true) return null
+  if (o.force !== true && rand() >= sightingChance(active, camp.built.tower)) return null
   const id = pickSpecies(contextFor(camp, projectId, now), Object.hasOwn(camp.lastSeen, projectId) ? camp.lastSeen[projectId] : null, rand)
   if (id === null) return null
   recordSighting(camp, id, projectId, now)

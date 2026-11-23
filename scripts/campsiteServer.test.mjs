@@ -74,6 +74,8 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
   const off = new Set()
   /** Projects removed from the server: the host's isEnabled is false for them, as for a project that is not there */
   const gone = new Set()
+  /** Projects with a window open (host.subscriberCount 1, else 0) */
+  const open = new Set()
   const host = {
     id: 'campsite',
     dataFile: (name) => join(dir, name),
@@ -105,9 +107,10 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
       if (projectId !== 'p') throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
       return Object.values(worktrees)
     },
+    subscriberCount: (projectId) => (open.has(projectId) ? 1 : 0),
     log: { info: () => {}, warn: (m) => warnings.push(m) }
   }
-  return { host, emitted, sent, warnings, off, gone, fire: (e) => { for (const l of listeners) l(e) }, listeners }
+  return { host, emitted, sent, warnings, off, gone, open, fire: (e) => { for (const l of listeners) l(e) }, listeners }
 }
 
 test('the server half: events earn wood, state answers the snapshot, emitAll follows (throttled)', async (t) => {
@@ -1042,6 +1045,7 @@ test("wildlife (3d-2): seen keeps a window's time zone and Seasons setting (save
   let tick
   const inst = createCampServer(h.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
+  h.open.add('p')
   inst.handlers.seen({ projectId: 'p', tz: 'America/Denver', seasons: 'south' }, { projectId: 'p', caller: 'c' })
   clock.run()
   assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).clock, { tz: 'America/Denver', seasons: 'south' })
@@ -1057,6 +1061,36 @@ test("wildlife (3d-2): seen keeps a window's time zone and Seasons setting (save
   assert.notEqual(h.sent[1][2].species, h.sent[0][2].species, 'never twice running')
   assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: '1' }), true)
   for (const v of [undefined, '', '0', 'yes']) assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: v }), false, String(v))
+})
+
+test('wildlife (3d-2): only a project that is active or has a window open rolls; a quiet one nobody watches draws no die', async (t) => {
+  const h = fakeHost(t)
+  const camp = newCamp(7, T0)
+  // p heard from long ago (quiet), q active a minute ago, r quiet with a window open
+  camp.lastActive = { p: T0 - 3_600_000, q: T0 - 60_000, r: T0 - 3_600_000 }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  h.open.add('r')
+  let now = T0
+  let tick
+  /** Which projects drew the die: the roll's chance is the first rand() of a project's roll */
+  let rolls = 0
+  const inst = createCampServer(h.host, { rand: () => { rolls++; return 0.99 }, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  now += 1000
+  tick()
+  assert.equal(rolls, 2, 'q (active) and r (a window open); not p')
+  // With forced sightings too: p still doesn't roll
+  const h2 = fakeHost(t)
+  writeFileSync(h2.host.dataFile('camp.json'), JSON.stringify(camp))
+  let tick2
+  const inst2 = createCampServer(h2.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick2 = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst2.dispose?.())
+  tick2()
+  assert.deepEqual(h2.sent.map(([p]) => p).sort(), ['q'], 'only the active project (no window open here)')
+  h2.open.add('p')
+  now += 10 * 60_000
+  tick2()
+  assert.deepEqual(h2.sent.slice(1).map(([p]) => p), ['p'], 'p, once its window opens; q is quiet by now, with no window')
 })
 
 test('wildlife (3d-2): build takes the ranger tower (500 wood and 2 markers, then 1,200 and 3); refusals are CONFLICT', async (t) => {
@@ -1128,6 +1162,7 @@ test("wildlife (3d-2): a window's project where the plugin is off (or unknown) i
   let now = T0
   let tick
   h.off.add('x')
+  h.open.add('x')
   const inst = createCampServer(h.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   assert.ok(h.warnings.some((w) => w.includes('TREK_CAMPSITE_FORCE_SIGHTINGS')), 'warned at start-up')

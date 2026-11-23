@@ -92,8 +92,9 @@ off and clear weather is exactly the strip before 3d-1.
 
 **Wildlife** (part 3d-2, collection only: nothing here pays). 24 species (20 common, 4 rare) cross
 the strip now and then. The server rolls each minute for every project it knows where the plugin
-is on: a 1 in 20 chance while the project is active (a working session, or activity in the last
-10 minutes), else 1 in 120; ranger tower II lifts both by a quarter. The species is drawn by weight
+is on and that is active (a working session, or activity in the last 10 minutes) or has a window
+open: a 1 in 20 chance while active, else 1 in 120; ranger tower II lifts both by a quarter. A quiet
+project with no window open doesn't roll, so a server left running doesn't fill the guide unseen. The species is drawn by weight
 among those the project's time of day, season and weather allow (by the windows' time zone and
 Seasons setting, which each window's `seen` ping reports; the Sky setting doesn't gate), and the
 lake (swimmers) and the ranger tower (the rares, one draw in 80) let in; never the species just

@@ -18,7 +18,7 @@
 // trails' checks it is pushed for the windows' weather. Wildlife (part 3d-2): `seen` also carries the
 // window's time zone and Seasons setting (the camp's clock); each minute tick rolls a sighting for
 // every project the camp knows (its last activity, or a window that asked for the state or pinged
-// seen this run) where the plugin is on, logs it and sends `sighting` to that project's windows
+// seen this run) where the plugin is on and that is active or has a window open, logs it and sends `sighting` to that project's windows
 // only; `build` takes the ranger tower. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
@@ -33,7 +33,7 @@ import { SUMMIT, freshOf, reconcile, trailLogOf, trailProjects, trailsOn, type F
 import { rollSighting, setClock } from '../shared/wildlife.ts'
 import { openCampStore } from './store.ts'
 
-export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emit' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree' | 'worktrees'>
+export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emit' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree' | 'worktrees' | 'subscriberCount'>
 
 /** The host's names for the journal: a project's name (its id if the host can't say), a worktree's repository, branch and folder (null once it is gone). Never throws, as `Where` promises */
 export function hostWhere(host: Pick<CampHost, 'projectName' | 'worktree'>): Where {
@@ -316,7 +316,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       try {
         if (!host.isEnabled(projectId)) continue
         const t = now()
-        const id = rollSighting(camp, projectId, t, rand, forceSightings)
+        const id = rollSighting(camp, projectId, t, rand, { open: host.subscriberCount(projectId) > 0, force: forceSightings })
         if (id !== null) out.push({ projectId, species: id, at: t })
       } catch (err) {
         warn('sighting', err)
