@@ -108,3 +108,23 @@ test('an event during a purchase shows at once; the answer (the purchase) wins; 
   assert.equal(store.snapshot().wood, 75)
   off()
 })
+
+test('gear and pin (campsite part 3b) send the member, slot, tier and price, or the pin, and take the answer; a refusal reloads and rethrows', async () => {
+  let wood = 300
+  const { host, calls } = fakeHost({ state: () => ({ wood }), gear: { wood: 240 }, pin: Object.assign(new Error('No session of that type or agent started here in the last 30 days'), { code: 'CONFLICT' }) })
+  const store = campStore(host)
+  const off = store.subscribe(() => {})
+  await flush()
+  await store.gear('c1', 'pack', 1, 60)
+  assert.deepEqual(calls.at(-1), ['gear', { crewId: 'c1', slot: 'pack', tier: 1, cost: { wood: 60 } }])
+  assert.equal(store.snapshot().wood, 240)
+  wood = 280
+  await assert.rejects(store.pin('c1', { kind: 'provider', id: 'grok' }), /in the last 30 days/)
+  const pins = () => calls.filter((c) => c[0] === 'pin')
+  assert.deepEqual(pins().at(-1), ['pin', { crewId: 'c1', pin: { kind: 'provider', id: 'grok' } }])
+  await flush()
+  assert.equal(store.snapshot().wood, 280, 'reloaded')
+  await assert.rejects(store.pin('c2', null))
+  assert.deepEqual(pins().at(-1), ['pin', { crewId: 'c2', pin: null }])
+  off()
+})
