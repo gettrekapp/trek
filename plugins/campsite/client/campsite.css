@@ -976,7 +976,7 @@
 }
 
 /* A sighting's animal (part 3d-2): its button over its sprite, moved by the stage (left and bottom
-   set each frame); under the camps' badges, the dog and the hikers */
+   set each frame); under every other button on the strip (the camps' badges, the buildings, the flags, the dog and the hikers) */
 .cs-animal {
   position: absolute;
   left: 0;
@@ -985,6 +985,10 @@
   border: none;
   cursor: pointer;
   z-index: 0;
+}
+/* A swimmer's button lies on the lake: over the lake's own button (both z-index 1, the animal's later), else the water would take its clicks */
+.cs-animal.swimmer {
+  z-index: 1;
 }
 .cs-animal:focus-visible {
   outline: 1px solid #ffe680;

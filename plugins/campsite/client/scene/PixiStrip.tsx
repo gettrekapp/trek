@@ -142,6 +142,7 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
           <button
             key={p.key}
             className="cs-building"
+            data-building={p.id}
             style={{ left: p.x, width: p.w, height: p.h, bottom: STAGE_H - p.bottom }}
             title={p.id === 'signpost' ? `${placedTitle(p)}: ${signpostText(allTrails)}` : placedTitle(p)}
             aria-label={p.id === 'signpost' ? `${placedTitle(p)}: ${signpostText(allTrails)}` : placedTitle(p)}
@@ -200,12 +201,12 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
           onClick={(e) => onTrail(e.currentTarget, 'cairn')}
         />
       )}
-      {/* Under the camps' badges, the dog and the hikers (z-index 0): the stage moves it over the animal */}
+      {/* Under the camps' badges, the dog and the hikers (z-index 0; a swimmer over the lake's button, which would hide it): the stage moves it over the animal */}
       {stage && animal && (
         <button
           key={animal.seq}
           ref={(el) => stage.bindAnimal(el)}
-          className="cs-animal"
+          className={animal.crossing.move === 'swimmer' ? 'cs-animal swimmer' : 'cs-animal'}
           style={{ width: animal.crossing.w, height: animal.crossing.h }}
           title={animalLabel(animal.crossing.species)}
           aria-label={animalLabel(animal.crossing.species)}

@@ -66,7 +66,27 @@ const SHOTS = [
   { name: 'rain', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off', weather: 'rain' },
   { name: 'fog', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T18:00', seasons: 'off', weather: 'fog' },
   { name: 'night-rain', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T22:00', seasons: 'off', weather: 'rain' },
-  { name: 'rain-reduced', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off', weather: 'rain', reduced: true }
+  { name: 'rain-reduced', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off', weather: 'rain', reduced: true },
+  // Wildlife (campsite 3d-2): every species' two frames at the strip's scale (the harness's sheet: the whole page)
+  { name: 'species-sheet', sheet: true, height: 640 },
+  // The ranger tower at the left edge, outside the cabins: tier 1, tier 2 (a telescope and a flag), and a narrow window (the cabins go first)
+  { name: 'tower', scenario: 'few', built: 'out', tower: 1, width: 1600 },
+  { name: 'tower-2', scenario: 'few', built: 'out', tower: 2, width: 1600 },
+  { name: 'tower-narrow', scenario: 'few', built: 'out', tower: 2, width: 700 },
+  // Animals, caught partway (?age; ?r the crossing's die): a mule deer pausing on the treeline between the shed and the camp; a hawk by
+  // day under the header, clear of every trail's flag; a mallard on the lake; a raccoon at night (a
+  // shade darker); a fox standing still (reduced motion)
+  { name: 'animal-walker', scenario: 'few', built: 'out', width: 1600, animal: 'deer', r: 0.02, age: 4500 },
+  { name: 'animal-flier', scenario: 'few', built: 'out', trails: 'all', width: 1600, at: '2026-11-23T12:00', seasons: 'off', animal: 'hawk', age: 5000 },
+  { name: 'animal-swimmer', scenario: 'few', built: 'out', width: 1600, animal: 'duck', age: 5000 },
+  { name: 'animal-night', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T22:00', seasons: 'off', animal: 'raccoon', dir: 'right', age: 4000 },
+  { name: 'animal-reduced', scenario: 'few', built: 'out', width: 1600, animal: 'fox', reduced: true },
+  // The field guide, opened from the deer's button (its card focused): five seen, three new, no tower (the rares need it)
+  { name: 'guide-tab', scenario: 'few', built: 'out', width: 1600, guide: 'some', animal: 'deer', r: 0.02, age: 4500, guideFrom: 'animal', height: 1000 },
+  // With ranger tower II, from the counts and the Guide tab: hints on the unseen (scrolled to the rares)
+  { name: 'guide-tab-tower', scenario: 'few', built: 'out', guide: 'some', tower: 2, guideFrom: 'tab', height: 1000 },
+  // The away card with sightings and new species
+  { name: 'away-sightings', scenario: 'few', away: 'sightings' }
 ]
 
 /**
@@ -128,28 +148,54 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${freeze ? '&freeze=1' : ''}`)
+    if (shot.sheet) {
+      await page.goto(`${url}?sheet=1`)
+      await page.waitForTimeout(300)
+      const path = join(out, `${shot.name}.png`)
+      await page.screenshot({ path, fullPage: true, ...still })
+      console.log(`wrote ${path}`)
+      await page.close()
+      continue
+    }
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? `&away=${shot.away === true ? 1 : shot.away}` : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${shot.tower ? `&tower=${shot.tower}` : ''}${shot.guide ? `&guide=${shot.guide}` : ''}${shot.animal ? `&animal=${shot.animal}&age=${shot.age ?? 0}${shot.dir ? `&dir=${shot.dir}` : ''}${shot.r === undefined ? '' : `&r=${shot.r}`}` : ''}${freeze ? '&freeze=1' : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
+    // The harness sends the sighting once the stage is up: its button appears, and a few frames draw it
+    if (shot.animal) {
+      await page.waitForSelector('.cs-animal', { state: 'attached', timeout: 5000 })
+      await page.waitForTimeout(300)
+    }
     // The stage skips Pixi's browser extras: no accessibility hook button (nor its global listeners)
     if (await page.evaluate(() => document.querySelector('button[title*="accessibility"]') !== null)) {
       problems.push(`${shot.name}: Pixi's accessibility button is on the page`)
     }
     // The trails' buttons (flags, a ledge's "+n", the cairn) overlap neither each other nor a hiker's;
     // the header's controls stay out of the peak's keep-out band (peakClear: between the start
-    // group's room and the end group's) and off the trails' buttons
+    // group's room and the end group's) and off the trails' buttons; an animal's button (3d-2) meets
+    // no trail's, hiker's or building's button nor a header control (the shots catch it in the clear)
     const overlaps = await page.evaluate(() => {
-      const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker')].map((el) => ({ el, r: el.getBoundingClientRect() }))
+      const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker, .cs-building, .cs-animal')].map((el) => ({ el, r: el.getBoundingClientRect() })).filter((b) => getComputedStyle(b.el).visibility !== 'hidden')
       const name = (el) => el.getAttribute('aria-label') ?? el.className
       const found = []
+      const is = (el, c) => el.classList.contains(c)
       for (let i = 0; i < boxes.length; i++) {
         for (let j = i + 1; j < boxes.length; j++) {
           const a = boxes[i]
           const b = boxes[j]
-          if (a.el.classList.contains('cs-camp-hiker') && b.el.classList.contains('cs-camp-hiker')) continue
+          if (is(a.el, 'cs-camp-hiker') && is(b.el, 'cs-camp-hiker')) continue
+          // The buildings are checked against the animal only; a swimmer lies on the lake (over its button)
+          if ((is(a.el, 'cs-building') || is(b.el, 'cs-building')) && !is(a.el, 'cs-animal') && !is(b.el, 'cs-animal')) continue
+          const lake = (x, y) => is(x.el, 'swimmer') && y.el.getAttribute('data-building') === 'lake'
+          if (lake(a, b) || lake(b, a)) continue
           if (a.r.left < b.r.right && b.r.left < a.r.right && a.r.top < b.r.bottom && b.r.top < a.r.bottom) found.push(`${name(a.el)} / ${name(b.el)}`)
         }
+      }
+      // The animal's button takes a click at its middle (nothing over it there)
+      for (const b of boxes) {
+        if (!is(b.el, 'cs-animal')) continue
+        const hit = document.elementFromPoint((b.r.left + b.r.right) / 2, (b.r.top + b.r.bottom) / 2)
+        if (!hit || !b.el.contains(hit)) found.push(`${name(b.el)} is under ${hit ? name(hit) : 'nothing'} at its middle`)
       }
       const header = document.querySelector('.cs-header')
       const start = document.querySelector('.cs-header-start')
@@ -162,7 +208,7 @@ try {
         for (const c of controls) {
           if (c.r.right > band.left + EPS && c.r.left < band.right - EPS) found.push(`header ${name(c.el)} / the peak's band (${Math.round(band.left)}–${Math.round(band.right)})`)
           for (const b of boxes) {
-            if (b.el.classList.contains('cs-camp-hiker')) continue
+            if (b.el.classList.contains('cs-camp-hiker') || b.el.classList.contains('cs-building')) continue
             if (c.r.left < b.r.right && b.r.left < c.r.right && c.r.top < b.r.bottom && b.r.top < c.r.bottom) found.push(`header ${name(c.el)} / ${name(b.el)}`)
           }
         }
@@ -179,6 +225,17 @@ try {
       // The first flag (the trailhead's oldest) opens the Trails tab at its row; its history is read
       await page.locator('.cs-flag').first().click()
       await page.waitForSelector('.cs-camp-popover .cs-trail-log', { timeout: 5000 })
+      await page.screenshot({ path, ...still })
+    } else if (shot.guideFrom) {
+      // From the animal's button (it moves: a dispatched click), or the counts and the Guide tab
+      if (shot.guideFrom === 'animal') await page.locator('.cs-animal').dispatchEvent('click')
+      else {
+        await page.locator('.cs-camp-button').click()
+        await page.locator('.cs-camp-popover [role="tab"]', { hasText: 'Guide' }).click()
+      }
+      await page.waitForSelector('.cs-camp-popover .cs-guide-card', { timeout: 5000 })
+      if (shot.guideFrom === 'tab') await page.locator('.cs-camp-popover .cs-guide-card[data-species="moose"]').scrollIntoViewIfNeeded()
+      await page.waitForTimeout(200)
       await page.screenshot({ path, ...still })
     } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read

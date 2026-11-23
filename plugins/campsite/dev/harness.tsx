@@ -11,12 +11,22 @@
 // (the sky "Follow the clock", the seasons ?seasons=north|south|off, default north); without ?at the
 // strip is always dusk with no season, its look before 3d. ?weather=rain fails the checks of the
 // harness project's api trail (snow in winter); ?weather=fog leaves the project quiet for 14 hours.
+// Wildlife (campsite 3d-2): ?tower=1|2 builds the ranger tower; ?guide=some fills the field guide
+// (five species, three first seen in the last two days: the new dot; the Guide tab last opened two
+// days ago); ?away=sightings adds 12 sightings and two new species to the away card;
+// ?animal=<species> sends a sighting once the strip is up (?dir=left|right, default left), then
+// (?age=<ms>) moves the page's performance.now on by that much, so the animal is drawn that far
+// into its crossing, frozen or not (?r, default 0.5, is the crossing's die: its length and spot);
+// window.__sighting(species, dir) sends one, as the server does.
+// ?sheet=1 shows every species' two frames at the strip's scale instead of the strip.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
 import '../client/campsite.css'
 import { Campsite } from '../client/Campsite.tsx'
+import { ANIMAL_SCALE, animalPixels, animalSize } from '../shared/animalPixels.ts'
 import { newCamp, snapshot } from '../shared/camp.ts'
+import { SPECIES } from '../shared/wildlife.ts'
 
 const PROVIDERS = ['claude', 'codex', 'gemini', 'grok']
 const s = (n: number, status: PluginSession['status'], worktree: string | null, extra: Partial<PluginSession> = {}): PluginSession => ({
@@ -74,7 +84,7 @@ if (frozen || Number.isFinite(pinned)) {
 }
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 // Without ?at: always dusk, no season (the strip before 3d-1, so the older shots stay the same)
-const prefs = Number.isFinite(pinned) ? { showDog: params.get('dog') !== '0', sky: 'clock', seasons: params.get('seasons') ?? 'north' } : { showDog: params.get('dog') !== '0', sky: 'dusk', seasons: 'off' }
+const prefs: Record<string, string | number | boolean> = Number.isFinite(pinned) ? { showDog: params.get('dog') !== '0', sky: 'clock', seasons: params.get('seasons') ?? 'north' } : { showDog: params.get('dog') !== '0', sky: 'dusk', seasons: 'off' }
 // The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;
 // ?built=out builds everything (all seven buildings at their top tier)
 const T = Date.now()
@@ -144,15 +154,66 @@ if (params.get('weather') === 'rain') {
   state.trails[key] = { ...api, checks: 'failed', checksAt: T - 600_000 }
 }
 if (params.get('weather') === 'fog') state.lastActive.harness = T - 14 * 3_600_000
+const tower = Number(params.get('tower'))
+if (tower === 1 || tower === 2) state.built.tower = tower
+// ?guide=some: five species seen (three of them since the Guide tab was last opened, two days ago)
+if (params.get('guide') === 'some') {
+  const D = 86_400_000
+  state.guide = {
+    deer: { count: 12, first: T - 9 * D, last: T - 3_600_000 },
+    fox: { count: 3, first: T - 5 * D, last: T - D },
+    owl: { count: 1, first: T - D, last: T - D },
+    heron: { count: 2, first: T - 12 * 3_600_000, last: T - 3_600_000 },
+    moose: { count: 1, first: T - 3_600_000, last: T - 3_600_000 }
+  }
+  prefs.guideSeenAt = T - 2 * D
+}
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {
   state.seenAt = T - 9 * 3_600_000
   state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ crewId: state.crew[1].id, level: 3 }], sightings: 0, newSpecies: [] }
 }
+// ?away=sightings: the same card, with 12 sightings, a heron and a lynx new among them
+if (params.get('away') === 'sightings') {
+  state.seenAt = T - 9 * 3_600_000
+  state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 0, levelUps: [], sightings: 12, newSpecies: ['heron', 'lynx'] }
+}
 const camp = snapshot(state, T, { project: (id) => (id === 'harness' ? 'trek' : 'website') })
 const listeners = new Map<string, Set<(data: unknown) => void>>()
 ;(window as unknown as { __summit: (worktreeId: string, branch: string) => void }).__summit = (worktreeId, branch) => {
   for (const l of listeners.get('summit') ?? []) l({ projectId: 'harness', worktreeId, branch })
+}
+const sighting = (species: string, dir: string): void => {
+  for (const l of listeners.get('sighting') ?? []) l({ projectId: 'harness', species, at: Date.now(), dir })
+}
+;(window as unknown as { __sighting: typeof sighting }).__sighting = sighting
+// ?animal=<species>: once the stage is drawn, a sighting; then the page's clock moves on by ?age
+const animal = params.get('animal')
+if (animal) {
+  const age = Number(params.get('age') ?? 0)
+  const send = (): void => {
+    if (!document.querySelector('.cs-canvas canvas')) {
+      setTimeout(send, 50)
+      return
+    }
+    setTimeout(() => {
+      // The crossing's die (its length, pause and spot), pinned so a shot is the same in every run (?r, default 0.5)
+      const random = Math.random
+      const r = Number(params.get('r') ?? 0.5)
+      Math.random = () => r
+      try {
+        sighting(animal, params.get('dir') === 'right' ? 'right' : 'left')
+      } finally {
+        Math.random = random
+      }
+      setTimeout(() => {
+        if (!(age > 0)) return
+        const was = performance.now.bind(performance)
+        performance.now = () => was() + age
+      }, 100)
+    }, 200)
+  }
+  send()
 }
 const host = {
   id: 'campsite',
@@ -178,10 +239,41 @@ const host = {
   onChanged: () => () => {}
 } as unknown as ClientPluginHost
 
-createRoot(document.getElementById('root')!).render(
-  <PluginHostContext.Provider value={host}>
-    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0 }}>
-      <Campsite />
+/** ?sheet=1: every species, both frames, at the strip's scale on a dusk sky over a ground line, named */
+function Sheet(): React.JSX.Element {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: 8, background: '#1a1622', color: '#c9c2d6', font: '11px ui-monospace, Menlo, monospace' }}>
+      {SPECIES.map((s) => {
+        const { w, h } = animalSize(s.id)
+        return (
+          <div key={s.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: 6, background: '#221e2a' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 60, borderBottom: '3px solid #2c2536' }}>
+              {([0, 1] as const).map((f) => (
+                <svg key={f} width={w * ANIMAL_SCALE} height={h * ANIMAL_SCALE} viewBox={`0 0 ${w} ${h}`} shapeRendering="crispEdges">
+                  {animalPixels(s.id, f).map((r, i) => (
+                    <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />
+                  ))}
+                </svg>
+              ))}
+            </div>
+            <span>
+              {s.name} ({s.move})
+            </span>
+          </div>
+        )
+      })}
     </div>
-  </PluginHostContext.Provider>
+  )
+}
+
+createRoot(document.getElementById('root')!).render(
+  params.get('sheet') === '1' ? (
+    <Sheet />
+  ) : (
+    <PluginHostContext.Provider value={host}>
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0 }}>
+        <Campsite />
+      </div>
+    </PluginHostContext.Provider>
+  )
 )
