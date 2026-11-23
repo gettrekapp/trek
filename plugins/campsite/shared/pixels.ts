@@ -1,5 +1,7 @@
 // A hiker as pixels: rectangles on a 12×16 grid for a look, a pose and a frame. The client draws
-// them as SVG; two-frame poses alternate by CSS. Pure.
+// them as SVG; two-frame poses alternate by CSS. A crew member's gear (the look's `kit`, campsite
+// part 3b) shows on it: a bigger pack by tier, boots by tier, a tier hat in place of the look's, and
+// a tool strapped to the pack. Pure.
 import type { Gear, Look } from './hiker.ts'
 
 export const POSES = ['stand', 'walk', 'wave', 'cheer', 'sit', 'sleep', 'map', 'chop', 'tent', 'fire'] as const
@@ -33,6 +35,20 @@ const ROLL = '#d9c9a0'
 /** A sleeper's z, and a mug's steam */
 const ZED = '#b9b4c6'
 
+// Gear by tier (1–3): packs tan, forest green, crimson; boots brown, black, black with red laces;
+// hats a bucket hat, a ranger hat, an alpine hat with a feather; tools a trekking pole, an ice axe, a
+// gold ice axe
+const KIT_PACKS: readonly string[] = ['#c8a46a', '#3f6b3a', '#a8323a']
+const KIT_BOOTS: readonly string[] = ['#8a5a2b', '#1e1e24', '#1e1e24']
+const LACE = '#d8423a'
+const KIT_HATS: readonly string[] = ['#b9a77a', '#8a6a3a', '#3f5a3a']
+const BUCKET_BAND = '#8a7a52'
+const RANGER_CREASE = '#6e5230'
+const LEATHER = '#5a3a1e'
+const ALPINE_BRIM = '#2e4430'
+const FEATHER = '#e6e1d3'
+const GOLD = '#e0b84a'
+
 /** A hex color with each channel × 0.76: sleeves and hems, so arms do not merge into the torso */
 export function shade(hex: string): string {
   return '#' + [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * 0.76).toString(16).padStart(2, '0')).join('')
@@ -48,10 +64,17 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
     out.push({ x, y, w, h, fill })
   }
   const sleeve = shade(look.jacket)
+  const kit = look.kit
+  const pack = kit && kit.pack > 0 ? KIT_PACKS[kit.pack - 1] : look.pack
+  const bootColor = kit && kit.boots > 0 ? KIT_BOOTS[kit.boots - 1] : BOOT
+  const boot = (x: number, y: number, w: number, h: number): void => {
+    r(x, y, w, h, bootColor)
+    if (kit?.boots === 3) r(x, y, 1, 1, LACE)
+  }
 
   // Asleep: lying in a sleeping bag the jacket's color, head on the left. Nothing else is this low and wide.
   if (pose === 'sleep') {
-    const cap = look.hat === 'none' || look.hat === 'headlamp' ? look.hair : look.hatColor
+    const cap = kit && kit.hat > 0 ? KIT_HATS[kit.hat - 1] : look.hat === 'none' || look.hat === 'headlamp' ? look.hair : look.hatColor
     r(0, 15, 4, 1, ROLL)
     r(0, 12, 4, 3, look.skin)
     r(0, 11, 4, 1, cap)
@@ -74,9 +97,24 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   const d = DROP[pose] ?? 0
   const held: Gear | 'none' = gear ?? (pose === 'stand' || pose === 'walk' ? look.gear : 'none')
 
-  // Pack (behind) with its bedroll, head, face
-  r(1, 6 + d, 2, 6, look.pack)
-  r(1, 5 + d, 2, 1, ROLL)
+  // Pack (behind) with its bedroll (a geared one a column wider), the tool strapped to it, head, face
+  if (kit && kit.pack > 0) {
+    r(0, 6 + d, 3, 6, pack)
+    r(0, 5 + d, 3, 1, ROLL)
+    r(0, 8 + d, 1, 1, shade(pack))
+  } else {
+    r(1, 6 + d, 2, 6, pack)
+    r(1, 5 + d, 2, 1, ROLL)
+  }
+  if (kit && kit.tool === 1) {
+    r(0, 2 + d, 1, 10, POLE)
+    r(0, 4 + d, 1, 1, BAND)
+  } else if (kit && kit.tool > 1) {
+    const head = kit.tool === 3 ? GOLD : STEEL
+    r(0, 3 + d, 1, 9, WOOD)
+    r(0, 2 + d, 3, 1, head)
+    r(2, 3 + d, 1, 1, head)
+  }
   r(3, 3 + d, 6, 4, look.skin)
   if (pose === 'wave') {
     r(4, 4 + d, 1, 2, EYE)
@@ -92,8 +130,24 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   // After the beard, so a bearded hiker's smile shows
   if (pose === 'cheer') r(5, 6 + d, 2, 1, EYE)
 
-  // Hat
-  if (look.hat === 'beanie') {
+  // Hat: a geared member's tier hat, else the look's
+  if (kit && kit.hat === 1) {
+    r(4, 1 + d, 4, 2, KIT_HATS[0])
+    r(4, 2 + d, 4, 1, BUCKET_BAND)
+    r(2, 3 + d, 8, 1, KIT_HATS[0])
+  } else if (kit && kit.hat === 2) {
+    r(4, d, 4, 3, KIT_HATS[1])
+    r(5, d, 2, 1, RANGER_CREASE)
+    r(4, 2 + d, 4, 1, LEATHER)
+    r(1, 3 + d, 10, 1, KIT_HATS[1])
+  } else if (kit && kit.hat === 3) {
+    r(5, d, 2, 1, KIT_HATS[2])
+    r(4, 1 + d, 4, 2, KIT_HATS[2])
+    r(4, 2 + d, 4, 1, RED)
+    r(3, 3 + d, 6, 1, ALPINE_BRIM)
+    r(8, d, 1, 2, FEATHER)
+    r(9, d, 1, 1, FEATHER)
+  } else if (look.hat === 'beanie') {
     r(3, 1 + d, 6, 2, look.hatColor)
     r(5, d, 2, 1, SNOW)
   } else if (look.hat === 'bucket') {
@@ -115,7 +169,7 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   // Jacket, its hem, and a pack strap
   r(3, 8 + d, 6, 4, look.jacket)
   r(3, 11 + d, 6, 1, sleeve)
-  r(4, 8 + d, 1, 3, look.pack)
+  r(4, 8 + d, 1, 3, pack)
 
   // Arms
   const armDown = (x: number): void => {
@@ -174,24 +228,24 @@ export function pixels(look: Look, pose: Pose, frame = 0, gear?: Gear | 'none'):
   // Legs and boots
   if (d === 2) {
     r(3, 14, 6, 2, look.pants)
-    r(9, 14, 2, 2, BOOT)
+    boot(9, 14, 2, 2)
   } else if (d === 1) {
     r(3, 13, 6, 2, look.pants)
-    r(3, 15, 2, 1, BOOT)
-    r(7, 15, 2, 1, BOOT)
+    boot(3, 15, 2, 1)
+    boot(7, 15, 2, 1)
   } else if (pose === 'walk' && frame === 1) {
     r(5, 12, 2, 3, look.pants)
-    r(5, 15, 2, 1, BOOT)
+    boot(5, 15, 2, 1)
   } else if (pose === 'walk') {
     r(3, 12, 1, 3, look.pants)
     r(8, 12, 1, 3, look.pants)
-    r(2, 15, 2, 1, BOOT)
-    r(8, 15, 2, 1, BOOT)
+    boot(2, 15, 2, 1)
+    boot(8, 15, 2, 1)
   } else {
     r(4, 12, 1, 3, look.pants)
     r(7, 12, 1, 3, look.pants)
-    r(3, 15, 2, 1, BOOT)
-    r(7, 15, 2, 1, BOOT)
+    boot(3, 15, 2, 1)
+    boot(7, 15, 2, 1)
   }
 
   // What the hands hold

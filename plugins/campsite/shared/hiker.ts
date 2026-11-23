@@ -1,5 +1,7 @@
 // A hiker's look, from its session's id: the same id always gives the same hiker (after a restart
-// too). The provider picks the jacket; everything else comes from the id. Pure.
+// too). The provider picks the jacket; everything else comes from the id. A crew member's gear
+// (campsite part 3b) is worn over it: `withKit`. Pure.
+import { GEAR_SLOTS, type GearTiers } from './catalog.ts'
 
 export const HATS = ['beanie', 'bucket', 'cap', 'headlamp', 'none'] as const
 export type Hat = (typeof HATS)[number]
@@ -26,6 +28,8 @@ export interface Look {
   pack: string
   gear: Gear
   pants: string
+  /** A crew member's gear tiers, worn over the look (pixels.ts); absent: none */
+  kit?: Readonly<GearTiers>
 }
 
 /** 32-bit FNV-1a */
@@ -66,4 +70,23 @@ export function lookFor(terminalId: string, provider: string): Look {
   const pants = pick(PANTS)
   const jacket = Object.hasOwn(JACKETS, provider) ? JACKETS[provider] : NEUTRAL_JACKET
   return { jacket, hat, hatColor, hair, skin, beard, pack, gear, pants }
+}
+
+/** The look wearing a member's gear (the same look when it has none) */
+export function withKit(look: Look, gear: Readonly<GearTiers> | null | undefined): Look {
+  if (!gear || GEAR_SLOTS.every((slot) => gear[slot] === 0)) return look
+  return { ...look, kit: { ...gear } }
+}
+
+/** Gear tiers as a short key ("1203": pack, boots, hat, tool), for memos and texture keys; '' for none */
+export const kitKey = (gear: Readonly<GearTiers> | null | undefined): string => (!gear || GEAR_SLOTS.every((slot) => gear[slot] === 0) ? '' : GEAR_SLOTS.map((slot) => gear[slot]).join(''))
+
+/** The tiers a kitKey holds; null for '' (or anything that isn't one) */
+export function kitOf(key: string): GearTiers | null {
+  if (!/^[0-3]{4}$/.test(key)) return null
+  const out = {} as GearTiers
+  GEAR_SLOTS.forEach((slot, i) => {
+    out[slot] = Number(key[i])
+  })
+  return out
 }

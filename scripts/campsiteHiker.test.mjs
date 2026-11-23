@@ -2,7 +2,7 @@
 // for each pose, stances, chores and labels.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, lookFor } from '../plugins/campsite/shared/hiker.ts'
+import { HATS, JACKETS, NEUTRAL_JACKET, PANTS, fnv1a, kitKey, kitOf, lookFor, withKit } from '../plugins/campsite/shared/hiker.ts'
 import { FRAMES, POSES, pixels, shade } from '../plugins/campsite/shared/pixels.ts'
 import { CHORES, CHORE_NAMES, SIGN_COLORS, SIGN_GLYPHS, SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, indicatorState, indicatorTitle, isWaiting, stanceFor, statusText, statusTitle } from '../plugins/campsite/shared/pose.ts'
 
@@ -222,4 +222,76 @@ test('hikerDoing: its chore while working, else its status; a pending decision o
   assert.equal(hikerDoing(session({ status: 'attention' }), 'chop'), 'needs your attention')
   assert.equal(hikerDoing(session({ status: 'done' }), 'chop'), 'finished')
   assert.equal(hikerDoing(session({ status: 'someday' }), 'chop'), 'idle')
+})
+
+
+/** The color drawn last at (x, y), or null */
+const pixelAt = (rects, x, y) => rects.findLast((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)?.fill ?? null
+const tiers = (n) => ({ pack: n, boots: n, hat: n, tool: n })
+
+test('withKit, kitKey, kitOf (campsite part 3b): a look wears gear; none leaves it as it is', () => {
+  const look = lookFor('kit', 'claude')
+  assert.equal(withKit(look, null), look)
+  assert.equal(withKit(look, tiers(0)), look)
+  const geared = withKit(look, { pack: 1, boots: 0, hat: 3, tool: 2 })
+  assert.deepEqual(geared, { ...look, kit: { pack: 1, boots: 0, hat: 3, tool: 2 } })
+  assert.equal(kitKey({ pack: 1, boots: 0, hat: 3, tool: 2 }), '1032')
+  assert.equal(kitKey(tiers(0)), '')
+  assert.equal(kitKey(undefined), '')
+  assert.deepEqual(kitOf('1032'), { pack: 1, boots: 0, hat: 3, tool: 2 })
+  assert.equal(kitOf(''), null)
+  assert.equal(kitOf('1049'), null)
+})
+
+test('pixels with gear: every pose, frame and tier stays on the 12×16 grid', () => {
+  for (const n of [1, 2, 3]) {
+    const look = withKit(lookFor('grid', 'claude'), tiers(n))
+    for (const pose of POSES) {
+      for (let frame = 0; frame < FRAMES[pose]; frame++) {
+        for (const r of pixels(look, pose, frame)) {
+          assert.ok(r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 && r.x + r.w <= 12 && r.y + r.h <= 16, `tier ${n} ${pose}/${frame}: ${JSON.stringify(r)}`)
+          assert.match(r.fill, /^#[0-9a-f]{6}$/i)
+        }
+      }
+    }
+  }
+})
+
+test('pixels with gear: the pack is a column wider in its tier\'s color; boots by tier, red laces at 3', () => {
+  const look = lookFor('t-1', 'claude')
+  const plain = pixels(look, 'stand')
+  assert.equal(pixelAt(plain, 0, 8), null, 'no gear: nothing at the far left')
+  assert.equal(pixelAt(plain, 3, 15), '#6b4528')
+  const packs = [1, 2, 3].map((n) => pixelAt(pixels(withKit(look, { ...tiers(0), pack: n }), 'stand'), 1, 9))
+  assert.deepEqual(packs, ['#c8a46a', '#3f6b3a', '#a8323a'])
+  assert.equal(pixelAt(pixels(withKit(look, { ...tiers(0), pack: 2 }), 'stand'), 0, 9), '#3f6b3a', 'a column wider')
+  const boots = (n, pose = 'stand') => pixels(withKit(look, { ...tiers(0), boots: n }), pose)
+  assert.deepEqual([1, 2, 3].map((n) => pixelAt(boots(n), 4, 15)), ['#8a5a2b', '#1e1e24', '#1e1e24'])
+  assert.equal(pixelAt(boots(3), 3, 15), '#d8423a', 'a red lace on each boot')
+  assert.equal(pixelAt(boots(3, 'sit'), 9, 14), '#d8423a', 'sitting too')
+  assert.equal(pixelAt(boots(2), 3, 15), '#1e1e24')
+})
+
+test("pixels with gear: a tier hat replaces the look's own; the sleeper's cap takes its color", () => {
+  const look = { ...lookFor('t-1', 'claude'), hat: 'beanie', hatColor: '#123456' }
+  assert.equal(pixelAt(pixels(look, 'stand'), 5, 0), '#eeeeee', "the beanie's bobble")
+  const hat = (n, pose = 'stand') => pixels(withKit(look, { ...tiers(0), hat: n }), pose)
+  assert.ok(!hat(1).some((r) => r.fill === '#123456'), "no trace of the look's hat")
+  assert.equal(pixelAt(hat(1), 2, 3), '#b9a77a', "the bucket hat's brim")
+  assert.equal(pixelAt(hat(2), 1, 3), '#8a6a3a', "the ranger hat's wide brim")
+  assert.equal(pixelAt(hat(2), 5, 0), '#6e5230', 'its crease')
+  assert.equal(pixelAt(hat(3), 8, 0), '#e6e1d3', "the alpine hat's feather")
+  assert.equal(pixelAt(hat(3), 5, 2), '#c94f3d', 'its red band')
+  assert.equal(pixelAt(hat(3, 'sleep'), 0, 11), '#3f5a3a')
+})
+
+test('pixels with gear: the tool is strapped to the pack, rising above it', () => {
+  const look = lookFor('t-1', 'claude')
+  const tool = (n, pose = 'stand') => pixels(withKit(look, { ...tiers(0), tool: n }), pose)
+  assert.equal(pixelAt(tool(1), 0, 2), '#9aa0a8', 'a trekking pole')
+  assert.equal(pixelAt(tool(2), 2, 2), '#c9ccd1', "an ice axe's head")
+  assert.equal(pixelAt(tool(2), 0, 6), '#7a5230', 'its shaft')
+  assert.equal(pixelAt(tool(3), 2, 2), '#e0b84a', 'gold')
+  assert.equal(pixelAt(tool(3, 'sit'), 2, 4), '#e0b84a', 'it sits down with the hiker')
+  for (const n of [1, 2, 3]) assert.ok(tool(n).filter((r) => r.y < 5 + 0 && r.x < 3).length > 0, `tier ${n} shows above the pack`)
 })
