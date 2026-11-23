@@ -77,7 +77,7 @@ const SHOTS = [
   // day under the header, clear of every trail's flag; a mallard on the lake; a raccoon at night (a
   // shade darker); a fox standing still (reduced motion)
   { name: 'animal-walker', scenario: 'few', built: 'out', width: 1600, animal: 'deer', r: 0.02, age: 4500 },
-  { name: 'animal-flier', scenario: 'few', built: 'out', trails: 'all', width: 1600, at: '2026-11-23T12:00', seasons: 'off', animal: 'hawk', age: 5000 },
+  { name: 'animal-flier', scenario: 'few', built: 'out', trails: 'all', width: 1600, at: '2026-11-23T12:00', seasons: 'off', animal: 'hawk', r: 1, age: 7450 },
   { name: 'animal-swimmer', scenario: 'few', built: 'out', width: 1600, animal: 'duck', age: 5000 },
   { name: 'animal-night', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T22:00', seasons: 'off', animal: 'raccoon', dir: 'right', age: 4000 },
   { name: 'animal-reduced', scenario: 'few', built: 'out', width: 1600, animal: 'fox', reduced: true },
@@ -161,9 +161,10 @@ try {
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
-    // The harness sends the sighting once the stage is up: its button appears, and a few frames draw it
+    // The harness sends the sighting once the stage is up and then moves its clock on (__animalAged): its button appears, and a few frames draw it
     if (shot.animal) {
       await page.waitForSelector('.cs-animal', { state: 'attached', timeout: 5000 })
+      await page.waitForFunction(() => window.__animalAged === true, null, { timeout: 5000 })
       await page.waitForTimeout(300)
     }
     // The stage skips Pixi's browser extras: no accessibility hook button (nor its global listeners)

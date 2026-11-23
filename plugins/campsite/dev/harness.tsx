@@ -207,9 +207,12 @@ if (animal) {
         Math.random = random
       }
       setTimeout(() => {
-        if (!(age > 0)) return
-        const was = performance.now.bind(performance)
-        performance.now = () => was() + age
+        if (age > 0) {
+          const was = performance.now.bind(performance)
+          performance.now = () => was() + age
+        }
+        // The render waits for this before it checks and shoots the animal
+        ;(window as unknown as { __animalAged: boolean }).__animalAged = true
       }, 100)
     }, 200)
   }
