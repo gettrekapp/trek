@@ -4,6 +4,7 @@
 // Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
 // moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts),
+// and tasks (tasks/taskHandlers.ts),
 // and the server's own update (update/updateHandlers.ts), and the MCP tools a session can call
 // (mcp/toolCatalog.ts).
 import type { PairingCodes } from './pairing'
@@ -26,6 +27,7 @@ import { machineHandlers, type EventSink, type Machine } from './integrations/ma
 import { integrationHandlers } from './integrations/integrationHandlers.ts'
 import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
 import { automationHandlers } from './automations/automationHandlers.ts'
+import { taskHandlers } from './tasks/taskHandlers.ts'
 import type { AutomationScheduler } from './automations/scheduler.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
@@ -561,6 +563,7 @@ const handlers: Record<string, Handler> = {
   ...integrationHandlers,
   ...prWatchHandlers,
   ...automationHandlers,
+  ...taskHandlers,
   ...reviewHandlers,
   ...moveHandlers,
   ...promoteHandlers,

@@ -112,3 +112,73 @@ test('findTask and requireTasksOn', () => {
   assert.equal(code(() => requireTasksOn({ settings: { tasksEnabled: true } })), 'ok')
   assert.equal(code(() => requireTasksOn({ settings: { tasksEnabled: false } })), 'TOOL_ERROR')
 })
+
+import { TopicHub } from '../server/src/topicHub.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
+import { dispatchV2 } from '../server/src/v2.ts'
+import { welcomeCapabilities } from '../server/src/capabilities.ts'
+
+function setupV2(tasks, settings = {}) {
+  const hub = new TopicHub()
+  const project = { id: 'p1', name: 'Demo', settings, globalSessions: [], repositories: [{ id: 'r1', name: 'app', path: '/repo', branchData: {}, worktrees: [] }], ...(tasks ? { tasks } : {}) }
+  const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [project])
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, sessions: { refreshAttention() {} } })
+  const list = () => projects.require('p1').tasks
+  return { projects, call, list }
+}
+
+test('welcome lists tasks', () => {
+  assert.ok(welcomeCapabilities(false).includes('tasks'))
+})
+
+test('task.save creates and updates; CONFLICT on a stale expectedUpdatedAt; bad input BAD_REQUEST', () => {
+  const v = setupV2()
+  const created = v.call('task.save', { task: { title: 'Fix it' } })
+  assert.equal(created.ok, true, JSON.stringify(created))
+  const { id, updatedAt } = created.result
+  assert.deepEqual(v.list().map((t) => [t.id, t.title]), [[id, 'Fix it']])
+  assert.equal(v.call('task.save', { task: { id, title: 'Renamed', status: 'waiting' }, expectedUpdatedAt: updatedAt }).ok, true)
+  assert.deepEqual([v.list()[0].title, v.list()[0].status], ['Renamed', 'waiting'])
+  assert.equal(v.call('task.save', { task: { id, title: 'Again' }, expectedUpdatedAt: updatedAt }).error.code, 'CONFLICT')
+  assert.equal(v.call('task.save', { task: { id, title: 'x' }, expectedUpdatedAt: 'soon' }).error.code, 'BAD_REQUEST')
+  assert.equal(v.call('task.save', { task: { title: '' } }).error.code, 'BAD_REQUEST')
+  assert.equal(v.call('task.save', { projectId: 'nope', task: { title: 'x' } }).error.code, 'NOT_FOUND')
+})
+
+test('task.setCompleted, task.setArchived, task.delete, task.reorder', () => {
+  const v = setupV2([task({ id: 'a' }), task({ id: 'b' })])
+  assert.deepEqual(v.call('task.setCompleted', { taskId: 'a', completed: true }), { ok: true, result: null })
+  assert.equal(typeof v.list()[0].completedAt, 'number')
+  assert.equal(v.call('task.setCompleted', { taskId: 'a', completed: 'yes' }).error.code, 'BAD_REQUEST')
+  assert.equal(v.call('task.delete', { taskId: 'a' }).error.code, 'BAD_REQUEST', 'not archived yet')
+  v.call('task.setArchived', { taskId: 'a', archived: true })
+  assert.equal(v.call('task.reorder', { taskIds: ['b', 'a'] }).ok, true)
+  assert.deepEqual(v.list().map((t) => t.id), ['b', 'a'])
+  assert.deepEqual(v.call('task.delete', { taskId: 'a' }), { ok: true, result: null })
+  v.call('task.setArchived', { taskId: 'b', archived: true })
+  v.call('task.delete', { taskId: 'b' })
+  assert.equal(v.list(), undefined, 'the last task gone removes the field')
+  assert.equal(v.call('task.setArchived', { taskId: 'zz', archived: true }).error.code, 'NOT_FOUND')
+})
+
+test('every task method refuses while Tasks is off', () => {
+  const v = setupV2([task({ id: 'a', archivedAt: 1 })], { tasksEnabled: false })
+  for (const [method, params] of [
+    ['task.save', { task: { title: 'x' } }],
+    ['task.setCompleted', { taskId: 'a', completed: true }],
+    ['task.setArchived', { taskId: 'a', archived: false }],
+    ['task.delete', { taskId: 'a' }],
+    ['task.reorder', { taskIds: ['a'] }]
+  ]) {
+    const res = v.call(method, params)
+    assert.equal(res.error?.code, 'TOOL_ERROR', method)
+    assert.match(res.error.message, /turned off/)
+  }
+})
+
+test('project.updateSettings takes tasksEnabled as a boolean', () => {
+  const v = setupV2()
+  assert.equal(v.call('project.updateSettings', { settings: { tasksEnabled: false } }).ok, true)
+  assert.equal(v.projects.require('p1').settings.tasksEnabled, false)
+  assert.equal(v.call('project.updateSettings', { settings: { tasksEnabled: 'no' } }).error.code, 'BAD_REQUEST')
+})

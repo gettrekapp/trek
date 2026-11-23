@@ -11,7 +11,7 @@ import type {
   Topic,
   TopicSnapshot
 } from './model/topics.ts'
-import type { AutomationInput, ProjectSettings, ProjectSummary, Project } from './model/types.ts'
+import type { AutomationInput, ProjectSettings, ProjectSummary, Project, TaskInput } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
@@ -304,6 +304,8 @@ export const CAPABILITY = {
   update: 'update',
   /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
   automations: 'automations',
+  /** Tasks: `task.save`, `task.setCompleted`, `task.setArchived`, `task.delete`, `task.reorder`, `task.start`, `Project.tasks` and the `tasksEnabled` setting */
+  tasks: 'tasks',
   /** `plugins.install` and `plugins.remove`: a client may install a plugin on the server, or remove one (theme plugins) */
   pluginInstall: 'pluginInstall',
   /** `pr.resolve` reads a pull request link or number through the project's PR providers, with its head branch; `worktree.create` takes `prUrl` (plugins P3) */
@@ -512,6 +514,13 @@ export interface MethodParamsV2 {
   'automation.delete': ProjectRef & { automationId: string }
   'automation.runNow': ProjectRef & { automationId: string }
   'automation.resolveMissed': ProjectRef & { run: string[]; dismiss: string[] }
+  // Tasks
+  'task.save': ProjectRef & { task: TaskInput; expectedUpdatedAt?: number }
+  'task.setCompleted': ProjectRef & { taskId: string; completed: boolean }
+  'task.setArchived': ProjectRef & { taskId: string; archived: boolean }
+  'task.delete': ProjectRef & { taskId: string }
+  'task.reorder': ProjectRef & { taskIds: string[] }
+  'task.start': ProjectRef & { taskId: string; repositoryId: string; llm?: LlmSelection }
   /**
    * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
    * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
@@ -756,6 +765,12 @@ export interface MethodResultsV2 {
   'automation.delete': null
   'automation.runNow': { sessionId: string }
   'automation.resolveMissed': { started: { automationId: string; sessionId?: string; error?: string }[] }
+  'task.save': { id: string; updatedAt: number }
+  'task.setCompleted': null
+  'task.setArchived': null
+  'task.delete': null
+  'task.reorder': null
+  'task.start': { worktreeId: string; sessionId: string; branch: string }
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null

@@ -12,6 +12,7 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
  * `promote.listen`, `promote.claim` and `promote.answer`, and promote_to_primary's
  * `promote.request` / `promote.settled`. `push` (6b): `push.setGrant`, `push.clearGrant` and
  * `push.status`, a phone's relay grant for background push. `automations`: `automation.*` and `Project.automations`.
+ * `tasks`: `task.*`, `Project.tasks` and the `tasksEnabled` setting.
  * `history`: `history.list` and the
  * `history.added` event, the worktree history. `ui`: `ui.report` and the `ui.focus` event, what
  * each client shows, for the MCP tools get_selected_worktree and focus_session. `mcpTools`:
@@ -33,6 +34,7 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.promote,
   CAPABILITY.push,
   CAPABILITY.automations,
+  CAPABILITY.tasks,
   CAPABILITY.history,
   CAPABILITY.ui,
   CAPABILITY.mcpTools,
