@@ -101,7 +101,12 @@ function createStore(host: CampHost): CampStore {
     gear: (crewId, slot, tier, cost) => buy('gear', { crewId, slot, tier, cost: { wood: cost } }),
     pin: (crewId, pin) => buy('pin', { crewId, pin: pin && { kind: pin.kind, id: pin.id } }),
     journal: async (crewId) => (await host.request<{ journal: JournalEntry[] }>('journal', { crewId })).journal,
-    trailLog: async (projectId) => (await host.request<{ log: TrailRecord[] }>('trailLog', { projectId })).log,
+    trailLog: async (projectId) => {
+      const r = await host.request<{ log?: unknown }>('trailLog', { projectId })
+      // An older server (no such request answers otherwise) or a bad reply: a failure, so Retry shows
+      if (!r || !Array.isArray(r.log)) throw new Error('The trail log came back in a shape this version cannot read')
+      return r.log as TrailRecord[]
+    },
     seen: () => {
       host.request('seen').catch(() => {
         // An older server: no away card

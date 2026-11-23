@@ -46,8 +46,10 @@ interface Props {
   onPick: (terminalId: string) => void
   /** A building's button was clicked: open the camp at its row */
   onBuilding: (id: BuildingId, el: HTMLButtonElement) => void
-  /** A flag (its worktree), a ledge's "+n" or the cairn was clicked: open the Trails tab (at that trail) */
-  onTrail: (el: HTMLButtonElement, worktreeId?: string) => void
+  /** A flag (its worktree), a ledge's "+n" or the cairn was clicked: open the Trails tab (at that trail); `opener` names which ("flag:<worktree>", "more:<stage>", "cairn") */
+  onTrail: (el: HTMLButtonElement, opener: string, worktreeId?: string) => void
+  /** The opener whose Trails tab is open (aria-expanded), else null */
+  openTrail: string | null
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -62,7 +64,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, selected, paused, showDog, onPick, onBuilding, onTrail }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -157,18 +159,34 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
               style={{ left: box.x, bottom: STAGE_H - box.y - box.h, width: box.w, height: box.h }}
               title={flagLabel(f)}
               aria-label={flagLabel(f)}
-              onClick={(e) => onTrail(e.currentTarget, f.worktreeId)}
+              aria-haspopup="dialog"
+              aria-expanded={openTrail === `flag:${f.worktreeId}`}
+              onClick={(e) => onTrail(e.currentTarget, `flag:${f.worktreeId}`, f.worktreeId)}
             />
           )
         })}
       {stage &&
         spots.more.map((m) => (
-          <button key={m.stage} className="cs-flag-more" style={{ left: m.x, bottom: STAGE_H - m.y, width: moreBox(m).w, height: moreBox(m).h }} title={`${m.count} more at ${STAGES[m.stage]}`} aria-label={`${m.count} more trails at ${STAGES[m.stage]}`} onClick={(e) => onTrail(e.currentTarget)}>
+          <button
+            key={m.stage}
+            className="cs-flag-more"
+            style={{ left: m.x, bottom: STAGE_H - m.y, width: moreBox(m).w, height: moreBox(m).h }}
+            title={`${m.count} more at ${STAGES[m.stage]}`}
+            aria-label={`${m.count} more trails at ${STAGES[m.stage]}`}
+            aria-haspopup="dialog"
+            aria-expanded={openTrail === `more:${m.stage}`}
+            onClick={(e) => onTrail(e.currentTarget, `more:${m.stage}`)}
+          >
             +{m.count}
           </button>
         ))}
       {stage && cairn && (
-        <button className="cs-cairn" style={{ left: cairn.x, bottom: STAGE_H - cairn.y - cairn.h, width: cairn.w, height: cairn.h }} title={cairnText(summits)} aria-label={cairnText(summits)} onClick={(e) => onTrail(e.currentTarget)} />
+        <button className="cs-cairn" style={{ left: cairn.x, bottom: STAGE_H - cairn.y - cairn.h, width: cairn.w, height: cairn.h }} title={cairnText(summits)}
+          aria-label={cairnText(summits)}
+          aria-haspopup="dialog"
+          aria-expanded={openTrail === 'cairn'}
+          onClick={(e) => onTrail(e.currentTarget, 'cairn')}
+        />
       )}
       {stage && showDog && <button ref={(el) => stage.bindDog(el)} className="cs-dog" title="Pet the dog" aria-label="Pet the dog" onClick={() => stage.petDog()} />}
       {stage &&

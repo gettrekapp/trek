@@ -152,3 +152,10 @@ test("state names the window's project (its trails are reconciled); trailLog ask
   assert.equal(calls.filter((c) => c[0] === 'state').length, 1)
   off()
 })
+
+test('trailLog: a reply without a list (an older server, a bad answer) is a failure, so the Trails tab offers Retry', async () => {
+  for (const reply of [undefined, null, {}, { log: 'x' }, { log: { 0: 1 } }]) {
+    const { host } = fakeHost({ state: { wood: 1 }, trailLog: reply })
+    await assert.rejects(campStore(host).trailLog('p'), /shape/, JSON.stringify(reply))
+  }
+})

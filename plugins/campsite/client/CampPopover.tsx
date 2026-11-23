@@ -31,6 +31,8 @@ export interface OpenCamp {
   focus: BuildingId | null
   tab?: CampTab
   trail?: string
+  /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn"): another one moves the popover rather than closing it */
+  opener?: string
 }
 
 const EDGE = 8

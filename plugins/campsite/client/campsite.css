@@ -529,8 +529,10 @@
   transform: translateY(-100%);
   width: 380px;
   max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 140px);
+  max-height: min(520px, calc(100vh - 140px));
   overflow-y: auto;
+  /* A row scrolled into view (a flag's trail, a building) lands below the sticky tabs */
+  scroll-padding-top: 36px;
   padding: 6px;
   background: #1c1d1f;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -540,10 +542,16 @@
   font-size: 12px;
   z-index: 50;
 }
+/* Sticky, so Camp, Crew and Trails stay in reach while the popover scrolls: over the popover's top padding too, in its background */
 .cs-camp-tabs {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
   display: flex;
   gap: 4px;
-  margin-bottom: 6px;
+  margin: -6px -6px 0;
+  padding: 6px;
+  background: #1c1d1f;
 }
 .cs-camp-tabs button {
   font-family: inherit;
@@ -871,6 +879,14 @@
   color: #9a9aa2;
   font-size: 11px;
   cursor: pointer;
+}
+.cs-trails-history:focus {
+  outline: none;
+}
+.cs-trails-history:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: -1px;
+  border-radius: 5px;
 }
 .cs-trail-row .cs-shop-text {
   gap: 1px;

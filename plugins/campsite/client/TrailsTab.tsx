@@ -2,8 +2,11 @@
 // flag's colour, its branch, a five-dot stage meter, its stage and how long it has been there), then
 // its history (asked for when the tab opens: the snapshot doesn't carry it); with the trail signpost,
 // every other project's trails, each with a "Show history" button; without it, a dimmed line saying
-// what the signpost adds. Opened at a trail (a flag clicked), that row takes the focus.
-import { useEffect, useRef, useState } from 'react'
+// what the signpost adds. Opened at a trail (a flag clicked), that row takes the focus (the selected
+// tab when its row is gone). This project's history is asked for again when its open trails change
+// (one ending shows in it); only the newest answer for a project is kept. After "Show history" or
+// Retry, the history's region takes the focus (the button is gone).
+import { useEffect, useId, useRef, useState } from 'react'
 import type { CampSnapshot, TrailEntry } from '../shared/camp.ts'
 import { NO_TRAILS, SIGNPOST_HINT, historyText, meterLabel, trailGroups, trailStatus } from '../shared/campView.ts'
 import { tentColors } from '../shared/layout.ts'
@@ -24,36 +27,69 @@ type History = { state: 'loading' } | { state: 'failed' } | { state: 'ready'; lo
 
 export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const ids = useId()
   const now = useNow()
   // Each project's history, once asked for (this project's when the tab opens)
   const [histories, setHistories] = useState<Record<string, History>>({})
   const alive = useRef(true)
-  const load = (id: string): void => {
-    setHistories((h) => ({ ...h, [id]: { state: 'loading' } }))
+  // Each project's latest request: an older answer is dropped
+  const asked = useRef(new Map<string, number>())
+  // A history region to focus once it renders (after Show history or Retry)
+  const focusHistory = useRef<string | null>(null)
+  /** Asks for a project's history; `quiet` (asked again): a list already shown stays until the answer, and stays if it fails */
+  const load = (id: string, quiet = false): void => {
+    const token = (asked.current.get(id) ?? 0) + 1
+    asked.current.set(id, token)
+    const latest = (): boolean => alive.current && asked.current.get(id) === token
+    setHistories((h) => (quiet && h[id]?.state === 'ready' ? h : { ...h, [id]: { state: 'loading' } }))
     store.trailLog(id).then(
       (log) => {
-        if (alive.current) setHistories((h) => ({ ...h, [id]: { state: 'ready', log } }))
+        if (latest()) setHistories((h) => ({ ...h, [id]: { state: 'ready', log } }))
       },
       () => {
-        if (alive.current) setHistories((h) => ({ ...h, [id]: { state: 'failed' } }))
+        if (latest()) setHistories((h) => (quiet && h[id]?.state === 'ready' ? h : { ...h, [id]: { state: 'failed' } }))
       }
     )
   }
+  /** Show history or Retry: load, and the history's region takes the focus (the pressed button goes) */
+  const ask = (id: string): void => {
+    focusHistory.current = id
+    load(id)
+  }
   useEffect(() => {
     alive.current = true
-    load(projectId)
     return () => {
       alive.current = false
     }
   }, [])
+  const { here, others } = trailGroups(camp.trails ?? [], projectId)
+  // This project's open trails as a string: when one ends (or starts), its history is asked for again
+  const hereKey = here
+    .map((t) => `${t.worktreeId}:${t.branch}`)
+    .sort()
+    .join('\n')
+  const first = useRef(true)
+  useEffect(() => {
+    load(projectId, !first.current)
+    first.current = false
+  }, [hereKey])
+  useEffect(() => {
+    const id = focusHistory.current
+    if (id === null) return
+    focusHistory.current = null
+    ref.current?.querySelector<HTMLElement>(`[data-history="${CSS.escape(id)}"]`)?.focus()
+  }, [histories])
   useEffect(() => {
     if (focus === null) return
     const row = ref.current?.querySelector<HTMLElement>(`[data-trail="${CSS.escape(focus)}"]`)
-    if (!row) return
+    // Its trail ended before the popover opened: the selected tab instead of nothing (the body)
+    if (!row) {
+      ref.current?.closest('.cs-camp-popover')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+      return
+    }
     row.scrollIntoView({ block: 'nearest' })
     row.focus()
   }, [])
-  const { here, others } = trailGroups(camp.trails ?? [], projectId)
   return (
     <div ref={ref} className="cs-trails">
       <div className="cs-crew-heading">{here[0]?.projectName ?? 'This project'}</div>
@@ -61,8 +97,12 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
       {here.map((t) => (
         <TrailRow key={t.worktreeId} trail={t} now={now} focusable />
       ))}
-      <div className="cs-crew-heading">History</div>
-      <HistoryList history={histories[projectId]} now={now} onRetry={() => load(projectId)} />
+      <div className="cs-crew-heading" id={`${ids}-history`}>
+        History
+      </div>
+      <div className="cs-trails-history" data-history={projectId} tabIndex={-1} role="region" aria-labelledby={`${ids}-history`}>
+        <HistoryList history={histories[projectId]} now={now} onRetry={() => ask(projectId)} />
+      </div>
       {(camp.built.signpost ?? 0) >= 1 ? (
         others.map((g) => (
           <div key={g.projectId} className="cs-trails-project" role="group" aria-label={g.projectName}>
@@ -71,11 +111,13 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
               <TrailRow key={t.worktreeId} trail={t} now={now} focusable={false} />
             ))}
             {histories[g.projectId] === undefined ? (
-              <button className="cs-trails-more" aria-label={`Show ${g.projectName}'s history`} onClick={() => load(g.projectId)}>
+              <button className="cs-trails-more" aria-label={`Show ${g.projectName}'s history`} onClick={() => ask(g.projectId)}>
                 Show history
               </button>
             ) : (
-              <HistoryList history={histories[g.projectId]} now={now} onRetry={() => load(g.projectId)} />
+              <div className="cs-trails-history" data-history={g.projectId} tabIndex={-1} role="region" aria-label={`${g.projectName}'s history`}>
+                <HistoryList history={histories[g.projectId]} now={now} onRetry={() => ask(g.projectId)} />
+              </div>
             )}
           </div>
         ))

@@ -141,15 +141,15 @@ export function Campsite(): React.JSX.Element | null {
   }
   if (!loaded || !prefs.showCampsite) return null
 
-  /** Opens the camp above `el`: at `focus`'s row, or at a tab (and a trail in it); the same opener again closes it */
-  const openCamp = (el: HTMLElement, focus: BuildingId | null, tab?: CampTab, trail?: string): void => {
+  /** Opens the camp above `el`: at `focus`'s row, or at a tab (and a trail in it); the same opener again closes it, another one moves it there */
+  const openCamp = (el: HTMLElement, focus: BuildingId | null, tab?: CampTab, trail?: string, opener?: string): void => {
     campOpener.current = el
     const r = el.getBoundingClientRect()
-    const next: OpenCamp = { left: r.left, top: r.top, focus, tab, trail }
+    const next: OpenCamp = { left: r.left, top: r.top, focus, tab, trail, opener }
     setCampOpen((o) => (o !== null && openKey(o) === openKey(next) ? null : next))
   }
-  /** The Trails tab, at a trail of this project or at its top */
-  const openTrails = (el: HTMLElement, trail?: string): void => openCamp(el, null, 'trails', trail)
+  /** The Trails tab from `opener` (the signpost, a flag, a ledge's "+n" or the cairn), at a trail of this project or at its top */
+  const openTrails = (el: HTMLElement, opener: string, trail?: string): void => openCamp(el, null, 'trails', trail, opener)
   const campButton = camp && (
     <button
       ref={countsButton}
@@ -276,8 +276,9 @@ export function Campsite(): React.JSX.Element | null {
             paused={hidden}
             showDog={prefs.showDog}
             onPick={(id) => host.focusSession(id)}
-            onBuilding={(id, el) => (id === 'signpost' ? openTrails(el) : openCamp(el, id))}
-            onTrail={(el, worktreeId) => openTrails(el, worktreeId)}
+            onBuilding={(id, el) => (id === 'signpost' ? openTrails(el, 'signpost') : openCamp(el, id))}
+            onTrail={(el, opener, worktreeId) => openTrails(el, opener, worktreeId)}
+            openTrail={campOpen?.tab === 'trails' ? (campOpen.opener ?? null) : null}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
@@ -301,8 +302,8 @@ export function Campsite(): React.JSX.Element | null {
   )
 }
 
-/** Where the camp popover opens, as a key: its tab, and its building row or trail ("camp:", "camp:lights", "trails:w1") */
-const openKey = (o: OpenCamp): string => `${o.tab ?? 'camp'}:${o.trail ?? o.focus ?? ''}`
+/** Where the camp popover opens, as a key: its tab, its building row or trail, and what opened it ("camp:", "camp:lights", "trails:@signpost", "trails:w1@flag:w1") */
+const openKey = (o: OpenCamp): string => `${o.tab ?? 'camp'}:${o.trail ?? o.focus ?? ''}${o.opener === undefined ? '' : `@${o.opener}`}`
 
 /** While `open`: a press outside the camps' badges and the popover, or a window resize, closes; Escape closes and refocuses the badge */
 function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): void {
