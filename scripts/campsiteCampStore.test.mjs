@@ -1,5 +1,6 @@
 // scripts/campsiteCampStore.test.mjs — the client's shared camp store (campsite parts 2 and 3a):
-// build and recruit take the answer as the snapshot; a refusal reloads and rethrows; seen and awaySeen.
+// build and recruit take the answer as the snapshot; a refusal reloads and rethrows; seen and awaySeen;
+// the window's project's notes and a trail log's reports (part 5).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { campStore } from '../plugins/campsite/client/campStore.ts'
@@ -148,7 +149,7 @@ test("state names the window's project (its trails are reconciled); trailLog ask
   const off = store.subscribe(() => {})
   await flush()
   assert.deepEqual(calls[0], ['state', { projectId: 'p' }])
-  assert.deepEqual(await store.trailLog('p'), [{ branch: 'b', result: 'summited', start: 1, end: 2 }])
+  assert.deepEqual(await store.trailLog('p'), { log: [{ branch: 'b', result: 'summited', start: 1, end: 2 }], reports: {} }, 'an older server: no reports')
   assert.deepEqual(calls.at(-1), ['trailLog', { projectId: 'p' }])
   await assert.rejects(store.trailLog('q'), /boom/)
   assert.equal(calls.filter((c) => c[0] === 'state').length, 1)
@@ -230,4 +231,98 @@ test('tools (campsite part 4): a state answer asked before a tool event leaves t
   assert.deepEqual(oldStore.snapshot(), { wood: 2 })
   off2()
   tools = null
+})
+
+test("trailLog (part 5): the open trails' reports by worktree, those this version can read", async () => {
+  const report = { summary: 'Done.', at: 5, by: 'Claude' }
+  const { host } = fakeHost({ state: { wood: 1 }, trailLog: { log: [], reports: { w: report, v: { summary: 3 }, u: 'junk' } } })
+  assert.deepEqual(await campStore(host).trailLog('p'), { log: [], reports: { w: report } })
+  const { host: bad } = fakeHost({ state: { wood: 1 }, trailLog: { log: [], reports: 'junk' } })
+  assert.deepEqual((await campStore(bad).trailLog('p')).reports, {})
+})
+
+/** A host whose `notes` answers when the test says (`answer(value)` or `fail()`, oldest request first), and that sends events by name */
+function notesHost() {
+  const listeners = new Map()
+  const pending = []
+  const calls = []
+  const host = {
+    request: (method, params) => {
+      calls.push([method, params])
+      if (method !== 'notes') return Promise.resolve({ wood: 1 })
+      return new Promise((resolve, reject) => pending.push({ resolve, reject }))
+    },
+    onEvent: (event, listener) => {
+      listeners.set(event, listener)
+      return () => listeners.delete(event)
+    },
+    onChanged: () => () => {},
+    projectId: 'p'
+  }
+  return { host, calls, send: (event, data) => listeners.get(event)?.(data), answer: (v) => pending.shift().resolve(v), fail: () => pending.shift().reject(new Error('no method notes')) }
+}
+const n = (id, at, more = {}) => ({ id, text: `note ${id}`, at, ...more })
+
+test("notes (part 5): read for the window's project when asked; bad notes left out; the newest answer wins; a failure keeps what was shown", async () => {
+  const h = notesHost()
+  const store = campStore(h.host)
+  let heard = 0
+  const off = store.subscribe(() => heard++)
+  assert.deepEqual(store.notes(), { status: 'idle', list: [] })
+  store.loadNotes()
+  assert.deepEqual(h.calls.at(-1), ['notes', { projectId: 'p' }])
+  assert.equal(store.notes().status, 'loading')
+  h.answer({ notes: [n('1', 10, { agent: 'claude' }), { id: 2 }, n('3', 30)] })
+  await flush()
+  assert.deepEqual(store.notes(), { status: 'ready', list: [n('1', 10, { agent: 'claude' }), n('3', 30)] })
+  // Two asks: only the newest one's answer lands
+  store.loadNotes()
+  store.loadNotes()
+  assert.deepEqual(store.notes().list.map((x) => x.id), ['1', '3'], 'the list stays while it reloads')
+  h.answer({ notes: [n('old', 1)] })
+  h.answer({ notes: [n('1', 10), n('3', 30), n('4', 40)] })
+  await flush()
+  assert.deepEqual(store.notes().list.map((x) => x.id), ['1', '3', '4'])
+  store.loadNotes()
+  h.fail()
+  await flush()
+  assert.deepEqual(store.notes().status, 'failed')
+  assert.deepEqual(store.notes().list.map((x) => x.id), ['1', '3', '4'], 'kept')
+  store.loadNotes()
+  h.answer({ nothing: true })
+  await flush()
+  assert.equal(store.notes().status, 'failed', 'a reply without a list')
+  assert.ok(heard >= 6)
+  off()
+  // No project (a window without one): nothing asked
+  const none = notesHost()
+  delete none.host.projectId
+  const noneStore = campStore(none.host)
+  noneStore.loadNotes()
+  assert.deepEqual(none.calls.filter((c) => c[0] === 'notes'), [])
+})
+
+test("notes (part 5): a `note` event adds this project's note once its notes are read; another project's, a bad one or one already there is left out", async () => {
+  const h = notesHost()
+  const store = campStore(h.host)
+  const off = store.subscribe(() => {})
+  h.send('note', { projectId: 'p', note: n('early', 5) })
+  assert.deepEqual(store.notes(), { status: 'idle', list: [] }, 'not read yet: the read brings it')
+  store.loadNotes()
+  h.answer({ notes: [n('1', 10)] })
+  await flush()
+  const before = store.notes()
+  h.send('note', { projectId: 'p', note: n('2', 20, { branch: 'feature/x' }) })
+  assert.deepEqual(store.notes().list, [n('1', 10), n('2', 20, { branch: 'feature/x' })])
+  assert.notEqual(store.notes(), before, 'a new object')
+  h.send('note', { projectId: 'q', note: n('3', 30) })
+  h.send('note', { projectId: 'p', note: { id: 4 } })
+  h.send('note', { projectId: 'p', note: n('2', 20) })
+  h.send('note', null)
+  assert.deepEqual(store.notes().list.map((x) => x.id), ['1', '2'])
+  // At most 20, the newest
+  for (let i = 0; i < 25; i++) h.send('note', { projectId: 'p', note: n(`m${i}`, 100 + i) })
+  assert.equal(store.notes().list.length, 20)
+  assert.equal(store.notes().list.at(-1).id, 'm24')
+  off()
 })

@@ -7,18 +7,32 @@
 // `seen` and `awaySeen` keep the away card; `seen` also tells the server the window's time zone and
 // Seasons setting (part 3d-2: they gate the wildlife). Real chores (part 4): each session's latest
 // tool call, from the `state` answer (its project's, with their ages) and the `tool` events, stamped
-// with this window's clock when heard; kept beside the snapshot (a pushed state has none). No React.
+// with this window's clock when heard; kept beside the snapshot (a pushed state has none). Agents in
+// the camp (part 5): the window's project's noticeboard notes, asked for on their own (`loadNotes`;
+// the newest answer wins) and added to by `note` events once loaded; a trail log comes with its
+// project's open trails' reports. No React.
 import { agentTool } from '../../../src/shared/plugins/agents.ts'
 import type { ClientPluginHost } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot, PinRef } from '../shared/camp.ts'
 import type { GearSlot } from '../shared/catalog.ts'
 import type { JournalEntry } from '../shared/journal.ts'
+import { NOTES_MAX, isNote, isReport, type Note, type TrailReport } from '../shared/notes.ts'
 import type { Hemisphere } from '../shared/world.ts'
 import type { HikerTool } from '../shared/pose.ts'
 import type { Offer } from '../shared/shop.ts'
 import type { TrailRecord } from '../shared/trails.ts'
 
 type CampHost = Pick<ClientPluginHost, 'request' | 'onEvent' | 'onChanged'> & Partial<Pick<ClientPluginHost, 'projectId'>>
+/** The window's project's notes (part 5), oldest first: not asked for yet, being read (the last list kept), read, or the last read failed */
+export interface NotesState {
+  status: 'idle' | 'loading' | 'ready' | 'failed'
+  list: readonly Note[]
+}
+/** A project's trail history and its open trails' reports by worktree (part 5; an older server: none) */
+export interface TrailLog {
+  log: TrailRecord[]
+  reports: Record<string, TrailReport>
+}
 export interface CampStore {
   subscribe(listener: () => void): () => void
   snapshot(): CampSnapshot | null
@@ -34,8 +48,12 @@ export interface CampStore {
   pin(crewId: string, pin: PinRef | null): Promise<void>
   /** A member's journal, oldest first (a refusal rethrows; nothing is reloaded) */
   journal(crewId: string): Promise<JournalEntry[]>
-  /** A project's ended trails, oldest first (a refusal rethrows; nothing is reloaded) */
-  trailLog(projectId: string): Promise<TrailRecord[]>
+  /** A project's ended trails, oldest first, and its open trails' reports (a refusal rethrows; nothing is reloaded) */
+  trailLog(projectId: string): Promise<TrailLog>
+  /** The window's project's notes (part 5): a new object when they change */
+  notes(): NotesState
+  /** Asks for the window's project's notes again (none without a project) */
+  loadNotes(): void
   /** A visible window saw the camp, with its time zone and Seasons setting (an older server without it is ignored) */
   seen(clock: { tz: string; seasons: Hemisphere }): void
   /** The away card was dismissed */
@@ -70,6 +88,13 @@ export function campStore(host: CampHost): CampStore {
 function createStore(host: CampHost): CampStore {
   let state: CampSnapshot | null = null
   let tools: Readonly<Record<string, HikerTool>> = {}
+  let notes: NotesState = { status: 'idle', list: [] }
+  // Each notes request's number: only the newest answer lands
+  let notesAsked = 0
+  const setNotes = (next: NotesState): void => {
+    notes = next
+    notify()
+  }
   const listeners = new Set<() => void>()
   let offs: (() => void)[] = []
   // Bumped by every event and purchase, so a load answer older than it is dropped
@@ -145,6 +170,13 @@ function createStore(host: CampHost): CampStore {
             tools = next
             notify()
           }),
+          host.onEvent<{ projectId?: unknown; note?: unknown }>('note', (data) => {
+            // This project's, once its notes are read (else the next read brings it)
+            if (data?.projectId !== host.projectId || !isNote(data.note) || notes.status !== 'ready') return
+            const note = data.note
+            if (notes.list.some((n) => n.id === note.id)) return
+            setNotes({ status: 'ready', list: [...notes.list, note].slice(-NOTES_MAX) })
+          }),
           host.onChanged(load)
         ]
         load()
@@ -165,10 +197,30 @@ function createStore(host: CampHost): CampStore {
     pin: (crewId, pin) => buy('pin', { crewId, pin: pin && { kind: pin.kind, id: pin.id } }),
     journal: async (crewId) => (await host.request<{ journal: JournalEntry[] }>('journal', { crewId })).journal,
     trailLog: async (projectId) => {
-      const r = await host.request<{ log?: unknown }>('trailLog', { projectId })
+      const r = await host.request<{ log?: unknown; reports?: unknown }>('trailLog', { projectId })
       // An older server (no such request answers otherwise) or a bad reply: a failure, so Retry shows
       if (!r || !Array.isArray(r.log)) throw new Error('The trail log came back in a shape this version cannot read')
-      return r.log as TrailRecord[]
+      // The reports (part 5): those this version can read; none from an older server
+      const reports: Record<string, TrailReport> = {}
+      if (r.reports && typeof r.reports === 'object') for (const [worktreeId, report] of Object.entries(r.reports)) if (isReport(report)) reports[worktreeId] = report
+      return { log: r.log as TrailRecord[], reports }
+    },
+    notes: () => notes,
+    loadNotes: () => {
+      if (host.projectId === undefined) return
+      const asked = ++notesAsked
+      setNotes({ status: 'loading', list: notes.list })
+      host.request<{ notes?: unknown }>('notes', { projectId: host.projectId }).then(
+        (r) => {
+          if (asked !== notesAsked) return
+          // A bad reply is a failure (Retry); bad notes in a good one are left out
+          if (!r || !Array.isArray(r.notes)) setNotes({ status: 'failed', list: notes.list })
+          else setNotes({ status: 'ready', list: r.notes.filter(isNote) })
+        },
+        () => {
+          if (asked === notesAsked) setNotes({ status: 'failed', list: notes.list })
+        }
+      )
     },
     seen: (clock) => {
       host.request('seen', { ...(host.projectId === undefined ? {} : { projectId: host.projectId }), tz: clock.tz, seasons: clock.seasons }).catch(() => {

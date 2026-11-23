@@ -43,7 +43,7 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
     const latest = (): boolean => alive.current && asked.current.get(id) === token
     setHistories((h) => (quiet && h[id]?.state === 'ready' ? h : { ...h, [id]: { state: 'loading' } }))
     store.trailLog(id).then(
-      (log) => {
+      ({ log }) => {
         if (latest()) setHistories((h) => ({ ...h, [id]: { state: 'ready', log } }))
       },
       () => {
