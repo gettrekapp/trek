@@ -221,6 +221,17 @@ try {
   check('the SDK task is listed with its status', await until(() => rowOf(sdkTaskId).locator('.ld-row-line').textContent().catch(() => null), 'seeded'), 'seeded')
   const selectedTitle = () => panel.locator('.tasks-row .ld-row-main[aria-current="true"] .ld-row-name').textContent().catch(() => null)
   check('the first open task is selected when the page opens', await selectedTitle(), 'From the SDK')
+  const rowNames = () => panel.locator('.tasks-row .ld-row-name').allTextContents()
+  const focusedTask = () => win.evaluate(() => document.activeElement?.closest('[data-task]')?.getAttribute('data-task') ?? document.activeElement?.className ?? null)
+
+  // The selection stays put: an agent adding a task above the selected one does not move it.
+  const { id: agentTaskId } = await sdk.request('task.save', { projectId, task: { title: 'Added by an agent' } })
+  await sdk.request('task.reorder', { projectId, taskIds: [agentTaskId, sdkTaskId] })
+  check('an agent adds a task above the selected one', await until(rowNames, ['Added by an agent', 'From the SDK']), ['Added by an agent', 'From the SDK'])
+  check('…and the selection stays on it', await selectedTitle(), 'From the SDK')
+  await sdk.request('task.setArchived', { projectId, taskId: agentTaskId, archived: true })
+  await sdk.request('task.delete', { projectId, taskId: agentTaskId })
+  check("…the agent's task is gone again", await until(rowNames, ['From the SDK']), ['From the SDK'])
   const titleInput = panel.locator('.tasks-title-input')
   const statusInput = panel.locator('.tasks-status-input')
   const detailsInput = panel.locator('.tasks-details-input')
@@ -277,6 +288,21 @@ try {
   check('…the details field shows them', await until(() => detailsInput.inputValue(), 'Edited by an agent.'), 'Edited by an agent.')
   check('…and no clash box', await clash.count(), 0)
 
+  // Alt+↓ moves a row, and the focus stays on it.
+  await rowOf(sdkTaskId).locator('.ld-row-main').focus()
+  await win.keyboard.press('Alt+ArrowDown')
+  check('Alt+↓ moves the row down', await until(titles, ['Fix the login bug', 'From the SDK']), ['Fix the login bug', 'From the SDK'])
+  check('…on the page too', await until(rowNames, ['Fix the login bug', 'From the SDK']), ['Fix the login bug', 'From the SDK'])
+  check('…and the focus stays on it', await until(focusedTask, sdkTaskId), sdkTaskId)
+  check('focusing a row does not select it', await selectedTitle(), 'Fix the login bug')
+  // Alt+↑ on the top row sends nothing, and leaves nothing behind to take the focus later.
+  await rowOf(fixId).locator('.ld-row-main').focus()
+  await win.keyboard.press('Alt+ArrowUp')
+  await detailsInput.focus()
+  await sdk.request('task.reorder', { projectId, taskIds: [sdkTaskId, fixId] })
+  check('an agent reorders the list', await until(rowNames, ['From the SDK', 'Fix the login bug']), ['From the SDK', 'Fix the login bug'])
+  check('…and the focus stays in the details field', await win.evaluate(() => document.activeElement?.className ?? null), 'tasks-details-input')
+
 
   // ---- 4. Start: two repositories, so the picker asks which --------------------------------------------
   await panel.locator('.tasks-actions button', { hasText: 'Start in new worktree' }).click()
@@ -311,19 +337,28 @@ try {
   await rowOf(fixId).locator('.tasks-check').click()
   check('the checkbox completes it', await until(async () => typeof (await fix()).completedAt, 'number'), 'number')
   check('the selection moves to the row that took its place', await until(selectedTitle, 'From the SDK'), 'From the SDK')
+  check('…and the focus goes to it', await until(focusedTask, sdkTaskId), sdkTaskId)
   check('the count line counts it as completed', await until(() => panel.locator('.tasks-header .muted').textContent(), '1 open · 1 completed'), '1 open · 1 completed')
   await panel.locator('.tasks-group-head', { hasText: 'Completed' }).click()
   check('the Completed group shows it struck through', await until(() => rowOf(fixId).evaluate((el) => el.classList.contains('done')).catch(() => null), true), true)
   await rowOf(fixId).locator('.ld-row-main').click()
   await panel.locator('.tasks-actions button', { hasText: 'Archive' }).click()
   check('Archive archives it', await until(async () => typeof (await fix()).archivedAt, 'number'), 'number')
+  check('…and the focus goes to the selected row', await until(focusedTask, sdkTaskId), sdkTaskId)
   await panel.locator('.tasks-archived-toggle').click()
   await rowOf(fixId).locator('.ld-row-main').click()
   check('an archived task cannot be started', await until(() => panel.locator('.tasks-actions button', { hasText: 'Start in new worktree' }).isDisabled(), true), true)
+  const focusedText = () => win.evaluate(() => document.activeElement?.textContent ?? null)
+  await panel.locator('.tasks-actions button', { hasText: 'Delete…' }).click()
+  check('the delete question starts on Cancel', await until(focusedText, 'Cancel'), 'Cancel')
+  await win.keyboard.press('Enter')
+  check('Cancel hands the focus back to Delete…', await until(focusedText, 'Delete…'), 'Delete…')
+  check('…and deletes nothing', (await titles()).length, 2)
   await panel.locator('.tasks-actions button', { hasText: 'Delete…' }).click()
   await panel.locator('.tasks-confirm button', { hasText: /^Delete$/ }).click()
   check('Delete removes it', await until(titles, ['From the SDK']), ['From the SDK'])
   check('the selection moves on', await until(selectedTitle, 'From the SDK'), 'From the SDK')
+  check('…with the focus', await until(focusedTask, sdkTaskId), sdkTaskId)
 
   // ---- 6. The switch -------------------------------------------------------------------------------
   await sdk.request('project.updateSettings', { projectId, settings: { tasksEnabled: false } })
