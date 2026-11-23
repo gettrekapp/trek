@@ -22,18 +22,25 @@
 // only; `build` takes the ranger tower. Real chores (part 4): each session's latest tool call
 // (session.tool) is kept in memory only (never in camp.json, and it pays nothing), sent as `tool` to
 // that project's windows, and dropped (sent as null) when the session's agent starts again, stops,
-// exits or the session closes; `state` answers a window's project's tools with the snapshot. New commits are counted with git (fast-forward only). Nothing here can stop the server:
+// exits or the session closes; `state` answers a window's project's tools with the snapshot. Agents
+// in the camp (part 5): two MCP tools, camp_note (a note on the project's noticeboard, sent as `note`
+// to its windows) and camp_trail_report (the latest report on a worktree's trail, in its member's
+// journal too), each at most once a minute per session (or project) and per trail, saved at once;
+// a session's worktree and agent come from the activity feed (kept in memory); `notes` answers a project's notes (the snapshot carries only each project's newest note's
+// time). New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import type { AgentToolKind } from '../../../src/shared/plugins/agents.ts'
-import { pluginError, type PluginInstance, type PluginWorktree, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import { pluginError, type PluginInstance, type PluginMcpTool, type PluginWorktree, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { awaySeen, seen } from '../shared/away.ts'
 import { snapshot, type CampSnapshot } from '../shared/camp.ts'
-import { journalOf, pinMember, type Where } from '../shared/crew.ts'
+import { journalOf, memberOf, pinMember, type Where } from '../shared/crew.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
+import { note } from '../shared/journal.ts'
+import { NOTE_MAX, REPORT_MAX, addNote, cleanText, notesOf, takePost, whoLine, type Note } from '../shared/notes.ts'
 import { build, buyGear, recruit, type ShopRefusal } from '../shared/shop.ts'
-import { SUMMIT, freshOf, reconcile, trailLogOf, trailProjects, trailsOn, type Fresh, type ReconcileMode } from '../shared/trails.ts'
+import { SUMMIT, freshOf, postReport, reconcile, trailKey, trailLogOf, trailProjects, trailsOn, type Fresh, type ReconcileMode } from '../shared/trails.ts'
 import { rollSighting, setClock } from '../shared/wildlife.ts'
 import { openCampStore } from './store.ts'
 
@@ -83,6 +90,43 @@ export interface ToolNote {
 }
 /** A window's project's tools as `state` answers them: by session, with their age (ms), so a window on another clock can place them */
 export type ToolAges = Record<string, { kind: AgentToolKind; label: string; age: number }>
+
+/** The `note` event: a project's new note */
+export interface NoteEvent {
+  projectId: string
+  note: Note
+}
+
+export const CAMP_NOTE_TOOL = {
+  name: 'camp_note',
+  description:
+    "Leave a short note for the user on this project's noticeboard at the camp (Trek's Campsite strip): one line of plain text, at most 140 characters (no markdown or links). At most one note a minute. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID) as terminalId, so the note says which agent and worktree it is from.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'The note: one line, at most 140 characters' },
+      terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' }
+    },
+    required: ['text']
+  }
+}
+
+export const CAMP_TRAIL_REPORT_TOOL = {
+  name: 'camp_trail_report',
+  description:
+    "Post a short report on your worktree's trail at the camp (Trek's Campsite strip) when you finish a task: what you did and where it stands, plain text, at most 280 characters. The trail keeps only its latest report. A Global session has no trail: leave a camp_note instead. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID) as terminalId (or the worktree's id as worktreeId). At most one report a minute per trail.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      summary: { type: 'string', description: 'What you did and where it stands, at most 280 characters' },
+      terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
+      worktreeId: { type: 'string', description: "The worktree's id, when there is no terminalId" }
+    },
+    required: ['summary']
+  }
+}
+
+export const CAMP_MCP_INSTRUCTIONS = 'Campsite: you may post a trail report with camp_trail_report when you finish a task, and leave a short note for the user with camp_note.'
 
 const EMIT_EVERY_MS = 1000
 /** How often every known project's trails are reconciled against its worktrees */
@@ -313,7 +357,15 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     return out
   }
 
+  /** Each session's project, worktree and agent as the activity feed last said (part 5: who left a note): in memory only */
+  const sessionFacts = new Map<string, { projectId: string; worktreeId: string | null; provider: string }>()
+
   const off = host.onActivity((e) => {
+    if (e.kind.startsWith('session.')) {
+      const s = e as Extract<ActivityEvent, { terminalId: string }>
+      if (s.kind === 'session.closed') sessionFacts.delete(s.terminalId)
+      else sessionFacts.set(s.terminalId, { projectId: s.projectId, worktreeId: s.worktreeId, provider: s.provider })
+    }
     // A tool call is the hiker's chore only: not the camp's (no pay, no last activity, no save)
     if (e.kind === 'session.tool') {
       if (disposed) return
@@ -387,13 +439,21 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     try {
       const before = saved()
       prune()
-      // A session gone without a word (its project, repo or worktree removed; the plugin off there) drops its tool call
+      // A session gone without a word (its project, repo or worktree removed; the plugin off there) drops its tool call and its facts
       for (const [terminalId, t] of [...tools]) {
         try {
           if (!host.isEnabled(t.projectId)) dropTool(terminalId)
           else host.session(t.projectId, terminalId)
         } catch (err) {
           if ((err as { code?: string }).code === 'NOT_FOUND') dropTool(terminalId)
+        }
+      }
+      for (const [terminalId, f] of [...sessionFacts]) {
+        try {
+          if (!host.isEnabled(f.projectId)) sessionFacts.delete(terminalId)
+          else host.session(f.projectId, terminalId)
+        } catch (err) {
+          if ((err as { code?: string }).code === 'NOT_FOUND') sessionFacts.delete(terminalId)
         }
       }
       tick(camp, now(), rules)
@@ -414,7 +474,90 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     }
   }, rules.minuteMs)
 
+  /** A refusal as the tool's error result */
+  const refuse = (r: ShopRefusal): never => {
+    throw pluginError(r.code, r.message)
+  }
+  /**
+   * The session `terminalId` names in the project (host.session throws for none, or another
+   * project's): Global or not, its worktree and agent as the activity feed last said (unknown: null
+   * and ''), its worktree's branch (or folder; "Global") and its member's name
+   */
+  const whoIs = (projectId: string, terminalId: unknown): { terminalId: string; global: boolean; worktreeId: string | null; agent: string; branch: string | undefined; member: string | undefined } => {
+    const found = host.session(projectId, terminalId)
+    const id = terminalId as string
+    const heard = sessionFacts.get(id)
+    const facts = heard?.projectId === projectId ? heard : null
+    const worktreeId = found.global ? null : (facts?.worktreeId ?? null)
+    let branch: string | undefined = found.global ? 'Global' : undefined
+    if (worktreeId !== null) {
+      const w = where.worktree(projectId, worktreeId)
+      if (w) branch = w.branch ?? w.name
+    }
+    return { terminalId: id, global: found.global, worktreeId, agent: facts?.provider ?? '', branch, member: memberOf(camp, id)?.name }
+  }
+  /** One post a minute per key, or the tool's error result */
+  const posts = new Map<string, number>()
+  const limit = (key: string, what: 'note' | 'report'): void => {
+    if (!takePost(posts, key, now())) throw pluginError('CONFLICT', `Please wait a minute before the next ${what}.`)
+  }
+  const optional = (x: unknown): boolean => x === undefined || x === null
+
+  const mcpTools: PluginMcpTool[] = [
+    {
+      definition: CAMP_NOTE_TOOL,
+      call: (args, ctx) => {
+        open()
+        const text = cleanText(args.text, NOTE_MAX, 'note')
+        if (typeof text !== 'string') return refuse(text)
+        const who = optional(args.terminalId) ? null : whoIs(ctx.projectId, args.terminalId)
+        limit(who ? `note:session:${who.terminalId}` : `note:project:${ctx.projectId}`, 'note')
+        const pinned = addNote(camp, ctx.projectId, {
+          text,
+          at: now(),
+          ...(who?.agent ? { agent: who.agent } : {}),
+          ...(who?.branch ? { branch: who.branch } : {}),
+          ...(who?.member ? { member: who.member } : {})
+        })
+        // Saved at once, like a purchase; the snapshot's newest-note time follows
+        store.flush()
+        publish()
+        const event: NoteEvent = { projectId: ctx.projectId, note: { ...pinned } }
+        host.emit(ctx.projectId, 'note', event)
+        return 'Pinned to the noticeboard.'
+      }
+    },
+    {
+      definition: CAMP_TRAIL_REPORT_TOOL,
+      call: (args, ctx) => {
+        open()
+        const summary = cleanText(args.summary, REPORT_MAX, 'summary')
+        if (typeof summary !== 'string') return refuse(summary)
+        const who = optional(args.terminalId) ? null : whoIs(ctx.projectId, args.terminalId)
+        if (who?.global) throw pluginError('BAD_REQUEST', 'This session has no trail (Global); leave a camp_note instead.')
+        const worktreeId = who?.worktreeId ?? (typeof args.worktreeId === 'string' && args.worktreeId !== '' ? args.worktreeId : null)
+        if (worktreeId === null) {
+          throw pluginError('BAD_REQUEST', who ? "Trek can't tell this session's worktree yet; pass worktreeId too." : 'Pass terminalId (your $TREK_TERMINAL_ID) or worktreeId.')
+        }
+        const key = trailKey(ctx.projectId, worktreeId)
+        if (!Object.hasOwn(camp.trails, key)) throw pluginError('NOT_FOUND', 'That worktree has no trail.')
+        limit(`report:${key}`, 'report')
+        const at = now()
+        const by = who ? whoLine(who.agent || undefined, who.member) : ''
+        const trail = postReport(camp, ctx.projectId, worktreeId, { summary, at, ...(by ? { by } : {}) })
+        if ('code' in trail) return refuse(trail)
+        const member = who ? memberOf(camp, who.terminalId) : undefined
+        if (member) note(member, { kind: 'report', at, branch: trail.branch, summary })
+        store.flush()
+        publish()
+        return `Report posted on ${trail.branch}.`
+      }
+    }
+  ]
+
   return {
+    mcpTools,
+    mcpInstructions: CAMP_MCP_INSTRUCTIONS,
     handlers: {
       // A window naming its project (part 3c): its trails are reconciled the first time this run (after the grace period)
       state: (_params, ctx) => {
@@ -452,9 +595,15 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
         if ('code' in out) throw pluginError(out.code, out.message)
         return out
       },
-      // A project's ended trails (part 3c): not in the pushed snapshot; the Trails tab asks
+      // A project's ended trails (part 3c), and its open trails' reports (part 5): not in the pushed snapshot; the Trails tab asks
       trailLog: (params) => {
         const out = trailLogOf(camp, params)
+        if ('code' in out) throw pluginError(out.code, out.message)
+        return out
+      },
+      // A project's noticeboard (part 5): not in the pushed snapshot (its newest note's time is); the Noticeboard asks
+      notes: (params) => {
+        const out = notesOf(camp, params)
         if ('code' in out) throw pluginError(out.code, out.message)
         return out
       },
@@ -477,6 +626,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       disposed = true
       off()
       tools.clear()
+      sessionFacts.clear()
       ticker.clear()
       pendingEmit?.cancel()
       store.dispose()

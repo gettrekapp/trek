@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
-import { TRAIL_EVERY_MS, TRAIL_GRACE_MS, createCampServer, forceSightingsFromEnv, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
+import { CAMP_MCP_INSTRUCTIONS, TRAIL_EVERY_MS, TRAIL_GRACE_MS, createCampServer, forceSightingsFromEnv, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
 import { newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
@@ -63,8 +63,8 @@ test('an unreadable camp.json is moved to camp.json.bak and a new camp starts, w
   assert.equal(warnings.length, 1)
 })
 
-/** A server plugin host with what the campsite uses; `fire` sends an activity event. Project p is "Trek"; its worktree w is on branch b of repo r (a trail: not the main checkout); `worktrees` lists them */
-function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true } } } = {}) {
+/** A server plugin host with what the campsite uses; `fire` sends an activity event. Project p is "Trek"; its worktree w is on branch b of repo r (a trail: not the main checkout); `worktrees` lists them; `globals`: the sessions that are Global */
+function fakeHost(t, { sessions = new Set(['t1']), globals = new Set(), git = {}, worktrees = { w: { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true } } } = {}) {
   const dir = tempDir(t)
   const listeners = new Set()
   const emitted = []
@@ -83,8 +83,9 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
     emit: (projectId, event, data) => { sent.push([projectId, event, data]); return 1 },
     emitAll: (event, data) => { emitted.push([event, data]); return 1 },
     session: (projectId, terminalId) => {
-      if (!sessions.has(terminalId)) throw Object.assign(new Error('no session'), { code: 'NOT_FOUND' })
-      return { sessionId: terminalId, global: false }
+      if (typeof terminalId !== 'string' || !terminalId) throw Object.assign(new Error('terminalId is required'), { code: 'BAD_REQUEST' })
+      if (projectId !== 'p' || !sessions.has(terminalId)) throw Object.assign(new Error(`No session with id "${terminalId}" in this project`), { code: 'NOT_FOUND' })
+      return { sessionId: terminalId, global: globals.has(terminalId) }
     },
     checkedWorktree: async (projectId, worktreeId) => ({ id: worktreeId, repoId: 'r', repoPath: '/r', path: `/r/${worktreeId}`, branch: 'b', present: true }),
     run: async (cmd, args) => {
@@ -1294,4 +1295,114 @@ test('real chores (4): the tick drops a call once the plugin is off in its proje
   // Back on: the call is gone, not restored
   h.off.delete('q')
   assert.deepEqual((await inst.handlers.state({}, { projectId: 'q', caller: 'c' })).tools, {})
+})
+
+/** The campsite's MCP tool by name */
+const tool = (inst, name) => inst.mcpTools.find((x) => x.definition.name === name)
+/** A camp server on a manual clock, for the part 5 tools */
+function agentsCamp(t, hostOptions = {}) {
+  const h = fakeHost(t, { sessions: new Set(['t1', 't2', 'g1']), globals: new Set(['g1']), ...hostOptions })
+  const clock = manual()
+  const time = { now: T0 }
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => time.now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  const note = (args, projectId = 'p') => tool(inst, 'camp_note').call(args, { projectId })
+  const report = (args, projectId = 'p') => tool(inst, 'camp_trail_report').call(args, { projectId })
+  return { h, clock, time, inst, note, report }
+}
+
+test('agents (5): the tools and their instructions; the inputs: text or summary required, the ids optional strings', (t) => {
+  const { inst } = agentsCamp(t)
+  assert.deepEqual(inst.mcpTools.map((x) => x.definition.name), ['camp_note', 'camp_trail_report'])
+  assert.equal(inst.mcpInstructions, CAMP_MCP_INSTRUCTIONS)
+  assert.equal(CAMP_MCP_INSTRUCTIONS, 'Campsite: you may post a trail report with camp_trail_report when you finish a task, and leave a short note for the user with camp_note.')
+  const [noteDef, reportDef] = inst.mcpTools.map((x) => x.definition)
+  assert.deepEqual(noteDef.inputSchema.required, ['text'])
+  assert.deepEqual(Object.fromEntries(Object.entries(noteDef.inputSchema.properties).map(([k, v]) => [k, v.type])), { text: 'string', terminalId: 'string' })
+  assert.deepEqual(reportDef.inputSchema.required, ['summary'])
+  assert.deepEqual(Object.fromEntries(Object.entries(reportDef.inputSchema.properties).map(([k, v]) => [k, v.type])), { summary: 'string', terminalId: 'string', worktreeId: 'string' })
+})
+
+test("agents (5): camp_note pins a note naming the session's agent, branch and member; saved at once; sent as `note` to that project's windows only; state carries its time, notes answers it", async (t) => {
+  const { h, inst, note, time } = agentsCamp(t)
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  const member = (await inst.handlers.state({}, {})).crew.find((m) => m.id === 'c1').name
+  time.now = T0 + 1000
+  assert.equal(note({ text: ' Tests are green;\nleft the flaky one skipped. ', terminalId: 't1' }), 'Pinned to the noticeboard.')
+  const pinned = { id: String(T0 + 1000), text: 'Tests are green; left the flaky one skipped.', at: T0 + 1000, agent: 'claude', branch: 'b', member }
+  assert.deepEqual(h.sent.filter(([, event]) => event === 'note'), [['p', 'note', { projectId: 'p', note: pinned }]])
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).notes, { p: [pinned] }, 'saved at once')
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual(snap.noteAt, { p: T0 + 1000 })
+  assert.equal(JSON.stringify(snap).includes('flaky'), false, 'the snapshot carries no notes')
+  assert.deepEqual(await inst.handlers.notes({ projectId: 'p' }, {}), { notes: [pinned] })
+  assert.deepEqual(await inst.handlers.notes({ projectId: 'other' }, {}), { notes: [] })
+  assert.throws(() => inst.handlers.notes({}, {}), (err) => err.code === 'BAD_REQUEST')
+})
+
+test('agents (5): camp_note without terminalId names nobody; a Global session says Global; a session the feed never named, only its member (none here); one a minute per session (or per project without one)', async (t) => {
+  const { h, inst, note, time } = agentsCamp(t)
+  assert.equal(note({ text: 'From nowhere' }), 'Pinned to the noticeboard.')
+  assert.throws(() => note({ text: 'Again' }), { message: 'Please wait a minute before the next note.' })
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 'g1', worktreeId: null, automation: false, provider: 'gemini', sessionType: null })
+  note({ text: 'From the log', terminalId: 'g1' })
+  assert.throws(() => note({ text: 'Twice', terminalId: 'g1' }), { message: 'Please wait a minute before the next note.' })
+  // t2: no event this run, so neither its worktree nor its agent is known
+  note({ text: 'Unplaced', terminalId: 't2' })
+  time.now = T0 + 60_000
+  note({ text: 'A minute later', terminalId: 'g1' })
+  note({ text: 'And without an id', terminalId: null })
+  const notes = (await inst.handlers.notes({ projectId: 'p' }, {})).notes
+  assert.deepEqual(notes.map(({ text, agent, branch }) => [text, agent, branch]), [['From nowhere', undefined, undefined], ['From the log', 'gemini', 'Global'], ['Unplaced', undefined, undefined], ['A minute later', 'gemini', 'Global'], ['And without an id', undefined, undefined]])
+  assert.equal(Object.hasOwn(notes[0], 'agent'), false, 'absent, not undefined')
+})
+
+test("agents (5): camp_note refuses an empty or too long text, an unknown or bad terminalId, another project's session; nothing is pinned or sent", async (t) => {
+  const { h, inst, note } = agentsCamp(t)
+  assert.throws(() => note({ text: '  \n ' }), { message: 'The note is empty.' })
+  assert.throws(() => note({}), { message: 'The note must be a string.' })
+  assert.throws(() => note({ text: 'x'.repeat(141) }), { message: 'The note is too long: 141 characters (at most 140).' })
+  assert.throws(() => note({ text: 'hi', terminalId: 'nobody' }), (err) => err.code === 'NOT_FOUND')
+  assert.throws(() => note({ text: 'hi', terminalId: 42 }), (err) => err.code === 'BAD_REQUEST')
+  assert.throws(() => note({ text: 'hi', terminalId: 't1' }, 'q'), (err) => err.code === 'NOT_FOUND', "t1 is p's")
+  assert.deepEqual((await inst.handlers.notes({ projectId: 'p' }, {})).notes, [])
+  assert.deepEqual(h.sent.filter(([, event]) => event === 'note'), [])
+})
+
+test("agents (5): camp_trail_report puts the session's report on its worktree's trail (a new one replaces it), in its member's journal; trailLog answers it; refused for a Global session, no trail, or within a minute", async (t) => {
+  const { h, inst, report, time } = agentsCamp(t)
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b' })
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null })
+  const member = (await inst.handlers.state({}, {})).crew.find((m) => m.id === 'c1').name
+  time.now = T0 + 5000
+  assert.equal(report({ summary: 'Added the noticeboard; tests green.', terminalId: 't1' }), 'Report posted on b.')
+  const first = { summary: 'Added the noticeboard; tests green.', at: T0 + 5000, by: `Claude · ${member}` }
+  assert.deepEqual(await inst.handlers.trailLog({ projectId: 'p' }, {}), { log: [], reports: { w: first } })
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).trails['p:w'].report, first, 'saved at once')
+  assert.deepEqual((await inst.handlers.journal({ crewId: 'c1' }, {})).journal.at(-1), { kind: 'report', at: T0 + 5000, branch: 'b', summary: 'Added the noticeboard; tests green.' })
+  assert.throws(() => report({ summary: 'Again', terminalId: 't1' }), { message: 'Please wait a minute before the next report.' })
+  // By worktree, without a session: the same trail's limit
+  assert.throws(() => report({ summary: 'By id', worktreeId: 'w' }), { message: 'Please wait a minute before the next report.' })
+  time.now = T0 + 65_000
+  assert.equal(report({ summary: 'By id', worktreeId: 'w' }), 'Report posted on b.')
+  assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).reports.w, { summary: 'By id', at: T0 + 65_000 }, 'replaced; nobody named')
+  assert.equal((await inst.handlers.journal({ crewId: 'c1' }, {})).journal.filter((e) => e.kind === 'report').length, 1, 'no session, no journal')
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 'g1', worktreeId: null, automation: false, provider: 'claude', sessionType: null })
+  assert.throws(() => report({ summary: 'From the log', terminalId: 'g1' }), { message: 'This session has no trail (Global); leave a camp_note instead.' })
+  assert.throws(() => report({ summary: 'Nowhere', worktreeId: 'gone' }), { message: 'That worktree has no trail.' })
+  assert.throws(() => report({ summary: 'Nowhere' }), { message: 'Pass terminalId (your $TREK_TERMINAL_ID) or worktreeId.' })
+  assert.throws(() => report({ summary: 'y'.repeat(281), worktreeId: 'w' }), { message: 'The summary is too long: 281 characters (at most 280).' })
+  // A session the server can't place in a worktree yet (no event, no member): worktreeId tells it
+  assert.throws(() => report({ summary: 'Where am I', terminalId: 't2' }), { message: "Trek can't tell this session's worktree yet; pass worktreeId too." })
+  // The trail ends: its report goes into the history
+  h.fire({ kind: 'worktree.removed', projectId: 'p', at: T0 + 70_000, repoId: 'r', worktreeId: 'w', branch: 'b' })
+  const after = await inst.handlers.trailLog({ projectId: 'p' }, {})
+  assert.deepEqual(after.reports, {})
+  assert.deepEqual(after.log.at(-1).report, { summary: 'By id', at: T0 + 65_000 })
+})
+
+test('agents (5): after dispose the tools refuse (the camp is closing)', (t) => {
+  const { inst, note } = agentsCamp(t)
+  inst.dispose()
+  assert.throws(() => note({ text: 'late' }), (err) => err.code === 'CONFLICT')
 })
