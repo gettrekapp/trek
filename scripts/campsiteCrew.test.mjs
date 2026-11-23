@@ -7,7 +7,8 @@ import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shar
 import { assign, creditXp, kitsKey, kitsOf, liveKinds, noteKinds, pinMember, release, sessionKit } from '../plugins/campsite/shared/crew.ts'
 import { applyActivity, restore, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
 import { buyGear } from '../plugins/campsite/shared/shop.ts'
-import { JOURNAL_MAX, note, providerName } from '../plugins/campsite/shared/journal.ts'
+import { JOURNAL_MAX, ago, duration, entryText, journalLines, note, providerName } from '../plugins/campsite/shared/journal.ts'
+import { bonusText, gearRows, memberSummary, pinFrom, pinOptions, pinValue } from '../plugins/campsite/shared/campView.ts'
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
@@ -404,4 +405,81 @@ test("sessionKit, kitsKey, kitsOf: a session's member's gear for its hikers; one
   assert.equal(kitsKey(snapshot(camp, T0)), key, 'wood alone: the same string')
   camp.crew[1].gear.boots = 1
   assert.equal(kitsKey(snapshot(camp, T0)), '[["t1","0100"],["t2","1032"]]', 'by terminal id')
+})
+
+test('journal words: durations, how long ago', () => {
+  assert.deepEqual([0, 45, 60, 192, 600].map(duration), ['0 m', '45 m', '1 h', '3 h 12 m', '10 h'])
+  assert.equal(ago(T0, T0 + 59_000), 'just now')
+  assert.equal(ago(T0, T0 + 5 * M), '5 m ago')
+  assert.equal(ago(T0, T0 + 2 * H + 5 * M), '2 h ago')
+  assert.equal(ago(T0, T0 + 3 * DAY + H), '3 d ago')
+})
+
+test("journal words: each kind of entry's line", () => {
+  assert.equal(entryText({ kind: 'hired', at: T0 }), 'Joined the camp')
+  assert.equal(entryText({ kind: 'trip', at: T0, minutes: 192, project: 'trek', place: 'main', provider: 'claude', wood: 48 }), '3 h 12 m on main in trek with Claude · 🪵 48')
+  assert.equal(entryText({ kind: 'trip', at: T0, minutes: 5, project: 'trek', place: 'Global', provider: '', wood: 0 }), '5 m on Global in trek')
+  assert.equal(entryText({ kind: 'summit', at: T0, branch: 'feature/campsite-strip', project: 'trek' }), 'Summited feature/campsite-strip in trek')
+  assert.equal(entryText({ kind: 'level', at: T0, level: 3, title: 'Mountaineer' }), 'Reached Lv 3 Mountaineer')
+  assert.equal(entryText({ kind: 'gear', at: T0, slot: 'tool', tier: 2 }), 'Bought an ice axe')
+  assert.equal(entryText({ kind: 'gear', at: T0, slot: 'boots', tier: 3 }), 'Bought red-laced boots')
+  assert.equal(entryText({ kind: 'pinned', at: T0, name: 'Review' }), 'Pinned to Review sessions')
+  assert.equal(entryText({ kind: 'unpinned', at: T0, name: 'Codex' }), 'Unpinned from Codex sessions')
+})
+
+test('journalLines: newest first, each with its words and when', () => {
+  const lines = journalLines([{ kind: 'hired', at: T0 }, { kind: 'level', at: T0 + H, level: 2, title: 'Trailblazer' }], T0 + 3 * H)
+  assert.deepEqual(lines, [
+    { key: `1:${T0 + H}`, text: 'Reached Lv 2 Trailblazer', when: '2 h ago' },
+    { key: `0:${T0}`, text: 'Joined the camp', when: '3 h ago' }
+  ])
+})
+
+test('gearRows: what a member wears, the next item and its price, or the gate before it (the shed, the level), then the wood', () => {
+  const member = { gear: { pack: 0, boots: 1, hat: 2, tool: 3 }, level: 2 }
+  const rows = gearRows({ wood: 100, built: { shed: 0 } }, member)
+  assert.deepEqual(rows.map((r) => r.slotName), ['Pack', 'Boots', 'Hat', 'Tool'])
+  assert.deepEqual(rows[0], { slot: 'pack', slotName: 'Pack', current: 'None', next: { tier: 1, name: 'Canvas pack', cost: 60 }, price: '🪵 60', blocked: 'Needs the gear shed' })
+  assert.deepEqual(rows[3], { slot: 'tool', slotName: 'Tool', current: 'Gold ice axe', next: null, price: '', blocked: null })
+  const shed = gearRows({ wood: 100, built: { shed: 1 } }, member)
+  assert.equal(shed[0].blocked, null)
+  assert.equal(shed[1].blocked, 'Needs Lv 3')
+  assert.equal(shed[2].blocked, 'Needs gear shed II')
+  assert.equal(gearRows({ wood: 150, built: { shed: 1 } }, { ...member, level: 3 })[1].blocked, 'Need 50 more wood')
+  assert.equal(gearRows({ wood: 99.9, built: { shed: 2 } }, { ...member, level: 5 })[2].blocked, 'Need 401 more wood')
+})
+
+test('the pin select: values, back to pins (type keys hold a colon), choices (a pin no longer seen stays listed); bonus and summary words', () => {
+  assert.equal(pinValue(null), '')
+  assert.equal(pinValue({ kind: 'type', id: 'p:rev' }), 'type:p:rev')
+  assert.deepEqual(pinFrom('provider:codex'), { kind: 'provider', id: 'codex' })
+  assert.deepEqual(pinFrom('type:p:rev'), { kind: 'type', id: 'p:rev' })
+  assert.deepEqual(pinFrom(pinValue({ kind: 'type', id: 'p:a:b' })), { kind: 'type', id: 'p:a:b' })
+  assert.equal(pinFrom(''), null)
+  assert.equal(pinFrom('agent:x'), null)
+  assert.equal(pinFrom('type:'), null)
+  const seenKinds = [{ kind: 'type', id: 'p:rev', name: 'Review' }, { kind: 'provider', id: 'claude', name: 'Claude' }]
+  assert.deepEqual(pinOptions({ seenKinds }, null), [
+    { value: '', label: 'Any session' },
+    { value: 'type:p:rev', label: 'Session type: Review' },
+    { value: 'provider:claude', label: 'Agent: Claude' }
+  ])
+  assert.deepEqual(pinOptions({ seenKinds }, { kind: 'provider', id: 'grok' }).at(-1), { value: 'provider:grok', label: 'Agent: grok' })
+  assert.equal(pinOptions({ seenKinds }, { kind: 'type', id: 'p:rev' }).length, 3)
+  assert.equal(bonusText(0), '+0% wood')
+  assert.equal(bonusText(24), '+24% wood')
+  assert.equal(memberSummary({ name: 'Aspen', level: 2, title: 'Trailblazer', xp: 150, next: 400 }, 'resting'), 'Aspen, Lv 2 Trailblazer, 150 / 400 XP, resting')
+})
+
+test("the pin select: two projects' session types of one name say which project each is", () => {
+  const seenKinds = [
+    { kind: 'type', id: 'trek:rev', name: 'Review' },
+    { kind: 'type', id: 'site:rev', name: 'Review' },
+    { kind: 'type', id: 'trek:fix', name: 'Fix' },
+    { kind: 'provider', id: 'review', name: 'Review' }
+  ]
+  assert.deepEqual(
+    pinOptions({ seenKinds }, null).map((o) => o.label),
+    ['Any session', 'Session type: Review (trek)', 'Session type: Review (site)', 'Session type: Fix', 'Agent: Review']
+  )
 })
