@@ -1,10 +1,12 @@
 // The campsite strip without the app: the real Campsite component on a fake plugin host, with the
 // sessions of the scenario named in ?scenario= (default "few"); ?dog=0 hides the dog.
+// ?built=out builds every building.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
 import '../client/campsite.css'
 import { Campsite } from '../client/Campsite.tsx'
+import { newCamp, snapshot } from '../shared/camp.ts'
 
 const PROVIDERS = ['claude', 'codex', 'gemini', 'grok']
 const s = (n: number, status: PluginSession['status'], worktree: string | null, extra: Partial<PluginSession> = {}): PluginSession => ({
@@ -29,8 +31,17 @@ const SCENARIOS: Record<string, PluginSession[]> = {
 const params = new URLSearchParams(location.search)
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 const prefs = { showDog: params.get('dog') !== '0' }
-// The camp's state, so the header shows its wood and markers and t1's tooltip names its crew member
-const camp = { wood: 340, markers: 2, crew: [{ id: 'c1', name: 'Aspen', level: 2, title: 'Trailblazer' }], assignments: { t1: 'c1' } }
+// The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;
+// ?built=out builds everything (all five buildings at their top tier)
+const T = Date.now()
+const state = newCamp(7, T)
+state.wood = 340
+state.markers = 2
+state.crew[0].name = 'Aspen'
+state.crew[0].xp = 150
+state.assignments.t1 = { crew: state.crew[0].id, project: 'harness' }
+if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3 }
+const camp = snapshot(state, T)
 const host = {
   id: 'campsite',
   projectId: 'harness',
@@ -41,6 +52,7 @@ const host = {
   prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} },
   request: async (method: string) => {
     if (method === 'state') return camp
+    if (method === 'seen' || method === 'awaySeen') return { ok: true }
     throw new Error(`[harness] no method ${method}`)
   },
   onEvent: () => () => {},

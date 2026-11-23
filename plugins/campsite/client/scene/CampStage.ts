@@ -1,12 +1,13 @@
-// The campsite strip drawn by Pixi: the backdrop, tents and Global's log, and the actors (the fire,
-// the hikers, the camp dog; scene/actors/). It only draws: Campsite lays the camp out (layout.ts)
-// and hands it over with update(). The DOM overlay's buttons (bindTarget, bindDog) are moved by the
-// actors every frame to stand over their sprites, so names, focus and clicks stay DOM. Timing and
-// geometry come from shared/stage.ts.
+// The campsite strip drawn by Pixi: the backdrop, tents and Global's log, and the actors (the
+// buildings and lights, the fire, the hikers, the camp dog; scene/actors/). It only draws: Campsite
+// lays the camp out (layout.ts) and hands it over with update(). The DOM overlay's buttons
+// (bindTarget, bindDog) are moved by the actors every frame to stand over their sprites, so names,
+// focus and clicks stay DOM. Timing and geometry come from shared/stage.ts.
 import 'pixi.js/unsafe-eval'
 import { Application, Graphics } from 'pixi.js'
 import type { CampLayout } from '../../shared/layout.ts'
 import { SKY, STAGE_H, backdrop, logBox, tentShapes } from '../../shared/stage.ts'
+import { BuildingsActor } from './actors/buildings.ts'
 import { DogActor } from './actors/dog.ts'
 import { FireActor } from './actors/fire.ts'
 import { HikersActor } from './actors/hikers.ts'
@@ -52,6 +53,7 @@ export class CampStage {
   private readonly textures = new TextureCache()
   private readonly backdrop = new Graphics()
   private readonly camps = new Graphics()
+  private readonly buildings: BuildingsActor
   private readonly fire: FireActor
   private readonly dog: DogActor
   private readonly hikers: HikersActor
@@ -69,10 +71,11 @@ export class CampStage {
   private constructor(app: Application, parent: HTMLElement, colors: SignColors) {
     this.app = app
     parent.appendChild(app.canvas)
+    this.buildings = new BuildingsActor(this.textures)
     this.fire = new FireActor(this.textures)
     this.dog = new DogActor(this.textures)
     this.hikers = new HikersActor(this.textures, colors)
-    app.stage.addChild(this.backdrop, this.fire.glow, this.hikers.inside, this.camps, this.fire.root, this.dog.root, this.hikers.front)
+    app.stage.addChild(this.backdrop, this.buildings.root, this.fire.glow, this.hikers.inside, this.camps, this.fire.root, this.dog.root, this.hikers.front)
     // Pixel art at a few px a frame: 30 fps is plenty
     app.ticker.maxFPS = 30
     app.ticker.add(() => this.frame(performance.now()))
@@ -97,6 +100,7 @@ export class CampStage {
     this.snapshot = s
     this.drawCamps(s.layout)
     this.fire.sync(s)
+    this.buildings.sync(s)
     // Hidden, or reduced motion with no heart rising: nothing moves, so no frames
     const idle = s.paused || (s.reduced && !this.dog.rising)
     if (idle) this.app.ticker.stop()
@@ -133,6 +137,7 @@ export class CampStage {
     this.hikers.destroy()
     this.dog.destroy()
     this.fire.destroy()
+    this.buildings.destroy()
   }
 
   private resize(width: number, t: number): void {
@@ -158,6 +163,7 @@ export class CampStage {
     if (!s || this.destroyed) return
     const still = s.reduced
     this.hikers.frame(t, still)
+    this.buildings.frame(t, still)
     this.fire.frame(t, still)
     this.dog.frame(t, still)
     // Reduced motion: the last heart has gone, so stop the frames petDog() started

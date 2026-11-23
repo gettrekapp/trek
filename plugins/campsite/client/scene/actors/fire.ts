@@ -1,7 +1,9 @@
 // The campfire on the Pixi strip: its hearth and embers (redrawn when the fire moves), three flames
-// that flicker, and the glow under the camp. Lit (embers and glow) while anyone is at camp.
+// that flicker, and the glow under the camp. Lit (embers and glow) while anyone is at camp. The fire
+// ring's tiers (part 3a) add stones around the hearth.
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
+import { fireRing } from '../../../shared/buildingPixels.ts'
 import { fireParts, flameScale, type FireParts } from '../../../shared/stage.ts'
 import { drawBoxes } from '../draw.ts'
 import type { TextureCache } from '../textures.ts'
@@ -15,7 +17,7 @@ export class FireActor implements Actor {
   private readonly hearth = new Graphics()
   private readonly flames = new Graphics()
   private readonly embers = new Graphics()
-  private fireX = -1
+  private hearthKey = ''
   private parts: FireParts | null = null
   private snapshot: StageSnapshot | null = null
 
@@ -26,11 +28,13 @@ export class FireActor implements Actor {
 
   sync(s: StageSnapshot): void {
     this.snapshot = s
-    if (s.layout.fireX !== this.fireX) {
-      this.fireX = s.layout.fireX
+    const tier = s.built?.fire ?? 1
+    const hearthKey = `${s.layout.fireX}:${tier}`
+    if (hearthKey !== this.hearthKey) {
+      this.hearthKey = hearthKey
       this.parts = fireParts(s.layout.fireX)
       this.hearth.clear()
-      drawBoxes(this.hearth, this.parts.hearth)
+      drawBoxes(this.hearth, [...this.parts.hearth, ...fireRing(s.layout.fireX, tier)])
       this.embers.clear()
       drawBoxes(this.embers, this.parts.embers)
       this.glow.position.set(this.parts.glow.x, this.parts.glow.y)

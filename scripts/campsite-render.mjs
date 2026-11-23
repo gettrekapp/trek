@@ -26,7 +26,11 @@ const SHOTS = [
   { name: 'few-narrow', scenario: 'few', width: 600, touch: true },
   { name: 'exited', scenario: 'exited' },
   { name: 'grouped', scenario: 'grouped' },
-  { name: 'no-dog', scenario: 'few', dog: false }
+  { name: 'no-dog', scenario: 'few', dog: false },
+  // Every building at its top tier: all three cabins, the lake and dock, the beds, fire ring III, the lights
+  { name: 'built-out', scenario: 'few', built: 'out', width: 1600 },
+  // A narrow window: the outermost buildings are dropped (one cabin; the garden without the lake)
+  { name: 'narrow', scenario: 'few', built: 'out', width: 700 }
 ]
 
 mkdirSync(out, { recursive: true })
@@ -56,7 +60,7 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)

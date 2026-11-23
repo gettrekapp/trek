@@ -4,6 +4,8 @@
 // hiker to show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import { placeBuildings } from '../shared/campEdges.ts'
+import { startBuilt } from '../shared/catalog.ts'
 import { crewLabel } from '../shared/crew.ts'
 import { campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -11,6 +13,9 @@ import { useCamp, useDocumentHidden, useNow, usePrefs, useSelected, useSessions,
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
+
+/** Before the camp's state loads (or from an older server): nothing built */
+const NOTHING_BUILT = startBuilt()
 
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
@@ -25,7 +30,9 @@ export function Campsite(): React.JSX.Element | null {
   const [rowRef, rowWidth] = useWidth<HTMLDivElement>()
   const [openTent, setOpenTent] = useState<OpenTent | null>(null)
   const badge = useRef<HTMLButtonElement | null>(null)
-  const layout = useMemo(() => campLayout(sessions, width), [sessions, width])
+  const built = camp?.built ?? NOTHING_BUILT
+  const edges = useMemo(() => placeBuildings(built, width), [built, width])
+  const layout = useMemo(() => campLayout(sessions, width, edges.reserve), [sessions, width, edges.reserve])
   const closeTent = useCallback((refocus: boolean) => {
     setOpenTent(null)
     if (refocus) badge.current?.focus()
@@ -116,7 +123,7 @@ export function Campsite(): React.JSX.Element | null {
             />
           ))}
           {/* After the camps' badges in tab order, as the dog and hikers were; the canvas sits under everything (z-index 0) */}
-          <PixiStrip layout={layout} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
+          <PixiStrip layout={layout} edges={edges} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
       )}

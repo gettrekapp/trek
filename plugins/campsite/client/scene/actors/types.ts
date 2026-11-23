@@ -1,6 +1,8 @@
 // What the stage's actors share (campsite part 3a): the snapshot each is synced with, the actor's
 // shape, and moving an overlay button over a sprite.
 import type { PluginSession } from '../../../../../src/shared/plugins/client.ts'
+import type { Edges } from '../../../shared/campEdges.ts'
+import type { BuildingId } from '../../../shared/catalog.ts'
 import type { CampLayout } from '../../../shared/layout.ts'
 import type { Sign } from '../../../shared/pose.ts'
 
@@ -14,6 +16,10 @@ export interface StageSnapshot {
   /** The window is hidden: nothing moves */
   paused: boolean
   showDog: boolean
+  /** The buildings at the strip's ends, and the middle's reserve */
+  edges: Edges
+  /** Each building's tier (the fire ring's, the lights'); null until the camp's state loads */
+  built: Readonly<Record<BuildingId, number>> | null
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */
