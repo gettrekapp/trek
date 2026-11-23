@@ -17,10 +17,12 @@ export interface CampsitePrefs {
   seasons: Hemisphere
   /** When the field guide's tab was last opened (ms; part 3d-2): species first seen after it carry the new dot */
   guideSeenAt: number
+  /** When the Noticeboard was last opened (ms; part 5): a project whose newest note is later carries the board's unread dot */
+  notesSeenAt: number
 }
 export type CampsitePrefKey = keyof CampsitePrefs
 
-export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0 }
+export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0, notesSeenAt: 0 }
 
 /** The choices of each pref that isn't a switch */
 const CHOICES: Partial<Record<CampsitePrefKey, readonly string[]>> = { sky: SKY_PREFS, seasons: SEASON_PREFS }

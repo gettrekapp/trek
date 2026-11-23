@@ -1,6 +1,7 @@
 // A crew member's trail journal (campsite part 3b): what it did, as data, newest last, at most
 // JOURNAL_MAX; and its words for the member view, made where it is shown so they can change ("3 h
-// 12 m on main in trek with Claude · 🪵 48", "Summited feature/x in trek", "2 h ago"). Pure.
+// 12 m on main in trek with Claude · 🪵 48", "Summited feature/x in trek", "Reported on feature/x: Tests are
+// green.", "2 h ago"). Pure.
 import { GEAR_TOP, HOUR_MS, gearItem, isGearSlot, isRecord, type GearSlot } from './catalog.ts'
 
 export type JournalEntry =
@@ -15,6 +16,8 @@ export type JournalEntry =
   /** Pinned to a session type or an agent, by its name then */
   | { kind: 'pinned'; at: number; name: string }
   | { kind: 'unpinned'; at: number; name: string }
+  /** Its session's agent posted a trail report (part 5): the trail's branch and the summary */
+  | { kind: 'report'; at: number; branch: string; summary: string }
 
 export const JOURNAL_MAX = 40
 
@@ -30,6 +33,7 @@ const cut = (s: string): string => (s.length > NAME_MAX ? s.slice(0, NAME_MAX) :
 export function note(member: { journal: JournalEntry[] }, entry: JournalEntry): void {
   if (entry.kind === 'trip') entry = { ...entry, project: cut(entry.project), place: cut(entry.place) }
   else if (entry.kind === 'summit') entry = { ...entry, branch: cut(entry.branch), project: cut(entry.project) }
+  else if (entry.kind === 'report') entry = { ...entry, branch: cut(entry.branch) }
   member.journal.push(entry)
   if (member.journal.length > JOURNAL_MAX) member.journal.splice(0, member.journal.length - JOURNAL_MAX)
 }
@@ -54,6 +58,8 @@ export function isEntry(x: unknown): x is JournalEntry {
     case 'pinned':
     case 'unpinned':
       return str(x.name)
+    case 'report':
+      return str(x.branch) && str(x.summary)
     default:
       return false
   }
@@ -94,6 +100,8 @@ export function entryText(e: JournalEntry): string {
       return `Pinned to ${e.name} sessions`
     case 'unpinned':
       return `Unpinned from ${e.name} sessions`
+    case 'report':
+      return `Reported on ${e.branch}: ${e.summary}`
   }
 }
 

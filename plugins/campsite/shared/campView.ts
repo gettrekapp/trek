@@ -3,11 +3,13 @@
 // strip; a member's view: its gear rows, its bonus, and the pin's choices; the trails: a flag's
 // label, a trail's row and its history's lines, the Trails tab's groups, the signpost's and the
 // cairn's words, the summit's line; the header's weather glyph and its reason; the field guide's
-// cards (names, counts, hints for unseen species, the new dot) and an animal's button. Pure.
+// cards (names, counts, hints for unseen species, the new dot) and an animal's button; the
+// noticeboard (part 5): its button's name, a note's line, a report's excerpt and when the notes count as seen. Pure.
 import type { CampSnapshot, CrewEntry, Pin, PinRef, TrailEntry } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
-import { providerName } from './journal.ts'
+import { ago, providerName } from './journal.ts'
+import { textLength, whoLine, type Note, type TrailReport } from './notes.ts'
 import { shortfall } from './shop.ts'
 import { STAGES, STAGE_HINTS, SUMMIT, type TrailRecord } from './trails.ts'
 import { SPECIES, isRare, species, type GuideEntry, type SpeciesDef } from './wildlife.ts'
@@ -316,3 +318,35 @@ export function guideTab(snap: { guide?: Readonly<Record<string, GuideEntry>> })
 
 /** An animal's button on the strip: "Red fox — open the field guide" */
 export const animalLabel = (id: string): string => `${species(id)?.name ?? 'An animal'} — open the field guide`
+
+/** The Noticeboard section with no notes */
+export const NO_NOTES = 'No notes yet. Agents can leave one with camp_note.'
+
+/** The noticeboard's button: "Noticeboard", "Noticeboard, 1 new note", "Noticeboard, 2 new notes"; null: unread, but not yet counted */
+export function boardLabel(unread: number | null): string {
+  if (unread === null) return 'Noticeboard, new notes'
+  if (unread <= 0) return 'Noticeboard'
+  return unread === 1 ? 'Noticeboard, 1 new note' : `Noticeboard, ${unread} new notes`
+}
+
+/** A note's line before its text: "Claude · Juniper on feature/x — 12 m ago" ("An agent" when nobody is known) */
+export const noteHead = (n: Pick<Note, 'agent' | 'member' | 'branch' | 'at'>, now: number): string =>
+  `${whoLine(n.agent, n.member) || 'An agent'}${n.branch ? ` on ${n.branch}` : ''} — ${ago(n.at, now)}`
+
+/** The notes newer than `since` (the board's unread count) */
+export const unreadNotes = (notes: readonly Pick<Note, 'at'>[], since: number): number => notes.filter((n) => n.at > since).length
+
+/** The Noticeboard's seen time on showing it: now, or the newest note's time when that is later (the server's clock ahead), at most a day past now */
+export const notesSeenNow = (noteAt: number | undefined, now: number): number => Math.min(now + 86_400_000, Math.max(now, noteAt ?? 0))
+
+/** A report's excerpt under its trail's row, in code points */
+export const REPORT_EXCERPT = 60
+
+/** A report's one-line excerpt (cut at REPORT_EXCERPT code points with "…") and whether it was cut */
+export function reportExcerpt(summary: string): { text: string; cut: boolean } {
+  if (textLength(summary) <= REPORT_EXCERPT) return { text: summary, cut: false }
+  return { text: `${[...summary].slice(0, REPORT_EXCERPT - 1).join('').trimEnd()}…`, cut: true }
+}
+
+/** Who posted a report and when: "Claude · Juniper, 5 m ago" ("An agent" when nobody is known) */
+export const reportBy = (r: Pick<TrailReport, 'by' | 'at'>, now: number): string => `${r.by || 'An agent'}, ${ago(r.at, now)}`

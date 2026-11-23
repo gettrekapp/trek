@@ -34,10 +34,13 @@ test('campsite: built in last, after Colima', () => {
   assert.equal(ids.at(-2), 'env')
 })
 
-test('readPrefs: booleans for the switches, a known choice for the sky and seasons, a time for the guide, defaults for the rest', () => {
-  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0 })
+test('readPrefs: booleans for the switches, a known choice for the sky and seasons, a time for the guide and the noticeboard, defaults for the rest', () => {
+  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0, notesSeenAt: 0 })
   assert.equal(readPrefs({ guideSeenAt: 1_800_000_000_000 }).guideSeenAt, 1_800_000_000_000)
   for (const bad of [-1, 'soon', true, Number.NaN]) assert.equal(readPrefs({ guideSeenAt: bad }).guideSeenAt, 0, String(bad))
+  // The noticeboard's seen time (part 5), a time like the guide's
+  assert.equal(readPrefs({ notesSeenAt: 1_800_000_000_000 }).notesSeenAt, 1_800_000_000_000)
+  for (const bad of [-1, 'soon', false]) assert.equal(readPrefs({ notesSeenAt: bad }).notesSeenAt, 0, String(bad))
   assert.deepEqual(readPrefs({}), DEFAULT_PREFS)
   assert.deepEqual(readPrefs({ showCampsite: false, campsiteCollapsed: 'yes', other: 1 }), { ...DEFAULT_PREFS, showCampsite: false })
   assert.deepEqual(readPrefs({ sky: 'dusk', seasons: 'south' }), { ...DEFAULT_PREFS, sky: 'dusk', seasons: 'south' })
