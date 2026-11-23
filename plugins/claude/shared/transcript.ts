@@ -70,8 +70,11 @@ export function toolLabelOf(name: string, input: Record<string, unknown>): strin
   return toolKind(name) === 'other' ? toolLabel(name) : ''
 }
 
-/** The tool calls on one transcript line, in order: none for a line that is not an assistant's, or not JSON */
+/** The tool calls on one transcript line, in order: none for a line that is not an assistant's, not JSON, or without `"tool_use"` */
 export function toolsInLine(line: string): AgentTool[] {
+  // Most lines (the user's, tool results, text) call no tool: not parsed at all. Claude writes JSON
+  // without escaping plain ASCII, so a line with a tool_use block has this text
+  if (!line.includes('"tool_use"')) return []
   let value: unknown
   try {
     // A byte-order mark (a file's first line) is not the line's; a CRLF's \r is whitespace to JSON.parse

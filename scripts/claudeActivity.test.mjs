@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FAILS_MAX, LINE_MAX, POLL_MS, READ_MAX, claudeActivity, followLines } from '../plugins/claude/server/activity.ts'
-import { historyFile, projectDir, transcriptFile } from '../plugins/claude/server/history.ts'
+import { TRANSCRIPT_CANDIDATES_MAX, historyFile, projectDir, transcriptFile, transcriptFiles } from '../plugins/claude/server/history.ts'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-claude-activity-'))
@@ -203,13 +203,13 @@ test('ENOENT from the open (removed between the stat and the open) is as if the 
   assert.deepEqual(f.warnings, [])
 })
 
-test('EBUSY or EPERM from the stat or the open is tried again on the next poll; FAILS_MAX in a row stops it, one success resets the count', (t) => {
+test('EBUSY, or EPERM on Windows, from the stat or the open is tried again on the next poll; FAILS_MAX in a row stops it, one success resets the count', (t) => {
   const file = join(tempDir(t), 's.jsonl')
   writeFileSync(file, '')
   let failing = null
   failFs(t, 'statSync', 'EBUSY', ([path]) => path === file && failing === 'stat')
   failFs(t, 'openSync', 'EPERM', ([path]) => path === file && failing === 'open')
-  const f = follow(t, file)
+  const f = follow(t, file, { platform: 'win32' })
   appendFileSync(file, '{"a":1}\n')
   failing = 'stat'
   for (let i = 0; i < FAILS_MAX - 1; i++) f.clock.run()
@@ -337,4 +337,164 @@ test('claudeActivity: a session in a symlinked cwd with $CLAUDE_CONFIG_DIR set, 
   writeFileSync(join(dir, `${sessionId}.jsonl`), `\uFEFF${edit}\n`)
   clock.run()
   assert.deepEqual(tools, [{ kind: 'edit', label: 'Campsite.tsx' }], 'the BOM line read whole')
+})
+
+test('EPERM is a real error off Windows: logged once, stopped at once', (t) => {
+  for (const platform of ['darwin', 'linux']) {
+    const file = join(tempDir(t), 's.jsonl')
+    writeFileSync(file, '')
+    let failing = false
+    failFs(t, 'statSync', 'EPERM', ([path]) => path === file && failing)
+    const f = follow(t, file, { platform })
+    failing = true
+    f.clock.run()
+    assert.equal(f.warnings.length, 1, platform)
+    assert.match(f.warnings[0], /EPERM: mocked statSync$/)
+    assert.deepEqual(f.clock.live(), [], `${platform}: stopped`)
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
+})
+
+test("FAILS_MAX counts the timer's polls only: fs.watch wake-ups that find the file busy use none up", (t) => {
+  const file = join(tempDir(t), 's.jsonl')
+  writeFileSync(file, '')
+  let failing = false
+  failFs(t, 'statSync', 'EBUSY', ([path]) => path === file && failing)
+  let changed = null
+  const f = follow(t, file, { watchFile: (_file, onChange) => { changed = onChange; return () => {} } })
+  appendFileSync(file, '{"a":1}\n')
+  failing = true
+  for (let i = 0; i < FAILS_MAX - 1; i++) f.clock.run()
+  // Many watch wake-ups, all busy: none counts, and the poll set stays as it was
+  const before = f.clock.live()
+  for (let i = 0; i < FAILS_MAX * 2; i++) changed()
+  assert.deepEqual(f.warnings, [])
+  assert.deepEqual(f.clock.live(), before, 'the poll is left alone')
+  // The next poll is the FAILS_MAX-th
+  f.clock.run()
+  assert.equal(f.warnings.length, 1)
+  assert.deepEqual(f.clock.live(), [])
+})
+
+test('several candidate paths: each is polled until one exists; the first existing wins, and is followed alone until it goes', (t) => {
+  const dir = tempDir(t)
+  const [a, b, c] = ['a', 'b', 'c'].map((n) => join(dir, n, 's.jsonl'))
+  const looked = []
+  const real = fs.statSync
+  t.mock.method(fs, 'statSync', (path, ...rest) => {
+    looked.push(path)
+    return real(path, ...rest)
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const f = follow(t, [a, b, c])
+  assert.deepEqual(looked, [a, b, c], 'one stat each a poll')
+  // b and c appear: b, the earlier, is followed, from its top (it appeared later)
+  for (const p of [b, c]) mkdirSync(join(p, '..'), { recursive: true })
+  writeFileSync(c, '{"c":1}\n')
+  writeFileSync(b, '{"b":1}\n')
+  looked.length = 0
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"b":1}'])
+  assert.deepEqual(looked, [a, b], 'stops at the first there')
+  // a appears now: b is still the one followed, a and c aren't looked at
+  mkdirSync(join(a, '..'), { recursive: true })
+  writeFileSync(a, '{"a":1}\n')
+  appendFileSync(b, '{"b":2}\n')
+  looked.length = 0
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}'])
+  assert.deepEqual(looked, [b])
+  // b goes: all are looked at again, and a, the first, is followed from its top
+  rmSync(b)
+  f.clock.run()
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}', '{"a":1}'])
+  assert.deepEqual(f.warnings, [])
+})
+
+test('several candidate paths, the first look: the first existing one is read from its end', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  writeFileSync(b, '{"old":1}\n')
+  const f = follow(t, [a, b])
+  appendFileSync(b, '{"new":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"new":1}'])
+})
+
+test('transcriptFiles: the resolved cwd then the cwd as given, under $CLAUDE_CONFIG_DIR then ~/.claude; no path twice; at most 4', (t) => {
+  const root = realpathSync(tempDir(t))
+  const home = join(root, 'home')
+  withEnv(t, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: undefined })
+  const real = join(root, 'real', 'app')
+  mkdirSync(real, { recursive: true })
+  symlinkSync(join(root, 'real'), join(root, 'link'), 'dir')
+  const linked = join(root, 'link', 'app')
+  const id = '00000000-0000-4000-8000-000000000004'
+  const at = (base, cwd) => join(base, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`)
+  const dot = join(home, '.claude')
+  const config = join(root, 'config')
+  assert.equal(TRANSCRIPT_CANDIDATES_MAX, 4)
+  assert.deepEqual(transcriptFiles(linked, id, { CLAUDE_CONFIG_DIR: config }), [at(config, real), at(config, linked), at(dot, real), at(dot, linked)])
+  assert.deepEqual(transcriptFiles(linked, id, {}), [at(dot, real), at(dot, linked)], 'no config dir')
+  assert.deepEqual(transcriptFiles(linked, id, { CLAUDE_CONFIG_DIR: '' }), [at(dot, real), at(dot, linked)], 'empty: unset')
+  assert.deepEqual(transcriptFiles(real, id, { CLAUDE_CONFIG_DIR: dot }), [at(dot, real)], 'the same paths once')
+  assert.deepEqual(transcriptFiles(join(root, 'nowhere'), id, {}), [at(dot, join(root, 'nowhere'))], "not there: as given")
+  assert.equal(transcriptFile(linked, id, { CLAUDE_CONFIG_DIR: config }), at(config, real))
+  assert.throws(() => transcriptFiles(real, '../x'), /Invalid session id/)
+})
+
+/** claudeActivity under a temp home: its tool calls, and a writer of an Edit line at `file` */
+function activityIn(t, cwd, sessionId) {
+  const clock = manual()
+  const tools = []
+  const stop = claudeActivity({ schedule: clock.schedule, watchFile: () => null, warn: () => {} }).watch({ sessionId, cwd, terminalId: 't1' }, (tool) => tools.push(tool))
+  t.after(stop)
+  const write = (file, label) => {
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: label, name: 'Edit', input: { file_path: `/w/${label}` } }] } }) + '\n')
+  }
+  return { clock, tools, write }
+}
+
+test('claudeActivity: a symlinked cwd whose transcript is under the cwd as given (a Windows junction kept) is found', (t) => {
+  const root = realpathSync(tempDir(t))
+  const home = join(root, 'home')
+  withEnv(t, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: undefined })
+  mkdirSync(join(root, 'real', 'app'), { recursive: true })
+  symlinkSync(join(root, 'real'), join(root, 'link'), 'dir')
+  const cwd = join(root, 'link', 'app')
+  const sessionId = '00000000-0000-4000-8000-000000000005'
+  const a = activityIn(t, cwd, sessionId)
+  a.write(join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`), 'Raw.tsx')
+  a.clock.run()
+  assert.deepEqual(a.tools, [{ kind: 'edit', label: 'Raw.tsx' }])
+})
+
+test("claudeActivity: with $CLAUDE_CONFIG_DIR set, a transcript under ~/.claude is found too; the config dir's wins when both are there", (t) => {
+  const root = realpathSync(tempDir(t))
+  const home = join(root, 'home')
+  const config = join(root, 'config')
+  withEnv(t, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: config })
+  const cwd = join(root, 'app')
+  mkdirSync(cwd, { recursive: true })
+  const folder = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+  // Only the default dir's
+  const one = '00000000-0000-4000-8000-000000000006'
+  const a = activityIn(t, cwd, one)
+  a.write(join(home, '.claude', 'projects', folder, `${one}.jsonl`), 'Default.tsx')
+  a.clock.run()
+  assert.deepEqual(a.tools, [{ kind: 'edit', label: 'Default.tsx' }])
+  // Both: the config dir's
+  const two = '00000000-0000-4000-8000-000000000007'
+  const b = activityIn(t, cwd, two)
+  b.write(join(home, '.claude', 'projects', folder, `${two}.jsonl`), 'Default.tsx')
+  b.write(join(config, 'projects', folder, `${two}.jsonl`), 'Config.tsx')
+  b.clock.run()
+  assert.deepEqual(b.tools, [{ kind: 'edit', label: 'Config.tsx' }])
 })

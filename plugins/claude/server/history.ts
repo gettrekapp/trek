@@ -29,23 +29,44 @@ export function historyFile(cwd: string, sessionId: string): string {
   return join(projectDir(cwd), `${sessionId}.jsonl`)
 }
 
+/** The most transcript paths a running session's follower looks at */
+export const TRANSCRIPT_CANDIDATES_MAX = 4
+
 /**
- * Where a running session's transcript is (campsite part 4: its tool calls). Claude Code names the
- * folder after its physical cwd (`process.cwd()`: symlinks resolved; the cwd as given when that
- * fails) and keeps it under `$CLAUDE_CONFIG_DIR/projects` when the server's env sets it (the agent
- * inherits it), else ~/.claude/projects. historyFile and the importer keep ~/.claude and the cwd as
- * given, as they always have.
+ * Where a running session's transcript may be (campsite part 4: its tool calls), most likely first,
+ * no path twice (at most TRANSCRIPT_CANDIDATES_MAX). Claude Code names the folder after its
+ * physical cwd (`process.cwd()`): the cwd with its symlinks resolved on POSIX, while on Windows it
+ * keeps a junction as given; so both forms: realpath(cwd) (skipped when it fails), then the cwd as
+ * given. It keeps the folder under `$CLAUDE_CONFIG_DIR/projects` when its env sets it (the server's,
+ * which the agent inherits; empty is unset), else ~/.claude/projects; both roots are looked at, the
+ * config dir's first. historyFile and the importer keep ~/.claude and the cwd as given, as they
+ * always have.
  */
-export function transcriptFile(cwd: string, sessionId: string, env: Record<string, string | undefined> = process.env): string {
+export function transcriptFiles(cwd: string, sessionId: string, env: Record<string, string | undefined> = process.env): string[] {
   assertSessionId(sessionId)
-  let physical = cwd
+  const forms: string[] = []
   try {
-    physical = realpathSync(cwd)
+    forms.push(realpathSync(cwd))
   } catch {
-    // Not there (yet), or unreadable: the cwd as given
+    // Not there (yet), or unreadable: the cwd as given only
   }
-  const root = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
-  return join(root, 'projects', encodeCwd(physical), `${sessionId}.jsonl`)
+  forms.push(cwd)
+  const roots: string[] = []
+  if (env.CLAUDE_CONFIG_DIR) roots.push(join(env.CLAUDE_CONFIG_DIR, 'projects'))
+  roots.push(join(homedir(), '.claude', 'projects'))
+  const out: string[] = []
+  for (const root of roots) {
+    for (const form of forms) {
+      const file = join(root, encodeCwd(form), `${sessionId}.jsonl`)
+      if (!out.includes(file)) out.push(file)
+    }
+  }
+  return out.slice(0, TRANSCRIPT_CANDIDATES_MAX)
+}
+
+/** The most likely of `transcriptFiles`: the physical cwd's, under the config dir when set */
+export function transcriptFile(cwd: string, sessionId: string, env: Record<string, string | undefined> = process.env): string {
+  return transcriptFiles(cwd, sessionId, env)[0]
 }
 
 /**

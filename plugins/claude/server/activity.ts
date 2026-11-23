@@ -1,19 +1,22 @@
 // Claude Code's tool calls as they happen (campsite part 4): a session's transcript
-// (`transcriptFile(cwd, sessionId)`, ~/.claude/projects/<physical cwd>/<id>.jsonl, or under
-// $CLAUDE_CONFIG_DIR) followed from the server.
-// It polls every 2 s until the file exists, and wakes on fs.watch as well where it works (the poll
-// keeps going: fs.watch can miss changes). Only what is appended is read, at most 256 KB a wake-up
+// (~/.claude/projects/<cwd>/<id>.jsonl, or under $CLAUDE_CONFIG_DIR) followed from the server.
+// Where it is isn't certain (`transcriptFiles`: the cwd resolved or as given, under the config dir
+// or ~/.claude: at most 4 paths), so it polls each every 2 s (one stat each) until one exists, then
+// follows that one alone; when that one goes, it looks at them all again. It wakes on fs.watch as
+// well where it works (the poll keeps going: fs.watch can miss changes). Only what is appended is read, at most 256 KB a wake-up
 // (more is read on the next turn); a file there when the watch starts is read from its end, so a
 // resumed session's old history isn't replayed, and one that appears later is this run's, read from
 // its top. A partial last line waits for the rest; a file that shrinks or is replaced is read again
-// from its top. A file busy or locked for a moment (EBUSY, EPERM: Windows) is tried again on the
-// next poll, up to FAILS_MAX times in a row; any other error is logged once and ends the watch: the
-// hiker falls back to random chores. Sync reads, bounded per wake-up.
-import { closeSync, fstatSync, openSync, readSync, statSync, watch as fsWatch } from 'node:fs'
+// from its top. A file busy or locked for a moment (EBUSY; EPERM on Windows only, where a share mode
+// or a virus scanner causes it) is tried again on the next poll, up to FAILS_MAX polls in a row (an
+// fs.watch wake-up that finds it busy doesn't count: the poll comes anyway); any other error is
+// logged once and ends the watch: the hiker falls back to random chores. Sync reads, bounded per
+// wake-up.
+import { closeSync, fstatSync, openSync, readSync, statSync, watch as fsWatch, type Stats } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import type { AgentActivity } from '../../../src/shared/plugins/agents.ts'
 import { toolsInLine } from '../shared/transcript.ts'
-import { transcriptFile } from './history.ts'
+import { transcriptFiles } from './history.ts'
 
 /** How often the file is looked at while nothing wakes the watch */
 export const POLL_MS = 2000
@@ -30,6 +33,8 @@ export interface FollowOptions {
   /** Wakes `onChange` when the file changes; returns its stop, or null where it can't (default fs.watch) */
   watchFile?: (file: string, onChange: () => void) => (() => void) | null
   warn: (message: string) => void
+  /** The platform EPERM is judged on (default process.platform): transient on win32 only */
+  platform?: string
 }
 
 const defaultSchedule = (fn: () => void, ms: number): { cancel(): void } => {
@@ -50,17 +55,27 @@ const defaultWatchFile = (file: string, onChange: () => void): (() => void) | nu
 }
 
 const codeOf = (err: unknown): string | undefined => (err as { code?: string } | null)?.code
-const isMissing = (err: unknown): boolean => codeOf(err) === 'ENOENT'
-/** Busy or locked for a moment (an editor, a virus scanner, Windows' share modes): tried again */
-const isBusy = (err: unknown): boolean => codeOf(err) === 'EBUSY' || codeOf(err) === 'EPERM'
+/** Not there: ENOENT, or ENOTDIR (a part of the path is a file) */
+const isMissing = (err: unknown): boolean => codeOf(err) === 'ENOENT' || codeOf(err) === 'ENOTDIR'
+/**
+ * Busy or locked for a moment, tried again: EBUSY anywhere; EPERM on Windows only (its share modes,
+ * a virus scanner), elsewhere a real error
+ */
+const isBusy = (err: unknown, platform: string): boolean => codeOf(err) === 'EBUSY' || (codeOf(err) === 'EPERM' && platform === 'win32')
 
 /**
- * Follows `file`'s complete lines as they are appended, each passed to `onLine`; returns the stop.
- * A throw (onLine's included) is logged once, as `warn`, and stops it.
+ * Follows a file's complete lines as they are appended, each passed to `onLine`; returns the stop.
+ * `files`: where it may be, most likely first; the first one found is followed (the others are
+ * looked at again only once it is gone). A throw (onLine's included) is logged once, as `warn`, and
+ * stops it.
  */
-export function followLines(file: string, onLine: (line: string) => void, options: FollowOptions): () => void {
+export function followLines(files: string | readonly string[], onLine: (line: string) => void, options: FollowOptions): () => void {
   const schedule = options.schedule ?? defaultSchedule
   const watchFile = options.watchFile ?? defaultWatchFile
+  const platform = options.platform ?? process.platform
+  const candidates = typeof files === 'string' ? [files] : [...files]
+  /** The file followed; null: none found yet (or it went) */
+  let file: string | null = null
   let stopped = false
   /** Whether the first look has been taken, and whether the file was there then */
   let looked = false
@@ -82,12 +97,13 @@ export function followLines(file: string, onLine: (line: string) => void, option
     partial = ''
     skipping = false
     unwatch?.()
-    unwatch = watchFile(file, wake)
+    unwatch = watchFile(file as string, () => wake(false))
   }
 
   /** Gone (or not there yet): when it comes back it is read from its top */
   const missing = (): false => {
     if (!looked) looked = true
+    file = null
     if (pos !== null) {
       pos = null
       unwatch?.()
@@ -97,12 +113,26 @@ export function followLines(file: string, onLine: (line: string) => void, option
   }
 
   const read = (): boolean => {
-    let st
-    try {
-      st = statSync(file)
-    } catch (err) {
-      if (!isMissing(err)) throw err
-      return missing()
+    let st: Stats | undefined
+    if (file === null) {
+      // Each place it may be, in order: the first there is followed
+      for (const candidate of candidates) {
+        try {
+          st = statSync(candidate)
+          file = candidate
+          break
+        } catch (err) {
+          if (!isMissing(err)) throw err
+        }
+      }
+      if (file === null || st === undefined) return missing()
+    } else {
+      try {
+        st = statSync(file)
+      } catch (err) {
+        if (!isMissing(err)) throw err
+        return missing()
+      }
     }
     if (!looked) {
       looked = true
@@ -150,26 +180,32 @@ export function followLines(file: string, onLine: (line: string) => void, option
     return st.size > (pos as number)
   }
 
-  /** Polls in a row that found the file busy or locked */
+  /** Polls in a row (the timer's, not fs.watch's wake-ups) that found the file busy or locked */
   let fails = 0
 
-  function wake(): void {
+  /** `byPoll`: the timer's (or the first look), not an fs.watch wake-up */
+  function wake(byPoll: boolean): void {
     if (stopped) return
     let more: boolean
     try {
       more = read()
       fails = 0
     } catch (err) {
-      if (isBusy(err) && ++fails < FAILS_MAX) more = false
-      else {
-        options.warn(`[claude] following ${file} failed; its tool calls are no longer shown: ${err instanceof Error ? err.message : String(err)}`)
-        stop()
-        return
-      }
+      if (isBusy(err, platform)) {
+        // A watch's wake-up doesn't use up the polls: the poll set already tries again
+        if (!byPoll) return
+        if (++fails < FAILS_MAX) more = false
+        else return fail(err)
+      } else return fail(err)
     }
     if (stopped) return
     timer?.cancel()
-    timer = schedule(wake, more ? 0 : POLL_MS)
+    timer = schedule(() => wake(true), more ? 0 : POLL_MS)
+  }
+
+  function fail(err: unknown): void {
+    options.warn(`[claude] following ${file ?? candidates.join(', ')} failed; its tool calls are no longer shown: ${err instanceof Error ? err.message : String(err)}`)
+    stop()
   }
 
   function stop(): void {
@@ -180,7 +216,7 @@ export function followLines(file: string, onLine: (line: string) => void, option
     unwatch = null
   }
 
-  wake()
+  wake(true)
   return stop
 }
 
@@ -189,7 +225,7 @@ export function claudeActivity(options: FollowOptions): AgentActivity {
   return {
     watch: (session, onTool) =>
       followLines(
-        transcriptFile(session.cwd, session.sessionId),
+        transcriptFiles(session.cwd, session.sessionId),
         (line) => {
           for (const tool of toolsInLine(line)) onTool(tool)
         },

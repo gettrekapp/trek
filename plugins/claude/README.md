@@ -14,9 +14,18 @@ agent: an unknown agent id runs Claude. Claude's history (`~/.claude/projects`) 
 and a move carries a Claude session's history file to the other server. Claude reports its
 sessions' tool calls (campsite part 4: the agent's `activity`): `server/activity.ts` follows a
 running session's transcript (`~/.claude/projects/<cwd>/<id>.jsonl`, from its end, or from its top
-when it appears later; the cwd with its symlinks resolved, as Claude names it, and under
-`$CLAUDE_CONFIG_DIR/projects` when the server's env sets it), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
-as a kind (read, edit, run, delegate, web, mcp, other) and a short label. Local reports none.
+when it appears later), and `shared/transcript.ts` reads each assistant line's `tool_use` blocks
+(lines without `"tool_use"` aren't parsed) as a kind (read, edit, run, delegate, web, mcp, other)
+and a short label. Local reports none. Where the transcript is isn't certain, so
+`transcriptFiles` gives up to four paths, polled (a stat each every 2 s) until one exists, which
+is then followed alone: the cwd with its symlinks resolved (as Claude names the folder on POSIX),
+then the cwd as given (Claude on Windows keeps a junction unresolved), each under
+`$CLAUDE_CONFIG_DIR/projects` when it is set, then under `~/.claude/projects`.
+`CLAUDE_CONFIG_DIR` is read from the server's env, not your shell's: set only in a shell profile,
+with Trek started from the Dock (or the server from a service), a custom config dir is missed
+unless it is `~/.claude`, and those hikers do the random chores. A file busy for a moment (EBUSY,
+or EPERM on Windows) is tried again for up to 30 polls; any other error ends the follow, logged
+once.
 A `/clear` starts a new transcript that isn't followed: its hiker thinks for two minutes after the
 last call it saw, then goes back to the random chores. Newer Claude versions may shorten a very
 long cwd's folder name with a hash (unverified); such a session's transcript isn't found, and its

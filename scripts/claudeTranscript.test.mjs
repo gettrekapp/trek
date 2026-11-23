@@ -108,3 +108,15 @@ test('toolsInLine: the tool_use blocks of an assistant line, in order; text, thi
   assert.deepEqual(toolsInLine(JSON.stringify({ type: 'assistant' })), [])
   assert.deepEqual(toolsInLine(assistant({ type: 'tool_use', id: 't', input: {} }, null, use('Grep', 'pattern'))), [{ kind: 'read', label: '' }])
 })
+
+test('toolsInLine: a line without "tool_use" is not parsed at all; one with it reads as before', (t) => {
+  const parse = t.mock.method(JSON, 'parse')
+  assert.deepEqual(toolsInLine(assistant({ type: 'text', text: 'Done.' })), [])
+  assert.deepEqual(toolsInLine(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_Edit', content: 'ok' }] } })), [], 'tool_use_id is not it')
+  assert.deepEqual(toolsInLine('not json at all'), [])
+  assert.equal(parse.mock.callCount(), 0, 'nothing parsed')
+  assert.deepEqual(toolsInLine(assistant(use('Bash', { command: 'npm test' }))), [{ kind: 'run', label: 'npm test' }])
+  assert.deepEqual(toolsInLine('{"type":"tool_use" broken'), [], 'not JSON: none')
+  assert.deepEqual(toolsInLine(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_use', name: 'Edit', input: {} }] } })), [], "not an assistant's")
+  assert.equal(parse.mock.callCount(), 3, 'the lines with it parsed, once each')
+})
