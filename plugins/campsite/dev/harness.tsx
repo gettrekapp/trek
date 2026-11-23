@@ -82,7 +82,7 @@ if (params.get('crew') === 'geared') {
 }
 if (params.get('trails') === 'all') {
   const D = 86_400_000
-  const trail = (projectId: string, worktreeId: string, branch: string, stage: number, ago: number) => ({ projectId, worktreeId, repoId: 'r', branch, stage, start: T - ago, stageAt: T - ago / 2 })
+  const trail = (projectId: string, worktreeId: string, branch: string, stage: number, ago: number) => ({ projectId, worktreeId, repoId: 'r', branch, stage, start: T - ago, stageAt: T - ago / 2, checks: null })
   const all = [
     trail('harness', 'docs', 'feature/docs', 0, 3 * 3_600_000),
     trail('harness', 'auth', 'feature/auth', 0, 2 * 3_600_000),

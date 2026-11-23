@@ -1,8 +1,12 @@
 // scripts/campsiteWorld.test.mjs — the world around the camp (campsite part 3d-1): the time of day,
 // the seasons, the backdrop's palettes (dusk exactly as before), the weather from a project's trails
-// and last activity, and the snow caps' clipping.
+// and last activity, and the snow caps' clipping; camp version 5 (the trails' checks, each project's
+// last activity).
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
+import { applyActivity, restore, tick } from '../plugins/campsite/shared/economy.ts'
+import { trailEvent } from '../plugins/campsite/shared/trails.ts'
 import { BLEND_MIN, DUSK, DUSK_WORLD, PALETTES, QUIET_MS, capsAbove, mix, paletteAt, phaseAt, seasonAt, weatherOf, worldAt, worldKey, worldPalette } from '../plugins/campsite/shared/world.ts'
 
 const H = 3_600_000
@@ -151,4 +155,70 @@ test('capsAbove: each top of a polygon above the cut, as its own polygon; none w
   assert.ok(caps.every((c) => c.length >= 6 && c.every((v, i) => i % 2 === 0 || v <= 5)))
   assert.deepEqual(capsAbove(ridge, -1), [])
   assert.deepEqual(capsAbove(ridge, 30), [ridge])
+})
+
+/** A version 4 camp.json, as 3c wrote it, with one trail */
+function v4() {
+  const { lastActive, ...rest } = JSON.parse(JSON.stringify(newCamp(1, T)))
+  return { ...rest, version: 4, trails: { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T } } }
+}
+
+test('migrateCamp: version 4 gains no checks on each trail and no last activity', () => {
+  const raw = v4()
+  assert.equal(isCamp(raw), false, 'not before the migration')
+  const out = migrateCamp(raw)
+  assert.ok(isCamp(out))
+  assert.equal(out.version, 5)
+  assert.deepEqual(out.trails['p:w'], { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: null })
+  assert.deepEqual(out.lastActive, {})
+  assert.equal(migrateCamp({ version: 4, trails: 'x' }).trails, 'x', 'a malformed one is left for isCamp to refuse')
+})
+
+test('restore: checks it cannot read become null (the trail stays); last activity that is not a time is dropped', () => {
+  const camp = newCamp(1, T)
+  camp.trails = { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: 'maybe' }, 'p:v': { projectId: 'p', worktreeId: 'v', repoId: 'r', branch: 'c', stage: 2, start: T, stageAt: T, checks: 'failed' } }
+  camp.lastActive = { p: T, q: 'yesterday', r: null, s: T - 5 }
+  const raw = JSON.parse(JSON.stringify(camp))
+  assert.ok(isCamp(raw))
+  restore(raw)
+  assert.deepEqual([raw.trails['p:w'].checks, raw.trails['p:v'].checks], [null, 'failed'])
+  assert.deepEqual(raw.lastActive, { p: T, s: T - 5 })
+})
+
+const pr = (kind, o = {}) => ({ kind, projectId: 'p', at: T, repoId: 'r', branch: 'feature/a', url: 'u', ...o })
+
+test("trailEvent: a pull request's checks are kept on its trails; a new pull request and its end (merged or closed) clear them", () => {
+  const camp = newCamp(1, T)
+  trailEvent(camp, { kind: 'worktree.created', projectId: 'p', at: T, repoId: 'r', worktreeId: 'a', branch: 'feature/a' }, T)
+  assert.equal(camp.trails['p:a'].checks, null)
+  trailEvent(camp, pr('pr.linked'), T + 1)
+  trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 's' }), T + 2)
+  assert.equal(camp.trails['p:a'].checks, 'failed')
+  trailEvent(camp, pr('pr.checks', { result: 'passed', headSha: 't' }), T + 3)
+  assert.equal(camp.trails['p:a'].checks, 'passed')
+  trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 'u' }), T + 4)
+  trailEvent(camp, pr('pr.linked', { url: 'v' }), T + 5)
+  assert.equal(camp.trails['p:a'].checks, null, 'a new pull request')
+  trailEvent(camp, pr('pr.checks', { url: 'v', result: 'failed', headSha: 'w' }), T + 6)
+  trailEvent(camp, pr('pr.ended', { url: 'v', result: 'closed' }), T + 7)
+  assert.equal(camp.trails['p:a'].checks, null, 'closed')
+  trailEvent(camp, pr('pr.checks', { url: 'v', result: 'failed', headSha: 'x' }), T + 8)
+  trailEvent(camp, pr('pr.ended', { url: 'v', result: 'merged' }), T + 9)
+  assert.equal(camp.trails['p:a'].checks, null, 'merged')
+})
+
+test("lastActive: every activity event stamps its project; the tick stamps the projects of working sessions; the snapshot carries trails' checks and every project's last activity", () => {
+  const camp = newCamp(1, T)
+  applyActivity(camp, { kind: 'session.started', projectId: 'p', at: T, terminalId: 't1', worktreeId: null, provider: 'claude', automation: false, sessionType: null }, T)
+  applyActivity(camp, pr('pr.linked', { projectId: 'q' }), T + 5)
+  assert.deepEqual(camp.lastActive, { p: T, q: T + 5 })
+  applyActivity(camp, { kind: 'session.status', projectId: 'p', at: T, terminalId: 't1', worktreeId: null, provider: 'claude', automation: false, sessionType: null, from: 'idle', to: 'working', cause: 'output' }, T + 10)
+  tick(camp, T + 3 * 60_000)
+  assert.deepEqual(camp.lastActive, { p: T + 3 * 60_000, q: T + 5 })
+  camp.trails['p:a'] = { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/a', stage: 2, start: T, stageAt: T, checks: 'failed' }
+  const snap = snapshot(camp, T + 3 * 60_000)
+  assert.equal(snap.trails[0].checks, 'failed')
+  assert.deepEqual(snap.lastActive, { p: T + 3 * 60_000, q: T + 5 })
+  snap.lastActive.p = 0
+  assert.equal(camp.lastActive.p, T + 3 * 60_000, 'a copy')
 })

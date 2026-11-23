@@ -115,10 +115,11 @@ function answer(camp: Camp, terminalId: string, now: number, rules: Rules, out: 
 /** A session event's launch: where it runs, its agent and type (an event from before part 3b has neither) */
 const launchOf = (e: { worktreeId: string | null; provider?: string; sessionType?: Launch['sessionType'] }): Launch => ({ worktreeId: e.worktreeId, provider: e.provider ?? '', sessionType: e.sessionType ?? null })
 
-/** One activity event's effect on the camp (its trails too); what it paid. `where` names projects and worktrees for the journal */
+/** One activity event's effect on the camp (its trails, and its project's last activity, too); what it paid. `where` names projects and worktrees for the journal */
 export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: Rules = RULES, where: Where = NO_WHERE): Reward[] {
   const out: Reward[] = []
   trailEvent(camp, e, now)
+  camp.lastActive[e.projectId] = now
   switch (e.kind) {
     case 'session.started':
       // An automation's run tab is always a day hiker (one stored before that rule is let go)
@@ -219,10 +220,13 @@ function passive(camp: Camp, minutes: number, out: Reward[], now: number): void 
   if (fish > 0) pay(camp, { wood: (fish / 60) * minutes, markers: 0, source: 'fishing', reason: 'fishing' }, out, now)
 }
 
-/** Every minute: pays finished working minutes, the garden and fishing, cools the fire while anyone waits, drops past hours' caps */
+/** Every minute: pays finished working minutes (their projects are active now), the garden and fishing, cools the fire while anyone waits, drops past hours' caps */
 export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
   const out: Reward[] = []
-  for (const id of Object.keys(camp.spans)) payMinutes(camp, id, now, rules, out)
+  for (const [id, span] of Object.entries(camp.spans)) {
+    payMinutes(camp, id, now, rules, out)
+    camp.lastActive[span.project] = now
+  }
   const minutes = Math.floor((now - camp.lastTick) / rules.minuteMs)
   if (minutes > 0) {
     passive(camp, minutes, out, now)
@@ -238,12 +242,13 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
  * After a server restart (nothing runs, statuses came back idle): open spans close at the last save,
  * paying their whole minutes; nobody is waiting; every member is back in camp from the last save. The
  * fire's clock starts at `now`: nobody waited through the down time, and quiet minutes before it were
- * not saved, so the last save can be long before it. Journal entries, assignments, trails and
- * history entries this version can't read are dropped first (camp.json is otherwise kept).
+ * not saved, so the last save can be long before it. Journal entries, assignments, trails, history
+ * entries and last activity times this version can't read are dropped first (camp.json is otherwise kept).
  */
 export function restore(camp: Camp, rules: Rules = RULES, now: number = camp.savedAt): void {
   for (const m of camp.crew) m.journal = m.journal.filter(isEntry)
   dropBadTrails(camp)
+  for (const [projectId, at] of Object.entries(camp.lastActive)) if (typeof at !== 'number' || !Number.isFinite(at)) delete camp.lastActive[projectId]
   for (const [id, a] of Object.entries(camp.assignments)) if (!isAssignment(a)) delete camp.assignments[id]
   for (const id of Object.keys(camp.spans)) {
     payMinutes(camp, id, camp.savedAt, rules, [])
