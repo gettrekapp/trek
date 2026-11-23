@@ -126,9 +126,11 @@ export function Campsite(): React.JSX.Element | null {
   const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
   const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
   const { summit, shown: summitShown, fresh: summitFresh } = useSummit(host)
-  // The world (part 3d-1): this window's clock and prefs; this project's weather from its trails' checks and its last activity
+  // The world (part 3d-1): this window's clock and prefs; this project's weather from its trails' checks and its last activity.
+  // Not memoised: it depends on the clock (the 24 h rain and 12 h fog run out as `now` moves), and it is
+  // a short scan of the trails; what it feeds is keyed (the world below, the badge's strings)
   const season = seasonAt(new Date(now), prefs.seasons)
-  const weather = useMemo(() => weatherOf(camp?.trails ?? [], camp?.lastActive ?? {}, host.projectId, now, season), [camp?.trails, camp?.lastActive, host.projectId, now, season])
+  const weather = weatherOf(camp?.trails ?? [], camp?.lastActive ?? {}, host.projectId, now, season)
   const nextWorld = worldAt(now, prefs.sky, prefs.seasons, weather.kind)
   const worldK = worldKey(nextWorld)
   // The same object while the world looks the same (the 5 s clock ticks on): the stage redraws its backdrop only when it changes
