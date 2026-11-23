@@ -113,7 +113,8 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
         setDraft((d) => (d === text ? null : d))
       }
     } catch (err) {
-      setError(getBackend().errors.inline(err))
+      // A dropped connection shows nothing inline elsewhere; here the typed text still needs Retry.
+      setError(getBackend().errors.inline(err) ?? 'Not saved: the connection dropped')
     } finally {
       busy.current = false
       setSaving(false)
