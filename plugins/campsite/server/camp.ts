@@ -1,18 +1,43 @@
 // The campsite's server half (campsite part 2): core's activity feed in, through the reward rules,
 // into camp.json; `state` answers the snapshot and every change is sent to every project's windows
 // (throttled to once a second). The shop's handlers (part 3a) build a building's next tier and hire a
-// walk-in; seen and awaySeen keep the "While you were away" card. A minute tick pays working minutes,
-// cools the fire and forgets sessions that are gone. New commits are counted with git (fast-forward
-// only). Nothing here can stop the server: errors are logged and pay nothing.
+// walk-in; seen and awaySeen keep the "While you were away" card; gear and pin (part 3b) buy a
+// member's next item and pin it to a kind of session. The host names projects and worktrees for the
+// crew's journals. A minute tick pays working minutes, cools the fire and forgets sessions that are
+// gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
+// errors are logged and pay nothing.
+import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { pluginError, type PluginInstance, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { awaySeen, seen } from '../shared/away.ts'
 import { snapshot, type CampSnapshot } from '../shared/camp.ts'
+import { pinMember, type Where } from '../shared/crew.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
-import { build, recruit, type ShopRefusal } from '../shared/shop.ts'
+import { build, buyGear, recruit, type ShopRefusal } from '../shared/shop.ts'
 import { openCampStore } from './store.ts'
 
-export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled'>
+export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled' | 'projectName' | 'worktree'>
+
+/** The host's names for the journal: a project's name (its id if the host can't say), a worktree's repository, branch and folder (null once it is gone). Never throws, as `Where` promises */
+export function hostWhere(host: Pick<CampHost, 'projectName' | 'worktree'>): Where {
+  return {
+    project: (projectId) => {
+      try {
+        return host.projectName(projectId)
+      } catch {
+        return projectId
+      }
+    },
+    worktree: (projectId, worktreeId) => {
+      try {
+        const w = host.worktree(projectId, worktreeId)
+        return { repoId: w.repoId, branch: w.branch, name: basename(w.path) }
+      } catch {
+        return null
+      }
+    }
+  }
+}
 
 export interface CampServerOptions {
   now?: () => number
@@ -82,6 +107,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     start: seedWood === undefined ? undefined : { wood: seedWood, markers: SEED_MARKERS }
   })
   const camp = store.camp
+  const where = hostWhere(host)
   let disposed = false
   let lastEmit = -Infinity
   let lastJson = ''
@@ -141,7 +167,7 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
 
   const off = host.onActivity((e) => {
     try {
-      applyActivity(camp, e, now(), rules)
+      applyActivity(camp, e, now(), rules, where)
       changed()
     } catch (err) {
       warn(e.kind, err)
@@ -190,6 +216,14 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       recruit: (params) => {
         open()
         return answer(recruit(camp, params, now()))
+      },
+      gear: (params) => {
+        open()
+        return answer(buyGear(camp, params, now()))
+      },
+      pin: (params) => {
+        open()
+        return answer(pinMember(camp, params, now()))
       },
       seen: () => {
         open()

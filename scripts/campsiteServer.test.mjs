@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
-import { createCampServer, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
+import { createCampServer, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
 import { newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
@@ -61,8 +61,8 @@ test('an unreadable camp.json is moved to camp.json.bak and a new camp starts, w
   assert.equal(warnings.length, 1)
 })
 
-/** A server plugin host with what the campsite uses; `fire` sends an activity event */
-function fakeHost(t, { sessions = new Set(['t1']), git = {} } = {}) {
+/** A server plugin host with what the campsite uses; `fire` sends an activity event. Project p is "Trek"; its worktree w is on branch b of repo r */
+function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true } } } = {}) {
   const dir = tempDir(t)
   const listeners = new Set()
   const emitted = []
@@ -86,6 +86,14 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {} } = {}) {
       return v
     },
     isEnabled: (projectId) => !off.has(projectId),
+    projectName: (projectId) => {
+      if (projectId !== 'p') throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
+      return 'Trek'
+    },
+    worktree: (projectId, worktreeId) => {
+      if (projectId !== 'p' || !Object.hasOwn(worktrees, worktreeId)) throw Object.assign(new Error('no worktree'), { code: 'NOT_FOUND' })
+      return worktrees[worktreeId]
+    },
     log: { info: () => {}, warn: (m) => warnings.push(m) }
   }
   return { host, emitted, warnings, off, fire: (e) => { for (const l of listeners) l(e) }, listeners }
@@ -518,6 +526,8 @@ test('once disposed, build, recruit, seen and awaySeen are CONFLICT: the camp is
   await assert.rejects(async () => inst.handlers.recruit({ candidate: 'x', cost: { wood: 200 } }, {}), closing)
   await assert.rejects(async () => inst.handlers.seen({}, {}), closing)
   await assert.rejects(async () => inst.handlers.awaySeen({}, {}), closing)
+  await assert.rejects(async () => inst.handlers.gear({ crewId: 'c1', slot: 'pack', tier: 1, cost: { wood: 60 } }, {}), closing)
+  await assert.rejects(async () => inst.handlers.pin({ crewId: 'c1', pin: null }, {}), closing)
 })
 
 test('a purchase is saved to camp.json at once, not after the debounce', async (t) => {
@@ -571,4 +581,86 @@ test('a version 1 camp.json still malformed after migration is moved to camp.jso
   assert.equal(store.camp.version, 3)
   assert.equal(readFileSync(`${file}.bak`, 'utf8'), text)
   assert.equal(warnings.length, 1)
+})
+
+test('a version 2 camp.json is migrated on load: the shed not built, no gear, pins or journals, version 3 saved', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const { seenKinds, ...v3 } = newCamp(7, T0)
+  const v2 = { ...v3, version: 2, wood: 42, savedAt: T0, built: { lights: 1, fire: 1, garden: 0, lake: 0, cabins: 0 }, crew: v3.crew.map(({ gear, pin, journal, ...m }) => m) }
+  writeFileSync(file, JSON.stringify(v2))
+  const warnings = []
+  const store = openCampStore(file, { now: () => T0 + 60_000, seed: () => 9, warn: (m) => warnings.push(m), schedule: manual().schedule })
+  assert.deepEqual(warnings, [])
+  assert.equal(store.camp.version, 3)
+  assert.equal(store.camp.wood, 42)
+  assert.equal(store.camp.built.shed, 0)
+  assert.ok(store.camp.crew.every((m) => m.pin === null && m.journal.length === 0 && m.gear.pack === 0))
+  store.flush()
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 3)
+})
+
+test('hostWhere: the host\'s project name and a worktree\'s repository, branch and folder; ids and null when the host can\'t say', (t) => {
+  const h = fakeHost(t, { worktrees: { w: { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: null, present: true } } })
+  const where = hostWhere(h.host)
+  assert.equal(where.project('p'), 'Trek')
+  assert.equal(where.project('gone'), 'gone')
+  assert.deepEqual(where.worktree('p', 'w'), { repoId: 'r', branch: null, name: 'app-w' })
+  assert.equal(where.worktree('p', 'nope'), null)
+})
+
+test('hostWhere never throws: a host whose projectName and worktree both throw names the id and no worktree', () => {
+  const boom = () => {
+    throw new Error('host down')
+  }
+  const where = hostWhere({ projectName: boom, worktree: boom })
+  assert.equal(where.project('p'), 'p')
+  assert.equal(where.worktree('p', 'w'), null)
+})
+
+test('gear: buys a member\'s next item once the shed is built, answers the snapshot (its bonus) and saves at once; refusals are CONFLICT or BAD_REQUEST', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 400 })
+  t.after(() => inst.dispose?.())
+  const pack = { crewId: 'c1', slot: 'pack', tier: 1, cost: { wood: 60 } }
+  await assert.rejects(async () => inst.handlers.gear(pack, {}), { code: 'CONFLICT', message: 'Needs the gear shed' })
+  await inst.handlers.build({ id: 'shed', tier: 1, cost: { wood: 250, markers: 0 } }, {})
+  const snap = await inst.handlers.gear(pack, {})
+  assert.deepEqual([snap.wood, snap.crew[0].gear.pack, snap.crew[0].bonus], [90, 1, 2])
+  assert.deepEqual(snap.crew[0].journal.at(-1), { kind: 'gear', at: T0, slot: 'pack', tier: 1 })
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).crew[0].gear.pack, 1, 'saved at once')
+  await assert.rejects(async () => inst.handlers.gear({ ...pack, tier: 2, cost: { wood: 200 } }, {}), { code: 'CONFLICT', message: 'Needs Lv 3' })
+  await assert.rejects(async () => inst.handlers.gear({ crewId: 'c1', slot: 'cape' }, {}), { code: 'BAD_REQUEST' })
+})
+
+test('pin: to a session type or agent seen starting a session; the snapshot lists them and the pin; one not seen is CONFLICT', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'codex', sessionType: { id: 'rev', name: 'Review' } })
+  const before = await inst.handlers.state({}, {})
+  assert.deepEqual(before.seenKinds, [{ kind: 'type', id: 'p:rev', name: 'Review' }, { kind: 'provider', id: 'codex', name: 'Codex' }])
+  const snap = await inst.handlers.pin({ crewId: 'c2', pin: { kind: 'type', id: 'p:rev' } }, {})
+  assert.deepEqual(snap.crew[1].pin, { kind: 'type', id: 'p:rev' })
+  assert.deepEqual(snap.crew[1].journal.at(-1), { kind: 'pinned', at: T0, name: 'Review' })
+  await assert.rejects(async () => inst.handlers.pin({ crewId: 'c2', pin: { kind: 'provider', id: 'claude' } }, {}), { code: 'CONFLICT' })
+  await assert.rejects(async () => inst.handlers.pin({ crewId: 'c2', pin: 'claude' }, {}), { code: 'BAD_REQUEST' })
+})
+
+test("the journal through the host: a trip names the project and the worktree's branch; a merge of that branch is a summit", async (t) => {
+  const h = fakeHost(t)
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  const fact = { projectId: 'p', terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null }
+  h.fire({ kind: 'session.started', at: now, ...fact })
+  now += 30_000
+  h.fire({ kind: 'pr.ended', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'https://example.test/pr/9', result: 'merged' })
+  now = T0 + 3 * 60_000
+  h.fire({ kind: 'session.closed', at: now, ...fact })
+  const journal = (await inst.handlers.state({}, {})).crew[0].journal
+  assert.deepEqual(journal.slice(1), [
+    { kind: 'summit', at: T0 + 30_000, branch: 'b', project: 'Trek' },
+    // The merge's wood is the camp's, not the session's: the trip credited none
+    { kind: 'trip', at: T0 + 3 * 60_000, minutes: 3, project: 'Trek', place: 'b', provider: 'claude', wood: 0 }
+  ])
 })
