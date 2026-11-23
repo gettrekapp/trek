@@ -46,9 +46,11 @@ export const textLength = (s: string): number => [...s].length
 /**
  * What becomes a space in an agent's text: C0 and C1 control characters, the line and paragraph
  * separators, and the invisible ones that could hide or reorder what is shown (zero-width spaces and
- * joiners, the bidi marks, embeddings, overrides and isolates, the word joiner, the BOM)
+ * joiners, the bidi marks, embeddings, overrides and isolates, the Arabic letter mark, the soft
+ * hyphen, the Mongolian vowel separator, the combining grapheme joiner, the word joiner, the BOM,
+ * the tag characters). Variation selectors (U+FE00–U+FE0F) stay: they are part of emoji.
  */
-const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\u{e0000}-\u{e007f}]/gu
 
 /**
  * An agent's text as the camp keeps it: one line (control and invisible characters and line breaks

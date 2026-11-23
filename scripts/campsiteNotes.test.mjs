@@ -26,6 +26,13 @@ test('cleanText: one line, white space collapsed, trimmed; 1 to max code points'
   assert.deepEqual(cleanText('\u200b\u200f\u202a\u202e\u2060\u2066\u2069\ufeff', NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note is empty.' })
   assert.equal(cleanText('safe\u202egnp.exe', NOTE_MAX, 'note'), 'safe gnp.exe', 'the right-to-left override is gone')
   assert.equal(cleanText('a\u200bb\u200dc\ufeffd\u2067e\u2069', NOTE_MAX, 'note'), 'a b c d e')
+  // The Arabic letter mark, the soft hyphen, the Mongolian vowel separator, the combining grapheme joiner, the tag characters
+  assert.deepEqual(cleanText('\u061c\u00ad\u180e\u034f\u{e0000}\u{e0041}\u{e007f}', NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note is empty.' })
+  assert.equal(cleanText('a\u061cb\u00adc\u180ed\u034fe', NOTE_MAX, 'note'), 'a b c d e')
+  assert.equal(cleanText('ok\u{e0068}\u{e0069}\u{e0064}\u{e0065}\u{e007f}', NOTE_MAX, 'note'), 'ok', 'hidden tag text is gone')
+  // Variation selectors stay: an emoji with VS16 reads as it did
+  assert.equal(cleanText('Shipped \u2764\ufe0f', NOTE_MAX, 'note'), 'Shipped \u2764\ufe0f')
+  assert.equal(cleanText('\u263a\ufe0e', NOTE_MAX, 'note'), '\u263a\ufe0e')
   assert.deepEqual(cleanText(42, NOTE_MAX, 'note'), { code: 'BAD_REQUEST', message: 'The note must be a string.' })
   assert.deepEqual(cleanText(undefined, REPORT_MAX, 'summary'), { code: 'BAD_REQUEST', message: 'The summary must be a string.' })
   assert.equal(cleanText('x'.repeat(NOTE_MAX), NOTE_MAX, 'note'), 'x'.repeat(NOTE_MAX))
