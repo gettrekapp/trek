@@ -1,12 +1,15 @@
 // The campsite's server half (campsite part 2): core's activity feed in, through the reward rules,
 // into camp.json; `state` answers the snapshot and every change is sent to every project's windows
-// (throttled to once a second). A minute tick pays working minutes, cools the fire and forgets
-// sessions that are gone. New commits are counted with git (fast-forward only). Nothing here can
-// stop the server: errors are logged and pay nothing.
+// (throttled to once a second). The shop's handlers (part 3a) build a building's next tier and hire a
+// walk-in; seen and awaySeen keep the "While you were away" card. A minute tick pays working minutes,
+// cools the fire and forgets sessions that are gone. New commits are counted with git (fast-forward
+// only). Nothing here can stop the server: errors are logged and pay nothing.
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
-import type { PluginInstance, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
-import { snapshot } from '../shared/camp.ts'
+import { pluginError, type PluginInstance, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import { awaySeen, seen } from '../shared/away.ts'
+import { snapshot, type CampSnapshot } from '../shared/camp.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
+import { build, recruit, type ShopRefusal } from '../shared/shop.ts'
 import { openCampStore } from './store.ts'
 
 export type CampHost = Pick<ServerPluginHost, 'dataFile' | 'onActivity' | 'emitAll' | 'session' | 'checkedWorktree' | 'run' | 'log' | 'isEnabled'>
@@ -18,6 +21,8 @@ export interface CampServerOptions {
   minuteMs?: number
   schedule?: (fn: () => void, ms: number) => { cancel(): void }
   interval?: (fn: () => void, ms: number) => { clear(): void }
+  /** A fresh camp's wood (it also gets 3 markers); default TREK_CAMPSITE_SEED_WOOD when set (smokes) */
+  seedWood?: number
 }
 
 const EMIT_EVERY_MS = 1000
@@ -27,6 +32,16 @@ function minuteFromEnv(): number {
   const v = Number(process.env.TREK_CAMPSITE_MINUTE_MS)
   return Number.isFinite(v) && v >= 50 ? v : 60_000
 }
+
+/** TREK_CAMPSITE_SEED_WOOD, read only when set: a finite number ≥ 0 */
+export function seedWoodFromEnv(env: Readonly<Record<string, string | undefined>> = process.env): number | undefined {
+  const raw = env.TREK_CAMPSITE_SEED_WOOD
+  if (raw === undefined || raw.trim() === '') return undefined
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? v : undefined
+}
+/** A seeded camp's markers: enough for a cabin or the dock in a smoke */
+const SEED_MARKERS = 3
 
 const defaultSchedule = (fn: () => void, ms: number): { cancel(): void } => {
   const timer = setTimeout(fn, ms)
@@ -57,28 +72,36 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const now = o.now ?? Date.now
   const rules: Rules = { minuteMs: o.minuteMs ?? minuteFromEnv() }
   const schedule = o.schedule ?? defaultSchedule
+  const seedWood = o.seedWood ?? seedWoodFromEnv()
   const store = openCampStore(host.dataFile('camp.json'), {
     now,
     seed: o.seed ?? (() => Math.floor(Math.random() * 2 ** 32)),
     warn: (m) => host.log.warn(m),
     schedule,
-    rules
+    rules,
+    start: seedWood === undefined ? undefined : { wood: seedWood, markers: SEED_MARKERS }
   })
   const camp = store.camp
   let disposed = false
   let lastEmit = -Infinity
   let lastJson = ''
   let pendingEmit: { cancel(): void } | null = null
+  const warn = (what: string, err: unknown): void => host.log.warn(`[campsite] ${what}: ${err instanceof Error ? err.message : String(err)}`)
   const publish = (): void => {
     if (disposed || pendingEmit) return
     pendingEmit = schedule(() => {
       pendingEmit = null
-      const snap = snapshot(camp, now())
-      const json = JSON.stringify(snap)
-      if (json === lastJson) return
-      lastJson = json
-      lastEmit = now()
-      host.emitAll('state', snap)
+      // A timer: a camp that can't be shown (or a push that fails) is logged, never thrown
+      try {
+        const snap = snapshot(camp, now())
+        const json = JSON.stringify(snap)
+        if (json === lastJson) return
+        lastJson = json
+        lastEmit = now()
+        host.emitAll('state', snap)
+      } catch (err) {
+        warn('publish', err)
+      }
     }, Math.max(0, lastEmit + EMIT_EVERY_MS - now()))
   }
   const changed = (): void => {
@@ -86,7 +109,12 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     store.changed()
     publish()
   }
-  const warn = (what: string, err: unknown): void => host.log.warn(`[campsite] ${what}: ${err instanceof Error ? err.message : String(err)}`)
+  /** A purchase: refused with its code, or saved, pushed and answered with the new snapshot */
+  const answer = (refusal: ShopRefusal | null): CampSnapshot => {
+    if (refusal) throw pluginError(refusal.code, refusal.message)
+    changed()
+    return snapshot(camp, now())
+  }
 
   /** Sessions that are gone without a `session.closed` (a project, repo or worktree removed; the plugin off in their project) stop earning and free their members */
   const prune = (): void => {
@@ -139,13 +167,29 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       prune()
       tick(camp, now(), rules)
       if (Object.keys(camp.spans).length > 0 || saved() !== before) changed()
+      // Time alone can change the snapshot (the away card falling due, its hours, a new day's
+      // walk-ins): pushed (publish skips an unchanged one), not saved
+      else publish()
     } catch (err) {
       warn('tick', err)
     }
   }, rules.minuteMs)
 
   return {
-    handlers: { state: () => snapshot(camp, now()) },
+    handlers: {
+      state: () => snapshot(camp, now()),
+      build: (params) => answer(build(camp, params)),
+      recruit: (params) => answer(recruit(camp, params, now())),
+      seen: () => {
+        if (seen(camp, now())) changed()
+        return { ok: true }
+      },
+      awaySeen: () => {
+        awaySeen(camp, now())
+        changed()
+        return { ok: true }
+      }
+    },
     dispose: () => {
       disposed = true
       off()

@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
-import { createCampServer } from '../plugins/campsite/server/camp.ts'
+import { createCampServer, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
 import { newCamp } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
@@ -387,4 +387,106 @@ test('start: a fresh camp (no camp.json) begins with the given wood and markers;
   a.flush()
   const b = openCampStore(file, { now: () => T0, seed: () => 7, warn: () => {}, schedule: manual().schedule, start: { wood: 100, markers: 3 } })
   assert.deepEqual([b.camp.wood, b.camp.markers], [5, 3])
+})
+
+test('build: buys the next tier, answers the snapshot and pushes it; refusals are CONFLICT or BAD_REQUEST and change nothing', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), seedWood: 100 })
+  t.after(() => inst.dispose?.())
+  const snap = await inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {})
+  assert.deepEqual([snap.wood, snap.markers, snap.built.lights], [75, 3, 1])
+  clock.run()
+  assert.equal(h.emitted.at(-1)[0], 'state')
+  assert.equal(h.emitted.at(-1)[1].built.lights, 1, 'every window hears of it')
+  await assert.rejects(async () => inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {}), { code: 'CONFLICT', message: 'String lights is fully built' })
+  await assert.rejects(async () => inst.handlers.build({ id: 'garden', tier: 1, cost: { wood: 150, markers: 0 } }, {}), { code: 'CONFLICT', message: 'Need 75 more wood' })
+  await assert.rejects(async () => inst.handlers.build({ id: 'fire', tier: 2, cost: { wood: 1, markers: 0 } }, {}), { code: 'CONFLICT', message: 'The price changed: Fire ring II costs 300 wood' })
+  await assert.rejects(async () => inst.handlers.build({ id: 'tower', tier: 1, cost: { wood: 1, markers: 0 } }, {}), { code: 'BAD_REQUEST' })
+  assert.equal((await inst.handlers.state({}, {})).wood, 75)
+})
+
+test("recruit: hires one of the day's walk-ins into a free bunk; no bunk, or a name not on today's list, is CONFLICT", async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
+  t.after(() => inst.dispose?.())
+  const before = await inst.handlers.state({}, {})
+  assert.deepEqual([before.bunks, before.recruitCost, before.candidates.length], [3, 200, 3])
+  await assert.rejects(async () => inst.handlers.recruit({ candidate: before.candidates[0].name, cost: { wood: 200 } }, {}), { code: 'CONFLICT', message: 'No free bunk: build a cabin first' })
+  await inst.handlers.build({ id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } }, {})
+  const snap = await inst.handlers.recruit({ candidate: before.candidates[0].name, cost: { wood: 200 } }, {})
+  assert.deepEqual([snap.crew.length, snap.wood, snap.recruitCost, snap.bunks], [4, 400, 250, 6])
+  assert.equal(snap.crew[3].name, before.candidates[0].name)
+  assert.deepEqual(snap.candidates.map((c) => c.name), before.candidates.slice(1).map((c) => c.name))
+  await assert.rejects(async () => inst.handlers.recruit({ candidate: 'Nobody', cost: { wood: 250 } }, {}), { code: 'CONFLICT', message: "Nobody isn't at camp today" })
+  await assert.rejects(async () => inst.handlers.recruit({ candidate: 7 }, {}), { code: 'BAD_REQUEST' })
+})
+
+test('seen and awaySeen: the card shows while due; seen keeps it then; awaySeen drops it from the next push', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
+  assert.deepEqual(inst.handlers.seen({}, {}), { ok: true })
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u2' })
+  now += 5 * 3_600_000
+  const due = await inst.handlers.state({}, {})
+  assert.deepEqual(due.away, { hours: 5, wood: { work: 0, outcomes: 20, garden: 0, fishing: 0 }, markers: 0, levelUps: [] }, 'only what came after the seen')
+  assert.deepEqual(inst.handlers.seen({}, {}), { ok: true })
+  assert.ok((await inst.handlers.state({}, {})).away, 'seen while due keeps the card')
+  clock.run()
+  assert.ok(h.emitted.at(-1)[1].away, 'pushed with the card')
+  assert.deepEqual(inst.handlers.awaySeen({}, {}), { ok: true })
+  clock.run()
+  assert.equal(h.emitted.at(-1)[1].away, undefined, 'the push drops it')
+  assert.equal((await inst.handlers.state({}, {})).away, undefined)
+})
+
+test('the minute tick pushes the away card once it falls due, with no event', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  let tickFn
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
+  clock.run()
+  const emits = h.emitted.length
+  assert.equal(h.emitted.at(-1)[1].away, undefined)
+  now += 5 * 3_600_000
+  tickFn()
+  clock.run()
+  assert.equal(h.emitted.length, emits + 1)
+  assert.equal(h.emitted.at(-1)[1].away.wood.outcomes, 20)
+})
+
+test('TREK_CAMPSITE_SEED_WOOD: read only when set; a fresh camp starts with that wood and 3 markers', async (t) => {
+  const h = fakeHost(t)
+  const prev = process.env.TREK_CAMPSITE_SEED_WOOD
+  t.after(() => {
+    if (prev === undefined) delete process.env.TREK_CAMPSITE_SEED_WOOD
+    else process.env.TREK_CAMPSITE_SEED_WOOD = prev
+  })
+  process.env.TREK_CAMPSITE_SEED_WOOD = '100'
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const snap = await inst.handlers.state({}, {})
+  inst.dispose()
+  assert.deepEqual([snap.wood, snap.markers], [100, 3])
+  for (const bad of ['-1', 'lots', '', ' ']) assert.equal(seedWoodFromEnv({ TREK_CAMPSITE_SEED_WOOD: bad }), undefined, JSON.stringify(bad))
+  assert.equal(seedWoodFromEnv({}), undefined)
+  assert.equal(seedWoodFromEnv({ TREK_CAMPSITE_SEED_WOOD: '0' }), 0)
+  assert.equal(seedWoodFromEnv({ TREK_CAMPSITE_SEED_WOOD: '250' }), 250)
+})
+
+test('a push that throws is logged, never thrown from its timer', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.host.emitAll = () => { throw new Error('boom') }
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
+  assert.doesNotThrow(() => clock.run())
+  assert.ok(h.warnings.some((m) => m.includes('boom')), JSON.stringify(h.warnings))
 })
