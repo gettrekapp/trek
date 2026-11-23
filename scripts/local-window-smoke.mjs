@@ -11,7 +11,9 @@
 //     the row's dot run and the footer count it; quiet, it is done; with the campsite plugin off
 //     for the project, a click on the core badge marks it complete (and another resumes); back on,
 //     a click on the tab's hiker marks it complete; the strip's header counts the camp's wood, which rises while the
-//     session works (a working minute shortened to 200 ms); a bell puts the row in attention (on the server too); showing the session
+//     session works (a working minute shortened to 200 ms); with the camp seeded with 100 wood
+//     (TREK_CAMPSITE_SEED_WOOD), the counts button opens the camp's popover, string lights are built
+//     from it (the row says Built, the wood drops by 25), and the button closes it again; a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -200,7 +202,9 @@ try {
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1',
     // The campsite's working minute, so a few seconds of work earn the camp wood
-    TREK_CAMPSITE_MINUTE_MS: '200'
+    TREK_CAMPSITE_MINUTE_MS: '200',
+    // A fresh camp starts with 100 wood (and 3 markers), so the shop check can build string lights (25)
+    TREK_CAMPSITE_SEED_WOOD: '100'
   }
   stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
@@ -373,6 +377,30 @@ try {
     await until(serverStatus, 'complete'),
     await until(() => tabHiker.getAttribute('title'), 'Marked complete — status tracking paused — click to resume tracking')
   ], ['complete', 'complete', 'Marked complete — status tracking paused — click to resume tracking'])
+  // The camp's shop (campsite 3a): the counts button opens the popover; string lights (25 wood) are
+  // built from it. The session is complete, so nothing earns now: wait for the wood to settle first.
+  const steadyWood = async () => {
+    let last = await wood()
+    for (let i = 0; i < 10; i++) {
+      await sleep(1500)
+      const n = await wood()
+      if (n === last) return n
+      last = n
+    }
+    return last
+  }
+  const woodBeforeBuild = await steadyWood()
+  await win.locator('.campsite .cs-camp-button').click()
+  const lightsRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="lights"]')
+  await lightsRow.locator('.cs-shop-build').click()
+  check('the camp popover builds string lights: the row says Built and the wood drops by 25', [
+    await until(() => lightsRow.locator('.cs-shop-built').count(), 1),
+    await until(async () => (await wood()) === woodBeforeBuild - 25, true)
+  ], [1, true])
+  console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${await wood()} after)`)
+  // The counts button again closes it
+  await win.locator('.campsite .cs-camp-button').click()
+  check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 

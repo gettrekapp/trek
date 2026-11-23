@@ -14,8 +14,18 @@ launch borrows one again; an automation's run tab always gets a day hiker (it st
 Commits earn wood as new commits on a worktree's head, however they got there (a commit, a pull, a
 fast-forward merge); a head that moves anywhere else (a rewrite, a reset back) earns nothing.
 
+The wood and markers are spent at the camp (part 3a): the header's counts are a button that opens a
+popover. **Camp** lists each building's next tier: string lights (they glow over the camp), the fire
+ring II and III (warmth lifts working wood up to ×1.75 and ×2), a garden (2, then 5 wood an hour,
+always), the lake and its dock (each resting crew member fishes 1, then 2 wood an hour) and up to
+three cabins (3 more bunks each). **Crew** lists the members (level, XP, where they are) and three
+walk-ins a day to hire into a free bunk (200 wood, 50 more for each hire after). Cabins stand at the
+strip's left end, the lake and the garden at its right (narrow windows drop the outermost first);
+click one to open its row. A window that hasn't seen the camp for more than 4 hours gets a "While
+you were away" card with what it earned, until one window dismisses it.
+
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
-- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests
+- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a); `TREK_CAMPSITE_SEED_WOOD` gives a fresh camp wood and 3 markers for the smokes
 - `shared/`: pure, tested in `scripts/campsite*.test.mjs`
   - `hiker.ts`: a look from the session id (provider = jacket color)
   - `pixels.ts`: the 12×16 pixels of each pose
@@ -26,15 +36,22 @@ fast-forward merge); a head that moves anywhere else (a rewrite, a reset back) e
   - `prefs.ts`: the per-app switches
   - `camp.ts`: the camp and its snapshot
   - `crew.ts`: names, assignment, levels
-  - `economy.ts`: what earns what (minutes × warmth, answers, completions, pull requests, commits); caps and the ledger
+  - `economy.ts`: what earns what (minutes × warmth, answers, completions, pull requests, commits); caps and the ledger; the fire ring's ceiling, the garden and fishing
+  - `catalog.ts`: the buildings' tiers, costs and effects, and the numbers behind them (tunable)
+  - `shop.ts`: offers, bunks, the day's walk-ins, build and recruit
+  - `away.ts`: the "While you were away" tally, when it is due, and its line
+  - `campView.ts`: what the camp popover's rows say
+  - `campEdges.ts`: where buildings stand at the strip's ends, and the middle left for the tents
+  - `buildingPixels.ts`: the buildings' pixels, the fire ring's stones, the string lights, the popover's icons
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
-  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar)
-  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` draws and animates; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
+  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `AwayCard.tsx` (While you were away)
+  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the backdrop, tents and log; `scene/actors/` (hikers, dog, fire, buildings) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared), `hooks.ts` (sessions, selection, prefs, the camp, width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
 - `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages)
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
-`focusSession`), it has one method (`state`, the camp's snapshot) and one event (`state`, sent when
-the snapshot changes).
+`focusSession`), it has five methods (`state`, the camp's snapshot; `build` and `recruit`, which
+answer the new snapshot; `seen`, sent on load and every 5 minutes while a window is visible;
+`awaySeen`, the card's dismiss) and one event (`state`, sent when the snapshot changes).
