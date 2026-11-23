@@ -761,3 +761,38 @@ test('trails (3c): at start-up the projects with trails in camp.json are reconci
   assert.deepEqual([built.built.signpost, built.wood], [1, 50])
   assert.throws(() => inst.handlers.build({ id: 'signpost', tier: 2, cost: { wood: 150, markers: 0 } }, {}), (err) => err.code === 'CONFLICT')
 })
+
+test('trails (3c): a merge as the first event from a project (no trails yet) still reaches the summit and sends summit once', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.ended', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'merged' })
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual([snap.trails[0].stage, snap.summits], [4, 1])
+  assert.deepEqual(h.emitted.filter(([e]) => e === 'summit'), [['summit', { projectId: 'p', worktreeId: 'w', branch: 'b' }]])
+})
+
+test('trails (3c): a pull request linked as the first event from a project puts its trail at stage 2', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
+  assert.equal((await inst.handlers.state({}, {})).trails[0].stage, 2)
+})
+
+test('trails (3c): a host.worktrees error other than NOT_FOUND leaves the trails as they are and is logged', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  let now = T0
+  let tickFn = null
+  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  assert.equal((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.length, 1)
+  h.host.worktrees = () => {
+    throw Object.assign(new Error('git is busy'), { code: 'EBUSY' })
+  }
+  now += TRAIL_EVERY_MS
+  tickFn()
+  assert.equal((await inst.handlers.state({}, {})).trails.length, 1, 'left as it is')
+  assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, [])
+  assert.ok(h.warnings.some((w) => w.includes('reading the worktrees') && w.includes('git is busy')))
+})

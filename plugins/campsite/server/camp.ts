@@ -159,7 +159,8 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const reconciled = new Set<string>()
   /**
    * A project's trails against the host's worktrees (no git refresh): a project that is gone
-   * (NOT_FOUND) turns its trails back; one where the plugin is off is left as it is. True when it ran.
+   * (NOT_FOUND) turns its trails back; one where the plugin is off is left as it is. True when a trail,
+   * the history or the done count changed.
    */
   const reconcileProject = (projectId: string): boolean => {
     let worktrees: PluginWorktree[] | null
@@ -173,10 +174,11 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       worktrees = null
     }
     if (worktrees !== null && !host.isEnabled(projectId)) return false
+    const before = JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone])
     reconcile(camp, projectId, worktrees, now())
     if (worktrees === null) reconciled.delete(projectId)
     else reconciled.add(projectId)
-    return true
+    return JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
   /** Every project with trails, and every one reconciled this run; true when a trail or the history changed */
   const reconcileAll = (): boolean => {
@@ -205,9 +207,11 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
 
   const off = host.onActivity((e) => {
     try {
+      // The first word from a project this run: its trails exist before the event moves them
+      if (!reconciled.has(e.projectId)) reconcileProject(e.projectId)
       const paid = applyActivity(camp, e, now(), rules, where)
-      // A worktree event (its trail is moved first), or the first word from a project this run
-      if (e.kind.startsWith('worktree.') || !reconciled.has(e.projectId)) reconcileProject(e.projectId)
+      // A worktree event: the worktrees changed, so the trails follow
+      if (e.kind.startsWith('worktree.')) reconcileProject(e.projectId)
       changed()
       if (e.kind === 'pr.ended' && e.result === 'merged' && paid.some((r) => r.key === `merged:${e.url}`)) {
         for (const t of trailsOn(camp, e)) if (t.stage === SUMMIT) host.emitAll('summit', { projectId: t.projectId, worktreeId: t.worktreeId, branch: t.branch })
