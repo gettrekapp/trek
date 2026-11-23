@@ -6,10 +6,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
-import { TRAIL_EVERY_MS, TRAIL_GRACE_MS, createCampServer, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
+import { TRAIL_EVERY_MS, TRAIL_GRACE_MS, createCampServer, forceSightingsFromEnv, hostWhere, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
 import { newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
+/** The sightings' dice never hit (part 3d-2): the tests before wildlife see no sightings */
+const noSightings = () => 0.99
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-camp-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -66,12 +68,17 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
   const dir = tempDir(t)
   const listeners = new Set()
   const emitted = []
+  /** host.emit's sends to one project's windows: [projectId, event, data] */
+  const sent = []
   const warnings = []
   const off = new Set()
+  /** Projects removed from the server: the host's isEnabled is false for them, as for a project that is not there */
+  const gone = new Set()
   const host = {
     id: 'campsite',
     dataFile: (name) => join(dir, name),
     onActivity: (l) => { listeners.add(l); return () => listeners.delete(l) },
+    emit: (projectId, event, data) => { sent.push([projectId, event, data]); return 1 },
     emitAll: (event, data) => { emitted.push([event, data]); return 1 },
     session: (projectId, terminalId) => {
       if (!sessions.has(terminalId)) throw Object.assign(new Error('no session'), { code: 'NOT_FOUND' })
@@ -85,7 +92,7 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
       if (v instanceof Error) throw v
       return v
     },
-    isEnabled: (projectId) => !off.has(projectId),
+    isEnabled: (projectId) => !off.has(projectId) && !gone.has(projectId),
     projectName: (projectId) => {
       if (projectId !== 'p') throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
       return 'Trek'
@@ -100,14 +107,14 @@ function fakeHost(t, { sessions = new Set(['t1']), git = {}, worktrees = { w: { 
     },
     log: { info: () => {}, warn: (m) => warnings.push(m) }
   }
-  return { host, emitted, warnings, off, fire: (e) => { for (const l of listeners) l(e) }, listeners }
+  return { host, emitted, sent, warnings, off, gone, fire: (e) => { for (const l of listeners) l(e) }, listeners }
 }
 
 test('the server half: events earn wood, state answers the snapshot, emitAll follows (throttled)', async (t) => {
   const h = fakeHost(t)
   const clock = manual()
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', provider: 'claude' })
   h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
@@ -122,7 +129,7 @@ test('the server half: events earn wood, state answers the snapshot, emitAll fol
 
 test('the server half counts fast-forward commits with git; a rewrite pays nothing', async (t) => {
   const h = fakeHost(t, { git: { 'merge-base --is-ancestor a b': '', 'rev-list --count a..b': '2\n', 'merge-base --is-ancestor b c': Object.assign(new Error('git exited with 1'), { exitCode: 1 }) } })
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'b', to: 'c' })
@@ -135,7 +142,7 @@ test('the minute tick prunes assignments whose sessions are gone; dispose unsubs
   const sessions = new Set(['t1'])
   const h = fakeHost(t, { sessions })
   let tickFn
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } } })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } } })
   h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', provider: 'claude' })
   sessions.delete('t1')
   tickFn()
@@ -198,7 +205,7 @@ test('a span whose session vanished stops earning after the next tick; a project
   const h = fakeHost(t, { sessions })
   let tickFn
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   for (const id of ['t1', 't2']) {
     h.fire({ kind: 'session.started', projectId: id === 't1' ? 'p' : 'q', at: now, terminalId: id, worktreeId: 'w', provider: 'claude' })
@@ -223,7 +230,7 @@ test('nothing after dispose: a commit count that resolves later saves and emits 
   const run = h.host.run
   h.host.run = async (cmd, args) => { await gate; return run(cmd, args) }
   const clock = manual()
-  const inst = createCampServer({ ...h.host, run: h.host.run }, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer({ ...h.host, run: h.host.run }, { rand: noSightings, now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
   await new Promise((r) => setImmediate(r))
   inst.dispose()
@@ -241,7 +248,7 @@ test('emits are throttled to one a second and skipped when nothing changed', asy
   const h = fakeHost(t)
   const clock = manual()
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   const link = (url) => h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url })
   link('a')
@@ -272,7 +279,7 @@ test('emits are throttled to one a second and skipped when nothing changed', asy
 test('git failures: a real error is logged and pays nothing; a worktree that cannot be checked is logged too', async (t) => {
   const git = { 'merge-base --is-ancestor a b': new Error('fatal: bad object') }
   const h = fakeHost(t, { git })
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
@@ -289,7 +296,7 @@ test('the minute tick saves camp.json only when something saved changed (or a sp
   const clock = manual()
   let now = T0
   let tickFn
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   const file = h.host.dataFile('camp.json')
   const saves = () => clock.jobs.filter((j) => j.ms === 2000 && !j.cancelled).length
@@ -336,7 +343,7 @@ test('a restart after hours of unsaved quiet minutes: wood kept, members back in
   const clock = manual()
   let now = T0
   let tickA
-  const a = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickA = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const a = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickA = fn; return { clear() {} } }, minuteMs: 60_000 })
   h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude' })
   h.fire({ kind: 'session.status', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', automation: false, from: 'idle', to: 'working', cause: 'output' })
   now += 2 * 60_000
@@ -356,7 +363,7 @@ test('a restart after hours of unsaved quiet minutes: wood kept, members back in
   // The server dies (no dispose) and comes back; a session waits at once
   h.listeners.clear()
   let tickB
-  const b = createCampServer(h.host, { now: () => now, seed: () => 2, schedule: clock.schedule, interval: (fn) => { tickB = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const b = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 2, schedule: clock.schedule, interval: (fn) => { tickB = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => b.dispose?.())
   const snap = await b.handlers.state({}, {})
   assert.equal(snap.wood, Math.floor(wood))
@@ -375,7 +382,7 @@ test('a commit count that fails after dispose logs nothing', async (t) => {
   let release
   const gate = new Promise((r) => { release = r })
   const run = h.host.run
-  const inst = createCampServer({ ...h.host, run: async (cmd, args) => { await gate; return run(cmd, args) } }, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer({ ...h.host, run: async (cmd, args) => { await gate; return run(cmd, args) } }, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'b', from: 'a', to: 'b' })
   await new Promise((r) => setImmediate(r))
   inst.dispose()
@@ -432,7 +439,7 @@ test('start: a fresh camp (no camp.json) begins with the given wood and markers;
 test('build: buys the next tier, answers the snapshot and pushes it; refusals are CONFLICT or BAD_REQUEST and change nothing', async (t) => {
   const h = fakeHost(t)
   const clock = manual()
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), seedWood: 100 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }), seedWood: 100 })
   t.after(() => inst.dispose?.())
   const snap = await inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {})
   assert.deepEqual([snap.wood, snap.markers, snap.built.lights], [75, 3, 1])
@@ -448,7 +455,7 @@ test('build: buys the next tier, answers the snapshot and pushes it; refusals ar
 
 test("recruit: hires one of the day's walk-ins into a free bunk; no bunk, or a name not on today's list, is CONFLICT", async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
   t.after(() => inst.dispose?.())
   const before = await inst.handlers.state({}, {})
   assert.deepEqual([before.bunks, before.recruitCost, before.candidates.length], [3, 200, 3])
@@ -466,7 +473,7 @@ test('seen and awaySeen: the card shows while due; seen keeps it then; awaySeen 
   const h = fakeHost(t)
   const clock = manual()
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
   assert.deepEqual(inst.handlers.seen({}, {}), { ok: true })
@@ -489,7 +496,7 @@ test('the minute tick pushes the away card once it falls due, with no event', as
   const clock = manual()
   let now = T0
   let tickFn
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
   clock.run()
@@ -510,7 +517,7 @@ test('TREK_CAMPSITE_SEED_WOOD: read only when set; a fresh camp starts with that
     else process.env.TREK_CAMPSITE_SEED_WOOD = prev
   })
   process.env.TREK_CAMPSITE_SEED_WOOD = '100'
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   const snap = await inst.handlers.state({}, {})
   inst.dispose()
   assert.deepEqual([snap.wood, snap.markers], [100, 3])
@@ -523,7 +530,7 @@ test('TREK_CAMPSITE_SEED_WOOD: read only when set; a fresh camp starts with that
 test('a push that throws is logged, never thrown from its timer', async (t) => {
   const h = fakeHost(t)
   const clock = manual()
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.host.emitAll = () => { throw new Error('boom') }
   h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
@@ -533,7 +540,7 @@ test('a push that throws is logged, never thrown from its timer', async (t) => {
 
 test('once disposed, build, recruit, seen and awaySeen are CONFLICT: the camp is closing', async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1000 })
   inst.dispose()
   const closing = { code: 'CONFLICT', message: 'The camp is closing' }
   await assert.rejects(async () => inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {}), closing)
@@ -546,7 +553,7 @@ test('once disposed, build, recruit, seen and awaySeen are CONFLICT: the camp is
 
 test('a purchase is saved to camp.json at once, not after the debounce', async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 100 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 100 })
   t.after(() => inst.dispose?.())
   await inst.handlers.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } }, {})
   const saved = JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8'))
@@ -557,7 +564,7 @@ test('an idle tick, twice, pushes nothing new', async (t) => {
   const h = fakeHost(t)
   const clock = manual()
   let tickFn
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
   clock.run()
@@ -573,7 +580,7 @@ test('seen while the card is not due: no push, and camp.json holds the new seenA
   const h = fakeHost(t)
   const clock = manual()
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u' })
   clock.run()
@@ -633,7 +640,7 @@ test('hostWhere never throws: a host whose projectName and worktree both throw n
 
 test('gear: buys a member\'s next item once the shed is built, answers the snapshot (its bonus) and saves at once; refusals are CONFLICT or BAD_REQUEST', async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 400 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 400 })
   t.after(() => inst.dispose?.())
   const pack = { crewId: 'c1', slot: 'pack', tier: 1, cost: { wood: 60 } }
   await assert.rejects(async () => inst.handlers.gear(pack, {}), { code: 'CONFLICT', message: 'Needs the gear shed' })
@@ -649,7 +656,7 @@ test('gear: buys a member\'s next item once the shed is built, answers the snaps
 
 test('pin: to a session type or agent seen starting a session; the snapshot lists them and the pin; one not seen is CONFLICT', async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'codex', sessionType: { id: 'rev', name: 'Review' } })
   const before = await inst.handlers.state({}, {})
@@ -663,7 +670,7 @@ test('pin: to a session type or agent seen starting a session; the snapshot list
 
 test('journal: a member\'s entries on request; BAD_REQUEST for a malformed id, NOT_FOUND for nobody; the pushed snapshot carries none', async (t) => {
   const h = fakeHost(t)
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   assert.deepEqual(await inst.handlers.journal({ crewId: 'c1' }, {}), { journal: [{ kind: 'hired', at: T0 }] })
   await assert.rejects(async () => inst.handlers.journal({ crewId: 7 }, {}), { code: 'BAD_REQUEST' })
@@ -675,7 +682,7 @@ test('journal: a member\'s entries on request; BAD_REQUEST for a malformed id, N
 test("the journal through the host: a trip names the project and the worktree's branch; a merge of that branch is a summit", async (t) => {
   const h = fakeHost(t)
   let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   const fact = { projectId: 'p', terminalId: 't1', worktreeId: 'w', automation: false, provider: 'claude', sessionType: null }
   h.fire({ kind: 'session.started', at: now, ...fact })
@@ -697,7 +704,7 @@ const W = { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b',
 /** A camp server whose grace period is over (started TRAIL_GRACE_MS before T0; its first full reconcile ran at T0): `c.now` is its clock, `c.tick()` its minute tick */
 function pastGrace(t, h, o = {}) {
   const c = { now: T0 - TRAIL_GRACE_MS, tick: () => {} }
-  const inst = createCampServer(h.host, { now: () => c.now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { c.tick = fn; return { clear() {} } }, minuteMs: 60_000, ...o })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => c.now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { c.tick = fn; return { clear() {} } }, minuteMs: 60_000, ...o })
   t.after(() => inst.dispose?.())
   c.now = T0
   c.tick()
@@ -769,7 +776,7 @@ test('trails (3c): the first full reconcile saves a change to the summited memor
   const clock = manual()
   let now = T0
   let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   clock.run()
   assert.equal(existsSync(h.host.dataFile('camp.json.tmp')), false)
@@ -790,7 +797,7 @@ test("trails (3c): at start-up camp.json's trails stand as they are (no reconcil
   writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
   let now = T0
   let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   assert.deepEqual((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.map((t) => t.worktreeId), ['gone'], 'nothing opened or ended yet')
   now += 60_000
@@ -808,7 +815,7 @@ test("trails (3c): at start-up camp.json's trails stand as they are (no reconcil
 
 test('trails (3c): a merge as the first event from a project (no trails yet) still reaches the summit and sends summit once', async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.ended', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'merged' })
   const snap = await inst.handlers.state({}, {})
@@ -818,7 +825,7 @@ test('trails (3c): a merge as the first event from a project (no trails yet) sti
 
 test('trails (3c): a pull request linked as the first event from a project puts its trail at stage 2', async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
   assert.equal((await inst.handlers.state({}, {})).trails[0].stage, 2)
@@ -850,7 +857,7 @@ test('trails (3c): a restart whose host still reports a stale branch keeps the t
   const refreshedAt = T0 + 90_000
   h.host.worktrees = () => (now < refreshedAt ? (staleCalls++, [MAIN_W, { ...W, branch: 'b' }]) : [MAIN_W, { ...W, branch: 'B' }])
   let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   // In the grace period: a tick, and a pull request's event (an open-only reconcile first)
   now += 60_000
@@ -872,7 +879,7 @@ test('trails (3c): in the grace period a worktree event reconciles nothing (its 
   const h = fakeHost(t, { worktrees })
   let now = T0
   let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'w', branch: 'b' })
   h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
@@ -895,7 +902,7 @@ test('trails (3c): in the grace period a worktree event reconciles nothing (its 
 test('trails (3c): a worktree made outside Trek (no worktree.created) gets its trail before its first commit or pull request moves it', async (t) => {
   const worktrees = { m: MAIN_W, w: W }
   const h = fakeHost(t, { worktrees, git: { 'merge-base --is-ancestor a c': '', 'rev-list --count a..c': '1\n' } })
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })
   worktrees.x = { id: 'x', repoId: 'r', repoPath: '/r', path: '/r/app-x', branch: 'feat', present: true }
@@ -918,7 +925,7 @@ test('trails (3c): a restart whose saved listing still has a worktree on a branc
     const refreshedAt = T0 + 90_000
     h.host.worktrees = () => (now < refreshedAt ? [MAIN_W, W] : [MAIN_W, real])
     let tickFn = null
-    const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+    const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
     t.after(() => inst.dispose?.())
     // In the grace period, before the refresh: a window's state and a session's first event from the project
     assert.deepEqual((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails, [])
@@ -939,7 +946,7 @@ test("trails (3c): a worktree that summited a branch and moved to another: its f
   const camp = newCamp(7, T0)
   camp.trailsDone = { 'p:w': 'A' }
   writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'B', from: 'a', to: 'c' })
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => [t.branch, t.stage]), [['B', 1]])
@@ -991,4 +998,97 @@ test("the world (3d-1): a removed project's last activity is dropped by the full
   clock.run()
   assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { off: T0 - 7 })
   assert.deepEqual(h.emitted.filter(([e]) => e === 'state').at(-1)[1].lastActive, { off: T0 - 7 }, 'pushed')
+})
+
+/** rand() answering these numbers in turn, then the last one forever */
+const dice = (...xs) => {
+  let i = 0
+  return () => xs[Math.min(i++, xs.length - 1)]
+}
+
+test('wildlife (3d-2): a tick that rolls a sighting logs it and sends `sighting` to that project\'s windows only; the pushed state carries the guide; a project with the plugin off is not rolled', async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  let tick
+  // p is heard from (an event), q only from a window (seen), off has the plugin off: one roll each for p and q, in that order
+  // p: 0 hits (< 1/20 active), then 0 draws the first allowed common; q: 0.5 misses; then the dir's die: 0.7 is 'right'
+  const inst = createCampServer(h.host, { rand: dice(0, 0, 0.5, 0.7, 0.99), now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', provider: 'claude' })
+  h.fire({ kind: 'session.started', projectId: 'off', at: now, terminalId: 't2', worktreeId: 'w', provider: 'claude' })
+  h.off.add('off')
+  inst.handlers.seen({ tz: 'Europe/London' }, { projectId: 'q', caller: 'c' })
+  now += 60_000
+  tick()
+  assert.equal(h.sent.length, 1)
+  const [projectId, event, data] = h.sent[0]
+  assert.deepEqual([projectId, event, data.projectId, data.at, data.dir], ['p', 'sighting', 'p', now, 'right'])
+  assert.equal(data.species, 'deer', '08:01 in London on 2027-01-15 (dawn, winter): deer leads the allowed commons')
+  clock.run()
+  const pushed = h.emitted.filter(([e]) => e === 'state').at(-1)[1]
+  assert.deepEqual(pushed.guide, { deer: { count: 1, first: now, last: now } })
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastSeen.p, 'deer', 'saved')
+  // The dice miss from here on: no more sightings
+  now += 60_000
+  tick()
+  assert.equal(h.sent.length, 1)
+})
+
+test("wildlife (3d-2): seen keeps a window's time zone and Seasons setting (saved); bad ones are ignored; forced sightings (the smokes) hit every minute", async (t) => {
+  const h = fakeHost(t)
+  const clock = manual()
+  let now = T0
+  let tick
+  const inst = createCampServer(h.host, { rand: noSightings, forceSightings: true, now: () => now, seed: () => 1, schedule: clock.schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  inst.handlers.seen({ projectId: 'p', tz: 'America/Denver', seasons: 'south' }, { projectId: 'p', caller: 'c' })
+  clock.run()
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).clock, { tz: 'America/Denver', seasons: 'south' })
+  inst.handlers.seen({ tz: 'Nowhere/Land', seasons: 7 }, { projectId: 'p', caller: 'c' })
+  clock.run()
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).clock, { tz: 'America/Denver', seasons: 'south' }, 'the previous kept')
+  for (let i = 0; i < 3; i++) {
+    now += 60_000
+    tick()
+  }
+  assert.equal(h.sent.length, 3, 'one a minute in the window\'s project')
+  assert.ok(h.sent.every(([p, e]) => p === 'p' && e === 'sighting'))
+  assert.notEqual(h.sent[1][2].species, h.sent[0][2].species, 'never twice running')
+  assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: '1' }), true)
+  for (const v of [undefined, '', '0', 'yes']) assert.equal(forceSightingsFromEnv({ TREK_CAMPSITE_FORCE_SIGHTINGS: v }), false, String(v))
+})
+
+test('wildlife (3d-2): build takes the ranger tower (500 wood and 2 markers, then 1,200 and 3); refusals are CONFLICT', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }), seedWood: 1800 })
+  t.after(() => inst.dispose?.())
+  await assert.rejects(async () => inst.handlers.build({ id: 'tower', tier: 2, cost: { wood: 1200, markers: 3 } }, {}), { code: 'CONFLICT', message: "Ranger tower's next tier is 1, not 2" })
+  const one = await inst.handlers.build({ id: 'tower', tier: 1, cost: { wood: 500, markers: 2 } }, {})
+  assert.deepEqual([one.built.tower, one.wood, one.markers], [1, 1300, 1])
+  assert.deepEqual(one.offers.find((o) => o.id === 'tower'), { id: 'tower', tier: 2, cost: { wood: 1200, markers: 3 } })
+  await assert.rejects(async () => inst.handlers.build({ id: 'tower', tier: 2, cost: { wood: 1200, markers: 3 } }, {}), { code: 'CONFLICT', message: 'Need 2 more markers' })
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).built.tower, 1, 'saved at once')
+})
+
+test('wildlife (3d-2): a removed project gets no sightings, heard from or asked about by a window; its last activity still goes at the full reconcile', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const camp = newCamp(7, T0)
+  camp.lastActive = { p: T0 - 5, gone: T0 - 9 }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  h.gone.add('gone')
+  const clock = manual()
+  const { inst, c } = pastGrace(t, h, { schedule: clock.schedule, forceSightings: true })
+  await inst.handlers.state({ projectId: 'gone' }, { projectId: 'gone', caller: 'c' })
+  inst.handlers.seen({}, { projectId: 'gone', caller: 'c' })
+  for (let i = 0; i < 3; i++) {
+    c.now += 60_000
+    c.tick()
+  }
+  clock.run()
+  assert.equal(h.sent.length, 4, 'p: one a minute (the grace tick and three more)')
+  assert.ok(h.sent.every(([projectId, , data]) => projectId === 'p' && data.projectId === 'p'), 'none for the removed project')
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual(snap.lastActive, { p: T0 - 5 }, "the removed project's last activity: pruned")
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastSeen.gone, undefined)
 })

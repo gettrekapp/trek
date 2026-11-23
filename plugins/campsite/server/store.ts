@@ -1,4 +1,4 @@
-// camp.json (campsite parts 2, 3a, 3b, 3c and 3d-1): the camp, loaded once (versions 1–4 are migrated to 5), saved atomically (a temp file renamed over it)
+// camp.json (campsite parts 2, 3a, 3b, 3c, 3d-1 and 3d-2): the camp, loaded once (versions 1–5 are migrated to 6), saved atomically (a temp file renamed over it)
 // at most once per debounce and on dispose. A file that can't be read as a camp is moved aside to
 // camp.json.bak and a new camp starts, with a warning: the camp never stops the server.
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'

@@ -70,8 +70,8 @@ test('TREK_LOCAL_PROFILE: a dev build takes a valid name, an invalid one is dev;
   assert.equal(localProfileName(true, { TREK_LOCAL_PROFILE: 'dev-wt2' }), undefined)
   // The server never inherits it: childEnv drops every TREK_ variable.
   assert.equal('TREK_LOCAL_PROFILE' in childEnv({ TREK_LOCAL_PROFILE: 'dev-wt2', PATH: '/bin' }), false)
-  // Only the server's test endpoints for Linear and ElevenLabs, its gh and the campsite's working minute and seed wood get through (the smokes' stubs, 5b).
-  assert.deepEqual(childEnv({ TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', TREK_CAMPSITE_MINUTE_MS: '200', TREK_CAMPSITE_SEED_WOOD: '100', TREK_SERVER_OTHER: 'x' }), { TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', TREK_CAMPSITE_MINUTE_MS: '200', TREK_CAMPSITE_SEED_WOOD: '100', ELECTRON_RUN_AS_NODE: '1' })
+  // Only the server's test endpoints for Linear and ElevenLabs, its gh and the campsite's working minute, seed wood and forced sightings get through (the smokes' stubs, 5b).
+  assert.deepEqual(childEnv({ TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', TREK_CAMPSITE_MINUTE_MS: '200', TREK_CAMPSITE_SEED_WOOD: '100', TREK_CAMPSITE_FORCE_SIGHTINGS: '1', TREK_SERVER_OTHER: 'x' }), { TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', TREK_CAMPSITE_MINUTE_MS: '200', TREK_CAMPSITE_SEED_WOOD: '100', TREK_CAMPSITE_FORCE_SIGHTINGS: '1', ELECTRON_RUN_AS_NODE: '1' })
 })
 
 test('isLocalServerCommand: trek-server, start --local, and this profile\'s --local-profile', () => {

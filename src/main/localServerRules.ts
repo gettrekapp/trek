@@ -203,9 +203,9 @@ const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_', 'npm_']
  * Kept despite their prefix: the server's test endpoints for Linear and ElevenLabs (the voice
  * plugin's, read through its host's testEndpoint; the smokes' stubs; the server takes them only on
  * loopback), its gh (the smokes' stub, scripts/smokeGh.mjs), and the campsite's short working
- * minute and seed wood (the local window smoke's wood and shop checks).
+ * minute, seed wood and forced sightings (the local window smoke's wood, shop and wildlife checks).
  */
-const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL', 'TREK_SERVER_GH', 'TREK_CAMPSITE_MINUTE_MS', 'TREK_CAMPSITE_SEED_WOOD'])
+const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL', 'TREK_SERVER_GH', 'TREK_CAMPSITE_MINUTE_MS', 'TREK_CAMPSITE_SEED_WOOD', 'TREK_CAMPSITE_FORCE_SIGHTINGS'])
 const DROPPED = new Set([
   'NODE_OPTIONS',
   'NODE_PATH',
