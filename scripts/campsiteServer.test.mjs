@@ -1276,3 +1276,22 @@ test("real chores (4): a session's tool call goes when its agent starts again, s
   h.fire(toolEvent('p', 't1', 'edit', 'late'))
   assert.equal(h.sent.at(-1)[2].terminalId, 't5')
 })
+
+test('real chores (4): the tick drops a call once the plugin is off in its project; the others stay', async (t) => {
+  const h = fakeHost(t, { sessions: new Set(['t1', 't2']) })
+  let tick
+  let now = T0
+  const inst = createCampServer(h.host, { rand: noSightings, now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tick = fn; return { clear() {} } }, minuteMs: 60_000 })
+  t.after(() => inst.dispose?.())
+  h.fire(toolEvent('p', 't1', 'read', 'a.ts'))
+  h.fire(toolEvent('q', 't2', 'edit', 'b.ts'))
+  h.sent.length = 0
+  h.off.add('q')
+  now += 60_000
+  tick()
+  assert.deepEqual(h.sent.filter(([, e]) => e === 'tool'), [['q', 'tool', { terminalId: 't2', tool: null }]])
+  assert.deepEqual(Object.keys((await inst.handlers.state({}, { projectId: 'p', caller: 'c' })).tools), ['t1'])
+  // Back on: the call is gone, not restored
+  h.off.delete('q')
+  assert.deepEqual((await inst.handlers.state({}, { projectId: 'q', caller: 'c' })).tools, {})
+})
