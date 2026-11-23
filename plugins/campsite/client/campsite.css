@@ -932,3 +932,12 @@
   white-space: nowrap;
   pointer-events: none;
 }
+/* Empty, the live region stays mounted but takes no room (and no gap: out of the flex row) */
+.cs-summit-line:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}

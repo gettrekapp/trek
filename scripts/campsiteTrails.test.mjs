@@ -7,7 +7,7 @@ import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shar
 import { SIGNPOST_HINT, cairnText, dayText, flagLabel, forText, historyText, meterLabel, signpostText, summitLine, trailGroups, trailStatus } from '../plugins/campsite/shared/campView.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
-import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, FLAG_PAD, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagTargets, flagsKey, flagsOf, moreBox, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, PLANT_WAIT_MS, SPARK_MS, SUMMIT_FRESH_MS, FLAG_PAD, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagTargets, flagsKey, flagsOf, moreBox, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
 import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
@@ -359,6 +359,13 @@ test('the climb: eased from the last ledge to the peak over 1.5 s, then planted;
   assert.deepEqual(sparksAt(500, SPARK_MS), [])
   assert.deepEqual(sparksAt(500, -5), [])
   assert.deepEqual(sparksAt(600, 1000).map((s) => s.x - 100), mid.map((s) => s.x), 'from the fire')
+})
+
+test('a summit is handed to the stage only while fresh: past its wait for the flag, its climb and its sparks (a stage made later never replays it)', () => {
+  assert.equal(PLANT_WAIT_MS, 5000)
+  assert.ok(SUMMIT_FRESH_MS >= PLANT_WAIT_MS + CLIMB_MS)
+  assert.ok(SUMMIT_FRESH_MS >= SPARK_MS)
+  assert.ok(SUMMIT_FRESH_MS <= 10_000, 'and not much longer')
 })
 
 test("the cairn: nothing at size 0, then size n stacks n + 1 rows of stones; it stands on the trailhead's shelf, clear of the flags, the waiting hikers and the tents", () => {

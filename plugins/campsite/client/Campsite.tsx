@@ -14,7 +14,7 @@ import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { summitLine } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
-import { flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
+import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
@@ -37,10 +37,15 @@ function tiersOf(key: string): Record<BuildingId, number> {
 /** How long the header says "⛳ Summited …" */
 const SUMMIT_LINE_MS = 5000
 
-/** The last summit of this window's project (the server's `summit` event), numbered so each one is celebrated; whether the header still says so */
-function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktreeId: string; branch: string; seq: number } | null; shown: boolean } {
+/**
+ * The last summit of this window's project (the server's `summit` event), numbered so each one is
+ * celebrated; whether the header still says so; whether it is still fresh (SUMMIT_FRESH_MS: only then
+ * is it handed to the stage, so a stage made later, the strip expanded again, doesn't replay it)
+ */
+function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktreeId: string; branch: string; seq: number } | null; shown: boolean; fresh: boolean } {
   const [summit, setSummit] = useState<{ worktreeId: string; branch: string; seq: number } | null>(null)
   const [shown, setShown] = useState(false)
+  const [fresh, setFresh] = useState(false)
   useEffect(
     () =>
       host.onEvent<{ projectId?: unknown; worktreeId?: unknown; branch?: unknown }>('summit', (e) => {
@@ -53,10 +58,15 @@ function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktree
   useEffect(() => {
     if (!summit) return
     setShown(true)
-    const timer = setTimeout(() => setShown(false), SUMMIT_LINE_MS)
-    return () => clearTimeout(timer)
+    setFresh(true)
+    const line = setTimeout(() => setShown(false), SUMMIT_LINE_MS)
+    const stale = setTimeout(() => setFresh(false), SUMMIT_FRESH_MS)
+    return () => {
+      clearTimeout(line)
+      clearTimeout(stale)
+    }
   }, [summit])
-  return { summit, shown }
+  return { summit, shown, fresh }
 }
 
 export function Campsite(): React.JSX.Element | null {
@@ -82,8 +92,9 @@ export function Campsite(): React.JSX.Element | null {
   // This window's project's trails on the mountain: a new array only when one of its flags changes
   const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
   const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
-  const { summit, shown: summitShown } = useSummit(host)
-  const stageSummit = useMemo(() => summit && { worktreeId: summit.worktreeId, seq: summit.seq }, [summit])
+  const { summit, shown: summitShown, fresh: summitFresh } = useSummit(host)
+  // Only while fresh: a stage's actors start with no summit seen and would celebrate an old one
+  const stageSummit = useMemo(() => (summitFresh && summit ? { worktreeId: summit.worktreeId, seq: summit.seq } : null), [summit, summitFresh])
   // Camps beat buildings: the ends give way until the middle shows every camp the bare strip would
   const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
   const { left: reserveLeft, right: reserveRight } = edges.reserve
@@ -153,9 +164,10 @@ export function Campsite(): React.JSX.Element | null {
   )
   // Fixed to the window, so neither the collapsed bar nor the stage clips it
   const campPopover = camp && campOpen && <CampPopover key={openKey(campOpen)} camp={camp} at={campOpen} sessions={sessions} projectId={host.projectId} store={campStore(host)} onClose={closeCamp} />
-  const summitNote = summitShown && summit && (
+  // A live region kept mounted (empty, it takes no room) and filled for a few seconds, so the line is announced
+  const summitNote = (
     <span className="cs-summit-line" role="status">
-      {summitLine(summit.branch)}
+      {summitShown && summit ? summitLine(summit.branch) : null}
     </span>
   )
   const awayCard = camp?.away && (

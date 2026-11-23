@@ -6,14 +6,11 @@
 // there). Under the ridge and the pines.
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
-import { CAIRN_GRID, CLIMB_MS, FLAG, PLANTED, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, type FlagSpot, type Mountain } from '../../../shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, PLANTED, PLANT_WAIT_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, type FlagSpot, type Mountain } from '../../../shared/mountain.ts'
 import { SUMMIT, cairnSize } from '../../../shared/trails.ts'
 import { drawBoxes, drawShapes } from '../draw.ts'
 import type { TextureCache } from '../textures.ts'
 import type { Actor, StageSnapshot } from './types.ts'
-
-/** A summit event waits this long for its flag to be planted (the camp's push follows it) */
-const PLANT_WAIT_MS = 5000
 
 export class MountainActor implements Actor {
   readonly root = new Container()

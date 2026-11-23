@@ -274,6 +274,13 @@ export const flagBox = (f: Pick<FlagSpot, 'x' | 'y' | 'planted'>): { x: number; 
 
 /** A summit's climb: the flag goes from its last ledge to its place at the peak over CLIMB_MS */
 export const CLIMB_MS = 1500
+/** A summit event waits this long for its flag to be planted (the camp's push follows it) */
+export const PLANT_WAIT_MS = 5000
+/**
+ * How long a summit is handed to the strip's stage: past its wait, its climb and its sparks, so a
+ * stage made later (the strip expanded again) never celebrates it again
+ */
+export const SUMMIT_FRESH_MS = PLANT_WAIT_MS + CLIMB_MS + 500
 /** Where a climbing flag is `age` ms in (eased); null once it is planted (or before it starts) */
 export function climbAt(from: { x: number; y: number }, to: { x: number; y: number }, age: number): { x: number; y: number } | null {
   if (age < 0 || age >= CLIMB_MS) return null
