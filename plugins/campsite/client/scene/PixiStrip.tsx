@@ -135,6 +135,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
             style={{ left: p.x, width: p.w, height: p.h, bottom: STAGE_H - p.bottom }}
             title={p.id === 'signpost' ? `${placedTitle(p)}: ${signpostText(allTrails)}` : placedTitle(p)}
             aria-label={p.id === 'signpost' ? `${placedTitle(p)}: ${signpostText(allTrails)}` : placedTitle(p)}
+            aria-haspopup={p.id === 'signpost' ? 'dialog' : undefined}
+            aria-expanded={p.id === 'signpost' ? openTrail === 'signpost' : undefined}
             onClick={(e) => onBuilding(p.id, e.currentTarget)}
           >
             {p.id === 'signpost' && (
