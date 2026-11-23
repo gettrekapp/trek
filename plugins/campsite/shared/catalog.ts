@@ -1,10 +1,12 @@
-// The camp's shop (campsite part 3a): every building's tiers with their cost and effect, and the
-// numbers behind the effects, bunks, hires, walk-ins and the away card. One table, tunable. Pure.
+// The camp's shop (campsite parts 3a and 3b): every building's tiers with their cost and effect, and
+// the numbers behind the effects, bunks, hires, walk-ins and the away card; the crew's gear (four
+// slots × three tiers: names, prices, the shed and level each tier needs, its wood bonus). One
+// table, tunable. Pure.
 
 export const HOUR_MS = 3_600_000
 export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 
-export const BUILDING_IDS = ['lights', 'fire', 'garden', 'lake', 'cabins'] as const
+export const BUILDING_IDS = ['lights', 'fire', 'garden', 'lake', 'cabins', 'shed'] as const
 export type BuildingId = (typeof BUILDING_IDS)[number]
 
 export interface Cost {
@@ -68,6 +70,15 @@ export const CATALOG: readonly BuildingDef[] = [
       { name: 'Cabin', effect: '+3 bunks (6 in all)', cost: c(400, 1) },
       { name: 'Two cabins', effect: '+3 bunks (9 in all)', cost: c(1000, 2) },
       { name: 'Three cabins', effect: '+3 bunks (12 in all)', cost: c(2000, 2) }
+    ]
+  },
+  {
+    id: 'shed',
+    name: 'Gear shed',
+    start: 0,
+    tiers: [
+      { name: 'Gear shed', effect: 'The crew can buy gear tiers 1 and 2', cost: c(250) },
+      { name: 'Gear shed II', effect: 'The crew can buy gear tier 3', cost: c(800, 1) }
     ]
   }
 ]

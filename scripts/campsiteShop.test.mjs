@@ -15,20 +15,22 @@ import { hireState, memberStatus, placedTitle, shopRow, xpProgress } from '../pl
 const T0 = 1_800_000_000_000
 const H = 3_600_000
 
-test("catalog: five buildings in the popover's order, their tiers and costs", () => {
-  assert.deepEqual(CATALOG.map((b) => b.id), ['lights', 'fire', 'garden', 'lake', 'cabins'])
-  assert.deepEqual([...BUILDING_IDS], ['lights', 'fire', 'garden', 'lake', 'cabins'])
+test("catalog: six buildings in the popover's order, their tiers and costs", () => {
+  assert.deepEqual(CATALOG.map((b) => b.id), ['lights', 'fire', 'garden', 'lake', 'cabins', 'shed'])
+  assert.deepEqual([...BUILDING_IDS], ['lights', 'fire', 'garden', 'lake', 'cabins', 'shed'])
   const costs = Object.fromEntries(CATALOG.map((b) => [b.id, b.tiers.slice(b.start).map((t) => [t.cost.wood, t.cost.markers])]))
   assert.deepEqual(costs, {
     lights: [[25, 0]],
     fire: [[300, 0], [900, 1]],
     garden: [[150, 0], [600, 0]],
     lake: [[500, 0], [1200, 1]],
-    cabins: [[400, 1], [1000, 2], [2000, 2]]
+    cabins: [[400, 1], [1000, 2], [2000, 2]],
+    shed: [[250, 0], [800, 1]]
   })
   const total = CATALOG.flatMap((b) => b.tiers.slice(b.start)).reduce((s, t) => ({ wood: s.wood + t.cost.wood, markers: s.markers + t.cost.markers }), { wood: 0, markers: 0 })
-  assert.deepEqual(total, { wood: 7075, markers: 7 })
-  assert.deepEqual(startBuilt(), { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
+  assert.deepEqual(total, { wood: 8125, markers: 8 })
+  assert.deepEqual(startBuilt(), { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
+  assert.deepEqual(building('shed').tiers.map((t) => t.name), ['Gear shed', 'Gear shed II'])
   assert.notEqual(startBuilt(), startBuilt(), 'a new record each time')
   assert.equal(building('lake').tiers[1].name, 'Dock')
   assert.ok(isBuildingId('cabins'))
@@ -59,7 +61,7 @@ test('camp v2: the fire ring at tier 1, nothing else built, an empty tally seen 
   const camp = newCamp(1, T0)
   assert.equal(CAMP_VERSION, 2)
   assert.equal(camp.version, 2)
-  assert.deepEqual(camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
+  assert.deepEqual(camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.deepEqual(camp.away, { since: T0, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 0, levelUps: [] })
   assert.equal(camp.seenAt, T0)
   assert.deepEqual(camp.hired, { day: '', names: [] })
@@ -74,7 +76,7 @@ test('migrateCamp: version 1 gains the defaults, seen at its last save; anything
   const v2 = migrateCamp(v1)
   assert.ok(isCamp(v2))
   assert.equal(v2.wood, 40)
-  assert.deepEqual(v2.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
+  assert.deepEqual(v2.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.equal(v2.seenAt, T0 + 5)
   assert.equal(v2.away.since, T0 + 5)
   assert.deepEqual(v2.hired, { day: '', names: [] })
@@ -179,9 +181,10 @@ test("offers: each building's next tier at its catalog price; a fully built one 
     { id: 'fire', tier: 2, cost: { wood: 300, markers: 0 } },
     { id: 'garden', tier: 1, cost: { wood: 150, markers: 0 } },
     { id: 'lake', tier: 1, cost: { wood: 500, markers: 0 } },
-    { id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } }
+    { id: 'cabins', tier: 1, cost: { wood: 400, markers: 1 } },
+    { id: 'shed', tier: 1, cost: { wood: 250, markers: 0 } }
   ])
-  camp.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3 }
+  camp.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 }
   assert.deepEqual(offers(camp), [])
 })
 

@@ -32,7 +32,7 @@ const params = new URLSearchParams(location.search)
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
 const prefs = { showDog: params.get('dog') !== '0' }
 // The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;
-// ?built=out builds everything (all five buildings at their top tier)
+// ?built=out builds everything (all six buildings at their top tier)
 const T = Date.now()
 const state = newCamp(7, T)
 state.wood = 340
@@ -40,7 +40,7 @@ state.markers = 2
 state.crew[0].name = 'Aspen'
 state.crew[0].xp = 150
 state.assignments.t1 = { crew: state.crew[0].id, project: 'harness' }
-if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3 }
+if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 }
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {
   state.seenAt = T - 9 * 3_600_000

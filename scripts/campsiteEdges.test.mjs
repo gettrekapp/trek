@@ -11,7 +11,7 @@ import { TENT_W, campLayout } from '../plugins/campsite/shared/layout.ts'
 const onGrid = (art) => art.rects.every((r) => r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 && r.x + r.w <= art.w && r.y + r.h <= art.h && /^#[0-9a-f]{6}$/.test(r.fill))
 
 test('building art: cabins 46×34, the lake 90×10 (its dock at tier 2), the garden 26×14 (plot, then beds); every rect on its grid', () => {
-  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 } })
+  assert.deepEqual(BUILDING_SIZE, { cabins: { w: 46, h: 34 }, lake: { w: 90, h: 10 }, garden: { w: 26, h: 14 }, shed: { w: 30, h: 26 } })
   for (const [id, tier] of [['cabins', 1], ['cabins', 3], ['lake', 1], ['lake', 2], ['garden', 1], ['garden', 2]]) {
     const art = buildingArt(id, tier)
     assert.deepEqual([art.w, art.h], [BUILDING_SIZE[id].w, BUILDING_SIZE[id].h], `${id} ${tier}`)
@@ -189,4 +189,35 @@ test('camps beat buildings: a building that would hide a camp (or group them) is
     const after = campLayout(crowd, w, placeBuildings(ALL, w, crowd).reserve)
     assert.ok(after.moreTents <= before.moreTents && after.moreWaiting <= before.moreWaiting && (!after.grouped || before.grouped), `${w}`)
   }
+})
+
+test('the gear shed (campsite part 3b): 30×26 on its grid, more at tier 2, standing on the tents\' line', () => {
+  for (const tier of [1, 2]) {
+    const art = buildingArt('shed', tier)
+    assert.deepEqual([art.w, art.h], [30, 26])
+    assert.ok(onGrid(art), `shed ${tier} stays on its grid`)
+    assert.ok(onGrid(iconArt('shed', tier)))
+  }
+  assert.ok(buildingArt('shed', 2).rects.length > buildingArt('shed', 1).rects.length, 'tier 2 adds the sign, lantern, axe and skis')
+  assert.equal(artBottom('shed'), 100)
+})
+
+const SHED = built({ lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 })
+
+test('placeBuildings: the shed stands inside the cabins at the left end, and is the first building dropped there', () => {
+  const wide = placeBuildings(SHED, 1600)
+  assert.deepEqual(wide.left.map((p) => p.key), ['cabin1', 'cabin2', 'cabin3', 'shed'])
+  assert.deepEqual(wide.left.map((p) => p.x), [8, 108, 208, 308])
+  assert.deepEqual([wide.left[3].w, wide.left[3].h, wide.left[3].bottom, wide.left[3].tier], [60, 52, 100, 2])
+  assert.equal(wide.reserve.left, 8 + 3 * 92 + 60 + 3 * 8 + 16)
+  assert.deepEqual(placeBuildings(SHED, 1400).left.map((p) => p.key), ['cabin1', 'cabin2', 'cabin3'], 'a quarter of 1400 is 350: the shed goes, all three cabins stay')
+  assert.deepEqual(placeBuildings(SHED, 1200).left.map((p) => p.key), ['cabin2', 'cabin3'], 'then the outermost cabin')
+  assert.deepEqual(placeBuildings(built({ shed: 1 }), 1200).left.map((p) => [p.key, p.x]), [['shed', 8]], 'with no cabins the shed is at the edge')
+  // Camps beat buildings: a crowded middle drops the shed before any cabin
+  const sessions = Array.from({ length: 9 }, (_, i) => s(`c${i}`))
+  const crowded = placeBuildings(SHED, 1600, sessions)
+  const bare = campLayout(sessions, 1600)
+  const now = campLayout(sessions, 1600, crowded.reserve)
+  assert.ok(now.moreTents <= bare.moreTents && now.grouped === bare.grouped, 'every camp the bare strip shows')
+  if (crowded.left.length < 4) assert.ok(!crowded.left.some((p) => p.key === 'shed'), 'the shed went first')
 })

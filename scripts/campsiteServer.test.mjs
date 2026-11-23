@@ -374,7 +374,7 @@ test('a version 1 camp.json is migrated on load: its wood kept, the new fields a
   assert.equal(store.camp.seed, 7)
   // Seen at its last save, then shifted by the downtime: seen now
   assert.equal(store.camp.seenAt, T0 + 60_000)
-  assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
+  assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.equal(existsSync(`${file}.bak`), false)
   store.flush()
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 2)
