@@ -288,8 +288,8 @@ export interface Task {
 export interface TaskInput {
   id?: string
   title: string
-  details?: string
-  status?: string
+  details?: string | null
+  status?: string | null
 }
 
 export interface Project {

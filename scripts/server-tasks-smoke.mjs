@@ -269,7 +269,8 @@ try {
   }
   await statusInput.press('Enter')
   const clash = panel.locator('.tasks-clash')
-  check('a clash shows the stored version', await until(() => clash.locator('pre').textContent().catch(() => null), 'theirs'), 'theirs')
+  check('a clash shows the stored version', await until(() => clash.locator('.tasks-clash-theirs pre').textContent().catch(() => null), 'theirs'), 'theirs')
+  check('…beside the typed one', await clash.locator('.tasks-clash-yours pre').textContent(), 'mine')
   check('…while the field keeps the typed one', await statusInput.inputValue(), 'mine')
   check('…and nothing was overwritten', (await fix()).status, 'theirs')
   await clash.locator('button', { hasText: 'Keep mine' }).click()
@@ -302,6 +303,21 @@ try {
   await sdk.request('task.reorder', { projectId, taskIds: [sdkTaskId, fixId] })
   check('an agent reorders the list', await until(rowNames, ['From the SDK', 'Fix the login bug']), ['From the SDK', 'Fix the login bug'])
   check('…and the focus stays in the details field', await win.evaluate(() => document.activeElement?.className ?? null), 'tasks-details-input')
+
+  // An unsaved draft is kept: a title of spaces is refused; another task and back, it is still there.
+  const titleError = () => panel.locator('.tasks-field-error').first().textContent().catch(() => null)
+  await titleInput.fill('   ')
+  await titleInput.press('Enter')
+  check('a title of spaces is refused in place, with Retry', await until(titleError, 'A task needs a title Retry'), 'A task needs a title Retry')
+  await rowOf(sdkTaskId).locator('.ld-row-main').click()
+  check('another task shows its own title', await until(() => titleInput.inputValue(), 'From the SDK'), 'From the SDK')
+  await rowOf(fixId).locator('.ld-row-main').click()
+  check('back on the task, the unsaved title is still there', await until(() => titleInput.inputValue(), '   '), '   ')
+  check('…with its error and Retry', await until(titleError, 'A task needs a title Retry'), 'A task needs a title Retry')
+  check('…and the stored title is untouched', (await fix()).title, 'Fix the login bug')
+  await titleInput.fill('Fix the login bug')
+  await titleInput.press('Enter')
+  check('typing the title back clears the error', await until(() => panel.locator('.tasks-field-error').count(), 0), 0)
 
 
   // ---- 4. Start: two repositories, so the picker asks which --------------------------------------------
@@ -375,7 +391,8 @@ try {
   check('…and the row goes', await until(() => tasksRow.count(), 0), 0)
   check('the tasks are kept', await titles(), ['From the SDK'])
   await tasksSwitch.click()
-  check('…and back on', await until(async () => (await project()).settings.tasksEnabled ?? null, true), true)
+  check('…and back on (the setting cleared: absent is on)', await until(async () => (await project()).settings.tasksEnabled ?? null, null), null)
+  check('…the row is back', await until(() => tasksRow.count(), 1), 1)
 
   check('no page errors', pageErrors, [])
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])

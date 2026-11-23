@@ -6,10 +6,10 @@ import { codedError } from '../errors.ts'
 import { isRecord } from '../validate.ts'
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
-/** Not in a one-line field */
-const LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
-/** Not in details (newlines and tabs are fine) */
-const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
+/** Not in a one-line field: control characters (C0, DEL, C1), line and paragraph separators, bidi overrides and isolates */
+const LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
+/** Not in details (newlines and tabs are fine): control characters (C0, DEL, C1), bidi overrides and isolates */
+const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
 
 /** A checked `task.save` input; '' means "absent" for details and status (sent as '', null or left out). */
 export interface CheckedTask {

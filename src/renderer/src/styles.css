@@ -1128,7 +1128,8 @@ button:disabled {
 /* Above the detail's content, under the menus' backdrops (z-index 20): a left panel menu open
    over a page still closes on a click on the page. */
 .workspace-main > .settings-panel,
-.workspace-main > .automations-panel {
+.workspace-main > .automations-panel,
+.workspace-main > .tasks-panel {
   z-index: 10;
 }
 
@@ -6575,6 +6576,7 @@ body.resizing-row {
 .tasks-clash { background: color-mix(in srgb, var(--attention) 14%, transparent); }
 .tasks-repo-picker { border: 1px solid var(--surface); background: var(--bg); }
 .tasks-confirm { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.tasks-clash-versions { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 .tasks-clash pre { margin: 2px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; user-select: text; }
 .tasks-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .tasks-repo-option { display: flex; gap: 6px; align-items: center; }

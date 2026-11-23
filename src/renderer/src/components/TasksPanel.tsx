@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Task } from '../../../shared/model/types'
 import type { Repository } from '../../../shared/types'
-import { MAX_TASK_STATUS, MAX_TASK_TITLE } from '../../../shared/tasks'
+import { MAX_TASK_DETAILS, MAX_TASK_STATUS, MAX_TASK_TITLE } from '../../../shared/tasks'
 import { useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { focusTerminal, revealTerminal } from '../terminals'
@@ -16,15 +16,21 @@ interface Props {
 const NONE: Task[] = []
 const NO_REPOS: Repository[] = []
 
-/** A field's clash box: the value stored elsewhere, against the typed one the field still shows. */
+/** A field's clash box: the value stored elsewhere beside the typed one (which the field still shows). */
 function Clash({ state, label }: { state: TaskFieldState; label: string }): React.JSX.Element | null {
   if (state.theirs === null) return null
   return (
     <div className="tasks-clash" role="alertdialog" aria-label={`${label} changed elsewhere`}>
       <strong>{label} was changed elsewhere while you were editing.</strong>
-      <div>
-        <span className="muted">Theirs</span>
-        <pre>{state.theirs || '(empty)'}</pre>
+      <div className="tasks-clash-versions">
+        <div className="tasks-clash-yours">
+          <span className="muted">Yours</span>
+          <pre>{state.value || '(empty)'}</pre>
+        </div>
+        <div className="tasks-clash-theirs">
+          <span className="muted">Theirs</span>
+          <pre>{state.theirs || '(empty)'}</pre>
+        </div>
       </div>
       <div className="tasks-buttons">
         <button onClick={state.keepMine}>Keep mine</button>
@@ -204,6 +210,7 @@ function TaskDetail({ task, repositories, offline, start, anyStarting, picking, 
         id={`task-details-${task.id}`}
         className="tasks-details-input"
         value={details.value}
+        maxLength={MAX_TASK_DETAILS}
         disabled={offline}
         rows={12}
         onChange={(e) => details.change(e.target.value)}

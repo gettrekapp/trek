@@ -11,7 +11,9 @@
 //   for the stored ones.
 // - A CONFLICT while this field is unchanged waits (up to 1 s) for the mirror to move, then
 //   retries once against the newest updatedAt.
-// - A failed save keeps the text and offers Retry.
+// - A failed save keeps the text and offers Retry. Nothing typed is lost until it is saved or
+//   reverted (Use theirs): a draft the editor leaves unsaved (another task selected) is sent then,
+//   and kept with its error, so coming back to the task shows the text and Retry again.
 import { useEffect, useRef, useState } from 'react'
 import type { Task, TaskInput } from '../../../shared/model/types'
 import { getBackend } from '../backend'
@@ -47,10 +49,23 @@ const MIRROR_WAIT_MS = 1000
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** An unsaved draft of an editor that went away, by `${taskId}:${field}`: the next editor of that field starts from it */
+interface KeptDraft {
+  text: string
+  base: string
+  error: string | null
+}
+const keptDrafts = new Map<string, KeptDraft>()
+const CHANGED_ELSEWHERE = 'Changed elsewhere meanwhile: Retry to compare the two'
+
 export function useTaskField(task: Task, field: TaskField): TaskFieldState {
-  const [draft, setDraft] = useState<string | null>(null)
+  const key = `${task.id}:${field}`
+  const [kept] = useState(() => keptDrafts.get(key))
+  const [draft, setDraft] = useState<string | null>(kept?.text ?? null)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(kept?.error ?? null)
+  const errorRef = useRef(error)
+  errorRef.current = error
   const [theirs, setTheirs] = useState<string | null>(null)
   const latest = useRef(task)
   latest.current = task
@@ -64,7 +79,7 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
   }
   const stored = storedNow().value
   /** The stored value when the edit began: a change to it from elsewhere is a clash */
-  const base = useRef(stored)
+  const base = useRef(kept?.base ?? stored)
   const draftRef = useRef(draft)
   draftRef.current = draft
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -79,8 +94,13 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
   }
+  /** Keeps `text` for the next editor of this field, should this one go away unsaved */
+  const keep = (text: string, why: string | null): void => {
+    keptDrafts.set(key, { text, base: base.current, error: why })
+  }
   /** Drops the draft, unless typing changed it meanwhile */
   const dropDraft = (text: string): void => {
+    if (keptDrafts.get(key)?.text === text) keptDrafts.delete(key)
     if (draftRef.current === text) draftRef.current = null
     setDraft((d) => (d === text ? null : d))
   }
@@ -131,10 +151,12 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
     }
     if (mode !== 'force' && now !== base.current) {
       setTheirs(now)
+      if (keptDrafts.has(key)) keep(text, CHANGED_ELSEWHERE)
       return
     }
     if (field === 'title' && text.trim() === '') {
       setError('A task needs a title')
+      if (keptDrafts.has(key)) keep(text, 'A task needs a title')
       return
     }
     busy.current = true
@@ -154,10 +176,13 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
         if (text === current || mode !== 'auto') dropDraft(text)
       } else {
         setTheirs(current)
+        if (keptDrafts.has(key)) keep(text, CHANGED_ELSEWHERE)
       }
     } catch (err) {
       // A dropped connection shows nothing inline elsewhere; here the typed text still needs Retry.
-      setError(getBackend().errors.inline(err) ?? 'Not saved: the connection dropped')
+      const why = getBackend().errors.inline(err) ?? 'Not saved: the connection dropped'
+      setError(why)
+      if (keptDrafts.has(key)) keep(text, why)
     } finally {
       busy.current = false
       setSaving(false)
@@ -167,16 +192,19 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
     if (next) void send(next)
   }
 
-  // Going away (another task selected) with a save still waiting: send it now. Through a ref, as
-  // the cleanup closes over the first render.
+  // Going away (another task selected) with typing not yet stored: keep it for the next editor, and
+  // send it now (a failure is kept with it). Through a ref, as the cleanup closes over the first render.
   const sendRef = useRef(send)
   sendRef.current = send
   useEffect(
     () => () => {
-      if (!timer.current) return
       clearTimer()
+      const text = draftRef.current
+      if (text === null || text === storedNow().value) return
+      keep(text, errorRef.current)
       void sendRef.current('commit')
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
 
@@ -201,6 +229,7 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
     },
     useTheirs: () => {
       clearTimer()
+      keptDrafts.delete(key)
       setTheirs(null)
       setError(null)
       draftRef.current = null

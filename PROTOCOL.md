@@ -1403,7 +1403,10 @@ interface TaskStart {
 ```
 
 Titles are not unique. A project holds at most 500 tasks. `title` and `status` are trimmed and
-may not contain control characters; `details` is trimmed and may hold newlines and tabs.
+may not contain control characters (C0, DEL or C1), line or paragraph separators (U+2028,
+U+2029), or bidi overrides and isolates (U+202A–U+202E, U+2066–U+2069); `details` is trimmed,
+may hold newlines and tabs, and may not contain the other control characters or the bidi
+overrides and isolates.
 
 | Method | Params | Result |
 |---|---|---|

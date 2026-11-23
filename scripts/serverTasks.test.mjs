@@ -40,7 +40,13 @@ test('checkTaskInput refuses bad input with BAD_REQUEST', () => {
     { title: 'T', id: '' },
     { title: 'line\u2028separator' },
     { title: 'para\u2029separator' },
-    { title: 'T', status: 'a\u2028b' }
+    { title: 'T', status: 'a\u2028b' },
+    { title: 'T', details: 'c1\u0085' },
+    { title: 'T', details: 'c1\u009b' },
+    { title: 'T', details: 'bidi\u202eevil' },
+    { title: 'T', details: 'isolate\u2066x' },
+    { title: 'bidi\u202dtitle' },
+    { title: 'T', status: 'isolate\u2069' }
   ]) {
     assert.equal(code(() => checkTaskInput(bad)), 'BAD_REQUEST', JSON.stringify(bad))
   }

@@ -74,7 +74,7 @@ test('each setter sends its key in the server form, with the current value as ex
   const type = { id: 't', name: 'Review', systemPrompt: '' }
   const button = { id: 'b', label: 'Go', text: 'go' }
   o.setAudioAlerts(true)
-  o.setTasksEnabled(true)
+  o.setTasksEnabled(false)
   // Claude's session mode is the claude plugin's project setting (plugins A2): its host writes it so.
   o.setPluginSetting('claudePermissionMode', '', 'Claude Code')
   o.setPluginSetting('claudePermissionMode', 'plan', 'Claude Code')
@@ -93,7 +93,7 @@ test('each setter sends its key in the server form, with the current value as ex
   o.setPluginSetting('azureDevOpsBaseUrl', '')
   assert.deepEqual(calls, [
     ['updateSettings', { audioAlerts: true }, { audioAlerts: false }],
-    ['updateSettings', { tasksEnabled: true }, { tasksEnabled: null }],
+    ['updateSettings', { tasksEnabled: false }, { tasksEnabled: null }],
     ['updateSettings', { claudePermissionMode: 'plan' }, { claudePermissionMode: null }],
     ['updateSettings', { titleBarColor: '#123456' }, { titleBarColor: null }],
     ['updateSettings', { sessionSystemPrompt: null }, { sessionSystemPrompt: 'Run the tests' }],
@@ -104,6 +104,13 @@ test('each setter sends its key in the server form, with the current value as ex
     ['updateSettings', { llmDefault: { provider: 'codex' } }, { llmDefault: null }],
     ['updateSettings', { linearWorkspace: 'acme' }, { linearWorkspace: null }]
   ])
+})
+
+test('Tasks back on clears tasksEnabled (absent is on)', () => {
+  const { o, calls, mirror } = setup()
+  mirror.settings.tasksEnabled = false
+  o.setTasksEnabled(true)
+  assert.deepEqual(calls, [['updateSettings', { tasksEnabled: null }, { tasksEnabled: false }]])
 })
 
 test("setPluginEnabled sends the whole plugins setting, built on what the window shows (a pending edit kept)", async () => {
