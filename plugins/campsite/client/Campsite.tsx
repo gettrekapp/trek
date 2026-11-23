@@ -7,13 +7,15 @@
 // signpost opens its Trails tab. A summit here (the server's `summit` event) climbs its flag,
 // raises sparks and says so in the header for a few seconds. The world (part 3d-1): the sky follows
 // this window's clock and the seasons the month (both settings), and the weather this project's
-// trails and activity, with a glyph after the counts saying why. Collapsed, it is one line: everyone
-// at tab size, those waiting first.
+// trails and activity, with a glyph after the counts saying why. Wildlife (part 3d-2): a sighting
+// here (the server's `sighting` event) sends its animal across the expanded, visible strip, one at a
+// time. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
+import { crossing, type Crossing } from '../shared/crossing.ts'
 import { summitLine, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
@@ -22,7 +24,7 @@ import { seasonAt, weatherOf, worldAt, worldKey } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
-import { useCamp, useDocumentHidden, useNow, usePrefs, useSeen, useSelected, useSessions, useWidth } from './hooks.ts'
+import { useCamp, useDocumentHidden, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -104,6 +106,49 @@ function useSummit(host: ReturnType<typeof usePluginHost>): { summit: { worktree
   return { summit, shown, fresh }
 }
 
+/** What a sighting needs to know of the strip when it arrives */
+interface StripView {
+  shown: boolean
+  width: number
+  lake: { x: number; w: number } | null
+  reduced: boolean
+  hidden: boolean
+}
+
+/**
+ * The sighting's animal crossing the strip now (part 3d-2): a `sighting` event for this project
+ * starts one (its crossing worked out for the strip as it is then) unless one is crossing, the strip
+ * is collapsed or not shown, the window is hidden, the species is one this version doesn't know or a
+ * swimmer has no lake: it is logged on the server either way. It goes once its crossing is over, or
+ * at once when the strip collapses.
+ */
+function useAnimal(host: ReturnType<typeof usePluginHost>, view: StripView): { seq: number; crossing: Crossing } | null {
+  const [animal, setAnimal] = useState<{ seq: number; crossing: Crossing } | null>(null)
+  const current = useRef({ animal, view })
+  current.current = { animal, view }
+  const seq = useRef(0)
+  useEffect(
+    () =>
+      host.onEvent<{ projectId?: unknown; species?: unknown; dir?: unknown }>('sighting', (e) => {
+        const { animal: now, view: v } = current.current
+        if (e.projectId !== host.projectId || typeof e.species !== 'string' || (e.dir !== 'left' && e.dir !== 'right')) return
+        if (now !== null || !v.shown || v.hidden || v.width <= 0) return
+        const c = crossing(e.species, e.dir, v.width, v.lake, Math.random(), v.reduced)
+        if (c) setAnimal({ seq: ++seq.current, crossing: c })
+      }),
+    [host]
+  )
+  useEffect(() => {
+    if (!animal) return
+    const gone = setTimeout(() => setAnimal(null), animal.crossing.ms)
+    return () => clearTimeout(gone)
+  }, [animal])
+  useEffect(() => {
+    if (!view.shown) setAnimal(null)
+  }, [view.shown])
+  return animal
+}
+
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
   const [{ loaded, prefs }, setPref] = usePrefs(host)
@@ -114,6 +159,7 @@ export function Campsite(): React.JSX.Element | null {
   const selected = useSelected(host)
   const now = useNow()
   const hidden = useDocumentHidden()
+  const reduced = useReducedMotion()
   const [ref, width] = useWidth<HTMLDivElement>()
   // The collapsed bar's row of hikers: measured, to know how many fit
   const [rowRef, rowWidth] = useWidth<HTMLDivElement>()
@@ -159,6 +205,14 @@ export function Campsite(): React.JSX.Element | null {
   }, [])
   // The counts button (collapsed or expanded): focus goes back to it when the away card is dismissed
   const countsButton = useRef<HTMLButtonElement | null>(null)
+  const lakeSpot = edges.right.find((p) => p.id === 'lake')
+  const animal = useAnimal(host, {
+    shown: loaded && prefs.showCampsite && !prefs.campsiteCollapsed,
+    width,
+    lake: lakeSpot ? { x: lakeSpot.x, w: lakeSpot.w } : null,
+    reduced,
+    hidden
+  })
   // The expanded header's end group, and the least room it needs without the weather glyph (measured after each render)
   const headerEnd = useRef<HTMLDivElement | null>(null)
   const [endNeeds, setEndNeeds] = useState(0)
@@ -345,6 +399,7 @@ export function Campsite(): React.JSX.Element | null {
             onBuilding={(id, el) => (id === 'signpost' ? openTrails(el, 'signpost') : openCamp(el, id))}
             onTrail={(el, opener, worktreeId) => openTrails(el, opener, worktreeId)}
             openTrail={campOpen?.tab === 'trails' ? (campOpen.opener ?? null) : null}
+            animal={animal}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>

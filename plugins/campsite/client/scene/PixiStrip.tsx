@@ -11,6 +11,7 @@ import type { Edges } from '../../shared/campEdges.ts'
 import { cairnText, flagLabel, placedTitle, signpostText } from '../../shared/campView.ts'
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
+import type { Crossing } from '../../shared/crossing.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { cairnBox, flagSpots, flagTargets, moreBox, mountain, type FlagTrail } from '../../shared/mountain.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
@@ -53,6 +54,8 @@ interface Props {
   onTrail: (el: HTMLButtonElement, opener: string, worktreeId?: string) => void
   /** The opener whose Trails tab is open (aria-expanded), else null */
   openTrail: string | null
+  /** The sighting's animal crossing now (Campsite's; its seq changes for each one), else null */
+  animal: { seq: number; crossing: Crossing } | null
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -67,7 +70,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -103,8 +106,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
   const palette = useMemo(() => worldPalette(world), [world])
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette })
-  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette])
+    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal })
+  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal])
 
   // The flags' buttons, where the stage draws them (before the fallback's early return: a hook)
   const room = layout.width - edges.reserve.left - edges.reserve.right

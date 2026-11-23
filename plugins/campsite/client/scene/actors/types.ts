@@ -2,6 +2,7 @@
 // shape, and moving an overlay button over a sprite.
 import type { PluginSession } from '../../../../../src/shared/plugins/client.ts'
 import type { Edges } from '../../../shared/campEdges.ts'
+import type { Crossing } from '../../../shared/crossing.ts'
 import type { BuildingId } from '../../../shared/catalog.ts'
 import type { CampLayout } from '../../../shared/layout.ts'
 import type { FlagTrail } from '../../../shared/mountain.ts'
@@ -34,6 +35,8 @@ export interface StageSnapshot {
   world: World
   /** The backdrop's colours for `world` */
   palette: Readonly<Palette>
+  /** The sighting's animal on the strip (campsite part 3d-2; its seq changes for each one); null: none */
+  animal: { seq: number; crossing: Crossing } | null
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

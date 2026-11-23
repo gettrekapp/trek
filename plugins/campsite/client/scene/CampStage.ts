@@ -1,9 +1,9 @@
 // The campsite strip drawn by Pixi: the world (the backdrop in the time of day's and the season's
 // colours, the trails' mountain between its sky and its ridge, spring's flowers, fog; part 3d-1),
 // tents and Global's log, and the actors (the mountain's flags and cairn, the buildings and lights,
-// the fire, the hikers, the camp dog, and what falls or drifts over it all; scene/actors/). It only draws: Campsite
+// the fire, the hikers, the camp dog, a sighting's animal (part 3d-2), and what falls or drifts over it all; scene/actors/). It only draws: Campsite
 // lays the camp out (layout.ts) and hands it over with update(). The DOM overlay's buttons
-// (bindTarget, bindDog) are moved by the actors every frame to stand over their sprites, so names,
+// (bindTarget, bindDog, bindAnimal) are moved by the actors every frame to stand over their sprites, so names,
 // focus and clicks stay DOM. Timing and geometry come from shared/stage.ts.
 import 'pixi.js/unsafe-eval'
 import { Application, Graphics } from 'pixi.js'
@@ -16,6 +16,7 @@ import { HikersActor } from './actors/hikers.ts'
 import { MountainActor } from './actors/mountain.ts'
 import { ParticlesActor } from './actors/particles.ts'
 import type { SignColors, StageSnapshot } from './actors/types.ts'
+import { WildlifeActor } from './actors/wildlife.ts'
 import { WorldActor } from './actors/world.ts'
 import { drawShapes } from './draw.ts'
 import { TextureCache } from './textures.ts'
@@ -65,6 +66,7 @@ export class CampStage {
   private readonly fire: FireActor
   private readonly dog: DogActor
   private readonly hikers: HikersActor
+  private readonly wildlife: WildlifeActor
   private snapshot: StageSnapshot | null = null
   private width = 0
   private destroyed = false
@@ -86,18 +88,22 @@ export class CampStage {
     this.fire = new FireActor(this.textures)
     this.dog = new DogActor(this.textures)
     this.hikers = new HikersActor(this.textures, colors)
+    this.wildlife = new WildlifeActor(this.textures)
     app.stage.addChild(
       this.world.sky,
       this.mountain.root,
       this.world.land,
       this.world.ground,
+      this.wildlife.back,
       this.buildings.root,
+      this.wildlife.water,
       this.fire.glow,
       this.hikers.inside,
       this.camps,
       this.fire.root,
       this.dog.root,
       this.hikers.front,
+      this.wildlife.sky,
       this.world.fog,
       this.particles.root
     )
@@ -129,6 +135,7 @@ export class CampStage {
     this.mountain.sync(s, t)
     this.fire.sync(s, t)
     this.buildings.sync(s)
+    this.wildlife.sync(s, t)
     // Hidden, or reduced motion with no heart rising: nothing moves, so no frames
     const idle = s.paused || (s.reduced && !this.dog.rising)
     if (idle) this.app.ticker.stop()
@@ -146,6 +153,11 @@ export class CampStage {
   /** The overlay button over the dog (null: it went) */
   bindDog(el: HTMLElement | null): void {
     this.dog.bind(el)
+  }
+
+  /** The overlay button over the sighting's animal (null: it went) */
+  bindAnimal(el: HTMLElement | null): void {
+    this.wildlife.bind(el)
   }
 
   /** The dog's button was clicked: it stops, wags, and a heart floats up */
@@ -169,6 +181,7 @@ export class CampStage {
     this.buildings.destroy()
     this.world.destroy()
     this.particles.destroy()
+    this.wildlife.destroy()
   }
 
   private resize(width: number): void {
@@ -198,6 +211,7 @@ export class CampStage {
     this.buildings.frame(t, still)
     this.fire.frame(t, still)
     this.dog.frame(t, still)
+    this.wildlife.frame(t)
     // Reduced motion: the last heart has gone, so stop the frames petDog() started
     if (s.reduced && !this.dog.rising && this.app.ticker.started) this.app.ticker.stop()
   }
