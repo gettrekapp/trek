@@ -976,7 +976,7 @@ export class SessionManager {
     this.publishAttention()
     if (exited) {
       try {
-        this.deps.onSessionExit?.({ projectId: owner.projectId, sessionId: owner.sessionId, ...exited })
+        this.deps.onSessionExit?.({ projectId: owner.projectId, sessionId: owner.sessionId, projectName: exited.projectName, worktreeId: exited.worktreeId })
       } catch (err) {
         console.warn('onSessionExit failed', err)
       }
