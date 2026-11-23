@@ -1,9 +1,10 @@
 // The "While you were away" tally (campsite part 3a): what the camp earned since a window last saw
-// it, by source, with markers and the crew's level-ups. Due once nobody has seen the camp for longer
+// it, by source, with markers and the crew's level-ups, and the sightings (part 3d-2). Due once nobody has seen the camp for longer
 // than AWAY_DUE_MS and it holds something to tell; `seen` starts it again only when it isn't due,
 // `awaySeen` (the card's dismiss) always. The rules change the camp in place. Pure.
 import type { Camp } from './camp.ts'
 import { AWAY_DUE_MS, whole } from './catalog.ts'
+import { species } from './wildlife.ts'
 
 export const AWAY_SOURCES = ['work', 'outcomes', 'garden', 'fishing'] as const
 export type AwaySource = (typeof AWAY_SOURCES)[number]
@@ -16,6 +17,9 @@ export interface AwayTally {
   markers: number
   /** Members whose level rose, at the level they reached */
   levelUps: { crewId: string; level: number }[]
+  /** Sightings (part 3d-2), and the species first seen among them (ids, in order) */
+  sightings: number
+  newSpecies: string[]
 }
 
 /** The card's facts (the snapshot's `away`): whole hours and whole wood; members by name */
@@ -24,6 +28,9 @@ export interface AwaySnapshot {
   wood: Record<AwaySource, number>
   markers: number
   levelUps: { name: string; level: number; title: string }[]
+  /** Sightings, and the species first seen among them by name (an older server: absent) */
+  sightings?: number
+  newSpecies?: string[]
 }
 
 type Seen = Pick<Camp, 'away' | 'seenAt'>
@@ -35,7 +42,7 @@ export function noWood(): Record<AwaySource, number> {
   return out
 }
 
-export const newAway = (since: number): AwayTally => ({ since, wood: noWood(), markers: 0, levelUps: [] })
+export const newAway = (since: number): AwayTally => ({ since, wood: noWood(), markers: 0, levelUps: [], sightings: 0, newSpecies: [] })
 
 export function addAway(camp: Pick<Camp, 'away'>, source: AwaySource, wood: number, markers: number): void {
   camp.away.wood[source] += wood
@@ -48,8 +55,11 @@ export function noteLevelUp(camp: Pick<Camp, 'away'>, crewId: string, level: num
   else camp.away.levelUps.push({ crewId, level })
 }
 
-/** Something to tell: a whole wood from some source, a marker or a level-up */
-export const awayHolds = (a: AwayTally): boolean => AWAY_SOURCES.some((k) => whole(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0
+/** Something to tell: a whole wood from some source, a marker, a level-up or a sighting */
+export const awayHolds = (a: AwayTally): boolean => AWAY_SOURCES.some((k) => whole(a.wood[k]) >= 1) || a.markers > 0 || a.levelUps.length > 0 || a.sightings > 0
+
+/** The new species' names, for the card (ids this version doesn't know are left out) */
+export const newSpeciesNames = (ids: readonly string[]): string[] => ids.flatMap((id) => species(id)?.name ?? [])
 
 export const awayDue = (camp: Seen, now: number): boolean => now - camp.seenAt > AWAY_DUE_MS && awayHolds(camp.away)
 
@@ -67,7 +77,7 @@ export function awaySeen(camp: Seen, now: number): void {
   camp.seenAt = now
 }
 
-/** "While you were away (9 h): 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer" */
+/** "While you were away (9 h): 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer · 12 sightings · 2 new species: Great blue heron, Lynx" */
 export function awayText(a: AwaySnapshot): string {
   // The sum of the floored parts, so the line adds up as shown
   const total = AWAY_SOURCES.reduce((sum, k) => sum + a.wood[k], 0)
@@ -75,5 +85,9 @@ export function awayText(a: AwaySnapshot): string {
   if (total > 0) out.push(`🪵 +${total} — ${AWAY_SOURCES.filter((k) => a.wood[k] > 0).map((k) => `${k} ${a.wood[k]}`).join(' · ')}`)
   if (a.markers > 0) out.push(`⛳ +${a.markers}`)
   for (const u of a.levelUps) out.push(`${u.name} reached Lv ${u.level} ${u.title}`)
+  const seen = a.sightings ?? 0
+  if (seen > 0) out.push(seen === 1 ? '1 sighting' : `${seen} sightings`)
+  const fresh = a.newSpecies ?? []
+  if (fresh.length > 0) out.push(`${fresh.length} new species: ${fresh.join(', ')}`)
   return `While you were away (${a.hours} h): ${out.join(' · ')}`
 }

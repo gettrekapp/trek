@@ -473,7 +473,7 @@ test('seen and awaySeen: the card shows while due; seen keeps it then; awaySeen 
   h.fire({ kind: 'pr.linked', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'u2' })
   now += 5 * 3_600_000
   const due = await inst.handlers.state({}, {})
-  assert.deepEqual(due.away, { hours: 5, wood: { work: 0, outcomes: 20, garden: 0, fishing: 0 }, markers: 0, levelUps: [] }, 'only what came after the seen')
+  assert.deepEqual(due.away, { hours: 5, wood: { work: 0, outcomes: 20, garden: 0, fishing: 0 }, markers: 0, levelUps: [], sightings: 0, newSpecies: [] }, 'only what came after the seen')
   assert.deepEqual(inst.handlers.seen({}, {}), { ok: true })
   assert.ok((await inst.handlers.state({}, {})).away, 'seen while due keeps the card')
   clock.run()

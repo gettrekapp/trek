@@ -67,14 +67,15 @@ test('cost wording: words for messages, glyphs for the popover', () => {
   assert.equal(costLabel({ wood: 900, markers: 1 }), '🪵 900 · ⛳ 1')
 })
 
-test('camp v6: the fire ring at tier 1, nothing else built, an empty tally seen now, nobody hired, no kinds seen, no trails, no last activity', () => {
+test('camp v6: the fire ring at tier 1, nothing else built, an empty tally seen now, nobody hired, no kinds seen, no trails, no last activity, no wildlife', () => {
   const camp = newCamp(1, T0)
   assert.equal(CAMP_VERSION, 6)
   assert.equal(camp.version, 6)
   assert.deepEqual(camp.seenKinds, [])
   assert.deepEqual([camp.trails, camp.trailLog, camp.trailsDone, camp.summits, camp.lastActive], [{}, {}, {}, 0, {}])
   assert.deepEqual(camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0, signpost: 0, tower: 0 })
-  assert.deepEqual(camp.away, { since: T0, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 0, levelUps: [] })
+  assert.deepEqual(camp.away, { since: T0, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 0, levelUps: [], sightings: 0, newSpecies: [] })
+  assert.deepEqual([camp.guide, camp.sightings, camp.lastSeen, camp.clock], [{}, [], {}, { tz: null, seasons: 'north' }])
   assert.equal(camp.seenAt, T0)
   assert.deepEqual(camp.hired, { day: '', names: [] })
   assert.ok(isCamp(JSON.parse(JSON.stringify(camp))))
@@ -83,7 +84,7 @@ test('camp v6: the fire ring at tier 1, nothing else built, an empty tally seen 
 })
 
 test('migrateCamp: version 1 gains the defaults, seen at its last save, and goes on to version 6; anything newer is left as it is', () => {
-  const { built, away, seenAt, hired, seenKinds, trails, trailLog, trailsDone, summits, lastActive, ...rest } = newCamp(1, T0)
+  const { built, away, seenAt, hired, seenKinds, trails, trailLog, trailsDone, summits, lastActive, guide, sightings, lastSeen, clock, ...rest } = newCamp(1, T0)
   const v1 = { ...rest, version: 1, savedAt: T0 + 5, wood: 40 }
   const v2 = migrateCamp(v1)
   assert.equal(v2.version, 6)
@@ -167,7 +168,7 @@ test('snapshot: away only while due, in whole hours and wood, level-ups named; c
   noteLevelUp(camp, camp.crew[0].id, 3)
   assert.equal('away' in snapshot(camp, T0 + H), false)
   const snap = snapshot(camp, T0 + 9 * H + 5)
-  assert.deepEqual(snap.away, { hours: 9, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ name: camp.crew[0].name, level: 3, title: 'Mountaineer' }] })
+  assert.deepEqual(snap.away, { hours: 9, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ name: camp.crew[0].name, level: 3, title: 'Mountaineer' }], sightings: 0, newSpecies: [] })
   assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 3, title: 'Mountaineer', xp: 450, next: 900, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, bonus: 0, pin: null, journalCount: 1, journalAt: T0 })
   assert.deepEqual(snap.built, camp.built)
   assert.notEqual(snap.built, camp.built, 'a copy')

@@ -147,7 +147,7 @@ if (params.get('weather') === 'fog') state.lastActive.harness = T - 14 * 3_600_0
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {
   state.seenAt = T - 9 * 3_600_000
-  state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ crewId: state.crew[1].id, level: 3 }] }
+  state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ crewId: state.crew[1].id, level: 3 }], sightings: 0, newSpecies: [] }
 }
 const camp = snapshot(state, T, { project: (id) => (id === 'harness' ? 'trek' : 'website') })
 const listeners = new Map<string, Set<(data: unknown) => void>>()
