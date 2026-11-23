@@ -6,7 +6,7 @@ import type { Crossing } from '../../../shared/crossing.ts'
 import type { BuildingId } from '../../../shared/catalog.ts'
 import type { CampLayout } from '../../../shared/layout.ts'
 import type { FlagTrail } from '../../../shared/mountain.ts'
-import type { Sign } from '../../../shared/pose.ts'
+import type { HikerTool, Sign } from '../../../shared/pose.ts'
 import type { Palette, World } from '../../../shared/world.ts'
 
 export interface StageSnapshot {
@@ -14,6 +14,8 @@ export interface StageSnapshot {
   sessions: readonly PluginSession[]
   /** The chores' clock (Date.now, ms; useNow's 5 s tick) */
   now: number
+  /** Each session's latest tool call (campsite part 4), by terminalId: the chore it shows */
+  tools: Readonly<Record<string, HikerTool>>
   selected: string | null
   reduced: boolean
   /** The window is hidden: nothing moves */

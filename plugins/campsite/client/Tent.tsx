@@ -7,7 +7,7 @@ import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/c
 import { LOG_W, TENT_W, campTone, popoverLeft, signText, tentBadge, type CampTent, type FireSide } from '../shared/layout.ts'
 import { SIGN_TEXT, choreFor, hikerLabel, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
-import { useHikerLook } from './hooks.ts'
+import { useHikerLook, useTool } from './hooks.ts'
 
 interface Props {
   tent: CampTent
@@ -97,8 +97,9 @@ export function TentPopover({ at, name, members, now, onPick }: PopoverProps): R
 }
 
 function PopoverRow({ session, now, onPick }: { session: PluginSession; now: number; onPick: (terminalId: string) => void }): React.JSX.Element {
-  const look = useHikerLook(usePluginHost(), session.terminalId, session.provider)
-  const stance = stanceFor(session, choreFor(session.terminalId, now))
+  const host = usePluginHost()
+  const look = useHikerLook(host, session.terminalId, session.provider)
+  const stance = stanceFor(session, choreFor(session.terminalId, now, useTool(host, session.terminalId)))
   return (
     <button onClick={() => onPick(session.terminalId)}>
       <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} scale={1} label={hikerLabel(session)} decorative />

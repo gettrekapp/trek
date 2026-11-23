@@ -132,7 +132,7 @@ export class HikersActor implements Actor {
 
   private draw(a: Hiker, m: Mover, s: StageSnapshot, t: number, still: boolean): void {
     const { x, walking } = walkAt(m.walk, t)
-    const stance = (walking || m.leaving) && !still ? WALK : stanceFor(a.session, choreFor(a.session.terminalId, s.now))
+    const stance = (walking || m.leaving) && !still ? WALK : stanceFor(a.session, choreFor(a.session.terminalId, s.now, Object.hasOwn(s.tools, a.session.terminalId) ? s.tools[a.session.terminalId] : undefined))
     const grey = stance.grey || a.place === 'inside'
     const frame = still ? 0 : frameAt(stance.pose, t)
     a.body.texture = this.textures.get(`hiker:${a.lookKey}:${stance.pose}:${frame}:${stance.gear ?? ''}`, 12, 16, () => pixels(a.look, stance.pose, frame, stance.gear), grey)

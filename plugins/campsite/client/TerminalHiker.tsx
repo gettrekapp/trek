@@ -4,9 +4,9 @@
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { crewLabel } from '../shared/crew.ts'
-import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, stanceFor } from '../shared/pose.ts'
+import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, liveTool, stanceFor } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
-import { useCamp, useHikerLook, useNow, usePrefs, useSession } from './hooks.ts'
+import { useCamp, useHikerLook, useNow, usePrefs, useSession, useTool } from './hooks.ts'
 
 export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX.Element | null {
   const host = usePluginHost()
@@ -16,13 +16,15 @@ export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX
   const now = useNow()
   const provider = session?.provider ?? DEFAULT_AGENT_ID
   const look = useHikerLook(host, terminalId, provider)
+  // The call its words name: none once it is stale (its chore is a random one again)
+  const tool = liveTool(useTool(host, terminalId), now)
   if (!loaded || !prefs.showTerminalHiker || !session) return null
-  const chore = choreFor(terminalId, now)
+  const chore = choreFor(terminalId, now, tool)
   const stance = stanceFor(session, chore)
   return (
-    <span className="cs-bar-hiker" title={hikerTooltip(session, chore, camp ? crewLabel(camp, terminalId) : undefined)}>
+    <span className="cs-bar-hiker" title={hikerTooltip(session, chore, camp ? crewLabel(camp, terminalId) : undefined, tool)}>
       <span className={`cs-bar-text${stance.sign ? ` ${stance.sign}` : ''}`}>
-        {session.label} · {hikerDoing(session, chore)}
+        {session.label} · {hikerDoing(session, chore, tool)}
       </span>
       {stance.sign && (
         <span className={`cs-tab-sign ${stance.sign}`} aria-hidden="true">

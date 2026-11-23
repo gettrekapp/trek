@@ -14,7 +14,7 @@ import { crewLabel } from '../../shared/crew.ts'
 import type { Crossing } from '../../shared/crossing.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { cairnBox, flagSpots, flagTargets, moreBox, mountain, type FlagTrail } from '../../shared/mountain.ts'
-import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
+import { choreFor, hikerLabel, hikerTooltip, liveTool, type HikerTool } from '../../shared/pose.ts'
 import { STAGE_H } from '../../shared/stage.ts'
 import { STAGES, cairnSize } from '../../shared/trails.ts'
 import { worldPalette, type World } from '../../shared/world.ts'
@@ -41,6 +41,8 @@ interface Props {
   summit: { worktreeId: string; seq: number } | null
   /** The chores' clock */
   now: number
+  /** Each session's latest tool call (part 4), by terminalId: the same object while none changes */
+  tools: Readonly<Record<string, HikerTool>>
   /** The time of day, the season and the weather (part 3d-1); the same object while they look the same */
   world: World
   selected: string | null
@@ -76,7 +78,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, tools, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -112,8 +114,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
   const palette = useMemo(() => worldPalette(world), [world])
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal })
-  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal])
+    stage?.update({ layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal })
+  }, [stage, layout, sessions, now, tools, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette, animal])
 
   // The flags' buttons, where the stage draws them (before the fallback's early return: a hook)
   const room = layout.width - edges.reserve.left - edges.reserve.right
@@ -212,12 +214,13 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
         layout.hikers.map((h) => {
           const s = byId.get(h.terminalId)
           if (!s) return null
+          const tool = liveTool(Object.hasOwn(tools, s.terminalId) ? tools[s.terminalId] : undefined, now)
           return (
             <button
               key={h.terminalId}
               ref={(el) => stage.bindTarget(h.terminalId, el)}
               className={`cs-camp-hiker${h.place === 'inside' ? ' inside' : ''}`}
-              title={hikerTooltip(s, choreFor(s.terminalId, now), camp ? crewLabel(camp, s.terminalId) : undefined)}
+              title={hikerTooltip(s, choreFor(s.terminalId, now, tool), camp ? crewLabel(camp, s.terminalId) : undefined, tool)}
               aria-label={hikerLabel(s)}
               onClick={() => onPick(s.terminalId)}
             />

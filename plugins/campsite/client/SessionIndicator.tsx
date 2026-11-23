@@ -6,7 +6,7 @@ import { usePluginHost, type SessionIndicatorProps } from '../../../src/shared/p
 import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { SIGN_TEXT, choreFor, indicatorState, indicatorTitle, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
-import { useHikerLook, useNow, useSession } from './hooks.ts'
+import { useHikerLook, useNow, useSession, useTool } from './hooks.ts'
 
 export function SessionIndicator({ terminalId, status, onToggleComplete }: SessionIndicatorProps): React.JSX.Element {
   const host = usePluginHost()
@@ -14,8 +14,9 @@ export function SessionIndicator({ terminalId, status, onToggleComplete }: Sessi
   const now = useNow()
   const provider = session?.provider ?? DEFAULT_AGENT_ID
   const look = useHikerLook(host, terminalId, provider)
+  const tool = useTool(host, terminalId)
   const state = indicatorState(session, status)
-  const stance = stanceFor(state, choreFor(terminalId, now))
+  const stance = stanceFor(state, choreFor(terminalId, now, tool))
   const toggle = state.status === 'done' || state.status === 'complete' ? onToggleComplete : undefined
   return (
     <span

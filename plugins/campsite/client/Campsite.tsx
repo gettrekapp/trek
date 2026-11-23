@@ -25,7 +25,7 @@ import { seasonAt, weatherOf, worldAt, worldKey } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
-import { useCamp, useDocumentHidden, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useWidth } from './hooks.ts'
+import { useCamp, useDocumentHidden, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useTools, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -160,6 +160,8 @@ export function Campsite(): React.JSX.Element | null {
   useSeen(host, loaded && prefs.showCampsite, prefs.seasons)
   const selected = useSelected(host)
   const now = useNow()
+  // Each session's latest tool call (part 4): the hikers' chores
+  const tools = useTools(host)
   const hidden = useDocumentHidden()
   const reduced = useReducedMotion()
   const [ref, width] = useWidth<HTMLDivElement>()
@@ -412,6 +414,7 @@ export function Campsite(): React.JSX.Element | null {
             summits={camp?.summits ?? 0}
             summit={stageSummit}
             now={now}
+            tools={tools}
             world={world}
             selected={selected}
             paused={hidden}
