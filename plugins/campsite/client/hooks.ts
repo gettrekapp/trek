@@ -6,7 +6,7 @@ import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugin
 import type { CampSnapshot } from '../shared/camp.ts'
 import { sessionKit } from '../shared/crew.ts'
 import { kitOf, lookFor, withKit, type Look } from '../shared/hiker.ts'
-import type { CampsitePrefKey } from '../shared/prefs.ts'
+import type { CampsitePrefKey, CampsitePrefs } from '../shared/prefs.ts'
 import { campStore } from './campStore.ts'
 import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
 
@@ -50,7 +50,7 @@ export function useNow(): number {
 }
 
 /** The plugin's prefs, shared by every component (one load, one change feed); `loaded` false until they are read */
-export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, (key: CampsitePrefKey, value: boolean) => void] {
+export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, <K extends CampsitePrefKey>(key: K, value: CampsitePrefs[K]) => void] {
   const store = prefsStore(host)
   return [useSyncExternalStore(store.subscribe, store.snapshot), store.set]
 }

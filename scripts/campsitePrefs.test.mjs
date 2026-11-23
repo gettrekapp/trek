@@ -114,3 +114,17 @@ test('prefs store: a failed first load still renders, with the defaults', async 
   }
   assert.deepEqual(store.snapshot(), { loaded: true, prefs: DEFAULT_PREFS })
 })
+
+test('prefs store: a choice (the sky, the seasons) is set like a switch', async () => {
+  const f = fakeHost()
+  const store = prefsStore(f.host)
+  store.subscribe(() => {})
+  f.pending.shift().resolve({})
+  await flush()
+  store.set('sky', 'dusk')
+  assert.equal(store.snapshot().prefs.sky, 'dusk')
+  assert.deepEqual(f.calls.set, [['sky', 'dusk']])
+  f.pending.shift().resolve({ sky: 'dusk', seasons: 'off' })
+  await flush()
+  assert.deepEqual(store.snapshot().prefs, { ...DEFAULT_PREFS, sky: 'dusk', seasons: 'off' })
+})

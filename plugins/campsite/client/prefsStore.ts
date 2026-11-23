@@ -13,7 +13,7 @@ export interface PrefsStore {
   subscribe(listener: () => void): () => void
   /** The same object until something changes */
   snapshot(): PrefsSnapshot
-  set(key: CampsitePrefKey, value: boolean): void
+  set<K extends CampsitePrefKey>(key: K, value: CampsitePrefs[K]): void
 }
 
 type PrefsHost = Pick<ClientPluginHost, 'prefs'>

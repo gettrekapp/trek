@@ -34,8 +34,12 @@ test('campsite: built in last, after Colima', () => {
   assert.equal(ids.at(-2), 'env')
 })
 
-test('readPrefs: booleans only, defaults for the rest', () => {
-  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true })
+test('readPrefs: booleans for the switches, a known choice for the sky and seasons, defaults for the rest', () => {
+  assert.deepEqual(DEFAULT_PREFS, { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north' })
   assert.deepEqual(readPrefs({}), DEFAULT_PREFS)
   assert.deepEqual(readPrefs({ showCampsite: false, campsiteCollapsed: 'yes', other: 1 }), { ...DEFAULT_PREFS, showCampsite: false })
+  assert.deepEqual(readPrefs({ sky: 'dusk', seasons: 'south' }), { ...DEFAULT_PREFS, sky: 'dusk', seasons: 'south' })
+  assert.deepEqual(readPrefs({ seasons: 'off' }).seasons, 'off')
+  assert.deepEqual(readPrefs({ sky: 'noon', seasons: true, showDog: 'clock' }), DEFAULT_PREFS, 'unknown values fall back to the defaults')
+  assert.deepEqual(readPrefs({ sky: 1 }).sky, 'clock')
 })
