@@ -6,7 +6,11 @@
 // project's trails on every stage (three at the trailhead, eight on the switchbacks: "+2", two planted), another
 // project's two, 12 summits (the cairn) and both projects' histories (the fake host answers
 // `trailLog`); window.__summit(worktreeId, branch) sends the summit event, as the server does.
-// ?freeze=1 stops both clocks (below).
+// ?freeze=1 stops both clocks (below). The world (campsite 3d-1): ?at=2026-11-23T12:00 (local time)
+// pins the window's clock there (it runs on from it, or stands still with ?freeze=1) and follows it
+// (the sky "Follow the clock", the seasons ?seasons=north|south|off, default north); without ?at the
+// strip is always dusk with no season, its look before 3d. ?weather=rain fails the checks of the
+// harness project's api trail (snow in winter); ?weather=fog leaves the project quiet for 14 hours.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -35,18 +39,42 @@ const SCENARIOS: Record<string, PluginSession[]> = {
 }
 
 const params = new URLSearchParams(location.search)
-// ?freeze=1: both clocks stand still (Date.now at 2026-11-23 12:00 UTC, performance.now at 1 ms), so
-// a shot is the same pixels on every run: `campsite:render -- <dir> --freeze` before and after a
-// change that must not move anything, then compare the PNGs byte for byte. With --freeze the render
-// script has already frozen them (and `new Date()`) before any script ran, imports included; this is
-// for the page opened by hand, and sets the same values
-if (params.get('freeze') === '1') {
-  const at = Date.UTC(2026, 10, 23, 12)
-  Date.now = () => at
-  performance.now = () => 1
+// ?freeze=1: both clocks stand still (Date.now at ?at, else 2026-11-23 12:00 UTC; performance.now at
+// 1 ms), so a shot is the same pixels on every run: `campsite:render -- <dir> --freeze` before and
+// after a change that must not move anything, then compare the PNGs byte for byte. With --freeze the
+// render script has already frozen them (and `new Date()`) before any script ran, imports included;
+// this is for the page opened by hand, and sets the same values. ?at alone: the clock starts there and
+// runs on. Either way Date.now and an argument-less `new Date()` agree (a Date with arguments is the
+// real one). Frozen, Math.random is seeded too (mulberry32), so the particles land in the same places
+const pinned = params.has('at') ? new Date(params.get('at') ?? '').getTime() : NaN
+const frozen = params.get('freeze') === '1'
+if (frozen || Number.isFinite(pinned)) {
+  const RealDate = Date
+  const base = Number.isFinite(pinned) ? pinned : Date.UTC(2026, 10, 23, 12)
+  const start = RealDate.now()
+  const clock = frozen ? () => base : () => base + (RealDate.now() - start)
+  const ClockDate = function (this: unknown, ...a: unknown[]) {
+    if (!new.target) return new RealDate(clock()).toString()
+    return a.length === 0 ? new RealDate(clock()) : new RealDate(...(a as [number]))
+  } as unknown as DateConstructor
+  Object.setPrototypeOf(ClockDate, RealDate)
+  ;(ClockDate as unknown as { prototype: Date }).prototype = RealDate.prototype
+  ClockDate.now = clock
+  globalThis.Date = ClockDate
+  if (frozen) {
+    performance.now = () => 1
+    let seed = 0x2d1
+    Math.random = () => {
+      seed = (seed + 0x6d2b79f5) | 0
+      let x = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296
+    }
+  }
 }
 const sessions = SCENARIOS[params.get('scenario') ?? 'few'] ?? []
-const prefs = { showDog: params.get('dog') !== '0' }
+// Without ?at: always dusk, no season (the strip before 3d-1, so the older shots stay the same)
+const prefs = Number.isFinite(pinned) ? { showDog: params.get('dog') !== '0', sky: 'clock', seasons: params.get('seasons') ?? 'north' } : { showDog: params.get('dog') !== '0', sky: 'dusk', seasons: 'off' }
 // The camp's state, from the real rules: the header's counts, t1's crew member in its tooltip;
 // ?built=out builds everything (all seven buildings at their top tier)
 const T = Date.now()
@@ -108,6 +136,14 @@ if (params.get('trails') === 'all') {
     site: [{ branch: 'feature/landing', result: 'summited', start: T - 4 * D, end: T - 3 * D }]
   }
 }
+// ?weather=rain: the api trail's checks fail, 10 minutes ago (it is added on the ridge when ?trails isn't all);
+// ?weather=fog: nothing heard from the harness project for 14 hours
+if (params.get('weather') === 'rain') {
+  const key = 'harness:api'
+  const api = state.trails[key] ?? { projectId: 'harness', worktreeId: 'api', repoId: 'r', branch: 'feature/api', stage: 2, start: T - 86_400_000, stageAt: T - 3_600_000, checks: null, checksAt: null }
+  state.trails[key] = { ...api, checks: 'failed', checksAt: T - 600_000 }
+}
+if (params.get('weather') === 'fog') state.lastActive.harness = T - 14 * 3_600_000
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {
   state.seenAt = T - 9 * 3_600_000

@@ -50,13 +50,28 @@ const SHOTS = [
   // A summit mid-celebration: the planted flag climbing, sparks over the fire, the header's line (caught 700 ms in)
   { name: 'summit', scenario: 'few', trails: 'all', built: 'out', width: 1600, summit: true },
   // The Trails tab, opened from a flag: this project's rows and history, the other project (the signpost is built)
-  { name: 'trails-tab', scenario: 'few', trails: 'all', built: 'out', trailsTab: true, height: 1000 }
+  { name: 'trails-tab', scenario: 'few', trails: 'all', built: 'out', trailsTab: true, height: 1000 },
+  // The world (campsite 3d-1), its clock pinned (local time): the day, dawn and night (the lights on) with no season
+  { name: 'day', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off' },
+  { name: 'dawn', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T06:30', seasons: 'off' },
+  { name: 'night', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T22:00', seasons: 'off' },
+  // The seasons (northern) at dusk, and spring's flowers by day; summer's fireflies at night
+  { name: 'winter', scenario: 'few', built: 'out', trails: 'all', width: 1600, at: '2027-01-15T18:00' },
+  { name: 'autumn', scenario: 'few', built: 'out', width: 1600, at: '2026-10-15T18:00' },
+  { name: 'spring', scenario: 'few', built: 'out', width: 1600, at: '2026-04-15T12:00' },
+  { name: 'summer-night', scenario: 'few', built: 'out', width: 1600, at: '2026-07-15T22:00' },
+  // The weather: failing checks (rain; the header's 🌧), a quiet project (fog), rain at night, and rain under reduced motion (still streaks)
+  { name: 'rain', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off', weather: 'rain' },
+  { name: 'fog', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T18:00', seasons: 'off', weather: 'fog' },
+  { name: 'night-rain', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T22:00', seasons: 'off', weather: 'rain' },
+  { name: 'rain-reduced', scenario: 'few', built: 'out', width: 1600, at: '2026-11-23T12:00', seasons: 'off', weather: 'rain', reduced: true }
 ]
 
 /**
  * --freeze, run in the page before any of its scripts: Date.now, an argument-less `new Date()` (and
  * `Date()`) stand at the page's ?at= (a local time), else 2026-11-23 12:00 UTC, and performance.now
- * at 1 ms. A Date with arguments, and Date's other statics, are the real ones
+ * at 1 ms. A Date with arguments, and Date's other statics, are the real ones. Math.random is a
+ * seeded PRNG (mulberry32), so the particles land in the same places on every run
  */
 function FREEZE() {
   const q = new URLSearchParams(location.search)
@@ -72,6 +87,13 @@ function FREEZE() {
   FrozenDate.now = () => at
   globalThis.Date = FrozenDate
   performance.now = () => 1
+  let seed = 0x2d1
+  Math.random = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let x = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 mkdirSync(out, { recursive: true })
@@ -104,7 +126,7 @@ try {
       // [campsite]: the strip's own warnings (Pixi didn't start); CSP: a blocked script or style
       if (m.text().includes('[campsite]') || m.text().includes('Content Security Policy')) problems.push(`${shot.name}: ${m.text()}`)
     })
-    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${freeze ? '&freeze=1' : ''}`)
+    await page.goto(`${url}?scenario=${shot.scenario}${shot.dog === false ? '&dog=0' : ''}${shot.built ? `&built=${shot.built}` : ''}${shot.away ? '&away=1' : ''}${shot.crew ? `&crew=${shot.crew}` : ''}${shot.trails ? `&trails=${shot.trails}` : ''}${shot.at ? `&at=${shot.at}` : ''}${shot.seasons ? `&seasons=${shot.seasons}` : ''}${shot.weather ? `&weather=${shot.weather}` : ''}${freeze ? '&freeze=1' : ''}`)
     await page.waitForSelector('.cs-canvas canvas', { timeout: 15000 })
     // The stage's first layout appears in place; give the dog a moment and Pixi a few frames
     await page.waitForTimeout(1200)
