@@ -155,7 +155,7 @@ const isAutomation = (s: Session): boolean => s.context?.kind === 'automation'
 /** The session's agent and type for the activity feed (campsite part 3b): the type named as the project's settings name it now; null with none, or one since removed */
 function kindOf(project: Pick<Project, 'settings'>, s: Session): { provider: string; sessionType: ActivitySessionType | null } {
   const type = s.sessionTypeId === undefined ? undefined : project.settings.sessionTypes?.find((t) => t.id === s.sessionTypeId)
-  return { provider: s.llm.provider, sessionType: type ? { id: type.id, name: type.name } : null }
+  return { provider: s.llm.provider, sessionType: type ? Object.freeze({ id: type.id, name: type.name }) : null }
 }
 
 /**

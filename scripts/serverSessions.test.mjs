@@ -1838,6 +1838,7 @@ test("activity: every session event names the session's agent and its type (camp
     ['session.closed', 'claude', null]
   ])
   assert.deepEqual(of(typed.sessionId)[0].sessionType, { id: 'rev', name: 'Review' })
+  assert.ok(Object.isFrozen(of(typed.sessionId)[0].sessionType), "a listener can't change the type another one sees")
   assert.ok(of(plain.sessionId).length >= 3)
   assert.ok(of(plain.sessionId).every((e) => e.provider === 'codex' && e.sessionType === null), 'no type: null')
 })
