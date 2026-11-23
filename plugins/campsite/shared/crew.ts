@@ -4,8 +4,8 @@
 // (exits, is stopped by Trek, or the session closes). A member earns XP equal to the wood its
 // session earns. Pure.
 import { noteLevelUp } from './away.ts'
-import { whole } from './catalog.ts'
-import type { Camp, CampSnapshot, CrewMember } from './camp.ts'
+import { SEEN_KIND_MS, noGear, whole } from './catalog.ts'
+import type { Camp, CampSnapshot, CrewMember, SeenKind } from './camp.ts'
 import { fnv1a, lookFor, type Look } from './hiker.ts'
 
 export const TRAIL_NAMES: readonly string[] = [
@@ -20,7 +20,16 @@ export const TITLES: readonly string[] = ['Tenderfoot', 'Trailblazer', 'Mountain
 /** The starting crew: names in a seeded order without repeats; restedAt staggered so the first is picked first */
 export function newCrew(seed: number, now: number): CrewMember[] {
   const order = TRAIL_NAMES.map((name, i) => ({ name, k: fnv1a(`${seed}:${i}`) })).sort((a, b) => a.k - b.k)
-  return order.slice(0, START_CREW).map((o, i) => ({ id: `c${i + 1}`, name: o.name, seed: fnv1a(`${seed}:crew:${i}`), xp: 0, restedAt: now - (START_CREW - i) }))
+  return order.slice(0, START_CREW).map((o, i) => ({
+    id: `c${i + 1}`,
+    name: o.name,
+    seed: fnv1a(`${seed}:crew:${i}`),
+    xp: 0,
+    restedAt: now - (START_CREW - i),
+    gear: noGear(),
+    pin: null,
+    journal: [{ kind: 'hired', at: now }]
+  }))
 }
 
 /** The session's member (kept while it lives), or a new pick; null: a day hiker */
@@ -30,7 +39,7 @@ export function assign(camp: Camp, terminalId: string, projectId: string, now: n
   const busy = new Set(Object.values(camp.assignments).map((a) => a.crew))
   const free = camp.crew.filter((m) => !busy.has(m.id)).sort((a, b) => a.restedAt - b.restedAt)
   if (free.length === 0) return null
-  camp.assignments[terminalId] = { crew: free[0].id, project: projectId }
+  camp.assignments[terminalId] = { crew: free[0].id, project: projectId, worktreeId: null, provider: '', projectName: projectId, place: 'Global', start: now, wood: 0 }
   return free[0].id
 }
 
@@ -62,6 +71,14 @@ export const levelXp = (level: number): number => 100 * (Math.max(1, level) - 1)
 
 /** A member's look, from its seed (a neutral jacket: it belongs to no provider) */
 export const memberLook = (seed: number): Look => lookFor(`crew:${seed}`, 'crew')
+
+/** The kinds seen in the last SEEN_KIND_MS: session types first, then agents, each by name */
+export function liveKinds(camp: Pick<Camp, 'seenKinds'>, now: number): Omit<SeenKind, 'at'>[] {
+  return camp.seenKinds
+    .filter((k) => now - k.at <= SEEN_KIND_MS)
+    .sort((a, b) => (a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === 'type' ? -1 : 1))
+    .map(({ kind, id, name }) => ({ kind, id, name }))
+}
 
 /** Members with no session: resting at camp */
 export function restingCount(camp: Pick<Camp, 'crew' | 'assignments'>): number {

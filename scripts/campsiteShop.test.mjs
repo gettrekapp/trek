@@ -57,30 +57,34 @@ test('cost wording: words for messages, glyphs for the popover', () => {
   assert.equal(costLabel({ wood: 900, markers: 1 }), '🪵 900 · ⛳ 1')
 })
 
-test('camp v2: the fire ring at tier 1, nothing else built, an empty tally seen now, nobody hired', () => {
+test('camp v3: the fire ring at tier 1, nothing else built, an empty tally seen now, nobody hired, no kinds seen', () => {
   const camp = newCamp(1, T0)
-  assert.equal(CAMP_VERSION, 2)
-  assert.equal(camp.version, 2)
+  assert.equal(CAMP_VERSION, 3)
+  assert.equal(camp.version, 3)
+  assert.deepEqual(camp.seenKinds, [])
   assert.deepEqual(camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.deepEqual(camp.away, { since: T0, wood: { work: 0, outcomes: 0, garden: 0, fishing: 0 }, markers: 0, levelUps: [] })
   assert.equal(camp.seenAt, T0)
   assert.deepEqual(camp.hired, { day: '', names: [] })
   assert.ok(isCamp(JSON.parse(JSON.stringify(camp))))
-  const bad = [{ built: { ...camp.built, fire: 'x' } }, { built: null }, { seenAt: 'x' }, { away: { ...camp.away, levelUps: [{ crewId: 1, level: 2 }] } }, { away: { ...camp.away, wood: { work: 0 } } }, { hired: { day: 1, names: [] } }, { version: 1 }, { built: { ...camp.built, garden: 0.5 } }, { built: { ...camp.built, lake: 3 } }, { built: { ...camp.built, fire: 0 } }, { built: { ...camp.built, fire: 1.5 } }]
+  const bad = [{ built: { ...camp.built, fire: 'x' } }, { built: null }, { seenAt: 'x' }, { away: { ...camp.away, levelUps: [{ crewId: 1, level: 2 }] } }, { away: { ...camp.away, wood: { work: 0 } } }, { hired: { day: 1, names: [] } }, { version: 2 }, { built: { ...camp.built, garden: 0.5 } }, { built: { ...camp.built, lake: 3 } }, { built: { ...camp.built, fire: 0 } }, { built: { ...camp.built, fire: 1.5 } }]
   for (const b of bad) assert.equal(isCamp({ ...camp, ...b }), false, JSON.stringify(b))
 })
 
-test('migrateCamp: version 1 gains the defaults, seen at its last save; anything else is left as it is', () => {
-  const { built, away, seenAt, hired, ...rest } = newCamp(1, T0)
+test('migrateCamp: version 1 gains the defaults, seen at its last save, and goes on to version 3; anything newer is left as it is', () => {
+  const { built, away, seenAt, hired, seenKinds, ...rest } = newCamp(1, T0)
   const v1 = { ...rest, version: 1, savedAt: T0 + 5, wood: 40 }
   const v2 = migrateCamp(v1)
+  assert.equal(v2.version, 3)
   assert.ok(isCamp(v2))
   assert.equal(v2.wood, 40)
   assert.deepEqual(v2.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.equal(v2.seenAt, T0 + 5)
   assert.equal(v2.away.since, T0 + 5)
   assert.deepEqual(v2.hired, { day: '', names: [] })
-  const v3 = { version: 3 }
+  const v4 = { version: 4 }
+  assert.equal(migrateCamp(v4), v4)
+  const v3 = newCamp(1, T0)
   assert.equal(migrateCamp(v3), v3)
   assert.equal(migrateCamp('x'), 'x')
   assert.equal(migrateCamp(null), null)
@@ -153,7 +157,7 @@ test('snapshot: away only while due, in whole hours and wood, level-ups named; c
   assert.equal('away' in snapshot(camp, T0 + H), false)
   const snap = snapshot(camp, T0 + 9 * H + 5)
   assert.deepEqual(snap.away, { hours: 9, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ name: camp.crew[0].name, level: 3, title: 'Mountaineer' }] })
-  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 3, title: 'Mountaineer', xp: 450, next: 900 })
+  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 3, title: 'Mountaineer', xp: 450, next: 900, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, bonus: 0, pin: null, journal: [{ kind: 'hired', at: T0 }] })
   assert.deepEqual(snap.built, camp.built)
   assert.notEqual(snap.built, camp.built, 'a copy')
 })
@@ -262,7 +266,7 @@ test("recruit: hires a walk-in into a free bunk at the rising price; it leaves t
   const [first, second, third] = list
   assert.equal(recruit(camp, { candidate: first.name, cost: { wood: 200 } }, T0 + 1), null)
   assert.equal(camp.wood, 800)
-  assert.deepEqual(camp.crew.at(-1), { id: 'c4', name: first.name, seed: first.seed, xp: 0, restedAt: T0 + 1 })
+  assert.deepEqual(camp.crew.at(-1), { id: 'c4', name: first.name, seed: first.seed, xp: 0, restedAt: T0 + 1, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, pin: null, journal: [{ kind: 'hired', at: T0 + 1 }] })
   assert.deepEqual(camp.hired, { day: dayOf(T0), names: [first.name] })
   assert.deepEqual(todaysCandidates(camp, T0 + 2), [second, third], 'the other two stay')
   assert.deepEqual(recruit(camp, { candidate: first.name, cost: { wood: 250 } }, T0 + 3), { code: 'CONFLICT', message: `${first.name} isn't at camp today` })

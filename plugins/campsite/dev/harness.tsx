@@ -39,7 +39,7 @@ state.wood = 340
 state.markers = 2
 state.crew[0].name = 'Aspen'
 state.crew[0].xp = 150
-state.assignments.t1 = { crew: state.crew[0].id, project: 'harness' }
+state.assignments.t1 = { crew: state.crew[0].id, project: 'harness', worktreeId: 'api', provider: 'codex', projectName: 'trek', place: 'feature/api', start: T - 3_600_000, wood: 12 }
 if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 }
 // ?away=1: unseen for 9 hours, with something to tell (the card)
 if (params.get('away') === '1') {

@@ -34,7 +34,8 @@ test('assign: the longest-rested free member; beyond the crew, day hikers; stabl
   assert.equal(camp.crew.find((m) => m.id === b.id).restedAt, T0 + 5)
   release(camp, 't1', T0 + 9)
   assert.equal(assign(camp, 't5', 'p', T0 + 10), b.id, 'rested longer than a')
-  assert.deepEqual(camp.assignments.t5, { crew: b.id, project: 'p' })
+  assert.equal(camp.assignments.t5.crew, b.id)
+  assert.equal(camp.assignments.t5.project, 'p')
 })
 
 test('levels and titles', () => {
@@ -49,7 +50,7 @@ test('snapshot: whole wood, crew with levels, assignments as crew ids; crewLabel
   assign(camp, 't1', 'p', T0)
   const snap = snapshot(camp, T0)
   assert.equal(snap.wood, 12)
-  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 2, title: 'Trailblazer', xp: 150, next: 400 })
+  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 2, title: 'Trailblazer', xp: 150, next: 400, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, bonus: 0, pin: null, journal: [{ kind: 'hired', at: T0 }] })
   assert.deepEqual(snap.assignments, { t1: camp.crew[0].id })
   assert.equal(crewLabel(snap, 't1'), `${camp.crew[0].name} · Lv 2 Trailblazer`)
   assert.equal(crewLabel(snap, 'nobody'), 'Day hiker')

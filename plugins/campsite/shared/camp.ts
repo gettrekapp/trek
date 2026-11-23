@@ -1,11 +1,23 @@
-// The camp (campsite parts 2 and 3a): one per server, shared by every project. What it holds, a new
-// one, version 1 → 2, a shape check for what camp.json held, and the snapshot windows see. Pure.
+// The camp (campsite parts 2, 3a and 3b): one per server, shared by every project. What it holds, a
+// new one, versions 1 → 2 → 3, a shape check for what camp.json held, and the snapshot windows see.
+// Pure.
 import { AWAY_SOURCES, awayDue, newAway, noWood, type AwaySnapshot, type AwayTally } from './away.ts'
-import { BUILDING_IDS, HOUR_MS, building, hireCost, isRecord, startBuilt, whole, type BuildingId } from './catalog.ts'
-import { levelFor, levelXp, newCrew, titleFor } from './crew.ts'
+import { BUILDING_IDS, GEAR_SLOTS, GEAR_TOP, HOUR_MS, building, gearBonus, hireCost, isRecord, noGear, startBuilt, whole, type BuildingId, type GearTiers } from './catalog.ts'
+import { levelFor, levelXp, liveKinds, newCrew, titleFor } from './crew.ts'
+import type { JournalEntry } from './journal.ts'
 import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './shop.ts'
 
-export const CAMP_VERSION = 2
+export const CAMP_VERSION = 3
+
+/** What a member goes out on: sessions of a type, or of an agent (provider); null: any session */
+export type Pin = { kind: 'type' | 'provider'; id: string }
+/** A session type or an agent the camp saw a session start with, by its name then, and when last */
+export interface SeenKind {
+  kind: 'type' | 'provider'
+  id: string
+  name: string
+  at: number
+}
 
 export interface CrewMember {
   id: string
@@ -15,10 +27,33 @@ export interface CrewMember {
   xp: number
   /** When it last came back to camp (ms): the longest-rested free member is picked first */
   restedAt: number
+  /** Its tier in each gear slot (0: none) */
+  gear: GearTiers
+  pin: Pin | null
+  /** Newest last, at most JOURNAL_MAX */
+  journal: JournalEntry[]
+}
+
+/** A session's member, and where the trip is (for the prune and the journal) */
+export interface Assignment {
+  crew: string
+  /** The project's id */
+  project: string
+  /** null: a Global session */
+  worktreeId: string | null
+  /** The session's agent ('' when not known) */
+  provider: string
+  /** The project's name and the session's place (the worktree's branch, else its folder, or "Global"), when it was assigned */
+  projectName: string
+  place: string
+  /** When the member went out */
+  start: number
+  /** Wood credited to the member on this trip (its gear's bonus included) */
+  wood: number
 }
 
 export interface Camp {
-  version: 2
+  version: 3
   seed: number
   /** With fractions (the warmth factor, the garden, fishing); shown floored */
   wood: number
@@ -26,8 +61,8 @@ export interface Camp {
   /** 0–1 */
   warmth: number
   crew: CrewMember[]
-  /** Session (terminalId) → its member, and its project (for the prune) */
-  assignments: Record<string, { crew: string; project: string }>
+  /** Session (terminalId) → its member and its trip */
+  assignments: Record<string, Assignment>
   /** Open working spans: since `start`, `paid` whole minutes paid */
   spans: Record<string, { start: number; paid: number; project: string }>
   /** Whole working minutes since the session's last paid completion */
@@ -46,12 +81,14 @@ export interface Camp {
   seenAt: number
   /** The names hired on `day` (YYYY-MM-DD, the server's local date): they leave that day's walk-ins */
   hired: { day: string; names: string[] }
+  /** Session types and agents sessions started with, for pinning (older than SEEN_KIND_MS are dropped) */
+  seenKinds: SeenKind[]
   /** The last whole minute the tick has accounted for */
   lastTick: number
   savedAt: number
 }
 
-/** A member as windows see it: whole XP, and the XP where its next level starts */
+/** A member as windows see it: whole XP, and the XP where its next level starts; its gear, the bonus it gives (percent), its pin and journal */
 export interface CrewEntry {
   id: string
   name: string
@@ -60,6 +97,10 @@ export interface CrewEntry {
   title: string
   xp: number
   next: number
+  gear: GearTiers
+  bonus: number
+  pin: Pin | null
+  journal: JournalEntry[]
 }
 
 /** What windows see (campsite.state) */
@@ -77,6 +118,8 @@ export interface CampSnapshot {
   candidates: Candidate[]
   /** The next hire's price */
   recruitCost: number
+  /** The session types and agents a member can be pinned to (seen in the last 30 days): types first, then agents, by name */
+  seenKinds: Omit<SeenKind, 'at'>[]
   /** Only while the away card is due */
   away?: AwaySnapshot
 }
@@ -99,6 +142,7 @@ export function newCamp(seed: number, now: number): Camp {
     away: newAway(now),
     seenAt: now,
     hired: { day: '', names: [] },
+    seenKinds: [],
     lastTick: now,
     savedAt: now
   }
@@ -106,11 +150,26 @@ export function newCamp(seed: number, now: number): Camp {
 
 const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
-/** camp.json as version 1 wrote it, given version 2's new fields (seen at its last save); anything else as it is */
+/**
+ * camp.json as version 1 or 2 wrote it, brought to version 3: version 1 gains version 2's fields
+ * (seen at its last save); version 2 gains the shed (not built), each member no gear, no pin and an
+ * empty journal, each trip its start (the last save) and no wood, and no seen kinds. Anything else as
+ * it is.
+ */
 export function migrateCamp(raw: unknown): unknown {
-  if (!isRecord(raw) || raw.version !== 1) return raw
+  if (!isRecord(raw)) return raw
   const at = num(raw.savedAt) ? raw.savedAt : 0
-  return { ...raw, version: 2, built: startBuilt(), away: newAway(at), seenAt: at, hired: { day: '', names: [] } }
+  let out: Record<string, unknown> = raw
+  if (out.version === 1) out = { ...out, version: 2, built: startBuilt(), away: newAway(at), seenAt: at, hired: { day: '', names: [] } }
+  if (out.version !== 2) return out
+  const crew = Array.isArray(out.crew) ? out.crew.map((m: unknown) => (isRecord(m) ? { ...m, gear: noGear(), pin: null, journal: [] } : m)) : out.crew
+  const assignments = isRecord(out.assignments)
+    ? Object.fromEntries(
+        Object.entries(out.assignments).map(([id, a]) => [id, isRecord(a) ? { ...a, worktreeId: null, provider: '', projectName: typeof a.project === 'string' ? a.project : '', place: '', start: at, wood: 0 } : a])
+      )
+    : out.assignments
+  const built = isRecord(out.built) ? { ...out.built, shed: 0 } : out.built
+  return { ...out, version: 3, crew, assignments, built, seenKinds: [] }
 }
 
 function isAway(x: unknown): boolean {
@@ -120,11 +179,27 @@ function isAway(x: unknown): boolean {
   return Array.isArray(x.levelUps) && x.levelUps.every((u) => isRecord(u) && typeof u.crewId === 'string' && num(u.level))
 }
 
-/** Whether camp.json held a camp of this version (top-level shape; members and maps checked loosely) */
+const isGear = (g: unknown): boolean => isRecord(g) && GEAR_SLOTS.every((slot) => Number.isInteger(g[slot]) && (g[slot] as number) >= 0 && (g[slot] as number) <= GEAR_TOP)
+const isKind = (k: unknown): boolean => k === 'type' || k === 'provider'
+const isPin = (p: unknown): boolean => p === null || (isRecord(p) && isKind(p.kind) && typeof p.id === 'string')
+const isMember = (m: unknown): boolean =>
+  isRecord(m) &&
+  typeof m.id === 'string' &&
+  typeof m.name === 'string' &&
+  num(m.xp) &&
+  num(m.restedAt) &&
+  num(m.seed) &&
+  isGear(m.gear) &&
+  isPin(m.pin) &&
+  Array.isArray(m.journal) &&
+  m.journal.every((e) => isRecord(e) && typeof e.kind === 'string' && num(e.at))
+
+/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely) */
 export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false
-  if (!Array.isArray(x.crew) || !x.crew.every((m) => isRecord(m) && typeof m.id === 'string' && typeof m.name === 'string' && num(m.xp) && num(m.restedAt) && num(m.seed))) return false
+  if (!Array.isArray(x.crew) || !x.crew.every(isMember)) return false
+  if (!Array.isArray(x.seenKinds) || !x.seenKinds.every((k) => isRecord(k) && isKind(k.kind) && typeof k.id === 'string' && typeof k.name === 'string' && num(k.at))) return false
   if (!Array.isArray(x.ledger) || !x.ledger.every((k) => typeof k === 'string')) return false
   const built = x.built
   if (!isRecord(built) || !BUILDING_IDS.every((id) => Number.isInteger(built[id]) && (built[id] as number) >= building(id).start && (built[id] as number) <= building(id).tiers.length)) return false
@@ -153,14 +228,15 @@ export function snapshot(camp: Camp, now: number): CampSnapshot {
     markers: camp.markers,
     crew: camp.crew.map((m) => {
       const level = levelFor(m.xp)
-      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: whole(m.xp), next: whole(levelXp(level + 1)) }
+      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: whole(m.xp), next: whole(levelXp(level + 1)), gear: { ...m.gear }, bonus: gearBonus(m.gear), pin: m.pin && { ...m.pin }, journal: m.journal.map((e) => ({ ...e })) }
     }),
     assignments,
     built: { ...camp.built },
     offers: offers(camp),
     bunks: bunks(camp),
     candidates: todaysCandidates(camp, now),
-    recruitCost: hireCost(camp.crew.length)
+    recruitCost: hireCost(camp.crew.length),
+    seenKinds: liveKinds(camp, now)
   }
   if (awayDue(camp, now)) snap.away = awaySnapshot(camp, now)
   return snap

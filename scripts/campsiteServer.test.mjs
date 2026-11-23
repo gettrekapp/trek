@@ -157,7 +157,7 @@ test('valid JSON of the wrong shape is moved to camp.json.bak', (t) => {
 
 test('a camp.json from a newer version is left alone: no .bak, a fresh camp in memory, never saved', (t) => {
   const file = join(tempDir(t), 'camp.json')
-  const text = '{"version":3,"wood":99}'
+  const text = '{"version":4,"wood":99}'
   writeFileSync(file, text)
   const warnings = []
   const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
@@ -364,12 +364,12 @@ test('a commit count that fails after dispose logs nothing', async (t) => {
 
 test('a version 1 camp.json is migrated on load: its wood kept, the new fields at their defaults, seen at load (its last save, moved on by the downtime)', (t) => {
   const file = join(tempDir(t), 'camp.json')
-  const { built, away, seenAt, hired, ...v1 } = newCamp(7, T0)
+  const { built, away, seenAt, hired, seenKinds, ...v1 } = newCamp(7, T0)
   writeFileSync(file, JSON.stringify({ ...v1, version: 1, wood: 42, savedAt: T0 + 9 }))
   const warnings = []
   const store = openCampStore(file, { now: () => T0 + 60_000, seed: () => 9, warn: (m) => warnings.push(m), schedule: manual().schedule })
   assert.deepEqual(warnings, [])
-  assert.equal(store.camp.version, 2)
+  assert.equal(store.camp.version, 3)
   assert.equal(store.camp.wood, 42)
   assert.equal(store.camp.seed, 7)
   // Seen at its last save, then shifted by the downtime: seen now
@@ -377,7 +377,7 @@ test('a version 1 camp.json is migrated on load: its wood kept, the new fields a
   assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0, shed: 0 })
   assert.equal(existsSync(`${file}.bak`), false)
   store.flush()
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 2)
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 3)
 })
 
 test('a restart after 9 hours down: the unpaid minute is paid, but the seen clocks move by the downtime, so no away card', (t) => {
@@ -568,7 +568,7 @@ test('a version 1 camp.json still malformed after migration is moved to camp.jso
   const warnings = []
   const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
   assert.equal(store.camp.wood, 0)
-  assert.equal(store.camp.version, 2)
+  assert.equal(store.camp.version, 3)
   assert.equal(readFileSync(`${file}.bak`, 'utf8'), text)
   assert.equal(warnings.length, 1)
 })

@@ -129,6 +129,9 @@ export const TRAITS: readonly string[] = [
   'Counts every step'
 ]
 
+/** The session types and agents the camp saw start a session within this long are offered for pinning */
+export const SEEN_KIND_MS = 30 * 24 * HOUR_MS
+
 /** The away card is due once nobody has seen the camp for longer than this */
 export const AWAY_DUE_MS = 4 * HOUR_MS
 
@@ -144,3 +147,67 @@ export const costLabel = (cost: Cost): string => (cost.markers > 0 ? `🪵 ${cos
 
 /** Wood (or a tally) as shown and checked: floored, forgiving the float drift of many small payments (30 × 2/60 is 0.9999999999999999) */
 export const whole = (x: number): number => Math.floor(x + 1e-6)
+
+export const GEAR_SLOTS = ['pack', 'boots', 'hat', 'tool'] as const
+export type GearSlot = (typeof GEAR_SLOTS)[number]
+/** A member's tier in each slot: 0 (none) to GEAR_TOP */
+export type GearTiers = Record<GearSlot, number>
+export const GEAR_TOP = 3
+export const isGearSlot = (x: unknown): x is GearSlot => typeof x === 'string' && (GEAR_SLOTS as readonly string[]).includes(x)
+/** No gear */
+export function noGear(): GearTiers {
+  const out = {} as GearTiers
+  for (const slot of GEAR_SLOTS) out[slot] = 0
+  return out
+}
+
+export interface GearItem {
+  /** "Ice axe" */
+  name: string
+  /** "an ice axe", for the journal ("Bought an ice axe") */
+  phrase: string
+}
+/** Each slot's items, by tier (GEAR[slot][n - 1] is tier n) */
+export const GEAR: Readonly<Record<GearSlot, readonly GearItem[]>> = {
+  pack: [
+    { name: 'Canvas pack', phrase: 'a canvas pack' },
+    { name: 'Forest pack', phrase: 'a forest pack' },
+    { name: 'Crimson pack', phrase: 'a crimson pack' }
+  ],
+  boots: [
+    { name: 'Leather boots', phrase: 'leather boots' },
+    { name: 'Black boots', phrase: 'black boots' },
+    { name: 'Red-laced boots', phrase: 'red-laced boots' }
+  ],
+  hat: [
+    { name: 'Bucket hat', phrase: 'a bucket hat' },
+    { name: 'Ranger hat', phrase: 'a ranger hat' },
+    { name: 'Alpine hat', phrase: 'an alpine hat' }
+  ],
+  tool: [
+    { name: 'Trekking pole', phrase: 'a trekking pole' },
+    { name: 'Ice axe', phrase: 'an ice axe' },
+    { name: 'Gold ice axe', phrase: 'a gold ice axe' }
+  ]
+}
+export const SLOT_NAMES: Readonly<Record<GearSlot, string>> = { pack: 'Pack', boots: 'Boots', hat: 'Hat', tool: 'Tool' }
+/** An item's price in wood, by tier (GEAR_COST[n - 1]) */
+export const GEAR_COST: readonly number[] = [60, 200, 500]
+/** An item's bonus (percent) on the wood its member's sessions earn, by tier */
+export const GEAR_BONUS: readonly number[] = [2, 4, 6]
+/** What a tier needs: the gear shed's tier and the member's level */
+export const GEAR_NEEDS: readonly { shed: number; level: number }[] = [
+  { shed: 1, level: 1 },
+  { shed: 1, level: 3 },
+  { shed: 2, level: 5 }
+]
+export const gearItem = (slot: GearSlot, tier: number): GearItem => GEAR[slot][tier - 1]
+/** A member's bonus (percent): the sum of its items' */
+export const gearBonus = (gear: Readonly<GearTiers>): number => GEAR_SLOTS.reduce((sum, slot) => sum + (gear[slot] > 0 ? GEAR_BONUS[gear[slot] - 1] : 0), 0)
+/** Why a tier can't be bought yet ("Needs the gear shed", "Needs gear shed II", "Needs Lv 3"); null when the shed and the level allow it */
+export function gearGate(shed: number, level: number, tier: number): string | null {
+  const needs = GEAR_NEEDS[tier - 1]
+  if (shed < needs.shed) return needs.shed === 1 ? 'Needs the gear shed' : 'Needs gear shed II'
+  if (level < needs.level) return `Needs Lv ${needs.level}`
+  return null
+}

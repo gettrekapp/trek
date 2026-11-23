@@ -3,7 +3,7 @@
 // camp, then change the camp in place (null) or say why not (a refusal the server half throws).
 // Purchases are final. Pure: the caller passes the time.
 import type { Camp, CrewMember } from './camp.ts'
-import { BUNKS_PER_CABIN, CANDIDATES_PER_DAY, CATALOG, START_BUNKS, TRAITS, building, costWords, hireCost, isBuildingId, isRecord, whole, type BuildingId, type Cost } from './catalog.ts'
+import { BUNKS_PER_CABIN, CANDIDATES_PER_DAY, CATALOG, START_BUNKS, TRAITS, building, costWords, hireCost, isBuildingId, isRecord, noGear, whole, type BuildingId, type Cost } from './catalog.ts'
 import { TRAIL_NAMES } from './crew.ts'
 import { fnv1a } from './hiker.ts'
 
@@ -106,7 +106,7 @@ export function recruit(camp: Camp, params: Record<string, unknown>, now: number
   const short = shortfall(camp, { wood: price, markers: 0 })
   if (short) return conflict(short)
   camp.wood = Math.max(0, camp.wood - price)
-  camp.crew.push({ id: nextCrewId(camp.crew), name: walkIn.name, seed: walkIn.seed, xp: 0, restedAt: now })
+  camp.crew.push({ id: nextCrewId(camp.crew), name: walkIn.name, seed: walkIn.seed, xp: 0, restedAt: now, gear: noGear(), pin: null, journal: [{ kind: 'hired', at: now }] })
   const day = dayOf(now)
   if (camp.hired.day !== day) camp.hired = { day, names: [] }
   camp.hired.names.push(walkIn.name)
