@@ -18,6 +18,11 @@ const PASSTHROUGH: ReadonlySet<string> = new Set<WireErrorCode>([
   'TOOL_ERROR'
 ])
 
+/** Whether `code` is one an error may carry to the client as-is (any other is INTERNAL there). */
+export function isPassthroughCode(code: unknown): code is WireErrorCode {
+  return typeof code === 'string' && PASSTHROUGH.has(code)
+}
+
 export function codedError(code: WireErrorCode, message: string, details?: WireErrorDetails): Error {
   const err = new Error(message)
   ;(err as NodeJS.ErrnoException).code = code
@@ -38,7 +43,7 @@ function wireDetails(err: unknown, withReason: boolean): WireErrorDetails | unde
 export function toWireError(method: string, err: unknown): WireError {
   const message = err instanceof Error ? err.message : String(err)
   const code = (err as { code?: unknown } | null)?.code
-  const passed = typeof code === 'string' && PASSTHROUGH.has(code)
+  const passed = isPassthroughCode(code)
   // A plugin's NOT_SIGNED_IN is for the server's own PR watch; a client sees it as a tool's failure.
   const wireCode: WireErrorCode = passed ? (code as WireErrorCode) : code === 'NOT_SIGNED_IN' ? 'TOOL_ERROR' : method.startsWith('git.') ? 'GIT_ERROR' : 'INTERNAL'
   // What was torn down before an unexpected failure reaches the client too.

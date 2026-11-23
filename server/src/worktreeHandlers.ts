@@ -43,7 +43,7 @@ export function defaultWorktreePath(repoPath: string, branch: string, platform: 
 }
 
 /** Runs a git operation; any failure reaches the client as GIT_ERROR with git's message. */
-async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
+export async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (err) {

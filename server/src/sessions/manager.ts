@@ -77,7 +77,7 @@ export interface SessionManagerDeps {
 }
 
 /** An optional agent pick from a client: one this server has. */
-function checkLlm(value: unknown, agents: AgentLookup): LlmSelection | undefined {
+export function checkLlm(value: unknown, agents: AgentLookup): LlmSelection | undefined {
   if (value === undefined) return undefined
   // sanitizeAgentSelection turns an unknown agent into the default one: refuse it instead.
   if (!isRecord(value) || typeof value.provider !== 'string' || !agents.has(value.provider)) throw bad('llm.provider must be a known provider')
@@ -279,9 +279,7 @@ export class SessionManager {
     if (p.initialMessage !== undefined && typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
 
     // Before the lazy load: at the cap, loading would only mark the worktree's sessions exited -1.
-    this.assertCapacity()
-    const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
-    if (records >= MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions; close some first`)
+    this.assertRoomFor(project.id)
     if (worktree && !worktree.loaded) this.loadWorktree({ projectId: project.id, worktreeId: worktree.id })
 
     // Loading replaced the project snapshot: count the sessions in the current one.
@@ -764,6 +762,18 @@ export class SessionManager {
 
   private assertRunning(): void {
     if (this.stopped) throw codedError('INTERNAL', 'the server is shutting down')
+  }
+
+  /**
+   * CAPACITY unless the server and the project have room for one more session (what start checks;
+   * task.start asks before its git work).
+   */
+  assertRoomFor(projectId: string): void {
+    this.assertRunning()
+    this.assertCapacity()
+    const project = this.deps.projects.require(projectId)
+    const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
+    if (records >= MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions; close some first`)
   }
 
   /**

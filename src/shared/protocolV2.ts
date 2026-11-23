@@ -770,7 +770,7 @@ export interface MethodResultsV2 {
   'task.setArchived': null
   'task.delete': null
   'task.reorder': null
-  'task.start': { worktreeId: string; sessionId: string; branch: string }
+  'task.start': { worktreeId: string; sessionId: string; branch: string; linkWarnings?: string[] }
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null

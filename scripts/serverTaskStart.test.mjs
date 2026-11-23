@@ -12,8 +12,10 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { freeTaskBranch } from '../server/src/tasks/taskHandlers.ts'
 import { realPath } from '../src/host/pathContainment.ts'
 import { removeDir } from './testPlatform.mjs'
+import { builtinAgents } from './agentsHarness.mjs'
 
 const gitEnv = {
   ...process.env,
@@ -22,7 +24,7 @@ const gitEnv = {
 }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
-async function setup(t, { startFails = false, repos = 1 } = {}) {
+async function setup(t, { startFails = false, startError, full = false, repos = 1 } = {}) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-task-start-')))
   t.after(() => removeDir(dir))
   const paths = []
@@ -43,7 +45,12 @@ async function setup(t, { startFails = false, repos = 1 } = {}) {
   const sessions = {
     refreshAttention() {},
     blockPath: () => () => {},
+    agentRegistry: builtinAgents(),
+    assertRoomFor: () => {
+      if (full) throw Object.assign(new Error('the server is running its maximum of 1 sessions'), { code: 'CAPACITY' })
+    },
     start: (p) => {
+      if (startError) throw startError
       if (startFails) throw Object.assign(new Error('a project holds at most 500 sessions; close some first'), { code: 'CAPACITY' })
       started.push(p)
       return { sessionId: `s${started.length}`, ptyId: `pty${started.length}` }
@@ -72,6 +79,9 @@ test('task.start makes task/<slug>, starts a session with the task prompt, and r
   assert.ok(existsSync(wt.path))
   assert.equal(s.started.length, 1)
   assert.equal(s.started[0].worktreeId, res.result.worktreeId)
+  assert.equal(s.started[0].title, 'Fix the login bug')
+  assert.equal('llm' in s.started[0], false)
+  assert.equal('linkWarnings' in res.result, false)
   assert.match(s.started[0].initialMessage, /^Fix the login bug\n\nIt 500s\.\n\nThis is Trek task /)
   const [start] = s.project().tasks[0].starts
   assert.deepEqual([start.repositoryId, start.worktreeId, start.branch, start.sessionId], [s.repoIds[0], res.result.worktreeId, 'task/fix-the-login-bug', 's1'])
@@ -111,4 +121,52 @@ test('task.start: a session that fails keeps the worktree, records the start wit
   assert.equal(start.branch, 'task/busy')
   assert.equal('sessionId' in start, false)
   assert.ok(s.project().repositories[0].worktrees.some((w) => w.branch === 'task/busy'))
+})
+
+const extraWorktrees = (s) => s.project().repositories.flatMap((r) => r.worktrees).filter((w) => !w.isMain).length
+
+test('task.start checks llm before any git work; a good one reaches the session', async (t) => {
+  const s = await setup(t)
+  const taskId = await s.addTask('Pick')
+  for (const llm of [{ provider: 'nope' }, 'claude', { provider: 7 }]) {
+    const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0], llm })
+    assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(llm))
+  }
+  assert.equal(extraWorktrees(s), 0, 'no worktree was made')
+  assert.equal(s.started.length, 0)
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0], llm: { provider: 'claude' } })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(s.started[0].llm.provider, 'claude')
+})
+
+test('task.start: no room for a session refuses before any git work', async (t) => {
+  const s = await setup(t, { full: true })
+  const taskId = await s.addTask('Full')
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0] })
+  assert.equal(res.error?.code, 'CAPACITY')
+  assert.equal(extraWorktrees(s), 0)
+  assert.equal(s.project().tasks[0].starts, undefined)
+})
+
+test('task.start: a session failure with no wire code is TOOL_ERROR, still naming the branch', async (t) => {
+  const s = await setup(t, { startError: Object.assign(new Error('spawn exploded'), { code: 'ENOENT' }) })
+  const taskId = await s.addTask('Odd')
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0] })
+  assert.equal(res.error?.code, 'TOOL_ERROR')
+  assert.match(res.error.message, /task\/odd.*spawn exploded/)
+})
+
+test('task.start gives the session a title cut to the session title limit', async (t) => {
+  const s = await setup(t)
+  const title = 'x'.repeat(200)
+  const taskId = await s.addTask(title)
+  const res = await s.call('task.start', { projectId: s.projectId, taskId, repositoryId: s.repoIds[0] })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.ok(s.started[0].title.length <= 200 && s.started[0].title.startsWith('xxx'))
+})
+
+test('freeTaskBranch: git failing to read a branch is GIT_ERROR', async (t) => {
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-task-nogit-')))
+  t.after(() => removeDir(dir))
+  await assert.rejects(freeTaskBranch(join(dir, 'missing'), 'x'), (err) => err.code === 'GIT_ERROR')
 })

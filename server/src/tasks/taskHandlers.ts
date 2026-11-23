@@ -4,11 +4,13 @@ import { existsSync } from 'node:fs'
 import * as gitService from '../../../src/host/gitService.ts'
 import type { Task } from '../../../src/shared/model/types'
 import { slugifyTaskTitle, taskBranchName, taskPrompt } from '../../../src/shared/tasks.ts'
-import { codedError } from '../errors.ts'
+import { codedError, isPassthroughCode } from '../errors.ts'
 import { repoIn } from '../projects/model.ts'
 import { requireBoolean, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
-import { defaultWorktreePath, worktreeHandlers } from '../worktreeHandlers.ts'
+import { checkLlm } from '../sessions/manager.ts'
+import { MAX_TITLE_LENGTH } from '../sessions/limits.ts'
+import { defaultWorktreePath, viaGit, worktreeHandlers } from '../worktreeHandlers.ts'
 import {
   checkTaskInput,
   deleteTask,
@@ -50,11 +52,11 @@ const START_COLS = 120
 const START_ROWS = 32
 const MAX_BRANCH_TRIES = 99
 
-/** The first of task/<slug>, task/<slug>-2 … that names no local branch and no existing default worktree folder. */
+/** The first of task/<slug>, task/<slug>-2 … that names no local branch and no existing default worktree folder. GIT_ERROR when git cannot read the branches. */
 export async function freeTaskBranch(repoPath: string, slug: string): Promise<string> {
   for (let n = 1; n <= MAX_BRANCH_TRIES; n++) {
     const branch = taskBranchName(slug, n)
-    if ((await gitService.localBranchSha(repoPath, branch)) === null && !existsSync(defaultWorktreePath(repoPath, branch))) return branch
+    if ((await viaGit(() => gitService.localBranchSha(repoPath, branch))) === null && !existsSync(defaultWorktreePath(repoPath, branch))) return branch
   }
   throw codedError('BAD_REQUEST', `${taskBranchName(slug, 1)} and its -2 … -${MAX_BRANCH_TRIES} are all taken; rename the task or delete some of those branches`)
 }
@@ -100,16 +102,23 @@ export const taskHandlers: Record<string, Handler> = {
     const task = findTask(project.tasks ?? [], taskId)
     if (task.archivedAt !== undefined) throw codedError('BAD_REQUEST', 'An archived task cannot be started; unarchive it first')
     const repo = repoIn(project, requireString(p.repositoryId, 'repositoryId'))
+    // What the session would refuse, refused before any git work leaves a worktree behind.
+    const llm = checkLlm(p.llm, ctx.sessions.agentRegistry)
+    ctx.sessions.assertRoomFor(projectId)
     const branch = await freeTaskBranch(repo.path, slugifyTaskTitle(task.title))
-    const { worktreeId } = (await worktreeHandlers['worktree.create']({ projectId, repoId: repo.id, branch, createBranch: true }, ctx)) as { worktreeId: string }
+    const { worktreeId, linkWarnings } = (await worktreeHandlers['worktree.create']({ projectId, repoId: repo.id, branch, createBranch: true }, ctx)) as {
+      worktreeId: string
+      linkWarnings?: string[]
+    }
     let sessionId: string | undefined
     let failure: unknown
     try {
       ;({ sessionId } = ctx.sessions.start({
         projectId,
         worktreeId,
+        title: task.title.slice(0, MAX_TITLE_LENGTH),
         initialMessage: taskPrompt(task),
-        ...(p.llm !== undefined ? { llm: p.llm } : {}),
+        ...(llm !== undefined ? { llm } : {}),
         cols: START_COLS,
         rows: START_ROWS
       }))
@@ -124,8 +133,8 @@ export const taskHandlers: Record<string, Handler> = {
     })
     if (failure !== undefined) {
       const e = failure as { code?: string; message?: string }
-      throw codedError((e.code ?? 'TOOL_ERROR') as Parameters<typeof codedError>[0], `Created the worktree on ${branch}, but its session did not start: ${e.message ?? String(failure)}`)
+      throw codedError(isPassthroughCode(e.code) ? e.code : 'TOOL_ERROR', `Created the worktree on ${branch}, but its session did not start: ${e.message ?? String(failure)}`)
     }
-    return { worktreeId, sessionId: sessionId!, branch }
+    return { worktreeId, sessionId: sessionId!, branch, ...(linkWarnings?.length ? { linkWarnings } : {}) }
   }
 }
