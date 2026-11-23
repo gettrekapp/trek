@@ -1,8 +1,8 @@
-// camp.json (campsite part 2): the camp, loaded once, saved atomically (a temp file renamed over it)
+// camp.json (campsite parts 2 and 3a): the camp, loaded once (version 1 is migrated to 2), saved atomically (a temp file renamed over it)
 // at most once per debounce and on dispose. A file that can't be read as a camp is moved aside to
 // camp.json.bak and a new camp starts, with a warning: the camp never stops the server.
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { CAMP_VERSION, isCamp, newCamp, type Camp } from '../shared/camp.ts'
+import { CAMP_VERSION, isCamp, migrateCamp, newCamp, type Camp } from '../shared/camp.ts'
 import { restore, RULES, type Rules } from '../shared/economy.ts'
 
 export interface CampStore {
@@ -22,6 +22,8 @@ export interface CampStoreOptions {
   schedule?: (fn: () => void, ms: number) => { cancel(): void }
   debounceMs?: number
   rules?: Rules
+  /** A fresh camp's wood and markers (no camp.json yet): TREK_CAMPSITE_SEED_WOOD, for the smokes */
+  start?: { wood: number; markers: number }
 }
 
 const defaultSchedule = (fn: () => void, ms: number): { cancel(): void } => {
@@ -32,9 +34,16 @@ const defaultSchedule = (fn: () => void, ms: number): { cancel(): void } => {
 
 /** A camp, and whether it may be saved (false: the file is from a newer Trek and stays as it is) */
 function load(file: string, o: CampStoreOptions): { camp: Camp; writable: boolean } {
-  if (!existsSync(file)) return { camp: newCamp(o.seed(), o.now()), writable: true }
+  if (!existsSync(file)) {
+    const camp = newCamp(o.seed(), o.now())
+    if (o.start) {
+      camp.wood = o.start.wood
+      camp.markers = o.start.markers
+    }
+    return { camp, writable: true }
+  }
   try {
-    const raw: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    const raw: unknown = migrateCamp(JSON.parse(readFileSync(file, 'utf8')))
     const version = typeof raw === 'object' && raw !== null ? (raw as { version?: unknown }).version : undefined
     if (typeof version === 'number' && version > CAMP_VERSION) {
       o.warn(`[campsite] camp.json is version ${version}, newer than this Trek understands (${CAMP_VERSION}): left as it is, and this run's camp is not saved`)

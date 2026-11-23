@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
 import { createCampServer } from '../plugins/campsite/server/camp.ts'
+import { newCamp } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
 const tempDir = (t) => {
@@ -156,7 +157,7 @@ test('valid JSON of the wrong shape is moved to camp.json.bak', (t) => {
 
 test('a camp.json from a newer version is left alone: no .bak, a fresh camp in memory, never saved', (t) => {
   const file = join(tempDir(t), 'camp.json')
-  const text = '{"version":2,"wood":99}'
+  const text = '{"version":3,"wood":99}'
   writeFileSync(file, text)
   const warnings = []
   const store = openCampStore(file, { now: () => T0, seed: () => 7, warn: (m) => warnings.push(m), schedule: manual().schedule })
@@ -359,4 +360,31 @@ test('a commit count that fails after dispose logs nothing', async (t) => {
   release()
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
   assert.deepEqual(h.warnings, [])
+})
+
+test('a version 1 camp.json is migrated on load: its wood kept, the new fields at their defaults, seen at its last save', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const { built, away, seenAt, hired, ...v1 } = newCamp(7, T0)
+  writeFileSync(file, JSON.stringify({ ...v1, version: 1, wood: 42, savedAt: T0 + 9 }))
+  const warnings = []
+  const store = openCampStore(file, { now: () => T0 + 60_000, seed: () => 9, warn: (m) => warnings.push(m), schedule: manual().schedule })
+  assert.deepEqual(warnings, [])
+  assert.equal(store.camp.version, 2)
+  assert.equal(store.camp.wood, 42)
+  assert.equal(store.camp.seed, 7)
+  assert.equal(store.camp.seenAt, T0 + 9)
+  assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
+  assert.equal(existsSync(`${file}.bak`), false)
+  store.flush()
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 2)
+})
+
+test('start: a fresh camp (no camp.json) begins with the given wood and markers; a loaded one keeps its own', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const a = openCampStore(file, { now: () => T0, seed: () => 7, warn: () => {}, schedule: manual().schedule, start: { wood: 100, markers: 3 } })
+  assert.deepEqual([a.camp.wood, a.camp.markers], [100, 3])
+  a.camp.wood = 5
+  a.flush()
+  const b = openCampStore(file, { now: () => T0, seed: () => 7, warn: () => {}, schedule: manual().schedule, start: { wood: 100, markers: 3 } })
+  assert.deepEqual([b.camp.wood, b.camp.markers], [5, 3])
 })
