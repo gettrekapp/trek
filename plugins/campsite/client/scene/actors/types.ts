@@ -6,6 +6,7 @@ import type { BuildingId } from '../../../shared/catalog.ts'
 import type { CampLayout } from '../../../shared/layout.ts'
 import type { FlagTrail } from '../../../shared/mountain.ts'
 import type { Sign } from '../../../shared/pose.ts'
+import type { Palette, World } from '../../../shared/world.ts'
 
 export interface StageSnapshot {
   layout: CampLayout
@@ -29,6 +30,10 @@ export interface StageSnapshot {
   summits: number
   /** The last summit to celebrate in this window (its seq changes for each one); null: none yet */
   summit: { worktreeId: string; seq: number } | null
+  /** The time of day, the season and the weather (campsite part 3d-1); the same object while they look the same */
+  world: World
+  /** The backdrop's colours for `world` */
+  palette: Palette
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

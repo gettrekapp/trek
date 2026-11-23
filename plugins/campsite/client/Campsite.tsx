@@ -16,6 +16,7 @@ import { summitLine } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
+import { DUSK_WORLD } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
@@ -272,6 +273,7 @@ export function Campsite(): React.JSX.Element | null {
             summits={camp?.summits ?? 0}
             summit={stageSummit}
             now={now}
+            world={DUSK_WORLD}
             selected={selected}
             paused={hidden}
             showDog={prefs.showDog}

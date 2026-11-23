@@ -1,20 +1,23 @@
-// The campsite strip drawn by Pixi: the backdrop (the trails' mountain between its sky and its
-// ridge), tents and Global's log, and the actors (the mountain's flags and cairn, the buildings and
-// lights, the fire, the hikers, the camp dog; scene/actors/). It only draws: Campsite
+// The campsite strip drawn by Pixi: the world (the backdrop in the time of day's and the season's
+// colours, the trails' mountain between its sky and its ridge, spring's flowers, fog; part 3d-1),
+// tents and Global's log, and the actors (the mountain's flags and cairn, the buildings and lights,
+// the fire, the hikers, the camp dog, and what falls or drifts over it all; scene/actors/). It only draws: Campsite
 // lays the camp out (layout.ts) and hands it over with update(). The DOM overlay's buttons
 // (bindTarget, bindDog) are moved by the actors every frame to stand over their sprites, so names,
 // focus and clicks stay DOM. Timing and geometry come from shared/stage.ts.
 import 'pixi.js/unsafe-eval'
 import { Application, Graphics } from 'pixi.js'
 import type { CampLayout } from '../../shared/layout.ts'
-import { SKY, STAGE_H, backdrop, logBox, tentShapes } from '../../shared/stage.ts'
+import { SKY, STAGE_H, logBox, tentShapes } from '../../shared/stage.ts'
 import { BuildingsActor } from './actors/buildings.ts'
 import { DogActor } from './actors/dog.ts'
 import { FireActor } from './actors/fire.ts'
 import { HikersActor } from './actors/hikers.ts'
 import { MountainActor } from './actors/mountain.ts'
+import { ParticlesActor } from './actors/particles.ts'
 import type { SignColors, StageSnapshot } from './actors/types.ts'
-import { drawBackdrop, drawShapes } from './draw.ts'
+import { WorldActor } from './actors/world.ts'
+import { drawShapes } from './draw.ts'
 import { TextureCache } from './textures.ts'
 
 export type { SignColors, StageSnapshot } from './actors/types.ts'
@@ -53,10 +56,10 @@ export class CampStage {
 
   private readonly app: Application
   private readonly textures = new TextureCache()
-  /** The stars and the moon; the ridge, the pines and the ground (the mountain stands between) */
-  private readonly sky = new Graphics()
-  private readonly land = new Graphics()
   private readonly camps = new Graphics()
+  /** The backdrop (the mountain stands between its sky and its land), spring's flowers, fog */
+  private readonly world: WorldActor
+  private readonly particles: ParticlesActor
   private readonly mountain: MountainActor
   private readonly buildings: BuildingsActor
   private readonly fire: FireActor
@@ -76,12 +79,28 @@ export class CampStage {
   private constructor(app: Application, parent: HTMLElement, colors: SignColors) {
     this.app = app
     parent.appendChild(app.canvas)
+    this.world = new WorldActor(this.textures)
+    this.particles = new ParticlesActor(this.textures)
     this.mountain = new MountainActor(this.textures)
     this.buildings = new BuildingsActor(this.textures)
     this.fire = new FireActor(this.textures)
     this.dog = new DogActor(this.textures)
     this.hikers = new HikersActor(this.textures, colors)
-    app.stage.addChild(this.sky, this.mountain.root, this.land, this.buildings.root, this.fire.glow, this.hikers.inside, this.camps, this.fire.root, this.dog.root, this.hikers.front)
+    app.stage.addChild(
+      this.world.sky,
+      this.mountain.root,
+      this.world.land,
+      this.world.ground,
+      this.buildings.root,
+      this.fire.glow,
+      this.hikers.inside,
+      this.camps,
+      this.fire.root,
+      this.dog.root,
+      this.hikers.front,
+      this.world.fog,
+      this.particles.root
+    )
     // Pixel art at a few px a frame: 30 fps is plenty
     app.ticker.maxFPS = 30
     app.ticker.add(() => this.frame(performance.now()))
@@ -104,6 +123,8 @@ export class CampStage {
     this.hikers.sync(s, t)
     this.dog.sync(s, t)
     this.snapshot = s
+    this.world.sync(s)
+    this.particles.sync(s)
     this.drawCamps(s.layout)
     this.mountain.sync(s, t)
     this.fire.sync(s, t)
@@ -146,12 +167,13 @@ export class CampStage {
     this.dog.destroy()
     this.fire.destroy()
     this.buildings.destroy()
+    this.world.destroy()
+    this.particles.destroy()
   }
 
   private resize(width: number): void {
     this.width = width
     this.app.renderer.resize(Math.max(1, width), STAGE_H)
-    drawBackdrop(this.sky, this.land, backdrop(width))
   }
 
   /** The tents and Global's log */
@@ -169,6 +191,8 @@ export class CampStage {
     const s = this.snapshot
     if (!s || this.destroyed) return
     const still = s.reduced
+    this.world.frame(t, still)
+    this.particles.frame(t, still)
     this.hikers.frame(t, still)
     this.mountain.frame(t, still)
     this.buildings.frame(t, still)

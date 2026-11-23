@@ -1,7 +1,7 @@
 // The campfire on the Pixi strip: its hearth and embers (redrawn when the fire moves), three flames
 // that flicker, and the glow under the camp. Lit (embers and glow) while anyone is at camp. The fire
 // ring's tiers (part 3a) add stones around the hearth. Sparks rise from it for a few seconds after a
-// summit (part 3c; not under reduced motion).
+// summit (part 3c; not under reduced motion). The glow's size follows the time of day (part 3d-1).
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
 import { fireRing } from '../../../shared/buildingPixels.ts'
@@ -49,7 +49,13 @@ export class FireActor implements Actor {
       drawBoxes(this.hearth, [...this.parts.hearth, ...fireRing(s.layout.fireX, tier)])
       this.embers.clear()
       drawBoxes(this.embers, this.parts.embers)
-      this.glow.position.set(this.parts.glow.x, this.parts.glow.y)
+    }
+    // The glow reaches further at night, less by day (part 3d-1): scaled about its middle (×1 at dusk, where it always was)
+    if (this.parts) {
+      const g = s.palette.glow
+      const box = this.parts.glow
+      this.glow.scale.set(g)
+      this.glow.position.set(box.x + (box.w * (1 - g)) / 2, box.y + (box.h * (1 - g)) / 2)
     }
     const lit = s.sessions.length > 0
     this.glow.visible = lit

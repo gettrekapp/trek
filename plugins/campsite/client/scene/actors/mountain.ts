@@ -3,10 +3,11 @@
 // a flag in its worktree's tent colours on its stage's ledge (shared/mountain.ts), and the cairn of
 // summits on the trailhead's shelf. A summit climbs: once the summited flag is planted, it goes from
 // where it last stood below the summit up to the peak over CLIMB_MS (reduced motion: it is simply
-// there). Under the ridge and the pines.
+// there). Under the ridge and the pines. Its colours follow the world's palette, with snow on its top
+// in winter (part 3d-1).
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
-import { CAIRN_GRID, CLIMB_MS, FLAG, PLANTED, PLANT_WAIT_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, type FlagSpot, type Mountain } from '../../../shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, PLANTED, PLANT_WAIT_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, mountainLook, type FlagSpot, type Mountain } from '../../../shared/mountain.ts'
 import { SUMMIT, cairnSize } from '../../../shared/trails.ts'
 import { drawBoxes, drawShapes } from '../draw.ts'
 import type { TextureCache } from '../textures.ts'
@@ -36,14 +37,16 @@ export class MountainActor implements Actor {
 
   sync(s: StageSnapshot, t: number): void {
     const room = s.layout.width - s.edges.reserve.left - s.edges.reserve.right
-    const key = `${s.layout.fireX}:${room}`
+    const p = s.palette
+    const key = `${s.layout.fireX}:${room}:${p.peak}:${p.ledge}:${p.path}:${p.snow}`
     if (key !== this.key) {
       this.key = key
       this.peak.clear()
       this.m = s.layout.width > 0 ? mountain(s.layout.fireX, room) : null
       if (this.m) {
-        drawShapes(this.peak, [this.m.peak])
-        drawBoxes(this.peak, this.m.path)
+        const look = mountainLook(this.m, p)
+        drawShapes(this.peak, look.shapes)
+        drawBoxes(this.peak, look.path)
       }
     }
     const size = this.m ? cairnSize(s.summits) : 0

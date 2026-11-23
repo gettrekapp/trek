@@ -16,6 +16,7 @@ import { cairnBox, flagSpots, flagTargets, moreBox, mountain, type FlagTrail } f
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
 import { STAGE_H } from '../../shared/stage.ts'
 import { STAGES, cairnSize } from '../../shared/trails.ts'
+import { worldPalette, type World } from '../../shared/world.ts'
 import { useReducedMotion } from '../hooks.ts'
 import { MiniHiker } from '../MiniHiker.tsx'
 import type { CampStage, SignColors } from './CampStage.ts'
@@ -39,6 +40,8 @@ interface Props {
   summit: { worktreeId: string; seq: number } | null
   /** The chores' clock */
   now: number
+  /** The time of day, the season and the weather (part 3d-1); the same object while they look the same */
+  world: World
   selected: string | null
   /** The window is hidden */
   paused: boolean
@@ -64,7 +67,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -96,10 +99,12 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
   }, [])
 
   const stage = load.state === 'ready' ? load.stage : null
+  // The backdrop's colours: worked out again only when the world looks different
+  const palette = useMemo(() => worldPalette(world), [world])
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit })
-  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit])
+    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette })
+  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits, trails, summits, summit, world, palette])
 
   // The flags' buttons, where the stage draws them (before the fallback's early return: a hook)
   const room = layout.width - edges.reserve.left - edges.reserve.right

@@ -1,6 +1,6 @@
 // Pixi textures from the plugin's pixel data: a small canvas per key, drawn one pixel per cell and
 // scaled up by its sprite with nearest-neighbour sampling, so pixels stay crisp. Cached until the
-// stage goes. Also the fire's glow, a soft radial gradient.
+// stage goes. Also the fire's glow, a soft radial gradient, and fog's soft band (part 3d-1).
 import 'pixi.js/unsafe-eval'
 import { Texture } from 'pixi.js'
 import type { Rect } from '../../shared/pixels.ts'
@@ -44,6 +44,27 @@ export class TextureCache {
     ctx.fillRect(-70, -70, 140, 140)
     const texture = Texture.from(canvas, true)
     this.cache.set('glow', texture)
+    return texture
+  }
+
+  /** Fog's band (part 3d-1): 64×16 white, solid in the middle and fading out to every edge; a sprite stretches and tints it */
+  fog(): Texture {
+    const hit = this.cache.get('fog')
+    if (hit) return hit
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 16
+    const ctx = canvas.getContext('2d')!
+    ctx.translate(32, 8)
+    ctx.scale(1, 16 / 64)
+    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 32)
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)')
+    gradient.addColorStop(0.55, 'rgba(255, 255, 255, 0.7)')
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)')
+    ctx.fillStyle = gradient
+    ctx.fillRect(-32, -32, 64, 64)
+    const texture = Texture.from(canvas, true)
+    this.cache.set('fog', texture)
     return texture
   }
 

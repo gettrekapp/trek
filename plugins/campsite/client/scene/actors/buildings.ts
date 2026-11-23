@@ -1,8 +1,8 @@
 // The camp's buildings on the Pixi strip (campsite part 3a): a sprite for each building placed at
 // the ends (campEdges.ts), kept by its key and tier and moved when the ends change, and the string
 // lights across the middle: the wire drawn once, and a sprite per bulb (one white texture, tinted)
-// whose alpha twinkles (still under reduced motion). Both are rebuilt only when what they show
-// changes. A building whose texture can't be made is skipped: the strip still works.
+// whose alpha twinkles (still under reduced motion), lit from dusk to dawn (by day dark bulbs, part
+// 3d-1). Both are rebuilt only when what they show changes. A building whose texture can't be made is skipped: the strip still works.
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
 import { BUILDING_SCALE, buildingArt, bulbAlpha, lightString } from '../../../shared/buildingPixels.ts'
@@ -12,6 +12,8 @@ import type { TextureCache } from '../textures.ts'
 import type { Actor, StageSnapshot } from './types.ts'
 
 const WHITE = [{ x: 0, y: 0, w: 2, h: 2, fill: '#ffffff' }]
+/** A bulb by day */
+const UNLIT = '#4a4552'
 
 export class BuildingsActor implements Actor {
   /** Under everything but the backdrop */
@@ -23,6 +25,9 @@ export class BuildingsActor implements Actor {
   /** `${key}:${tier}` → its sprite */
   private readonly placed = new Map<string, Sprite>()
   private lightsKey = ''
+  /** Each bulb's colour, lit */
+  private fills: string[] = []
+  private lit = true
 
   constructor(textures: TextureCache) {
     this.textures = textures
@@ -56,24 +61,32 @@ export class BuildingsActor implements Actor {
       this.lightsKey = lightsKey
       this.wire.clear()
       for (const child of this.bulbs.removeChildren()) child.destroy()
+      this.fills = []
       if (lit) {
         const lights = lightString(left, right)
         drawBoxes(this.wire, lights.wire)
         const white = this.textures.get('bulb', 2, 2, () => WHITE)
         for (const b of lights.bulbs) {
           const bulb = new Sprite(white)
-          bulb.tint = b.fill
+          bulb.tint = this.lit ? b.fill : UNLIT
           bulb.position.set(b.x, b.y)
           bulb.setSize(b.w, b.h)
           this.bulbs.addChild(bulb)
+          this.fills.push(b.fill)
         }
       }
+    }
+    if (s.palette.lights !== this.lit) {
+      this.lit = s.palette.lights
+      this.bulbs.children.forEach((bulb, i) => {
+        ;(bulb as Sprite).tint = this.lit ? this.fills[i] : UNLIT
+      })
     }
   }
 
   frame(t: number, still: boolean): void {
     this.bulbs.children.forEach((bulb, i) => {
-      bulb.alpha = still ? 1 : bulbAlpha(i, t)
+      bulb.alpha = still || !this.lit ? 1 : bulbAlpha(i, t)
     })
   }
 
