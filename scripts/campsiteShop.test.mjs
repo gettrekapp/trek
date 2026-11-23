@@ -157,7 +157,7 @@ test('snapshot: away only while due, in whole hours and wood, level-ups named; c
   assert.equal('away' in snapshot(camp, T0 + H), false)
   const snap = snapshot(camp, T0 + 9 * H + 5)
   assert.deepEqual(snap.away, { hours: 9, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ name: camp.crew[0].name, level: 3, title: 'Mountaineer' }] })
-  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 3, title: 'Mountaineer', xp: 450, next: 900, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, bonus: 0, pin: null, journal: [{ kind: 'hired', at: T0 }] })
+  assert.deepEqual(snap.crew[0], { id: camp.crew[0].id, name: camp.crew[0].name, seed: camp.crew[0].seed, level: 3, title: 'Mountaineer', xp: 450, next: 900, gear: { pack: 0, boots: 0, hat: 0, tool: 0 }, bonus: 0, pin: null, journalCount: 1, journalAt: T0 })
   assert.deepEqual(snap.built, camp.built)
   assert.notEqual(snap.built, camp.built, 'a copy')
 })

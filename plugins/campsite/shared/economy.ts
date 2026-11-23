@@ -122,7 +122,7 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       // An automation's run tab is always a day hiker (one stored before that rule is let go)
       if (e.automation) release(camp, e.terminalId, now)
       else {
-        noteKinds(camp, launchOf(e), now, e.projectId)
+        noteKinds(camp, launchOf(e), now, e.projectId, where)
         assign(camp, e.terminalId, e.projectId, now, launchOf(e), where)
       }
       break

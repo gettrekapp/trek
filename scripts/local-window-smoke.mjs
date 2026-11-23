@@ -14,7 +14,7 @@
 //     session works (a working minute shortened to 200 ms); with the camp seeded with 400 wood
 //     (TREK_CAMPSITE_SEED_WOOD), the counts button opens the camp's popover, string lights are built
 //     from it (the row says Built, the wood drops by 25), then the gear shed, and a member's view in the
-//     Crew tab buys a canvas pack ("+2% wood") and goes Back to the list; the button closes it again; a bell puts the row in attention (on the server too); showing the session
+//     Crew tab buys a canvas pack ("+2% wood"), reads its journal, and goes Back to the list (its row focused); the button closes it again; a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -418,8 +418,9 @@ try {
   check("a member's view offers a canvas pack to buy", await until(() => packRow.locator('.cs-gear-buy').count(), 1), 1)
   await packRow.locator('.cs-gear-buy').click()
   check('buying it shows the bonus on the member: +2% wood', await until(() => win.locator('.cs-camp-popover .cs-member-bonus').innerText(), '+2% wood'), '+2% wood')
+  check("the member view reads its journal (not in the snapshot): it was hired, then bought a canvas pack", await until(() => win.locator('.cs-camp-popover .cs-journal li').allInnerTexts().then((t) => t.map((x) => x.split('\n')[0])), ['Bought a canvas pack', 'Joined the camp']), ['Bought a canvas pack', 'Joined the camp'])
   await win.locator('.cs-camp-popover .cs-member-back').click()
-  check('Back lists the crew again', await until(async () => (await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, true), true)
+  check('Back lists the crew again, the focus on its row', await until(async () => [(await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, await win.evaluate(() => document.activeElement?.hasAttribute('data-crew') ?? false)], [true, true]), [true, true])
   // The counts button again closes it
   await win.locator('.campsite .cs-camp-button').click()
   check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)

@@ -2,10 +2,12 @@
 // one `state` request and one event feed while anything listens; reloaded when the connection comes
 // back. null until the first answer (or if the server half is missing). Buying (build, recruit,
 // gear) and pinning answer the new snapshot; a refusal reloads the state and rethrows, its message
-// saying why. `seen` and `awaySeen` keep the away card. No React.
+// saying why. A member's journal is asked for on its own (the snapshot doesn't carry it). `seen` and
+// `awaySeen` keep the away card. No React.
 import type { ClientPluginHost } from '../../../src/shared/plugins/client.ts'
-import type { CampSnapshot, Pin } from '../shared/camp.ts'
+import type { CampSnapshot, PinRef } from '../shared/camp.ts'
 import type { GearSlot } from '../shared/catalog.ts'
+import type { JournalEntry } from '../shared/journal.ts'
 import type { Offer } from '../shared/shop.ts'
 
 type CampHost = Pick<ClientPluginHost, 'request' | 'onEvent' | 'onChanged'>
@@ -19,7 +21,9 @@ export interface CampStore {
   /** Buys a member's next item in `slot` (its tier) at `cost` wood */
   gear(crewId: string, slot: GearSlot, tier: number, cost: number): Promise<void>
   /** Pins a member to a session type or an agent (null: any session) */
-  pin(crewId: string, pin: Pin | null): Promise<void>
+  pin(crewId: string, pin: PinRef | null): Promise<void>
+  /** A member's journal, oldest first (a refusal rethrows; nothing is reloaded) */
+  journal(crewId: string): Promise<JournalEntry[]>
   /** A visible window saw the camp (an older server without it is ignored) */
   seen(): void
   /** The away card was dismissed */
@@ -92,6 +96,7 @@ function createStore(host: CampHost): CampStore {
     recruit: (candidate, cost) => buy('recruit', { candidate, cost: { wood: cost } }),
     gear: (crewId, slot, tier, cost) => buy('gear', { crewId, slot, tier, cost: { wood: cost } }),
     pin: (crewId, pin) => buy('pin', { crewId, pin: pin && { kind: pin.kind, id: pin.id } }),
+    journal: async (crewId) => (await host.request<{ journal: JournalEntry[] }>('journal', { crewId })).journal,
     seen: () => {
       host.request('seen').catch(() => {
         // An older server: no away card

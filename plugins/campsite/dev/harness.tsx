@@ -1,7 +1,8 @@
 // The campsite strip without the app: the real Campsite component on a fake plugin host, with the
 // sessions of the scenario named in ?scenario= (default "few"); ?dog=0 hides the dog.
 // ?built=out builds every building; ?away=1 shows the away card; ?crew=geared gives t1–t3's members
-// gear (tier 3, 2 and 1 in every slot) and the first a pin and a journal.
+// gear (t1's tier 3 in every slot, t2's mixed, t3's tier 1) and the second a pin and a journal (which
+// the fake host answers to `journal`, as the server does).
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -42,13 +43,13 @@ state.crew[0].name = 'Aspen'
 state.crew[0].xp = 150
 state.assignments.t1 = { crew: state.crew[0].id, project: 'harness', worktreeId: 'api', provider: 'codex', projectName: 'trek', place: 'feature/api', start: T - 3_600_000, wood: 12 }
 if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3, shed: 2 }
-// ?crew=geared: the members out with t1, t2 and t3 wear tier 3, 2 and 1 gear; the first is pinned to
-// Codex and has a journal
+// ?crew=geared: the members out with t1, t2 and t3 wear tier 3 gear, mixed tiers (2, 2, 1 and none:
+// its view shows Buy and a gate) and tier 1; the second is pinned to Codex and has a journal
 if (params.get('crew') === 'geared') {
   state.built.shed = 2
+  const GEAR = [{ pack: 3, boots: 3, hat: 3, tool: 3 }, { pack: 2, boots: 2, hat: 1, tool: 0 }, { pack: 1, boots: 1, hat: 1, tool: 1 }]
   state.crew.forEach((m, i) => {
-    const n = 3 - i
-    m.gear = { pack: n, boots: n, hat: n, tool: n }
+    m.gear = GEAR[i]
     m.xp = [1700, 450, 120][i]
     state.assignments[`t${i + 1}`] = { crew: m.id, project: 'harness', worktreeId: i === 2 ? 'web' : 'api', provider: PROVIDERS[(i + 1) % PROVIDERS.length], projectName: 'trek', place: i === 2 ? 'feature/web' : 'feature/api', start: T - 3_600_000, wood: 12 }
   })
@@ -57,12 +58,12 @@ if (params.get('crew') === 'geared') {
     { kind: 'provider', id: 'claude', name: 'Claude', at: T },
     { kind: 'provider', id: 'codex', name: 'Codex', at: T }
   ]
-  state.crew[0].pin = { kind: 'provider', id: 'codex' }
-  state.crew[0].journal = [
+  state.crew[1].pin = { kind: 'provider', id: 'codex', name: 'Codex' }
+  state.crew[1].journal = [
     { kind: 'hired', at: T - 9 * 86_400_000 },
     { kind: 'trip', at: T - 2 * 86_400_000, minutes: 192, project: 'trek', place: 'main', provider: 'claude', wood: 48 },
-    { kind: 'level', at: T - 2 * 86_400_000, level: 5, title: 'Legend' },
-    { kind: 'gear', at: T - 86_400_000, slot: 'tool', tier: 3 },
+    { kind: 'level', at: T - 2 * 86_400_000, level: 3, title: 'Mountaineer' },
+    { kind: 'gear', at: T - 86_400_000, slot: 'hat', tier: 1 },
     { kind: 'summit', at: T - 5 * 3_600_000, branch: 'feature/campsite-strip', project: 'trek' },
     { kind: 'pinned', at: T - 3_600_000, name: 'Codex' }
   ]
@@ -81,8 +82,9 @@ const host = {
   selectedTerminalId: () => sessions[0]?.terminalId ?? null,
   focusSession: (id: string) => console.log('[harness] focus', id),
   prefs: { load: async () => prefs, set: async () => prefs, onChange: () => () => {} },
-  request: async (method: string) => {
+  request: async (method: string, params?: { crewId?: string }) => {
     if (method === 'state') return camp
+    if (method === 'journal') return { journal: state.crew.find((m) => m.id === params?.crewId)?.journal ?? [] }
     if (method === 'seen' || method === 'awaySeen') return { ok: true }
     throw new Error(`[harness] no method ${method}`)
   },

@@ -1,9 +1,10 @@
 // What the camp popover says (campsite parts 3a and 3b): a building's row, whether a hire can be
 // made, a member's status line, how far it is through its level, and a building's tooltip on the
 // strip; a member's view: its gear rows, its bonus, and the pin's choices. Pure.
-import type { CampSnapshot, CrewEntry, Pin } from './camp.ts'
+import type { CampSnapshot, CrewEntry, Pin, PinRef } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
+import { providerName } from './journal.ts'
 import { shortfall } from './shop.ts'
 
 export interface ShopRow {
@@ -77,6 +78,9 @@ export const memberSummary = (m: Pick<CrewEntry, 'name' | 'level' | 'title' | 'x
 /** "+6% wood" */
 export const bonusText = (bonus: number): string => `+${bonus}% wood`
 
+/** A crew row's status line: where it is, and its gear's bonus when it has one ("fishing · +6% wood") */
+export const crewLine = (status: string, bonus: number): string => (bonus > 0 ? `${status} · ${bonusText(bonus)}` : status)
+
 export interface GearRow {
   slot: GearSlot
   /** "Pack" */
@@ -105,10 +109,10 @@ export function gearRows(snap: Pick<CampSnapshot, 'wood' | 'built'>, member: Pic
 }
 
 /** A pin as a select's value: '' (any session), "type:<id>" or "provider:<id>" (a type's id is its typeKey, "<project id>:<type id>") */
-export const pinValue = (pin: Pin | null): string => (pin ? `${pin.kind}:${pin.id}` : '')
+export const pinValue = (pin: PinRef | null): string => (pin ? `${pin.kind}:${pin.id}` : '')
 
 /** The pin a select's value names (split at its first colon: the id may hold more); null for '' (or anything else) */
-export function pinFrom(value: string): Pin | null {
+export function pinFrom(value: string): PinRef | null {
   const at = value.indexOf(':')
   const kind = value.slice(0, at)
   const id = value.slice(at + 1)
@@ -117,16 +121,19 @@ export function pinFrom(value: string): Pin | null {
 
 /**
  * The pin's choices: any session, then each session type and agent seen in the last 30 days; a type
- * whose name another seen type shares says its project (the snapshot names no projects, so its
- * id: the typeKey's part before the colon); a current pin no longer seen stays listed (by its id)
+ * whose name another seen type shares says its project (its name, else the typeKey's project id); a
+ * current pin no longer seen stays listed, by its name, saying so
  */
 export function pinOptions(snap: Pick<CampSnapshot, 'seenKinds'>, current: Pin | null): { value: string; label: string }[] {
   const label = (kind: Pin['kind'], name: string): string => `${kind === 'type' ? 'Session type' : 'Agent'}: ${name}`
   const types = snap.seenKinds.filter((k) => k.kind === 'type')
   const shared = (k: { id: string; name: string }): boolean => types.some((o) => o.id !== k.id && o.name === k.name)
-  const project = (id: string): string => id.slice(0, Math.max(0, id.indexOf(':')))
-  const named = (k: CampSnapshot['seenKinds'][number]): string => (k.kind === 'type' && shared(k) ? `${k.name} (${project(k.id)})` : k.name)
+  const project = (k: CampSnapshot['seenKinds'][number]): string => k.project ?? k.id.slice(0, Math.max(0, k.id.indexOf(':')))
+  const named = (k: CampSnapshot['seenKinds'][number]): string => (k.kind === 'type' && shared(k) ? `${k.name} (${project(k)})` : k.name)
   const out = [{ value: '', label: 'Any session' }, ...snap.seenKinds.map((k) => ({ value: pinValue(k), label: label(k.kind, named(k)) }))]
-  if (current && !out.some((o) => o.value === pinValue(current))) out.push({ value: pinValue(current), label: label(current.kind, current.id) })
+  if (current && !out.some((o) => o.value === pinValue(current))) {
+    const name = current.kind === 'provider' ? providerName(current.id) : current.name
+    out.push({ value: pinValue(current), label: `${label(current.kind, name)} (not seen in 30 days)` })
+  }
   return out
 }

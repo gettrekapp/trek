@@ -4,11 +4,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { GEAR, GEAR_BONUS, GEAR_COST, GEAR_NEEDS, GEAR_SLOTS, SEEN_KIND_MS, gearBonus, gearGate, gearItem, isGearSlot, noGear } from '../plugins/campsite/shared/catalog.ts'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
-import { assign, creditXp, kitsKey, kitsOf, liveKinds, noteKinds, pinMember, release, sessionKit } from '../plugins/campsite/shared/crew.ts'
+import { SEEN_KINDS_MAX, assign, creditXp, journalOf, kitsKey, kitsOf, liveKinds, noteKinds, pinMember, release, sessionKit } from '../plugins/campsite/shared/crew.ts'
 import { applyActivity, restore, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
 import { buyGear } from '../plugins/campsite/shared/shop.ts'
-import { JOURNAL_MAX, ago, duration, entryText, journalLines, note, providerName } from '../plugins/campsite/shared/journal.ts'
-import { bonusText, gearRows, memberSummary, pinFrom, pinOptions, pinValue } from '../plugins/campsite/shared/campView.ts'
+import { JOURNAL_MAX, ago, duration, entryText, isEntry, journalLines, note, providerName } from '../plugins/campsite/shared/journal.ts'
+import { bonusText, crewLine, gearRows, memberSummary, pinFrom, pinOptions, pinValue } from '../plugins/campsite/shared/campView.ts'
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
@@ -56,10 +56,11 @@ test('camp v3: members start with no gear, no pin and a journal that says they j
   }
   assert.ok(isCamp(JSON.parse(JSON.stringify(camp))))
   const member = camp.crew[0]
-  const badMembers = [{ gear: { ...member.gear, hat: 4 } }, { gear: { ...member.gear, hat: 1.5 } }, { gear: { pack: 0 } }, { pin: 'claude' }, { pin: { kind: 'agent', id: 'x' } }, { journal: null }]
+  const badMembers = [{ gear: { ...member.gear, hat: 4 } }, { gear: { ...member.gear, hat: 1.5 } }, { gear: { pack: 0 } }, { pin: 'claude' }, { pin: { kind: 'agent', id: 'x', name: 'X' } }, { pin: { kind: 'provider', id: 'codex' } }, { journal: null }]
   for (const b of badMembers) assert.equal(isCamp({ ...camp, crew: [{ ...member, ...b }] }), false, JSON.stringify(b))
-  assert.equal(isCamp({ ...camp, crew: [{ ...member, pin: { kind: 'provider', id: 'codex' } }] }), true)
-  for (const k of [null, [{ kind: 'type', id: 'r', name: 'Review' }], [{ kind: 'x', id: 'r', name: 'R', at: 1 }]]) assert.equal(isCamp({ ...camp, seenKinds: k }), false, JSON.stringify(k))
+  assert.equal(isCamp({ ...camp, crew: [{ ...member, pin: { kind: 'provider', id: 'codex', name: 'Codex' } }] }), true)
+  for (const k of [null, [{ kind: 'type', id: 'r', name: 'Review' }], [{ kind: 'x', id: 'r', name: 'R', at: 1 }], [{ kind: 'type', id: 'p:r', name: 'R', at: 1, project: 5 }]]) assert.equal(isCamp({ ...camp, seenKinds: k }), false, JSON.stringify(k))
+  assert.equal(isCamp({ ...camp, seenKinds: [{ kind: 'type', id: 'p:r', name: 'R', at: 1, project: 'trek' }] }), true)
 })
 
 test('migrateCamp: version 2 gains the shed, no gear, no pins, empty journals, trips that start at its last save, no seen kinds', () => {
@@ -83,6 +84,20 @@ test('migrateCamp: version 2 gains the shed, no gear, no pins, empty journals, t
   assert.equal(migrateCamp({ version: 2, crew: 'x' }).crew, 'x', 'a malformed one is left for isCamp to refuse')
 })
 
+test('migrateCamp: a version 3 pin from before pins carried names gets its seen kind\'s name, else its id', () => {
+  const camp = newCamp(1, T0)
+  camp.seenKinds = [{ kind: 'type', id: 'p:rev', name: 'Review', at: T0, project: 'trek' }]
+  camp.crew[0].pin = { kind: 'type', id: 'p:rev' }
+  camp.crew[1].pin = { kind: 'provider', id: 'grok' }
+  const raw = JSON.parse(JSON.stringify(camp))
+  assert.equal(isCamp(raw), false, 'not before the migration')
+  const out = migrateCamp(raw)
+  assert.ok(isCamp(out))
+  assert.deepEqual(out.crew.map((m) => m.pin), [{ kind: 'type', id: 'p:rev', name: 'Review' }, { kind: 'provider', id: 'grok', name: 'grok' }, null])
+  const v2 = { ...JSON.parse(JSON.stringify(newCamp(1, T0))), version: 2 }
+  assert.ok(isCamp(migrateCamp(v2)), 'version 2 still migrates')
+})
+
 test('note: newest last, at most 40 entries', () => {
   const member = { journal: [] }
   for (let i = 0; i < JOURNAL_MAX + 5; i++) note(member, { kind: 'level', at: i, level: i, title: 'x' })
@@ -92,13 +107,23 @@ test('note: newest last, at most 40 entries', () => {
   assert.equal(member.journal.at(-1).at, 44)
 })
 
-test('snapshot: each member\'s gear, bonus, pin and journal (copies); the kinds seen in the last 30 days, types first, by name', () => {
+test("note: a trip's project and place and a summit's branch and project are cut to 80 characters", () => {
+  const long = 'x'.repeat(200)
+  const member = { journal: [] }
+  note(member, { kind: 'trip', at: 1, minutes: 2, project: long, place: long, provider: 'claude', wood: 0 })
+  note(member, { kind: 'summit', at: 2, branch: long, project: long })
+  note(member, { kind: 'trip', at: 3, minutes: 2, project: 'trek', place: 'main', provider: 'claude', wood: 0 })
+  assert.deepEqual([member.journal[0].project.length, member.journal[0].place.length, member.journal[1].branch.length, member.journal[1].project.length], [80, 80, 80, 80])
+  assert.deepEqual(member.journal[2], { kind: 'trip', at: 3, minutes: 2, project: 'trek', place: 'main', provider: 'claude', wood: 0 })
+})
+
+test('snapshot: each member\'s gear, bonus, pin (copies) and how much journal it has, not the journal; the kinds seen in the last 30 days, types first, by name', () => {
   const camp = newCamp(1, T0)
   camp.crew[0].gear = { pack: 2, boots: 1, hat: 0, tool: 0 }
-  camp.crew[0].pin = { kind: 'type', id: 'rev' }
+  camp.crew[0].pin = { kind: 'type', id: 'rev', name: 'Review' }
   camp.seenKinds = [
     { kind: 'provider', id: 'codex', name: 'Codex', at: T0 },
-    { kind: 'type', id: 'rev', name: 'Review', at: T0 },
+    { kind: 'type', id: 'rev', name: 'Review', at: T0, project: 'trek' },
     { kind: 'provider', id: 'claude', name: 'Claude', at: T0 + 1 },
     { kind: 'type', id: 'old', name: 'Docs', at: T0 - SEEN_KIND_MS - 1 },
     { kind: 'type', id: 'arch', name: 'Architect', at: T0 }
@@ -106,13 +131,16 @@ test('snapshot: each member\'s gear, bonus, pin and journal (copies); the kinds 
   const snap = snapshot(camp, T0 + 5)
   assert.deepEqual(snap.crew[0].gear, { pack: 2, boots: 1, hat: 0, tool: 0 })
   assert.equal(snap.crew[0].bonus, 6)
-  assert.deepEqual(snap.crew[0].pin, { kind: 'type', id: 'rev' })
-  assert.deepEqual(snap.crew[0].journal, [{ kind: 'hired', at: T0 }])
+  assert.deepEqual(snap.crew[0].pin, { kind: 'type', id: 'rev', name: 'Review' })
+  assert.notEqual(snap.crew[0].pin, camp.crew[0].pin, 'a copy')
+  assert.equal('journal' in snap.crew[0], false, 'the journal is asked for (journalOf), not pushed')
+  assert.deepEqual([snap.crew[0].journalCount, snap.crew[0].journalAt], [1, T0])
+  camp.crew[1].journal = []
+  assert.deepEqual([snapshot(camp, T0).crew[1].journalCount, snapshot(camp, T0).crew[1].journalAt], [0, 0])
   assert.notEqual(snap.crew[0].gear, camp.crew[0].gear, 'a copy')
-  assert.notEqual(snap.crew[0].journal, camp.crew[0].journal, 'a copy')
   assert.deepEqual(snap.seenKinds, [
     { kind: 'type', id: 'arch', name: 'Architect' },
-    { kind: 'type', id: 'rev', name: 'Review' },
+    { kind: 'type', id: 'rev', name: 'Review', project: 'trek' },
     { kind: 'provider', id: 'claude', name: 'Claude' },
     { kind: 'provider', id: 'codex', name: 'Codex' }
   ])
@@ -134,7 +162,7 @@ test('noteKinds: a session type and an agent seen now (named, the name kept curr
   noteKinds(camp, launch('codex'), T0 + 1, 'p')
   noteKinds(camp, launch('claude', { id: 'rev', name: 'Code review' }), T0 + 2, 'p')
   assert.deepEqual(camp.seenKinds, [
-    { kind: 'type', id: 'p:rev', name: 'Code review', at: T0 + 2 },
+    { kind: 'type', id: 'p:rev', name: 'Code review', at: T0 + 2, project: 'p' },
     { kind: 'provider', id: 'claude', name: 'Claude', at: T0 + 2 },
     { kind: 'provider', id: 'codex', name: 'Codex', at: T0 + 1 }
   ])
@@ -143,6 +171,17 @@ test('noteKinds: a session type and an agent seen now (named, the name kept curr
   noteKinds(camp, launch(''), T0, 'p')
   assert.equal(camp.seenKinds.length, 1, 'an unknown agent is not a kind')
   assert.deepEqual(['claude', 'codex', 'gemini', 'grok', 'local-llm'].map(providerName), ['Claude', 'Codex', 'Gemini', 'Grok', 'Local-llm'])
+})
+
+test("noteKinds: a session type carries its project's name (from where); at most the newest 50 kinds are kept", () => {
+  const camp = newCamp(1, T0)
+  noteKinds(camp, launch('', REVIEW), T0, 'p', where)
+  assert.deepEqual(camp.seenKinds, [{ kind: 'type', id: 'p:rev', name: 'Review', at: T0, project: 'trek' }])
+  for (let i = 0; i < SEEN_KINDS_MAX + 10; i++) noteKinds(camp, launch(`agent${i}`), T0 + 1 + i, 'p', where)
+  assert.equal(SEEN_KINDS_MAX, 50)
+  assert.equal(camp.seenKinds.length, 50)
+  assert.ok(camp.seenKinds.every((k) => k.at > T0 + 10), 'the oldest went first')
+  assert.ok(camp.seenKinds.some((k) => k.id === `agent${SEEN_KINDS_MAX + 9}`))
 })
 
 test('assign with pins: a member pinned to the type first, then one pinned to the agent, then the longest-rested unpinned one', () => {
@@ -312,8 +351,9 @@ test('pinMember: to a kind seen in the last 30 days, or null; the journal notes 
   noteKinds(camp, launch('codex', REVIEW), T0, 'p')
   const m = camp.crew[0]
   assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'p:rev' } }, T0 + 1), null)
-  assert.deepEqual(m.pin, { kind: 'type', id: 'p:rev' })
-  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'p:rev' } }, T0 + 2), null)
+  assert.deepEqual(m.pin, { kind: 'type', id: 'p:rev', name: 'Review' }, 'named from its seen kind')
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'p:rev', name: 'Spoof' } }, T0 + 2), null)
+  assert.equal(m.pin.name, 'Review', "a request's name is not taken")
   assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'provider', id: 'codex' } }, T0 + 3), null)
   assert.equal(pinMember(camp, { crewId: m.id, pin: null }, T0 + 4), null)
   assert.equal(m.pin, null)
@@ -322,6 +362,26 @@ test('pinMember: to a kind seen in the last 30 days, or null; the journal notes 
     { kind: 'pinned', at: T0 + 3, name: 'Codex' },
     { kind: 'unpinned', at: T0 + 4, name: 'Codex' }
   ])
+})
+
+test('pinMember: unpinning names the pin by the name it was given, though its kind is no longer seen', () => {
+  const camp = newCamp(1, T0)
+  noteKinds(camp, launch('codex', REVIEW), T0, 'p')
+  pinMember(camp, { crewId: 'c1', pin: { kind: 'type', id: 'p:rev' } }, T0)
+  camp.seenKinds = []
+  assert.equal(pinMember(camp, { crewId: 'c1', pin: null }, T0 + 1), null)
+  assert.deepEqual(camp.crew[0].journal.at(-1), { kind: 'unpinned', at: T0 + 1, name: 'Review' })
+})
+
+test('journalOf: a member\'s journal entries (a copy); BAD_REQUEST for no id, NOT_FOUND for nobody', () => {
+  const camp = newCamp(1, T0)
+  const out = journalOf(camp, { crewId: 'c1' })
+  assert.deepEqual(out, { journal: [{ kind: 'hired', at: T0 }] })
+  assert.notEqual(out.journal[0], camp.crew[0].journal[0], 'a copy')
+  assert.deepEqual(journalOf(camp, { crewId: 5 }), { code: 'BAD_REQUEST', message: 'A journal needs { crewId }' })
+  assert.deepEqual(journalOf(camp, {}), { code: 'BAD_REQUEST', message: 'A journal needs { crewId }' })
+  assert.deepEqual(journalOf(camp, { crewId: 'c9' }), { code: 'NOT_FOUND', message: 'Nobody in the crew is c9' })
+  assert.equal(journalOf(camp, { crewId: 'constructor' }).code, 'NOT_FOUND')
 })
 
 test('pinMember: refusals — malformed, nobody, a kind not seen (or seen too long ago)', () => {
@@ -377,7 +437,7 @@ test('restore drops journal entries and assignments it cannot read, and keeps th
   const camp = newCamp(1, T0)
   const m = camp.crew[0]
   const good = [{ kind: 'hired', at: 1 }, { kind: 'trip', at: 2, minutes: 3, project: 'trek', place: 'main', provider: 'claude', wood: 4 }, { kind: 'summit', at: 3, branch: 'b', project: 'trek' }, { kind: 'level', at: 4, level: 2, title: 'Trailblazer' }, { kind: 'gear', at: 5, slot: 'hat', tier: 2 }, { kind: 'pinned', at: 6, name: 'Codex' }, { kind: 'unpinned', at: 7, name: 'Codex' }]
-  const bad = [{ kind: 'hired' }, { kind: 'trip', at: 2, minutes: 3 }, { kind: 'summit', at: 3, branch: 1, project: 'x' }, { kind: 'level', at: 4, level: '2', title: 'x' }, { kind: 'gear', at: 5, slot: 'cape', tier: 1 }, { kind: 'gear', at: 5, slot: 'hat', tier: 4 }, { kind: 'pinned', at: 6 }, { kind: 'party', at: 8 }, null]
+  const bad = [{ kind: 'hired' }, { kind: 'trip', at: 2, minutes: 3 }, { kind: 'trip', at: 2, minutes: -1, project: 'trek', place: 'main', provider: 'claude', wood: 4 }, { kind: 'summit', at: 3, branch: 1, project: 'x' }, { kind: 'level', at: 4, level: '2', title: 'x' }, { kind: 'gear', at: 5, slot: 'cape', tier: 1 }, { kind: 'gear', at: 5, slot: 'hat', tier: 4 }, { kind: 'pinned', at: 6 }, { kind: 'party', at: 8 }, null]
   m.journal = [...good.slice(0, 3), ...bad, ...good.slice(3)]
   camp.assignments = { t1: { crew: m.id, project: 'p', worktreeId: null, provider: 'claude', projectName: 'p', place: 'Global', start: 'x', wood: 0 } }
   const raw = JSON.parse(JSON.stringify(camp))
@@ -399,8 +459,10 @@ test("sessionKit, kitsKey, kitsOf: a session's member's gear for its hikers; one
   assert.equal(sessionKit(snap, 'day'), '', 'a day hiker')
   const key = kitsKey(snap)
   assert.equal(key, '[["t2","1032"]]')
-  assert.deepEqual(kitsOf(key), { t2: '1032' })
-  assert.deepEqual(kitsOf('[]'), {})
+  assert.deepEqual({ ...kitsOf(key) }, { t2: '1032' })
+  assert.deepEqual({ ...kitsOf('[]') }, {})
+  assert.equal(Object.getPrototypeOf(kitsOf(key)), null, 'no inherited keys: a terminal id is only ever its own')
+  assert.equal(kitsOf('[]').constructor, undefined)
   camp.wood = 99
   assert.equal(kitsKey(snapshot(camp, T0)), key, 'wood alone: the same string')
   camp.crew[1].gear.boots = 1
@@ -409,6 +471,8 @@ test("sessionKit, kitsKey, kitsOf: a session's member's gear for its hikers; one
 
 test('journal words: durations, how long ago', () => {
   assert.deepEqual([0, 45, 60, 192, 600].map(duration), ['0 m', '45 m', '1 h', '3 h 12 m', '10 h'])
+  assert.deepEqual([-5, 44.6, 59.7].map(duration), ['0 m', '45 m', '1 h'], 'whole minutes, never below 0')
+  assert.equal(isEntry({ kind: 'trip', at: 1, minutes: 0, project: 'p', place: 'x', provider: '', wood: 0 }), true)
   assert.equal(ago(T0, T0 + 59_000), 'just now')
   assert.equal(ago(T0, T0 + 5 * M), '5 m ago')
   assert.equal(ago(T0, T0 + 2 * H + 5 * M), '2 h ago')
@@ -430,9 +494,12 @@ test("journal words: each kind of entry's line", () => {
 test('journalLines: newest first, each with its words and when', () => {
   const lines = journalLines([{ kind: 'hired', at: T0 }, { kind: 'level', at: T0 + H, level: 2, title: 'Trailblazer' }], T0 + 3 * H)
   assert.deepEqual(lines, [
-    { key: `1:${T0 + H}`, text: 'Reached Lv 2 Trailblazer', when: '2 h ago' },
-    { key: `0:${T0}`, text: 'Joined the camp', when: '3 h ago' }
+    { key: `${T0 + H}:level`, text: 'Reached Lv 2 Trailblazer', when: '2 h ago' },
+    { key: `${T0}:hired`, text: 'Joined the camp', when: '3 h ago' }
   ])
+  // Keys stay with their entries as the oldest are dropped; two alike at once tell apart by their place
+  const same = journalLines([{ kind: 'level', at: T0, level: 2, title: 'a' }, { kind: 'level', at: T0, level: 3, title: 'b' }], T0)
+  assert.deepEqual(same.map((l) => l.key), [`${T0}:level:1`, `${T0}:level`])
 })
 
 test('gearRows: what a member wears, the next item and its price, or the gate before it (the shed, the level), then the wood', () => {
@@ -464,22 +531,30 @@ test('the pin select: values, back to pins (type keys hold a colon), choices (a 
     { value: 'type:p:rev', label: 'Session type: Review' },
     { value: 'provider:claude', label: 'Agent: Claude' }
   ])
-  assert.deepEqual(pinOptions({ seenKinds }, { kind: 'provider', id: 'grok' }).at(-1), { value: 'provider:grok', label: 'Agent: grok' })
-  assert.equal(pinOptions({ seenKinds }, { kind: 'type', id: 'p:rev' }).length, 3)
+  assert.deepEqual(pinOptions({ seenKinds }, { kind: 'provider', id: 'grok', name: 'grok' }).at(-1), { value: 'provider:grok', label: 'Agent: Grok (not seen in 30 days)' })
+  assert.deepEqual(pinOptions({ seenKinds }, { kind: 'type', id: 'p:old', name: 'Docs' }).at(-1), { value: 'type:p:old', label: 'Session type: Docs (not seen in 30 days)' })
+  assert.equal(pinOptions({ seenKinds }, { kind: 'type', id: 'p:rev', name: 'Review' }).length, 3)
   assert.equal(bonusText(0), '+0% wood')
   assert.equal(bonusText(24), '+24% wood')
   assert.equal(memberSummary({ name: 'Aspen', level: 2, title: 'Trailblazer', xp: 150, next: 400 }, 'resting'), 'Aspen, Lv 2 Trailblazer, 150 / 400 XP, resting')
 })
 
-test("the pin select: two projects' session types of one name say which project each is", () => {
+test("the pin select: two projects' session types of one name say which project each is, by its name (else the key's project id)", () => {
   const seenKinds = [
-    { kind: 'type', id: 'trek:rev', name: 'Review' },
-    { kind: 'type', id: 'site:rev', name: 'Review' },
-    { kind: 'type', id: 'trek:fix', name: 'Fix' },
+    { kind: 'type', id: 'p1:rev', name: 'Review', project: 'trek' },
+    { kind: 'type', id: 'p2:rev', name: 'Review', project: 'site' },
+    { kind: 'type', id: 'p3:rev', name: 'Review' },
+    { kind: 'type', id: 'p1:fix', name: 'Fix', project: 'trek' },
     { kind: 'provider', id: 'review', name: 'Review' }
   ]
   assert.deepEqual(
     pinOptions({ seenKinds }, null).map((o) => o.label),
-    ['Any session', 'Session type: Review (trek)', 'Session type: Review (site)', 'Session type: Fix', 'Agent: Review']
+    ['Any session', 'Session type: Review (trek)', 'Session type: Review (site)', 'Session type: Review (p3)', 'Session type: Fix', 'Agent: Review']
   )
+})
+
+test("crewLine: a crew row's status line, with its gear's bonus when it has one; the row's label carries all of it", () => {
+  assert.equal(crewLine('resting', 0), 'resting')
+  assert.equal(crewLine('with Agent 1', 6), 'with Agent 1 · +6% wood')
+  assert.equal(memberSummary({ name: 'Aspen', level: 2, title: 'Trailblazer', xp: 150, next: 400 }, crewLine('fishing', 2)), 'Aspen, Lv 2 Trailblazer, 150 / 400 XP, fishing · +2% wood')
 })

@@ -679,11 +679,17 @@
   color: #9a9aa2;
   font-size: 11px;
 }
-.cs-member-pin-select {
-  display: block;
-  width: calc(100% - 12px);
-  height: 24px;
+.cs-member-pin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 6px;
+}
+.cs-member-pin-select {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  margin: 0;
   background: #2a2a30;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 5px;

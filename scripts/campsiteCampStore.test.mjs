@@ -128,3 +128,13 @@ test('gear and pin (campsite part 3b) send the member, slot, tier and price, or 
   assert.deepEqual(pins().at(-1), ['pin', { crewId: 'c2', pin: null }])
   off()
 })
+
+test("journal (campsite part 3b) asks for a member's journal and answers its entries; a refusal rethrows without a reload", async () => {
+  const entries = [{ kind: 'hired', at: 1 }]
+  const { host, calls } = fakeHost({ state: { wood: 1 }, journal: (p) => (p.crewId === 'c1' ? { journal: entries } : Promise.reject(Object.assign(new Error('Nobody in the crew is c9'), { code: 'NOT_FOUND' }))) })
+  const store = campStore(host)
+  assert.deepEqual(await store.journal('c1'), entries)
+  assert.deepEqual(calls.at(-1), ['journal', { crewId: 'c1' }])
+  await assert.rejects(store.journal('c9'), /Nobody/)
+  assert.equal(calls.filter((c) => c[0] === 'state').length, 0, 'no reload: nothing changed')
+})

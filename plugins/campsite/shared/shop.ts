@@ -42,7 +42,7 @@ export interface Candidate {
   trait: string
 }
 export interface ShopRefusal {
-  code: 'BAD_REQUEST' | 'CONFLICT'
+  code: 'BAD_REQUEST' | 'CONFLICT' | 'NOT_FOUND'
   message: string
 }
 

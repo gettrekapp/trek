@@ -626,7 +626,8 @@ test('gear: buys a member\'s next item once the shed is built, answers the snaps
   await inst.handlers.build({ id: 'shed', tier: 1, cost: { wood: 250, markers: 0 } }, {})
   const snap = await inst.handlers.gear(pack, {})
   assert.deepEqual([snap.wood, snap.crew[0].gear.pack, snap.crew[0].bonus], [90, 1, 2])
-  assert.deepEqual(snap.crew[0].journal.at(-1), { kind: 'gear', at: T0, slot: 'pack', tier: 1 })
+  assert.equal(snap.crew[0].journalCount, 2)
+  assert.deepEqual((await inst.handlers.journal({ crewId: 'c1' }, {})).journal.at(-1), { kind: 'gear', at: T0, slot: 'pack', tier: 1 })
   assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).crew[0].gear.pack, 1, 'saved at once')
   await assert.rejects(async () => inst.handlers.gear({ ...pack, tier: 2, cost: { wood: 200 } }, {}), { code: 'CONFLICT', message: 'Needs Lv 3' })
   await assert.rejects(async () => inst.handlers.gear({ crewId: 'c1', slot: 'cape' }, {}), { code: 'BAD_REQUEST' })
@@ -638,12 +639,23 @@ test('pin: to a session type or agent seen starting a session; the snapshot list
   t.after(() => inst.dispose?.())
   h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', automation: false, provider: 'codex', sessionType: { id: 'rev', name: 'Review' } })
   const before = await inst.handlers.state({}, {})
-  assert.deepEqual(before.seenKinds, [{ kind: 'type', id: 'p:rev', name: 'Review' }, { kind: 'provider', id: 'codex', name: 'Codex' }])
+  assert.deepEqual(before.seenKinds, [{ kind: 'type', id: 'p:rev', name: 'Review', project: 'Trek' }, { kind: 'provider', id: 'codex', name: 'Codex' }], "a type names its project (the host's name)")
   const snap = await inst.handlers.pin({ crewId: 'c2', pin: { kind: 'type', id: 'p:rev' } }, {})
-  assert.deepEqual(snap.crew[1].pin, { kind: 'type', id: 'p:rev' })
-  assert.deepEqual(snap.crew[1].journal.at(-1), { kind: 'pinned', at: T0, name: 'Review' })
+  assert.deepEqual(snap.crew[1].pin, { kind: 'type', id: 'p:rev', name: 'Review' })
+  assert.deepEqual((await inst.handlers.journal({ crewId: 'c2' }, {})).journal.at(-1), { kind: 'pinned', at: T0, name: 'Review' })
   await assert.rejects(async () => inst.handlers.pin({ crewId: 'c2', pin: { kind: 'provider', id: 'claude' } }, {}), { code: 'CONFLICT' })
   await assert.rejects(async () => inst.handlers.pin({ crewId: 'c2', pin: 'claude' }, {}), { code: 'BAD_REQUEST' })
+})
+
+test('journal: a member\'s entries on request; BAD_REQUEST for a malformed id, NOT_FOUND for nobody; the pushed snapshot carries none', async (t) => {
+  const h = fakeHost(t)
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  assert.deepEqual(await inst.handlers.journal({ crewId: 'c1' }, {}), { journal: [{ kind: 'hired', at: T0 }] })
+  await assert.rejects(async () => inst.handlers.journal({ crewId: 7 }, {}), { code: 'BAD_REQUEST' })
+  await assert.rejects(async () => inst.handlers.journal({ crewId: 'c9' }, {}), { code: 'NOT_FOUND' })
+  const snap = await inst.handlers.state({}, {})
+  assert.ok(snap.crew.every((m) => !('journal' in m) && m.journalCount === 1))
 })
 
 test("the journal through the host: a trip names the project and the worktree's branch; a merge of that branch is a summit", async (t) => {
@@ -657,7 +669,7 @@ test("the journal through the host: a trip names the project and the worktree's 
   h.fire({ kind: 'pr.ended', projectId: 'p', at: now, repoId: 'r', branch: 'b', url: 'https://example.test/pr/9', result: 'merged' })
   now = T0 + 3 * 60_000
   h.fire({ kind: 'session.closed', at: now, ...fact })
-  const journal = (await inst.handlers.state({}, {})).crew[0].journal
+  const journal = (await inst.handlers.journal({ crewId: 'c1' }, {})).journal
   assert.deepEqual(journal.slice(1), [
     { kind: 'summit', at: T0 + 30_000, branch: 'b', project: 'Trek' },
     // The merge's wood is the camp's, not the session's: the trip credited none

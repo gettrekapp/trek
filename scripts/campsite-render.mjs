@@ -33,9 +33,9 @@ const SHOTS = [
   { name: 'narrow', scenario: 'few', built: 'out', width: 700 },
   // The "While you were away" card over the strip
   { name: 'away', scenario: 'few', away: true },
-  // Crew depth (campsite 3b): t1–t3's members wear tier 3, 2 and 1 gear on the strip, the shed built out
+  // Crew depth (campsite 3b): t1–t3's members wear tier 3, mixed and tier 1 gear on the strip, the shed built out
   { name: 'geared-crew', scenario: 'few', crew: 'geared', built: 'out', width: 1600 },
-  // The camp popover's member view: portrait, bonus, pin, gear rows and journal (the whole page, taller)
+  // The camp popover's member view: portrait, bonus, pin, gear rows (Buy and a gate) and journal (the whole page, taller)
   { name: 'member-view', scenario: 'few', crew: 'geared', built: 'out', member: true, height: 720 }
 ]
 
@@ -76,11 +76,11 @@ try {
     }
     const path = join(out, `${shot.name}.png`)
     if (shot.member) {
-      // The counts button, the Crew tab, the first member
+      // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
       await page.locator('.cs-camp-button').click()
       await page.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
-      await page.locator('.cs-crew-member').first().click()
-      await page.waitForSelector('.cs-member', { timeout: 5000 })
+      await page.locator('.cs-crew-member').nth(1).click()
+      await page.waitForSelector('.cs-member .cs-journal', { timeout: 5000 })
       await page.screenshot({ path })
     } else await page.locator('.campsite').screenshot({ path })
     console.log(`wrote ${path}`)

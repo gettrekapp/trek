@@ -22,8 +22,14 @@ const PROVIDER_NAMES: Readonly<Record<string, string>> = { claude: 'Claude', cod
 /** An agent's name: the built-in ones by name, any other by its id with a capital */
 export const providerName = (id: string): string => (Object.hasOwn(PROVIDER_NAMES, id) ? PROVIDER_NAMES[id] : id.charAt(0).toUpperCase() + id.slice(1))
 
-/** Adds an entry, dropping the oldest past JOURNAL_MAX */
+/** The longest name a journal keeps (a project, a place, a branch) */
+const NAME_MAX = 80
+const cut = (s: string): string => (s.length > NAME_MAX ? s.slice(0, NAME_MAX) : s)
+
+/** Adds an entry (its names cut to NAME_MAX), dropping the oldest past JOURNAL_MAX */
 export function note(member: { journal: JournalEntry[] }, entry: JournalEntry): void {
+  if (entry.kind === 'trip') entry = { ...entry, project: cut(entry.project), place: cut(entry.place) }
+  else if (entry.kind === 'summit') entry = { ...entry, branch: cut(entry.branch), project: cut(entry.project) }
   member.journal.push(entry)
   if (member.journal.length > JOURNAL_MAX) member.journal.splice(0, member.journal.length - JOURNAL_MAX)
 }
@@ -38,7 +44,7 @@ export function isEntry(x: unknown): x is JournalEntry {
     case 'hired':
       return true
     case 'trip':
-      return num(x.minutes) && str(x.project) && str(x.place) && str(x.provider) && num(x.wood)
+      return num(x.minutes) && x.minutes >= 0 && str(x.project) && str(x.place) && str(x.provider) && num(x.wood)
     case 'summit':
       return str(x.branch) && str(x.project)
     case 'level':
@@ -53,10 +59,11 @@ export function isEntry(x: unknown): x is JournalEntry {
   }
 }
 
-/** Whole minutes as "3 h 12 m", "45 m" or "2 h" */
+/** Minutes as "3 h 12 m", "45 m" or "2 h" (rounded to whole minutes, never below 0) */
 export function duration(minutes: number): string {
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
+  const whole = Math.max(0, Math.round(minutes))
+  const h = Math.floor(whole / 60)
+  const m = whole % 60
   if (h === 0) return `${m} m`
   return m === 0 ? `${h} h` : `${h} h ${m} m`
 }
@@ -90,9 +97,19 @@ export function entryText(e: JournalEntry): string {
   }
 }
 
-/** A member's journal for its view: newest first, each with its line and how long ago */
+/**
+ * A member's journal for its view: newest first, each with its line and how long ago. Its key is
+ * "<at>:<kind>", which stays with the entry as the oldest are dropped; one alike an older entry adds
+ * its place (":<index>").
+ */
 export function journalLines(journal: readonly JournalEntry[], now: number): { key: string; text: string; when: string }[] {
+  const seen = new Set<string>()
   return journal
-    .map((e, i) => ({ key: `${i}:${e.at}`, text: entryText(e), when: ago(e.at, now) }))
+    .map((e, i) => {
+      const base = `${e.at}:${e.kind}`
+      const key = seen.has(base) ? `${base}:${i}` : base
+      seen.add(base)
+      return { key, text: entryText(e), when: ago(e.at, now) }
+    })
     .reverse()
 }

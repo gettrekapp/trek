@@ -1,16 +1,16 @@
 // The camp's popover (campsite parts 3a and 3b), opened from the header's counts or a building on
 // the strip. Camp: each building's next tier with its effect and price, and Build when the camp can
 // pay. Crew: the members (level, XP, where they are, their gear's bonus), each a button that opens
-// its view (MemberView: pin, gear, journal; Back returns the focus to its row), and today's
-// walk-ins to hire. DOM, fixed to the window above what opened it; Escape (focus back to the
-// opener) or a press outside closes it. A refusal shows on its row for 4 s (the store has already
-// reloaded); one for a walk-in who is gone shows under the walk-ins' heading. One purchase at a
-// time; a building's row takes the focus once it is built.
+// its view (MemberView: pin, gear, journal; Back, or Escape, returns the focus to its row; another
+// tab closes it), and today's walk-ins to hire. DOM, fixed to the window above what opened it;
+// Escape (focus back to the opener) or a press outside closes it. A refusal shows on its row for 4 s
+// (the store has already reloaded); one for a walk-in who is gone shows under the walk-ins' heading.
+// One purchase at a time; a building's row takes the focus once it is built or refused.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { iconArt } from '../shared/buildingPixels.ts'
 import type { CampSnapshot, CrewEntry } from '../shared/camp.ts'
-import { bonusText, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
+import { crewLine, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
 import { CATALOG, type BuildingId } from '../shared/catalog.ts'
 import { memberLook } from '../shared/crew.ts'
 import { kitKey, kitOf, withKit } from '../shared/hiker.ts'
@@ -33,7 +33,7 @@ interface Props {
   camp: CampSnapshot
   at: OpenCamp
   sessions: readonly PluginSession[]
-  store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin'>
+  store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin' | 'journal'>
   onClose: (refocus: boolean) => void
 }
 
@@ -54,6 +54,22 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
   // The member whose view is open in the Crew tab (null: the list); the row to focus once it closes
   const [open, setOpen] = useState<string | null>(null)
   const backTo = useRef<string | null>(null)
+  /** Back to the crew list, the member's row to take the focus */
+  const closeMember = (id: string): void => {
+    backTo.current = id
+    setOpen(null)
+  }
+  // Escape in a member's view goes back to the list first (the document listener reads it here)
+  const openRef = useRef<string | null>(null)
+  openRef.current = tab === 'crew' ? open : null
+  const closeMemberRef = useRef(closeMember)
+  closeMemberRef.current = closeMember
+  /** Another tab: a member's view is left (the Crew tab opens on its list, with no focus taken) */
+  const switchTab = (t: 'camp' | 'crew'): void => {
+    if (t === tab) return
+    setTab(t)
+    setOpen(null)
+  }
   useEffect(() => {
     if (open !== null || backTo.current === null) return
     ref.current?.querySelector<HTMLElement>(`[data-crew="${backTo.current}"]`)?.focus()
@@ -80,7 +96,12 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
       if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-popover, .cs-camp-button, .cs-building')) onClose(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose(true)
+      if (e.key !== 'Escape') return
+      const member = openRef.current
+      if (member !== null) {
+        e.preventDefault()
+        closeMemberRef.current(member)
+      } else onClose(true)
     }
     const onResize = (): void => onClose(false)
     document.addEventListener('pointerdown', onDown)
@@ -101,15 +122,12 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
     }
   }, [])
 
-  /** Runs a purchase (one at a time); `done` after it succeeds; a refusal's message shows under `key` for ERROR_MS */
-  const act = (key: string, run: () => Promise<void>, done?: () => void): void => {
+  /** Runs a purchase (one at a time); `settle` once it succeeds or fails; a refusal's message shows under `key` for ERROR_MS */
+  const act = (key: string, run: () => Promise<void>, settle?: () => void): void => {
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
     run()
-      .then(() => {
-        if (alive.current) done?.()
-      })
       .catch((err: unknown) => {
         if (!alive.current) return
         const message = err instanceof Error ? err.message : String(err)
@@ -126,10 +144,13 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
       })
       .finally(() => {
         inFlight.current = false
-        if (alive.current) setBusy(false)
+        if (!alive.current) return
+        setBusy(false)
+        // After the busy state clears, so a re-enabled control can take the focus
+        if (settle) setTimeout(() => alive.current && settle(), 0)
       })
   }
-  /** After a build: its row (the Build button may be gone) */
+  /** After a build or a refusal: its row (the Build button may be gone) */
   const focusRow = (id: BuildingId): void => {
     ref.current?.querySelector<HTMLElement>(`[data-building="${id}"]`)?.focus()
   }
@@ -138,7 +159,7 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
     const next = tab === 'camp' ? 'crew' : 'camp'
-    setTab(next)
+    switchTab(next)
     document.getElementById(tabId(next))?.focus()
   }
 
@@ -158,7 +179,7 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
             aria-controls={panelId(t)}
             tabIndex={tab === t ? 0 : -1}
             className={tab === t ? 'on' : ''}
-            onClick={() => setTab(t)}
+            onClick={() => switchTab(t)}
           >
             {t === 'camp' ? 'Camp' : `Crew ${camp.crew.length}/${camp.bunks}`}
           </button>
@@ -218,10 +239,7 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
               busy={busy}
               errors={errors}
               act={act}
-              onBack={() => {
-                backTo.current = member.id
-                setOpen(null)
-              }}
+              onBack={() => closeMember(member.id)}
             />
           ) : (
             <>
@@ -266,8 +284,9 @@ function CrewRow({ member, status, onOpen }: { member: CrewEntry; status: string
   const kit = kitKey(member.gear)
   const look = useMemo(() => withKit(memberLook(member.seed), kitOf(kit)), [member.seed, kit])
   const pct = Math.round(xpProgress(member) * 100)
+  const line = crewLine(status, member.bonus)
   return (
-    <button className="cs-crew-row cs-crew-member" data-crew={member.id} aria-label={memberSummary(member, status)} title={`${member.xp} / ${member.next} XP`} onClick={onOpen}>
+    <button className="cs-crew-row cs-crew-member" data-crew={member.id} aria-label={memberSummary(member, line)} title={`${member.xp} / ${member.next} XP`} onClick={onOpen}>
       <Hiker look={look} pose="stand" scale={2} label={member.name} decorative />
       <span className="cs-crew-text">
         <span className="cs-crew-name">
@@ -276,7 +295,7 @@ function CrewRow({ member, status, onOpen }: { member: CrewEntry; status: string
         <span className="cs-xp" aria-hidden="true">
           <span style={{ width: `${pct}%` }} />
         </span>
-        <span className="cs-crew-status">{member.bonus > 0 ? `${status} · ${bonusText(member.bonus)}` : status}</span>
+        <span className="cs-crew-status">{line}</span>
       </span>
       <span className="cs-crew-open" aria-hidden="true">
         ›

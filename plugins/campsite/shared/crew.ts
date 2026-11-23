@@ -8,6 +8,7 @@ import type { ActivitySessionType } from '../../../src/shared/plugins/activity.t
 import { noteLevelUp } from './away.ts'
 import { SEEN_KIND_MS, isRecord, noGear, whole } from './catalog.ts'
 import type { Camp, CampSnapshot, CrewMember, SeenKind } from './camp.ts'
+import type { JournalEntry } from './journal.ts'
 import { fnv1a, kitKey, lookFor, type Look } from './hiker.ts'
 import { note, providerName } from './journal.ts'
 import type { ShopRefusal } from './shop.ts'
@@ -87,18 +88,30 @@ export function memberOf(camp: Pick<Camp, 'crew' | 'assignments'>, terminalId: s
   return a && camp.crew.find((m) => m.id === a.crew)
 }
 
-/** A session started with `launch` in `projectId`: its type (keyed by the project) and its agent are seen now (kinds unseen for SEEN_KIND_MS are dropped) */
-export function noteKinds(camp: Pick<Camp, 'seenKinds'>, launch: Launch, now: number, projectId: string): void {
-  const see = (kind: SeenKind['kind'], id: string, name: string): void => {
+/** The most seen kinds kept (the newest) */
+export const SEEN_KINDS_MAX = 50
+
+/**
+ * A session started with `launch` in `projectId`: its type (keyed by the project, with the project's
+ * name from `where`) and its agent are seen now. Kinds unseen for SEEN_KIND_MS are dropped, and past
+ * SEEN_KINDS_MAX the oldest.
+ */
+export function noteKinds(camp: Pick<Camp, 'seenKinds'>, launch: Launch, now: number, projectId: string, where: Where = NO_WHERE): void {
+  const see = (kind: SeenKind['kind'], id: string, name: string, project?: string): void => {
     const had = camp.seenKinds.find((k) => k.kind === kind && k.id === id)
     if (had) {
       had.name = name
       had.at = now
-    } else camp.seenKinds.push({ kind, id, name, at: now })
+      if (project !== undefined) had.project = project
+    } else camp.seenKinds.push(project === undefined ? { kind, id, name, at: now } : { kind, id, name, at: now, project })
   }
-  if (launch.sessionType) see('type', typeKey(projectId, launch.sessionType.id), launch.sessionType.name)
+  if (launch.sessionType) see('type', typeKey(projectId, launch.sessionType.id), launch.sessionType.name, projectName(where, projectId))
   if (launch.provider) see('provider', launch.provider, providerName(launch.provider))
   camp.seenKinds = camp.seenKinds.filter((k) => now - k.at <= SEEN_KIND_MS)
+  if (camp.seenKinds.length > SEEN_KINDS_MAX) {
+    const keep = new Set([...camp.seenKinds].sort((a, b) => b.at - a.at).slice(0, SEEN_KINDS_MAX))
+    camp.seenKinds = camp.seenKinds.filter((k) => keep.has(k))
+  }
 }
 
 /**
@@ -180,13 +193,13 @@ export function liveKinds(camp: Pick<Camp, 'seenKinds'>, now: number): Omit<Seen
   return camp.seenKinds
     .filter((k) => now - k.at <= SEEN_KIND_MS)
     .sort((a, b) => (a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === 'type' ? -1 : 1))
-    .map(({ kind, id, name }) => ({ kind, id, name }))
+    .map(({ kind, id, name, project }) => (project === undefined ? { kind, id, name } : { kind, id, name, project }))
 }
 
 /**
  * Pins `{ crewId, pin }`: to a session type (its typeKey) or an agent the camp saw start a session in
- * the last 30 days, or null (any session). The same pin again changes nothing; a change goes in the
- * journal. A pin only steers the next pick: a member already out on a session that doesn't match
+ * the last 30 days, or null (any session); it keeps the kind's name (a request's name is not taken).
+ * The same pin again changes nothing; a change goes in the journal. A pin only steers the next pick: a member already out on a session that doesn't match
  * finishes its current trip there.
  */
 export function pinMember(camp: Camp, params: Record<string, unknown>, now: number): ShopRefusal | null {
@@ -199,10 +212,19 @@ export function pinMember(camp: Camp, params: Record<string, unknown>, now: numb
   if (want === undefined) return { code: 'CONFLICT', message: 'No session of that type or agent started here in the last 30 days' }
   const was = member.pin
   if (was?.kind === want?.kind && was?.id === want?.id) return null
-  member.pin = want && { kind: want.kind, id: want.id }
+  member.pin = want && { kind: want.kind, id: want.id, name: want.name }
   if (want) note(member, { kind: 'pinned', at: now, name: want.name })
-  else if (was) note(member, { kind: 'unpinned', at: now, name: camp.seenKinds.find((k) => k.kind === was.kind && k.id === was.id)?.name ?? (was.kind === 'provider' ? providerName(was.id) : was.id) })
+  else if (was) note(member, { kind: 'unpinned', at: now, name: was.name })
   return null
+}
+
+/** `journal { crewId }`: a member's journal entries, oldest first (copies) */
+export function journalOf(camp: Pick<Camp, 'crew'>, params: Record<string, unknown>): ShopRefusal | { journal: JournalEntry[] } {
+  const { crewId } = params
+  if (typeof crewId !== 'string') return { code: 'BAD_REQUEST', message: 'A journal needs { crewId }' }
+  const member = camp.crew.find((m) => m.id === crewId)
+  if (!member) return { code: 'NOT_FOUND', message: `Nobody in the crew is ${crewId.slice(0, 40)}` }
+  return { journal: member.journal.map((e) => ({ ...e })) }
 }
 
 /** Members with no session: resting at camp */
@@ -235,9 +257,9 @@ export function kitsKey(snap: Pick<CampSnapshot, 'crew' | 'assignments'>): strin
   return JSON.stringify(pairs)
 }
 
-/** The sessions' kits a kitsKey holds (terminalId → kitKey) */
+/** The sessions' kits a kitsKey holds (terminalId → kitKey), with no prototype: only its own keys answer */
 export function kitsOf(key: string): Record<string, string> {
-  const out: Record<string, string> = {}
+  const out = Object.create(null) as Record<string, string>
   for (const [id, kit] of JSON.parse(key) as [string, string][]) out[id] = kit
   return out
 }

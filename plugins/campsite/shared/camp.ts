@@ -9,14 +9,18 @@ import { bunks, offers, todaysCandidates, type Candidate, type Offer } from './s
 
 export const CAMP_VERSION = 3
 
-/** What a member goes out on: sessions of a type, or of an agent (provider); null: any session */
-export type Pin = { kind: 'type' | 'provider'; id: string }
+/** A session type (its typeKey) or an agent (provider), as a window asks to pin it */
+export type PinRef = { kind: 'type' | 'provider'; id: string }
+/** What a member goes out on: sessions of a type, or of an agent, by its name when pinned; null: any session */
+export type Pin = PinRef & { name: string }
 /** A session type or an agent the camp saw a session start with, by its name then, and when last */
 export interface SeenKind {
   kind: 'type' | 'provider'
   id: string
   name: string
   at: number
+  /** A session type's project, by its name then (two projects' types may share a name) */
+  project?: string
 }
 
 export interface CrewMember {
@@ -88,7 +92,12 @@ export interface Camp {
   savedAt: number
 }
 
-/** A member as windows see it: whole XP, and the XP where its next level starts; its gear, the bonus it gives (percent), its pin and journal */
+/**
+ * A member as windows see it: whole XP, and the XP where its next level starts; its gear, the bonus it
+ * gives (percent) and its pin. Not its journal (pushed every second, it would weigh ~70 KB): a window
+ * asks for it (`journal`), and asks again when `journalCount` or `journalAt` (its newest entry's time,
+ * 0 with none: the count stops at JOURNAL_MAX) changes.
+ */
 export interface CrewEntry {
   id: string
   name: string
@@ -100,7 +109,8 @@ export interface CrewEntry {
   gear: GearTiers
   bonus: number
   pin: Pin | null
-  journal: JournalEntry[]
+  journalCount: number
+  journalAt: number
 }
 
 /** What windows see (campsite.state) */
@@ -153,14 +163,15 @@ const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinit
 /**
  * camp.json as version 1 or 2 wrote it, brought to version 3: version 1 gains version 2's fields
  * (seen at its last save); version 2 gains the shed (not built), each member no gear, no pin and an
- * empty journal, each trip its start (the last save) and no wood, and no seen kinds. Anything else as
- * it is.
+ * empty journal, each trip its start (the last save) and no wood, and no seen kinds; a version 3 pin
+ * without a name (from before pins carried one) is named. Anything else as it is.
  */
 export function migrateCamp(raw: unknown): unknown {
   if (!isRecord(raw)) return raw
   const at = num(raw.savedAt) ? raw.savedAt : 0
   let out: Record<string, unknown> = raw
   if (out.version === 1) out = { ...out, version: 2, built: startBuilt(), away: newAway(at), seenAt: at, hired: { day: '', names: [] } }
+  if (out.version === CAMP_VERSION) return namePins(out)
   if (out.version !== 2) return out
   const crew = Array.isArray(out.crew) ? out.crew.map((m: unknown) => (isRecord(m) ? { ...m, gear: noGear(), pin: null, journal: [] } : m)) : out.crew
   const assignments = isRecord(out.assignments)
@@ -169,7 +180,20 @@ export function migrateCamp(raw: unknown): unknown {
       )
     : out.assignments
   const built = isRecord(out.built) ? { ...out.built, shed: 0 } : out.built
-  return { ...out, version: 3, crew, assignments, built, seenKinds: [] }
+  return namePins({ ...out, version: 3, crew, assignments, built, seenKinds: [] })
+}
+
+/** Version 3's pins from before a pin carried its name: named from its seen kind, else by its id (with none, the same object) */
+function namePins(out: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(out.crew) || !out.crew.some((m: unknown) => isRecord(m) && isRecord(m.pin) && typeof m.pin.name !== 'string')) return out
+  const seen = Array.isArray(out.seenKinds) ? out.seenKinds : []
+  const crew = out.crew.map((m: unknown) => {
+    if (!isRecord(m) || !isRecord(m.pin) || typeof m.pin.name === 'string' || typeof m.pin.id !== 'string') return m
+    const pin = m.pin
+    const kind = seen.find((k: unknown) => isRecord(k) && k.kind === pin.kind && k.id === pin.id && typeof k.name === 'string') as { name: string } | undefined
+    return { ...m, pin: { ...pin, name: kind ? kind.name : pin.id } }
+  })
+  return { ...out, crew }
 }
 
 function isAway(x: unknown): boolean {
@@ -181,7 +205,7 @@ function isAway(x: unknown): boolean {
 
 const isGear = (g: unknown): boolean => isRecord(g) && GEAR_SLOTS.every((slot) => Number.isInteger(g[slot]) && (g[slot] as number) >= 0 && (g[slot] as number) <= GEAR_TOP)
 const isKind = (k: unknown): boolean => k === 'type' || k === 'provider'
-const isPin = (p: unknown): boolean => p === null || (isRecord(p) && isKind(p.kind) && typeof p.id === 'string')
+const isPin = (p: unknown): boolean => p === null || (isRecord(p) && isKind(p.kind) && typeof p.id === 'string' && typeof p.name === 'string')
 const isMember = (m: unknown): boolean =>
   isRecord(m) &&
   typeof m.id === 'string' &&
@@ -210,7 +234,7 @@ export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false
   if (!Array.isArray(x.crew) || !x.crew.every(isMember)) return false
-  if (!Array.isArray(x.seenKinds) || !x.seenKinds.every((k) => isRecord(k) && isKind(k.kind) && typeof k.id === 'string' && typeof k.name === 'string' && num(k.at))) return false
+  if (!Array.isArray(x.seenKinds) || !x.seenKinds.every((k) => isRecord(k) && isKind(k.kind) && typeof k.id === 'string' && typeof k.name === 'string' && num(k.at) && (k.project === undefined || typeof k.project === 'string'))) return false
   if (!Array.isArray(x.ledger) || !x.ledger.every((k) => typeof k === 'string')) return false
   const built = x.built
   if (!isRecord(built) || !BUILDING_IDS.every((id) => Number.isInteger(built[id]) && (built[id] as number) >= building(id).start && (built[id] as number) <= building(id).tiers.length)) return false
@@ -239,7 +263,7 @@ export function snapshot(camp: Camp, now: number): CampSnapshot {
     markers: camp.markers,
     crew: camp.crew.map((m) => {
       const level = levelFor(m.xp)
-      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: whole(m.xp), next: whole(levelXp(level + 1)), gear: { ...m.gear }, bonus: gearBonus(m.gear), pin: m.pin && { ...m.pin }, journal: m.journal.map((e) => ({ ...e })) }
+      return { id: m.id, name: m.name, seed: m.seed, level, title: titleFor(level), xp: whole(m.xp), next: whole(levelXp(level + 1)), gear: { ...m.gear }, bonus: gearBonus(m.gear), pin: m.pin && { ...m.pin }, journalCount: m.journal.length, journalAt: m.journal.at(-1)?.at ?? 0 }
     }),
     assignments,
     built: { ...camp.built },

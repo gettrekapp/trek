@@ -2,7 +2,8 @@
 // into camp.json; `state` answers the snapshot and every change is sent to every project's windows
 // (throttled to once a second). The shop's handlers (part 3a) build a building's next tier and hire a
 // walk-in; seen and awaySeen keep the "While you were away" card; gear and pin (part 3b) buy a
-// member's next item and pin it to a kind of session. The host names projects and worktrees for the
+// member's next item and pin it to a kind of session, and journal answers a member's journal (not
+// pushed with the snapshot). The host names projects and worktrees for the
 // crew's journals. A minute tick pays working minutes, cools the fire and forgets sessions that are
 // gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
@@ -11,7 +12,7 @@ import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { pluginError, type PluginInstance, type ServerPluginHost } from '../../../src/shared/plugins/server.ts'
 import { awaySeen, seen } from '../shared/away.ts'
 import { snapshot, type CampSnapshot } from '../shared/camp.ts'
-import { pinMember, type Where } from '../shared/crew.ts'
+import { journalOf, pinMember, type Where } from '../shared/crew.ts'
 import { applyActivity, applyCommits, forget, tick, type Rules } from '../shared/economy.ts'
 import { build, buyGear, recruit, type ShopRefusal } from '../shared/shop.ts'
 import { openCampStore } from './store.ts'
@@ -224,6 +225,12 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
       pin: (params) => {
         open()
         return answer(pinMember(camp, params, now()))
+      },
+      // A member's journal (part 3b): not in the pushed snapshot; a member view asks while it is open
+      journal: (params) => {
+        const out = journalOf(camp, params)
+        if ('code' in out) throw pluginError(out.code, out.message)
+        return out
       },
       seen: () => {
         open()
