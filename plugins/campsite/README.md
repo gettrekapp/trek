@@ -90,8 +90,31 @@ fireflies, and still fog. Settings → Plugins → Campsite has **Sky** (Follow 
 dusk: the strip's look before 3d) and **Seasons** (Northern, Southern, Off). Dusk with the seasons
 off and clear weather is exactly the strip before 3d-1.
 
+**Wildlife** (part 3d-2, collection only: nothing here pays). 24 species (20 common, 4 rare) cross
+the strip now and then. The server rolls each minute for every project it knows where the plugin
+is on: a 1 in 20 chance while the project is active (a working session, or activity in the last
+10 minutes), else 1 in 120; ranger tower II lifts both by a quarter. The species is drawn by weight
+among those the project's time of day, season and weather allow (by the windows' time zone and
+Seasons setting, which each window's `seen` ping reports; the Sky setting doesn't gate), and the
+lake (swimmers) and the ranger tower (the rares, one draw in 80) let in; never the species just
+seen there. Each sighting goes into the field guide (how many, first and last), the last 30
+sightings and the away card ("12 sightings · 2 new species: Great blue heron, Lynx"), and the
+`sighting` event goes to that project's windows only. In an expanded, visible strip its animal
+crosses, one at a time (one arriving during a crossing is logged but not drawn): a walker on the
+treeline behind the buildings, tents and hikers (15–25 s, one pause), a flier between the header
+and the ridge, clear of the peak's flags (8–12 s), a swimmer bobbing on the lake for 20 s (none
+without the lake); a shade darker at night; standing still for 10 s under reduced motion (a walker
+in a gap clear of the tents, the log, the fire and the buildings). It goes at once when the strip
+collapses, changes width or moves the lake, or reduced motion changes. Its
+button opens the camp popover's **Guide** tab at its card: a grid of the 24 (still sprite, name,
+count, first day; unseen a silhouette and "???"; rares last, "Needs the ranger tower" without
+it), with a dot on species first seen since the tab was last opened (`guideSeenAt`, per app), and
+hints from each unseen species' gates with ranger tower II. The **ranger tower** (500 wood and 2
+markers; II: 1,200 and 3) stands at the strip's left end, outside the cabins, and is the last
+building dropped there.
+
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
-- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 5; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear`, `pin` and `journal` (part 3b), `trailLog` and the `summit` event (part 3c); each project's last activity and the trails' checks for the weather (part 3d-1); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
+- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 6; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear`, `pin` and `journal` (part 3b), `trailLog` and the `summit` event (part 3c); each project's last activity and the trails' checks for the weather (part 3d-1); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes; wildlife (part 3d-2): `seen` keeps the window's time zone and Seasons setting, the minute tick rolls sightings and sends `sighting` to a project's windows (`host.emit`), `build` takes the ranger tower; `TREK_CAMPSITE_FORCE_SIGHTINGS=1` (test-only) makes every roll a sighting
 - `shared/`: pure, tested in `scripts/campsite*.test.mjs`
   - `hiker.ts`: a look from the session id (provider = jacket color); `withKit` dresses it in a member's gear
   - `pixels.ts`: the 12×16 pixels of each pose, with the gear's pack, boots, hat and tool
@@ -99,7 +122,7 @@ off and clear weather is exactly the strip before 3d-1.
   - `layout.ts`: where tents, the log and hikers stand; grouped mode when crowded (`moreWaiting` and `moreTents` count what does not fit); badge wording and color, tent colors, which way a camp's list opens, the header line, the collapsed row
   - `dog.ts`: the camp dog's pixels, and where it runs next
   - `stage.ts`: the Pixi strip's pure half: pixels to RGBA, the motions' timing, walks in and off (`reconcileMovers`), the dog's wander, and where the backdrop, fire, tents, log and signs go
-  - `prefs.ts`: the per-app switches, and the sky and seasons choices
+  - `prefs.ts`: the per-app switches, the sky and seasons choices, and when the field guide was last opened
   - `camp.ts`: the camp and its snapshot
   - `crew.ts`: names, assignment (pins first), trips, levels, summits, pinning, the seen session types and agents, each session's gear for its hiker
   - `journal.ts`: a member's journal entries and their words
@@ -107,22 +130,25 @@ off and clear weather is exactly the strip before 3d-1.
   - `catalog.ts`: the buildings' tiers, costs and effects, and the numbers behind them; gear (slots, tiers, prices, bonuses, gates) (tunable)
   - `shop.ts`: offers, bunks, the day's walk-ins, build, recruit and buyGear
   - `away.ts`: the "While you were away" tally, when it is due, and its line
-  - `campView.ts`: what the camp popover's rows say, and a member's view (gear rows, the pin's choices, the bonus)
+  - `campView.ts`: what the camp popover's rows say, a member's view (gear rows, the pin's choices, the bonus), and the field guide's cards and hints
   - `campEdges.ts`: where buildings stand at the strip's ends, and the middle left for the tents
-  - `buildingPixels.ts`: the buildings' pixels, the fire ring's stones, the string lights, the popover's icons
+  - `buildingPixels.ts`: the buildings' pixels (the ranger tower's too), the fire ring's stones, the string lights, the popover's icons
   - `trails.ts`: the trails' stages, what moves them (`trailEvent`), `reconcile` with a project's worktrees, the history, the cairn's size
   - `mountain.ts`: the peak, its ledges and path (in the world's colours, `mountainLook`), the flags' places and pixels, the summit's climb and sparks, the cairn's pixels and place
-  - `world.ts`: the time of day (`phaseAt`), the season (`seasonAt`), the backdrop's palettes (`paletteAt`; dusk is the strip's colours before 3d), the weather (`weatherOf`), the world's key, the snow caps (`capsAbove`)
+  - `world.ts`: the time of day (`phaseAt`), the season (`seasonAt`), the backdrop's palettes (`paletteAt`; dusk is the strip's colours before 3d), the weather (`weatherOf`), the world's key, the snow caps (`capsAbove`), the wall clock in another time zone (`zonedDate`)
+  - `wildlife.ts`: the 24 species and their gates, the draw (`pickSpecies`), the minute's roll and its odds, the guide, the last sightings, the windows' clock
+  - `animalPixels.ts`: each species' two frames, as rows of letters
+  - `crossing.ts`: where an animal goes on the strip and for how long
   - `touches.ts`: spring's flowers, the particle pool (rain, snow, leaves, fireflies; at most 60, moved in place), fog's bands
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
-  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `MemberView.tsx` (a member: pin, gear, journal), `TrailsTab.tsx` (the trails and their history), `AwayCard.tsx` (While you were away)
-  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the buildings, the flags, the cairn, the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the tents and log; `scene/actors/` (the world: the backdrop, flowers and fog; mountain and cairn, hikers, dog, fire, buildings, particles) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
+  - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `MemberView.tsx` (a member: pin, gear, journal), `TrailsTab.tsx` (the trails and their history), `GuideTab.tsx` (the field guide), `AwayCard.tsx` (While you were away)
+  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the buildings, the flags, the cairn, the hikers, the dog and a sighting's animal (names, focus, clicks); `CampStage.ts` runs the app and draws the tents and log; `scene/actors/` (the world: the backdrop, flowers and fog; mountain and cairn, hikers, dog, fire, buildings, particles, wildlife) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared; a member's journal on request), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), a session's hiker look in its member's gear (`useHikerLook`: it listens for the session's kit alone, so a push that only moves the wood doesn't render the hikers again), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `?tower=1|2`, `?guide=some`, `?away=sightings`, `?animal=<species>&age=<ms>&dir=left|right` (an animal that far into its crossing) and `?sheet=1` (every species' two frames) show the wildlife; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has nine methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which
 answer the new snapshot; `journal`, a member's journal; `trailLog`, a project's ended trails; `seen`, sent on load and every 5 minutes while a window and its strip are shown;
-`awaySeen`, the card's dismiss) and two events (`state`, sent when the snapshot changes; `summit`, when a merge first paid summits a trail).
+`awaySeen`, the card's dismiss) and three events (`state`, sent when the snapshot changes; `summit`, when a merge first paid summits a trail; `sighting`, to one project's windows when an animal is seen there).

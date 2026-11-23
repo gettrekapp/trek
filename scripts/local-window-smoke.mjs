@@ -17,7 +17,10 @@
 //     Crew tab buys a canvas pack ("+2% wood"), reads its journal, and goes Back to the list (its row focused);
 //     the trail signpost is built (its planks count both feature-auth trails); the button closes it again;
 //     the mountain carries a flag for each feature-auth worktree (api's on the ridge: its PR is linked),
-//     and a flag opens the Trails tab at its row, with the history read; a bell puts the row in attention (on the server too); showing the session
+//     and a flag opens the Trails tab at its row, with the history read; the ranger tower is built
+//     and stands on the strip; with every minute rolling a sighting (TREK_CAMPSITE_FORCE_SIGHTINGS)
+//     an animal crosses the strip, and its button opens the Guide tab at its card, focused;
+//     a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
 //   - branch data per repository: api's tag, note, ticket and PR are not web's, on the server and
@@ -208,9 +211,12 @@ try {
     TREK_NO_UPDATE_CHECK: '1',
     // The campsite's working minute, so a few seconds of work earn the camp wood
     TREK_CAMPSITE_MINUTE_MS: '200',
-    // A fresh camp starts with 600 wood (and 3 markers), so the shop checks can build string lights
-    // (25), the gear shed (250) and the trail signpost (150), and buy a member a canvas pack (60)
-    TREK_CAMPSITE_SEED_WOOD: '600'
+    // A fresh camp starts with 1200 wood (and 3 markers), so the shop checks can build string lights
+    // (25), the gear shed (250), the trail signpost (150) and the ranger tower (500 and 2 markers),
+    // and buy a member a canvas pack (60)
+    TREK_CAMPSITE_SEED_WOOD: '1200',
+    // Every working minute (200 ms) rolls a sighting in each project: an animal crosses the strip
+    TREK_CAMPSITE_FORCE_SIGHTINGS: '1'
   }
   stubsFirstOnPath(env, stubs)
   delete env.TREK_NO_LOCAL_SERVER
@@ -444,6 +450,28 @@ try {
   check('the Trails tab reads the history (none ended yet)', await until(() => win.locator('.cs-camp-popover .cs-trails').innerText().then((t) => t.includes('No ended trails yet.')), true), true)
   await win.keyboard.press('Escape')
   check('Escape closes the Trails tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  // Wildlife (campsite 3d-2): the ranger tower from the Camp tab stands at the strip's left end
+  await win.locator('.campsite .cs-camp-button').click()
+  const towerRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="tower"]')
+  await towerRow.locator('.cs-shop-build').click()
+  check('the camp popover builds the ranger tower (its row offers Ranger tower II next), and it stands on the strip', await until(async () => [await towerRow.locator('.cs-shop-tier').innerText(), await win.locator('.campsite .cs-building[aria-label^="Ranger tower"]').count()], ['Tier 2 of 2', 1]), ['Tier 2 of 2', 1])
+  await win.locator('.campsite .cs-camp-button').click()
+  check('the counts button closes the popover', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  // A sighting every minute (forced): an animal crosses the strip, its button named for it; a click
+  // (dispatched: the button moves with the animal) opens the Guide tab at its card, focused
+  const animal = win.locator('.campsite .cs-animal')
+  const animalLabel = await first(async () => ((await animal.count()) > 0 ? await animal.first().getAttribute('aria-label') : null))
+  check('a sighting sends an animal across the strip, its button named for it', / — open the field guide$/.test(animalLabel ?? ''), true)
+  const animalName = (animalLabel ?? '').split(' — ')[0]
+  console.log(`     (the animal: ${animalName})`)
+  await animal.first().dispatchEvent('click')
+  const guideOpen = async () => [
+    await win.locator('.cs-camp-popover [role="tab"][aria-selected="true"]').innerText().then((t) => /^Guide \d+\/24$/.test(t)).catch(() => false),
+    await win.evaluate((name) => document.activeElement?.closest('.cs-guide-card')?.getAttribute('aria-label')?.startsWith(`${name}, seen`) ?? false, animalName)
+  ]
+  check("the animal's button opens the Guide tab at its card, focused", await until(guideOpen, [true, true]), [true, true])
+  await win.keyboard.press('Escape')
+  check('Escape closes the Guide tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 
