@@ -333,6 +333,9 @@ export function boardLabel(unread: number | null): string {
 export const noteHead = (n: Pick<Note, 'agent' | 'member' | 'branch' | 'at'>, now: number): string =>
   `${whoLine(n.agent, n.member) || 'An agent'}${n.branch ? ` on ${n.branch}` : ''} — ${ago(n.at, now)}`
 
+/** A project's newest note's time in the snapshot's `noteAt`; undefined when it has none (or the server is older) */
+export const projectNoteAt = (noteAt: Readonly<Record<string, number>> | undefined, projectId: string): number | undefined => (noteAt && Object.hasOwn(noteAt, projectId) ? noteAt[projectId] : undefined)
+
 /** The notes newer than `since` (the board's unread count) */
 export const unreadNotes = (notes: readonly Pick<Note, 'at'>[], since: number): number => notes.filter((n) => n.at > since).length
 

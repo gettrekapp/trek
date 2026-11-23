@@ -9,15 +9,16 @@
 // this window's clock and the seasons the month (both settings), and the weather this project's
 // trails and activity, with a glyph after the counts saying why. Wildlife (part 3d-2): a sighting
 // here (the server's `sighting` event) sends its animal across the expanded, visible strip, one at a
-// time; its button opens the field guide (the popover's Guide tab) at it. Collapsed, it is one line:
-// everyone at tab size, those waiting first.
+// time; its button opens the field guide (the popover's Guide tab) at it. Agents (part 5): this
+// project's notes are read whenever its newest note's time changes; the Noticeboard (the popover's
+// Camp tab) marks them seen. Collapsed, it is one line: everyone at tab size, those waiting first.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { admit, crossing, occupiedSpans, type Crossing, type SightingView, type Span } from '../shared/crossing.ts'
-import { guideSeenNow, summitLine, weatherBadge } from '../shared/campView.ts'
+import { guideSeenNow, notesSeenNow, projectNoteAt, summitLine, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -25,7 +26,7 @@ import { seasonAt, weatherOf, worldAt, worldKey } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
-import { useCamp, useDocumentHidden, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useTools, useWidth } from './hooks.ts'
+import { useCamp, useDocumentHidden, useNotes, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useTools, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -178,6 +179,12 @@ export function Campsite(): React.JSX.Element | null {
   const flagsJson = camp?.trails ? flagsKey(camp.trails, host.projectId) : '[]'
   const trails = useMemo(() => flagsOf(flagsJson), [flagsJson])
   const { summit, shown: summitShown, fresh: summitFresh } = useSummit(host)
+  // This project's notes (part 5): read again whenever its newest note's time changes (none: never asked)
+  const noteAt = projectNoteAt(camp?.noteAt, host.projectId)
+  const notes = useNotes(host)
+  useEffect(() => {
+    if (noteAt !== undefined) campStore(host).loadNotes()
+  }, [host, noteAt])
   // The world (part 3d-1): this window's clock and prefs; this project's weather from its trails' checks and its last activity.
   // Not memoised: it depends on the clock (the 24 h rain and 12 h fog run out as `now` moves), and it is
   // a short scan of the trails; what it feeds is keyed (the world below, the badge's strings)
@@ -298,6 +305,11 @@ export function Campsite(): React.JSX.Element | null {
       store={campStore(host)}
       guideSeenAt={prefs.guideSeenAt}
       onGuideSeen={() => setPref('guideSeenAt', guideSeenNow(camp.guide, Date.now()))}
+      notes={notes}
+      onNotesSeen={() => {
+        // Only when something is unread: opening the camp shouldn't write the prefs each time
+        if (noteAt !== undefined && noteAt > prefs.notesSeenAt) setPref('notesSeenAt', notesSeenNow(noteAt, Date.now()))
+      }}
       onClose={closeCamp}
     />
   )

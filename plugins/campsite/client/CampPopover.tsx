@@ -1,5 +1,7 @@
-// The camp's popover (campsite parts 3a, 3b, 3c and 3d-2), opened from the header's counts, a building on
-// the strip, (at the Trails tab) a flag, the cairn or the signpost, or (at the Guide tab) an animal. Camp: each building's next
+// The camp's popover (campsite parts 3a, 3b, 3c, 3d-2 and 5), opened from the header's counts, a building on
+// the strip, (at the Trails tab) a flag, the cairn or the signpost, (at the Guide tab) an animal, or
+// (at the Camp tab's Noticeboard, focused) the noticeboard. Camp: the Noticeboard (part 5: the
+// agents' notes; not from an older server), then each building's next
 // tier with its effect and price, and Build when the camp can pay. Crew: the members (level, XP,
 // where they are, their gear's bonus), each a button that opens its view (MemberView: pin, gear,
 // journal; Back, or Escape, returns the focus to its row; another tab closes it), and today's
@@ -12,15 +14,16 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { iconArt } from '../shared/buildingPixels.ts'
 import type { CampSnapshot, CrewEntry } from '../shared/camp.ts'
-import { crewLine, guideTab, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
+import { crewLine, guideTab, hireState, memberStatus, memberSummary, projectNoteAt, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
 import { CATALOG, type BuildingId } from '../shared/catalog.ts'
 import { memberLook } from '../shared/crew.ts'
 import { kitKey, kitOf, withKit } from '../shared/hiker.ts'
 import type { Candidate } from '../shared/shop.ts'
-import type { CampStore } from './campStore.ts'
+import type { CampStore, NotesState } from './campStore.ts'
 import { GuideTab } from './GuideTab.tsx'
 import { Hiker } from './Hiker.tsx'
 import { MemberView } from './MemberView.tsx'
+import { Noticeboard } from './Noticeboard.tsx'
 import { TrailsTab } from './TrailsTab.tsx'
 
 export type CampTab = 'camp' | 'crew' | 'trails' | 'guide'
@@ -35,7 +38,7 @@ export interface OpenCamp {
   trail?: string
   /** A species to show in the Guide tab (an animal on the strip was clicked) */
   species?: string
-  /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn", "animal"): another one moves the popover rather than closing it */
+  /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn", "animal", "board"): another one moves the popover rather than closing it; "board" focuses the Noticeboard */
   opener?: string
 }
 
@@ -48,14 +51,17 @@ interface Props {
   sessions: readonly PluginSession[]
   /** The window's project (its trails come first) */
   projectId: string
-  store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin' | 'journal' | 'trailLog'>
+  store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin' | 'journal' | 'trailLog' | 'loadNotes'>
   /** When the Guide tab was last opened (the prefs' guideSeenAt), and that it is opened now */
   guideSeenAt: number
   onGuideSeen: () => void
+  /** The window's project's notes (part 5), and that the Noticeboard shows them now */
+  notes: NotesState
+  onNotesSeen: () => void
   onClose: (refocus: boolean) => void
 }
 
-export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt, onGuideSeen, onClose }: Props): React.JSX.Element {
+export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt, onGuideSeen, notes, onNotesSeen, onClose }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [tab, setTab] = useState<CampTab>(at.tab ?? 'camp')
   const [left, setLeft] = useState(at.left)
@@ -99,11 +105,11 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
     const el = ref.current
     if (el) setLeft(Math.max(EDGE, Math.min(at.left, window.innerWidth - el.offsetWidth - EDGE)))
   })
-  // Opened from a building: its row; at a trail or a species: its tab focuses its row or card; else the open tab. (Campsite keys the popover by where it opens.)
+  // Opened from a building: its row; from the noticeboard: the Noticeboard; at a trail or a species: its tab focuses its row or card; else the open tab. (Campsite keys the popover by where it opens.)
   useEffect(() => {
     const el = ref.current
     if (!el || at.trail !== undefined || at.species !== undefined) return
-    const row = at.focus ? el.querySelector<HTMLElement>(`[data-building="${at.focus}"]`) : null
+    const row = at.focus ? el.querySelector<HTMLElement>(`[data-building="${at.focus}"]`) : at.opener === 'board' ? el.querySelector<HTMLElement>('[data-noticeboard]') : null
     if (row) {
       row.scrollIntoView({ block: 'nearest' })
       row.focus()
@@ -111,7 +117,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
   }, [])
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
-      if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-popover, .cs-camp-button, .cs-building, .cs-flag, .cs-flag-more, .cs-cairn, .cs-animal')) onClose(false)
+      if (!(e.target instanceof Element) || !e.target.closest('.cs-camp-popover, .cs-camp-button, .cs-building, .cs-flag, .cs-flag-more, .cs-cairn, .cs-animal, .cs-board')) onClose(false)
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -205,6 +211,13 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
       </div>
       {tab === 'camp' ? (
         <div className="cs-shop" role="tabpanel" id={panelId('camp')} aria-labelledby={tabId('camp')}>
+          {/* An older server has no noticeboard (no noteAt) */}
+          {camp.noteAt !== undefined && (
+            <>
+              <Noticeboard notes={notes} onLoad={store.loadNotes} noteAt={projectNoteAt(camp.noteAt, projectId)} onSeen={onNotesSeen} />
+              <div className="cs-crew-heading">Buildings</div>
+            </>
+          )}
           {CATALOG.map((b) => {
             const row = shopRow(camp, b.id)
             const offer = row.offer

@@ -31,7 +31,9 @@ import { Campsite } from '../client/Campsite.tsx'
 import { ANIMAL_SCALE, animalPixels, animalSize } from '../shared/animalPixels.ts'
 import { newCamp, snapshot } from '../shared/camp.ts'
 import { lookFor, withKit } from '../shared/hiker.ts'
+import { notesOf } from '../shared/notes.ts'
 import { FRAMES, POSES, pixels } from '../shared/pixels.ts'
+import { trailLogOf } from '../shared/trails.ts'
 import { SPECIES } from '../shared/wildlife.ts'
 
 const PROVIDERS = ['claude', 'codex', 'gemini', 'grok']
@@ -250,7 +252,9 @@ const host = {
   request: async (method: string, params?: { crewId?: string; projectId?: string }) => {
     if (method === 'state') return tools ? { ...camp, tools } : camp
     if (method === 'journal') return { journal: state.crew.find((m) => m.id === params?.crewId)?.journal ?? [] }
-    if (method === 'trailLog') return { log: state.trailLog[params?.projectId ?? ''] ?? [] }
+    // As the server answers them: a project's history and its open trails' reports; its notes (part 5)
+    if (method === 'trailLog') return trailLogOf(state, params ?? {})
+    if (method === 'notes') return notesOf(state, params ?? {})
     if (method === 'seen' || method === 'awaySeen') return { ok: true }
     throw new Error(`[harness] no method ${method}`)
   },

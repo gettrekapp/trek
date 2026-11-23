@@ -5,11 +5,14 @@
 // what the signpost adds. Opened at a trail (a flag clicked), that row takes the focus (the selected
 // tab when its row is gone). This project's history is asked for again when its open trails change
 // (one ending shows in it); only the newest answer for a project is kept. After "Show history" or
-// Retry, the history's region takes the focus (the button is gone).
+// Retry, the history's region takes the focus (the button is gone). Reports (part 5) come with the
+// history: a trail with one shows a line of it under its row (More shows all of it), and an ended
+// trail's entry shows the report it had.
 import { useEffect, useId, useRef, useState } from 'react'
 import type { CampSnapshot, TrailEntry } from '../shared/camp.ts'
-import { NO_TRAILS, SIGNPOST_HINT, historyText, meterLabel, trailGroups, trailStatus } from '../shared/campView.ts'
+import { NO_TRAILS, SIGNPOST_HINT, historyText, meterLabel, reportBy, reportExcerpt, trailGroups, trailStatus } from '../shared/campView.ts'
 import { tentColors } from '../shared/layout.ts'
+import type { TrailReport } from '../shared/notes.ts'
 import { STAGES, type TrailRecord } from '../shared/trails.ts'
 import type { CampStore } from './campStore.ts'
 import { useNow } from './hooks.ts'
@@ -23,7 +26,7 @@ interface Props {
   focus: string | null
 }
 
-type History = { state: 'loading' } | { state: 'failed' } | { state: 'ready'; log: TrailRecord[] }
+type History = { state: 'loading' } | { state: 'failed' } | { state: 'ready'; log: TrailRecord[]; reports: Record<string, TrailReport> }
 
 export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -43,8 +46,8 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
     const latest = (): boolean => alive.current && asked.current.get(id) === token
     setHistories((h) => (quiet && h[id]?.state === 'ready' ? h : { ...h, [id]: { state: 'loading' } }))
     store.trailLog(id).then(
-      ({ log }) => {
-        if (latest()) setHistories((h) => ({ ...h, [id]: { state: 'ready', log } }))
+      ({ log, reports }) => {
+        if (latest()) setHistories((h) => ({ ...h, [id]: { state: 'ready', log, reports } }))
       },
       () => {
         if (latest()) setHistories((h) => (quiet && h[id]?.state === 'ready' ? h : { ...h, [id]: { state: 'failed' } }))
@@ -79,6 +82,11 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
     focusHistory.current = null
     ref.current?.querySelector<HTMLElement>(`[data-history="${CSS.escape(id)}"]`)?.focus()
   }, [histories])
+  /** A project's open trails' reports, once its history is read */
+  const reportsOf = (id: string): Record<string, TrailReport> => {
+    const h = histories[id]
+    return h?.state === 'ready' ? h.reports : {}
+  }
   useEffect(() => {
     if (focus === null) return
     const row = ref.current?.querySelector<HTMLElement>(`[data-trail="${CSS.escape(focus)}"]`)
@@ -95,7 +103,7 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
       <div className="cs-crew-heading">{here[0]?.projectName ?? 'This project'}</div>
       {here.length === 0 && <div className="cs-crew-empty">{NO_TRAILS}</div>}
       {here.map((t) => (
-        <TrailRow key={t.worktreeId} trail={t} now={now} focusable />
+        <TrailRow key={t.worktreeId} trail={t} report={reportsOf(projectId)[t.worktreeId]} now={now} focusable />
       ))}
       <div className="cs-crew-heading" id={`${ids}-history`}>
         History
@@ -108,7 +116,7 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
           <div key={g.projectId} className="cs-trails-project" role="group" aria-label={g.projectName}>
             <div className="cs-crew-heading">{g.projectName}</div>
             {g.trails.map((t) => (
-              <TrailRow key={t.worktreeId} trail={t} now={now} focusable={false} />
+              <TrailRow key={t.worktreeId} trail={t} report={reportsOf(g.projectId)[t.worktreeId]} now={now} focusable={false} />
             ))}
             {histories[g.projectId] === undefined ? (
               <button className="cs-trails-more" aria-label={`Show ${g.projectName}'s history`} onClick={() => ask(g.projectId)}>
@@ -128,8 +136,8 @@ export function TrailsTab({ camp, projectId, store, focus }: Props): React.JSX.E
   )
 }
 
-/** A trail's row: its flag's colour, its branch, its stage meter, its stage and how long */
-function TrailRow({ trail, now, focusable }: { trail: TrailEntry; now: number; focusable: boolean }): React.JSX.Element {
+/** A trail's row: its flag's colour, its branch, its stage meter, its stage and how long; its report's first line under them (More: all of it) */
+function TrailRow({ trail, report, now, focusable }: { trail: TrailEntry; report: TrailReport | undefined; now: number; focusable: boolean }): React.JSX.Element {
   const status = trailStatus(trail, now)
   return (
     <div className="cs-trail-row" data-trail={focusable ? trail.worktreeId : undefined} tabIndex={focusable ? -1 : undefined} role="group" aria-label={`${trail.branch}: ${status}`}>
@@ -139,6 +147,7 @@ function TrailRow({ trail, now, focusable }: { trail: TrailEntry; now: number; f
           {trail.branch}
         </span>
         <span className="cs-crew-status">{status}</span>
+        {report && <ReportLine report={report} now={now} />}
       </div>
       <span className="cs-trail-meter" role="img" aria-label={meterLabel(trail.stage)}>
         {STAGES.map((name, i) => (
@@ -146,6 +155,22 @@ function TrailRow({ trail, now, focusable }: { trail: TrailEntry; now: number; f
         ))}
       </span>
     </div>
+  )
+}
+
+/** A trail's report: one line (cut short), More for the whole of it; who posted it and when in its title */
+function ReportLine({ report, now }: { report: TrailReport; now: number }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const { text, cut } = reportExcerpt(report.summary)
+  return (
+    <span className="cs-trail-report" title={reportBy(report, now)}>
+      <span className={open ? 'cs-report-text open' : 'cs-report-text'}>{open ? report.summary : text}</span>
+      {cut && (
+        <button className="cs-report-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          {open ? 'Less' : 'More'}
+        </button>
+      )}
+    </span>
   )
 }
 
@@ -167,9 +192,14 @@ function HistoryList({ history, now, onRetry }: { history: History | undefined; 
   return (
     <ol className="cs-journal cs-trail-log">
       {[...history.log].reverse().map((r, i) => (
-        <li key={`${r.end}:${r.branch}:${i}`}>
+        <li key={`${r.end}:${r.branch}:${i}`} className={r.report ? 'cs-log-reported' : undefined}>
           <span>{r.branch}</span>
           <span className="cs-journal-when">{historyText(r, now)}</span>
+          {r.report && (
+            <span className="cs-log-report" title={reportBy(r.report, now)}>
+              {r.report.summary}
+            </span>
+          )}
         </li>
       ))}
     </ol>

@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NOTES_MAX, NOTE_MAX, POST_EVERY_MS, REPORT_MAX, addNote, cleanText, dropBadNotes, isNote, isReport, noteAtOf, notesOf, takePost, textLength, whoLine } from '../plugins/campsite/shared/notes.ts'
 import { JOURNAL_MAX, entryText, isEntry, note } from '../plugins/campsite/shared/journal.ts'
-import { NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, reportBy, reportExcerpt, unreadNotes } from '../plugins/campsite/shared/campView.ts'
+import { NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, projectNoteAt, reportBy, reportExcerpt, unreadNotes } from '../plugins/campsite/shared/campView.ts'
 import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { restore } from '../plugins/campsite/shared/economy.ts'
 import { postReport, trailEvent, trailKey, trailLogOf } from '../plugins/campsite/shared/trails.ts'
@@ -281,4 +281,11 @@ test('boardSpot: on the tents\' line just left of the fire when that is free; cl
   assert.equal(boardSpot({ width: 1000, fireX: 500, tents: [], log: null, hikers: [] }, [], [{ from: 400, to: 452 }]).x, 366)
   assert.equal(boardSpot({ width: 400, fireX: 200, tents: [], log: null, hikers: [] }, [], [{ from: 8, to: 392 }]), null, 'no room at all')
   assert.equal(boardSpot({ width: 100, fireX: 50, tents: [], log: null, hikers: [] }, []), null, 'the fire leaves no stretch wide enough')
+})
+
+test("projectNoteAt: a project's newest note's time from the snapshot; none for another project, an Object member or an older server", () => {
+  assert.equal(projectNoteAt({ p: T0 }, 'p'), T0)
+  assert.equal(projectNoteAt({ p: T0 }, 'q'), undefined)
+  assert.equal(projectNoteAt({}, 'toString'), undefined)
+  assert.equal(projectNoteAt(undefined, 'p'), undefined)
 })

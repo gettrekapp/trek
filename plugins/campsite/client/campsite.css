@@ -1062,3 +1062,64 @@
   border-radius: 50%;
   background: #ffd27a;
 }
+/* The Noticeboard (campsite 5), at the top of the Camp tab: each note's who, where and when over its text */
+.cs-notes:focus {
+  outline: none;
+}
+.cs-notes:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: -1px;
+  border-radius: 5px;
+}
+.cs-notes-list li {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+}
+.cs-note-head {
+  color: #9a9aa2;
+}
+.cs-note-text {
+  color: #ededf0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+/* A trail's report under its row in the Trails tab: one line, More for the rest; an ended trail's under its entry */
+.cs-trail-report {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: #c9c2d6;
+  font-size: 11px;
+  font-style: italic;
+}
+.cs-report-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-report-text.open {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.cs-report-more {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #9fd3ff;
+  font: inherit;
+  font-style: normal;
+  cursor: pointer;
+}
+.cs-log-reported {
+  flex-wrap: wrap;
+}
+.cs-log-report {
+  flex-basis: 100%;
+  color: #9a9aa2;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
