@@ -45,16 +45,24 @@ function zoneFormat(tz: string): Intl.DateTimeFormat {
   return f
 }
 
-/** An IANA time zone this runtime knows ("Europe/Oslo"; at most 64 characters) */
-export function isTimeZone(tz: unknown): tz is string {
-  if (typeof tz !== 'string' || tz.length === 0 || tz.length > 64) return false
+/**
+ * A time zone's canonical IANA name as this runtime resolves it ("europe/oslo" → "Europe/Oslo",
+ * "US/Pacific" → "America/Los_Angeles"), or null for one it doesn't know (at most 64 characters).
+ * Its formatter is cached under that name only, so the spellings of one zone share it.
+ */
+export function canonicalZone(tz: unknown): string | null {
+  if (typeof tz !== 'string' || tz.length === 0 || tz.length > 64) return null
   try {
-    zoneFormat(tz)
-    return true
+    const name = ZONES.get(tz)?.resolvedOptions().timeZone ?? new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone
+    zoneFormat(name)
+    return name
   } catch {
-    return false
+    return null
   }
 }
+
+/** An IANA time zone this runtime knows ("Europe/Oslo"; at most 64 characters) */
+export const isTimeZone = (tz: unknown): tz is string => canonicalZone(tz) !== null
 
 /**
  * A Date whose local fields (hours, month) read the wall clock in `tz` at `now` (part 3d-2: the

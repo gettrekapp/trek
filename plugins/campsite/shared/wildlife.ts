@@ -6,7 +6,7 @@
 // so the rolls are the caller's. The rules change the camp in place. Pure.
 import type { Camp } from './camp.ts'
 import { isRecord } from './catalog.ts'
-import { isTimeZone, phaseAt, seasonAt, weatherOf, zonedDate, type Hemisphere, type Phase, type Season, type WeatherKind } from './world.ts'
+import { canonicalZone, phaseAt, seasonAt, weatherOf, zonedDate, type Hemisphere, type Phase, type Season, type WeatherKind } from './world.ts'
 
 export type Move = 'walker' | 'flier' | 'swimmer'
 /** What can change a species' weight: a time of day, a season or a weather */
@@ -144,9 +144,9 @@ export const DEFAULT_CLOCK: Readonly<CampClock> = Object.freeze({ tz: null, seas
 const HEMISPHERES: readonly Hemisphere[] = ['north', 'south', 'off']
 const isHemisphere = (x: unknown): x is Hemisphere => typeof x === 'string' && (HEMISPHERES as readonly string[]).includes(x)
 
-/** A window's `seen { tz, seasons }`: each valid value is kept (an unknown time zone or a bad value leaves the one before). Whether the clock changed */
+/** A window's `seen { tz, seasons }`: each valid value is kept, a time zone by its canonical name (an unknown time zone or a bad value leaves the one before). Whether the clock changed */
 export function setClock(camp: Pick<Camp, 'clock'>, params: Record<string, unknown>): boolean {
-  const tz = isTimeZone(params.tz) ? params.tz : camp.clock.tz
+  const tz = canonicalZone(params.tz) ?? camp.clock.tz
   const seasons = isHemisphere(params.seasons) ? params.seasons : camp.clock.seasons
   if (tz === camp.clock.tz && seasons === camp.clock.seasons) return false
   camp.clock = { tz, seasons }
@@ -220,7 +220,7 @@ export function dropBadWildlife(camp: Pick<Camp, 'guide' | 'sightings' | 'lastSe
   for (const [projectId, id] of Object.entries(camp.lastSeen)) if (!isSpecies(id)) delete camp.lastSeen[projectId]
   const clock: unknown = camp.clock
   camp.clock = {
-    tz: isRecord(clock) && isTimeZone(clock.tz) ? clock.tz : null,
+    tz: isRecord(clock) ? canonicalZone(clock.tz) : null,
     seasons: isRecord(clock) && isHemisphere(clock.seasons) ? clock.seasons : 'north'
   }
   const away = camp.away as unknown as Record<string, unknown>
