@@ -941,3 +941,23 @@ test("trails (3c): a worktree that summited a branch and moved to another: its f
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => [t.branch, t.stage]), [['B', 2]])
   await new Promise((r) => setImmediate(r))
 })
+
+test("the world (3d-1): every event stamps its project's last activity, a working session's minutes too, saved with the camp; failing checks show on the trail in the snapshot", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const clock = manual()
+  const { inst, c } = pastGrace(t, h, { schedule: clock.schedule })
+  h.fire({ kind: 'session.started', projectId: 'p', at: c.now, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null })
+  assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { p: T0 })
+  c.now += 1000
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: c.now, repoId: 'r', branch: 'b', url: 'u' })
+  h.fire({ kind: 'pr.checks', projectId: 'p', at: c.now, repoId: 'r', branch: 'b', url: 'u', result: 'failed', headSha: 's' })
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual([snap.trails[0].checks, snap.lastActive.p], ['failed', T0 + 1000])
+  h.fire({ kind: 'session.status', projectId: 'p', at: c.now, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null, from: 'idle', to: 'working', cause: 'output' })
+  c.now += 3 * 60_000
+  c.tick()
+  clock.run()
+  assert.equal((await inst.handlers.state({}, {})).lastActive.p, T0 + 1000 + 3 * 60_000, 'the work tick')
+  assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastActive.p, T0 + 1000 + 3 * 60_000, 'saved')
+  assert.equal(h.emitted.filter(([e]) => e === 'state').at(-1)[1].trails[0].checks, 'failed', 'pushed with the state')
+})

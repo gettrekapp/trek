@@ -13,7 +13,9 @@
 // or the first word from a project, nor after a worktree event (camp.json holds the open trails). The
 // first full reconcile is the first tick after it. A merge first paid sends `summit` for each trail it summits, and
 // `trailLog` answers a project's history (not pushed). A minute tick pays working minutes, cools the fire and forgets sessions that
-// are gone. New commits are counted with git (fast-forward only). Nothing here can stop the server:
+// are gone. The world (part 3d-1): each event stamps its project's last activity, and so does the
+// tick for each working session's project (saved with it, so at most about once a minute); with the
+// trails' checks it is pushed for the windows' weather. New commits are counted with git (fast-forward only). Nothing here can stop the server:
 // errors are logged and pay nothing.
 import { basename } from 'node:path'
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
