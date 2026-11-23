@@ -3,7 +3,8 @@
 // worktree with sessions pitches a tent, alternating right and left going out, with its hikers in
 // front. Crowded (more than MAX_SPREAD hikers out, or too wide for the strip): grouped mode, where
 // tents carry counts and only waiting hikers are drawn. Exited Global sessions sit on the log (they
-// widen it) though MAX_SPREAD counts only the hikers out who are not exited. Pure.
+// widen it) though MAX_SPREAD counts only the hikers out who are not exited. With a reserve (the
+// camp's buildings at the ends), the same within the middle region. Pure.
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { fnv1a } from './hiker.ts'
 import { isWaiting, type Sign } from './pose.ts'
@@ -17,6 +18,12 @@ const GAP = 16
 const PAD = 24
 const FIRE_CLEAR = 28
 export const MAX_SPREAD = 12
+/** Strip px kept at each end (the camp's buildings, campEdges.ts); the fire and the camps go between */
+export interface Reserve {
+  left: number
+  right: number
+}
+const NO_RESERVE: Reserve = { left: 0, right: 0 }
 
 export type Place = 'tent' | 'fire' | 'log' | 'inside'
 export interface CampHikerSpot {
@@ -54,7 +61,7 @@ interface Group {
   members: PluginSession[]
 }
 
-export function campLayout(sessions: readonly PluginSession[], width: number): CampLayout {
+export function campLayout(sessions: readonly PluginSession[], width: number, reserve: Reserve = NO_RESERVE): CampLayout {
   // Not measured yet
   if (width <= 0) return { width, fireX: 0, grouped: false, tents: [], log: null, hikers: [], moreTents: 0, moreWaiting: 0 }
   const groups: Group[] = []
@@ -71,17 +78,20 @@ export function campLayout(sessions: readonly PluginSession[], width: number): C
   }
   const spread = sessions.filter((s) => !isWaiting(s) && s.status !== 'exited').length
   if (spread <= MAX_SPREAD) {
-    const open = attempt(sessions, groups, global, width, false)
+    const open = attempt(sessions, groups, global, width, reserve, false)
     if (open) return open
   }
-  return attempt(sessions, groups, global, width, true)!
+  return attempt(sessions, groups, global, width, reserve, true)!
 }
 
-function attempt(sessions: readonly PluginSession[], groups: Group[], global: Group | null, width: number, grouped: boolean): CampLayout | null {
-  const fireX = Math.round(width / 2)
+function attempt(sessions: readonly PluginSession[], groups: Group[], global: Group | null, width: number, reserve: Reserve, grouped: boolean): CampLayout | null {
+  // The middle region, between the ends' buildings
+  const lo = reserve.left
+  const hi = width - reserve.right
+  const fireX = Math.round((lo + hi) / 2)
   const hikers: CampHikerSpot[] = []
   const allWaiting = sessions.filter(isWaiting)
-  const slots = Math.max(0, Math.floor((width - 2 * PAD - 2 * FIRE_CLEAR) / SLOT))
+  const slots = Math.max(0, Math.floor((hi - lo - 2 * PAD - 2 * FIRE_CLEAR) / SLOT))
   const waiting = allWaiting.slice(0, slots)
   const moreWaiting = allWaiting.length - waiting.length
   waiting.forEach((s, i) => {
@@ -91,8 +101,8 @@ function attempt(sessions: readonly PluginSession[], groups: Group[], global: Gr
   const fireHalf = FIRE_CLEAR + Math.ceil(waiting.length / 2) * SLOT
   let right = fireX + fireHalf + GAP
   let left = fireX - fireHalf - GAP
-  const fitsRight = (w: number): boolean => right + w <= width - PAD
-  const fitsLeft = (w: number): boolean => left - w >= PAD
+  const fitsRight = (w: number): boolean => right + w <= hi - PAD
+  const fitsLeft = (w: number): boolean => left - w >= lo + PAD
 
   // Log: Global's hikers that are not at the fire (exited ones too, greyed by the client)
   let moreTents = 0
