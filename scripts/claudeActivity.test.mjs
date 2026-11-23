@@ -243,7 +243,8 @@ test('a file swapped between the stat and the open (another inode) is read at on
     if (swapped) return st
     swapped = true
     // As if the open found another file than the stat
-    return { ...st, ino: st.ino + 1 }
+    // Not st.ino + 1: a Windows file index can be past 2^53, where adding 1 changes nothing
+    return { ...st, ino: -1 - st.ino }
   })
   syncBuiltinESMExports()
   t.after(() => {

@@ -235,7 +235,9 @@ try {
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ELECTRON_RENDERER_URL
-  app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
+  // Linux CI's virtual display has no GPU: SwiftShader gives WebGL (as the render harness's Chrome does), so Pixi draws
+  const softwareGl = process.platform === 'linux' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
+  app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`, ...softwareGl], cwd: root, env })
   app.on('window', watch)
   const win = await app.firstWindow()
   watch(win)
@@ -359,7 +361,10 @@ try {
   // The strip at the window's bottom is expanded by default (opened here as a user would, if not):
   // Pixi draws it into a canvas under the app's CSP, not the no-renderer fallback.
   if (await win.locator('.campsite.collapsed').count()) await win.locator('.campsite .cs-toggle').click()
-  check('the expanded campsite strip draws with Pixi, not its fallback', [await until(() => win.locator('.campsite .cs-canvas canvas').count(), 1), await win.locator('.campsite .cs-fallback').count()], [1, 0])
+  // A runner with no WebGL (Linux CI's virtual display) gets the fallback, as such a machine would.
+  const webgl = await win.evaluate(() => !!document.createElement('canvas').getContext('webgl2') || !!document.createElement('canvas').getContext('webgl'))
+  if (webgl) check('the expanded campsite strip draws with Pixi, not its fallback', [await until(() => win.locator('.campsite .cs-canvas canvas').count(), 1), await win.locator('.campsite .cs-fallback').count()], [1, 0])
+  else check('without WebGL, the expanded campsite strip shows its fallback', [await until(() => win.locator('.campsite .cs-fallback').count(), 1), await win.locator('.campsite .cs-canvas canvas').count()], [1, 0])
   // Its hiker stands on the shown terminal's quick button row, and the row is as tall with it as without (the terminal never resizes for it).
   const barHikers = () => win.locator('.quick-buttons .cs-bar-hiker').count()
   const rowHeight = () =>
@@ -394,158 +399,162 @@ try {
   })
   console.log(`     (the camp's wood: ${woodBefore} before the work, ${woodWorked} after)`)
   check("the strip's header counts the camp's wood (🪵 n ≥ 1), and it rises while the session works", [woodBefore !== null, woodWorked !== null], [true, true])
-  // Real chores (campsite 4): the claude plugin follows the session's Claude Code transcript,
-  // ~/.claude/projects/<cwd, every other character a dash>/<its session id>.jsonl, under the run's
-  // temp HOME (the server's too). The fake agent writes none, so the smoke writes one tool call
-  // there (the file appears after the watch started: it is read from its top). Kept working (the
-  // chore shows only then) until the hiker says what it is doing.
-  const apiMain = (await project()).repositories[0].worktrees.find((w) => w.isMain)
-  // Claude names the folder after its physical cwd (symlinks resolved), as the reader does
-  const transcriptDir = join(home, '.claude', 'projects', realPath(apiMain.path).replace(/[^a-zA-Z0-9]/g, '-'))
-  mkdirSync(transcriptDir, { recursive: true })
-  const toolLine = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Editing.' }, { type: 'tool_use', id: 'toolu_smoke', name: 'Edit', input: { file_path: join(apiMain.path, 'Campsite.tsx'), old_string: 'a', new_string: 'b' } }] } }
-  writeFileSync(join(transcriptDir, `${(await apiMainSession()).agentSessionId}.jsonl`), `${JSON.stringify(toolLine)}\n`)
-  const barText = () => win.locator('.quick-buttons .cs-bar-hiker .cs-bar-text').first().innerText()
-  const stripTitle = () => win.locator('.campsite .cs-camp-hiker').first().getAttribute('title')
-  const saysEditing = await first(async () => {
-    await sdkPtys.write(apiPty, 'work\r')
-    await sleep(800)
-    const [text, title] = [await barText(), await stripTitle()]
-    return text.endsWith(' · Editing Campsite.tsx') && title?.endsWith(' · working · Editing Campsite.tsx') ? [text.slice(text.indexOf(' · ') + 3), title.slice(title.lastIndexOf(' · ') + 3)] : null
-  }, 20_000)
-  check("a tool call in the session's transcript shows on its working hiker: the terminal bar and the strip hiker's title say Editing Campsite.tsx", saysEditing, ['Editing Campsite.tsx', 'Editing Campsite.tsx'])
-  check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
-  await detail.locator('.session-tab .cs-indicator.clickable').click()
-  check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
-    await until(status, 'complete'),
-    await until(serverStatus, 'complete'),
-    await until(() => tabHiker.getAttribute('title'), 'Marked complete — status tracking paused — click to resume tracking')
-  ], ['complete', 'complete', 'Marked complete — status tracking paused — click to resume tracking'])
-  // The camp's shop (campsite 3a): the counts button opens the popover; string lights (25 wood) are
-  // built from it. The session is complete, so nothing earns now: wait for the wood to settle first
-  // (and say so if it never does). Only lights are built, so no garden or lake earns while it runs.
-  const steadyWood = async () => {
-    let last = await wood()
-    for (let i = 0; i < 10; i++) {
-      await sleep(1500)
-      const n = await wood()
-      if (n === last) return n
-      last = n
+  // The strip's hikers, buildings, flags, animals and board are Pixi's (with DOM buttons over them):
+  // without WebGL they aren't drawn, so their checks are skipped (said once, below).
+  if (webgl) {
+    // Real chores (campsite 4): the claude plugin follows the session's Claude Code transcript,
+    // ~/.claude/projects/<cwd, every other character a dash>/<its session id>.jsonl, under the run's
+    // temp HOME (the server's too). The fake agent writes none, so the smoke writes one tool call
+    // there (the file appears after the watch started: it is read from its top). Kept working (the
+    // chore shows only then) until the hiker says what it is doing.
+    const apiMain = (await project()).repositories[0].worktrees.find((w) => w.isMain)
+    // Claude names the folder after its physical cwd (symlinks resolved), as the reader does
+    const transcriptDir = join(home, '.claude', 'projects', realPath(apiMain.path).replace(/[^a-zA-Z0-9]/g, '-'))
+    mkdirSync(transcriptDir, { recursive: true })
+    const toolLine = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Editing.' }, { type: 'tool_use', id: 'toolu_smoke', name: 'Edit', input: { file_path: join(apiMain.path, 'Campsite.tsx'), old_string: 'a', new_string: 'b' } }] } }
+    writeFileSync(join(transcriptDir, `${(await apiMainSession()).agentSessionId}.jsonl`), `${JSON.stringify(toolLine)}\n`)
+    const barText = () => win.locator('.quick-buttons .cs-bar-hiker .cs-bar-text').first().innerText()
+    const stripTitle = () => win.locator('.campsite .cs-camp-hiker').first().getAttribute('title')
+    const saysEditing = await first(async () => {
+      await sdkPtys.write(apiPty, 'work\r')
+      await sleep(800)
+      const [text, title] = [await barText(), await stripTitle()]
+      return text.endsWith(' · Editing Campsite.tsx') && title?.endsWith(' · working · Editing Campsite.tsx') ? [text.slice(text.indexOf(' · ') + 3), title.slice(title.lastIndexOf(' · ') + 3)] : null
+    }, 20_000)
+    check("a tool call in the session's transcript shows on its working hiker: the terminal bar and the strip hiker's title say Editing Campsite.tsx", saysEditing, ['Editing Campsite.tsx', 'Editing Campsite.tsx'])
+    check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
+    await detail.locator('.session-tab .cs-indicator.clickable').click()
+    check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
+      await until(status, 'complete'),
+      await until(serverStatus, 'complete'),
+      await until(() => tabHiker.getAttribute('title'), 'Marked complete — status tracking paused — click to resume tracking')
+    ], ['complete', 'complete', 'Marked complete — status tracking paused — click to resume tracking'])
+    // The camp's shop (campsite 3a): the counts button opens the popover; string lights (25 wood) are
+    // built from it. The session is complete, so nothing earns now: wait for the wood to settle first
+    // (and say so if it never does). Only lights are built, so no garden or lake earns while it runs.
+    const steadyWood = async () => {
+      let last = await wood()
+      for (let i = 0; i < 10; i++) {
+        await sleep(1500)
+        const n = await wood()
+        if (n === last) return n
+        last = n
+      }
+      throw new Error(`the camp's wood never settled (still changing after 15 s, last ${last}): the build check can't measure the drop`)
     }
-    throw new Error(`the camp's wood never settled (still changing after 15 s, last ${last}): the build check can't measure the drop`)
-  }
-  await steadyWood()
-  await win.locator('.campsite .cs-camp-button').click()
-  const lightsRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="lights"]')
-  check('the counts button opens the camp popover, with string lights to build', await until(() => lightsRow.locator('.cs-shop-build').count(), 1), 1)
-  // Read right before the click; the drop is 25, give or take a stray minute's wood (≤ 5)
-  const woodBeforeBuild = await wood()
-  await lightsRow.locator('.cs-shop-build').click()
-  const builtRow = await until(() => lightsRow.locator('.cs-shop-built').count(), 1)
-  await until(async () => (await wood()) < woodBeforeBuild, true)
-  const woodAfterBuild = await wood()
-  const drop = woodBeforeBuild - woodAfterBuild
-  check('the camp popover builds string lights: the row says Built and the wood drops by 25', [builtRow, drop >= 25 && drop <= 30], [1, true])
-  console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${woodAfterBuild} after)`)
-  // Crew depth (campsite 3b): the gear shed from the Camp tab (its row then offers tier 2); the Crew
-  // tab's first member opens its view, which buys a canvas pack (+2% wood); Back lists the crew again
-  const shedRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="shed"]')
-  await shedRow.locator('.cs-shop-build').click()
-  check('the camp popover builds the gear shed (its row offers Gear shed II next)', await until(() => shedRow.locator('.cs-shop-tier').innerText(), 'Tier 2 of 2'), 'Tier 2 of 2')
-  await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
-  const firstMember = win.locator('.cs-camp-popover .cs-crew-member').first()
-  check('the Crew tab lists its members as buttons', await until(() => firstMember.count(), 1), 1)
-  await firstMember.click()
-  const packRow = win.locator('.cs-camp-popover .cs-gear-row[data-slot="pack"]')
-  check("a member's view offers a canvas pack to buy", await until(() => packRow.locator('.cs-gear-buy').count(), 1), 1)
-  await packRow.locator('.cs-gear-buy').click()
-  check('buying it shows the bonus on the member: +2% wood', await until(() => win.locator('.cs-camp-popover .cs-member-bonus').innerText(), '+2% wood'), '+2% wood')
-  check("the member view reads its journal (not in the snapshot): it was hired, then bought a canvas pack", await until(() => win.locator('.cs-camp-popover .cs-journal li').allInnerTexts().then((t) => t.map((x) => x.split('\n')[0])), ['Bought a canvas pack', 'Joined the camp']), ['Bought a canvas pack', 'Joined the camp'])
-  await win.locator('.cs-camp-popover .cs-member-back').click()
-  check('Back lists the crew again, the focus on its row', await until(async () => [(await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, await win.evaluate(() => document.activeElement?.hasAttribute('data-crew') ?? false)], [true, true]), [true, true])
-  // Trails (campsite 3c): the trail signpost from the Camp tab; its planks on the strip count every project's trails
-  await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Camp' }).click()
-  const signpostRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="signpost"]')
-  await signpostRow.locator('.cs-shop-build').click()
-  check('the camp popover builds the trail signpost', await until(() => signpostRow.locator('.cs-shop-built').count(), 1), 1)
-  check("the signpost's planks count both feature-auth trails", await until(() => win.locator('.campsite .cs-signpost-text').innerText().catch(() => null), '2 trails'), '2 trails')
-  // The counts button again closes it
-  await win.locator('.campsite .cs-camp-button').click()
-  check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
-  // Each feature-auth worktree is a trail: a flag on the mountain; api's PR is linked, so its flag is on the ridge
-  const flags = win.locator('.campsite .cs-flag')
-  const flagLabels = async () => (await flags.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))).sort()
-  check('the mountain carries a flag for each feature-auth worktree, api\'s on the ridge', await until(flagLabels, ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead']), ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead'])
-  await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
-  const trailRow = win.locator('.cs-camp-popover .cs-trail-row[data-trail]')
-  check('a flag opens the Trails tab at its row, focused', await until(async () => [await trailRow.count(), await win.evaluate(() => document.activeElement?.closest('.cs-trail-row')?.textContent?.includes('feature-auth') ?? false)], [2, true]), [2, true])
-  check('the Trails tab reads the history (none ended yet)', await until(() => win.locator('.cs-camp-popover .cs-trails').innerText().then((t) => t.includes('No ended trails yet.')), true), true)
-  await win.keyboard.press('Escape')
-  check('Escape closes the Trails tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
-  // Wildlife (campsite 3d-2): the ranger tower from the Camp tab stands at the strip's left end
-  await win.locator('.campsite .cs-camp-button').click()
-  const towerRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="tower"]')
-  await towerRow.locator('.cs-shop-build').click()
-  check('the camp popover builds the ranger tower (its row offers Ranger tower II next), and it stands on the strip', await until(async () => [await towerRow.locator('.cs-shop-tier').innerText(), await win.locator('.campsite .cs-building[aria-label^="Ranger tower"]').count()], ['Tier 2 of 2', 1]), ['Tier 2 of 2', 1])
-  await win.locator('.campsite .cs-camp-button').click()
-  check('the counts button closes the popover', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
-  // A sighting every minute (forced): an animal crosses the strip, its button named for it; a click
-  // (dispatched: the button moves with the animal) opens the Guide tab at its card, focused
-  // The label is read from the very button clicked, in one step in the page, so a crossing that
-  // ends (and the next one's animal) between steps can't mismatch them
-  const clickAnimal = () =>
-    win.evaluate(() => {
-      const button = document.querySelector('.campsite .cs-animal')
-      if (!button) return null
-      const label = button.getAttribute('aria-label')
-      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-      return label
-    })
-  const animalLabel = await first(clickAnimal)
-  check('a sighting sends an animal across the strip, its button named for it', / — open the field guide$/.test(animalLabel ?? ''), true)
-  const animalName = (animalLabel ?? '').split(' — ')[0]
-  console.log(`     (the animal: ${animalName})`)
-  const guideOpen = async () => [
-    await win.locator('.cs-camp-popover [role="tab"][aria-selected="true"]').innerText().then((t) => /^Guide \d+\/24$/.test(t)).catch(() => false),
-    await win.evaluate((name) => document.activeElement?.closest('.cs-guide-card')?.getAttribute('aria-label')?.startsWith(`${name}, seen`) ?? false, animalName)
-  ]
-  check("the animal's button opens the Guide tab at its card, focused", await until(guideOpen, [true, true]), [true, true])
-  await win.keyboard.press('Escape')
-  check('Escape closes the Guide tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
-  // Agents (campsite 5): the camp's MCP tools over trek-dev, as an agent calls them: the server
-  // launched the fake agent with --mcp-config <file> (trek-dev's URL and the project's token)
-  const launched = readFileSync(agentArgs, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((args) => args.includes('--mcp-config'))
-  const mcpConfig = launched.at(-1)?.[launched.at(-1).indexOf('--mcp-config') + 1]
-  if (!mcpConfig) throw new Error(`the fake agent was never launched with --mcp-config: ${readFileSync(agentArgs, 'utf8')}`)
-  const trekDev = JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers['trek-dev']
-  const mcp = async (method, params) => {
-    const res = await fetch(trekDev.url, { method: 'POST', headers: { ...trekDev.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
-    const json = await res.json().catch(() => null)
-    if (!res.ok || json?.result === undefined) throw new Error(`trek-dev MCP ${method} failed: HTTP ${res.status}${json?.error?.message ? `: ${json.error.message}` : ''}`)
-    return json.result
-  }
-  check('trek-dev MCP lists the camp tools where Campsite is on', (await mcp('tools/list', {})).tools.map((tool) => tool.name).filter((name) => name.startsWith('camp_')), ['camp_note', 'camp_trail_report'])
-  const noted = await mcp('tools/call', { name: 'camp_note', arguments: { text: 'Tests are green; left the flaky one skipped.', terminalId: sessionId } })
-  check("camp_note from api's main session pins a note", [noted.isError, JSON.parse(noted.content[0].text)], [false, 'Pinned to the noticeboard.'])
-  const apiAuth = (await project()).repositories[0].worktrees.find((w) => w.branch === 'feature-auth')
-  const reported = await mcp('tools/call', { name: 'camp_trail_report', arguments: { summary: 'Wired the sign-in form to the auth API; its tests pass.', worktreeId: apiAuth.id } })
-  check("camp_trail_report posts a report on api's feature-auth trail", [reported.isError, JSON.parse(reported.content[0].text)], [false, 'Report posted on feature-auth.'])
-  const board = win.locator('.campsite .cs-board')
-  check('a noticeboard stands on the strip, its button counting one new note', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard, 1 new note'), 'Noticeboard, 1 new note')
-  await board.click()
-  const pinnedNote = win.locator('.cs-camp-popover .cs-notes-list li').first()
-  const noteSays = async () => [
-    await pinnedNote.locator('.cs-note-head').innerText().then((t) => /^Claude( · \w+)? on main — just now$/.test(t)).catch(() => false),
-    await pinnedNote.locator('.cs-note-text').innerText().catch(() => null)
-  ]
-  check("its button opens the Noticeboard with the note, Claude's on main", await until(noteSays, [true, 'Tests are green; left the flaky one skipped.']), [true, 'Tests are green; left the flaky one skipped.'])
-  check('opened, the note is read: the board says Noticeboard', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard'), 'Noticeboard')
-  await win.keyboard.press('Escape')
-  check('Escape closes the Noticeboard', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
-  await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
-  check("the Trails tab shows the report under api's feature-auth row", await until(() => win.locator('.cs-camp-popover .cs-trail-report .cs-report-text').first().innerText().catch(() => null), 'Wired the sign-in form to the auth API; its tests pass.'), 'Wired the sign-in form to the auth API; its tests pass.')
-  await win.keyboard.press('Escape')
-  check('Escape closes the Trails tab again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    await steadyWood()
+    await win.locator('.campsite .cs-camp-button').click()
+    const lightsRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="lights"]')
+    check('the counts button opens the camp popover, with string lights to build', await until(() => lightsRow.locator('.cs-shop-build').count(), 1), 1)
+    // Read right before the click; the drop is 25, give or take a stray minute's wood (≤ 5)
+    const woodBeforeBuild = await wood()
+    await lightsRow.locator('.cs-shop-build').click()
+    const builtRow = await until(() => lightsRow.locator('.cs-shop-built').count(), 1)
+    await until(async () => (await wood()) < woodBeforeBuild, true)
+    const woodAfterBuild = await wood()
+    const drop = woodBeforeBuild - woodAfterBuild
+    check('the camp popover builds string lights: the row says Built and the wood drops by 25', [builtRow, drop >= 25 && drop <= 30], [1, true])
+    console.log(`     (the camp's wood: ${woodBeforeBuild} before the build, ${woodAfterBuild} after)`)
+    // Crew depth (campsite 3b): the gear shed from the Camp tab (its row then offers tier 2); the Crew
+    // tab's first member opens its view, which buys a canvas pack (+2% wood); Back lists the crew again
+    const shedRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="shed"]')
+    await shedRow.locator('.cs-shop-build').click()
+    check('the camp popover builds the gear shed (its row offers Gear shed II next)', await until(() => shedRow.locator('.cs-shop-tier').innerText(), 'Tier 2 of 2'), 'Tier 2 of 2')
+    await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Crew' }).click()
+    const firstMember = win.locator('.cs-camp-popover .cs-crew-member').first()
+    check('the Crew tab lists its members as buttons', await until(() => firstMember.count(), 1), 1)
+    await firstMember.click()
+    const packRow = win.locator('.cs-camp-popover .cs-gear-row[data-slot="pack"]')
+    check("a member's view offers a canvas pack to buy", await until(() => packRow.locator('.cs-gear-buy').count(), 1), 1)
+    await packRow.locator('.cs-gear-buy').click()
+    check('buying it shows the bonus on the member: +2% wood', await until(() => win.locator('.cs-camp-popover .cs-member-bonus').innerText(), '+2% wood'), '+2% wood')
+    check("the member view reads its journal (not in the snapshot): it was hired, then bought a canvas pack", await until(() => win.locator('.cs-camp-popover .cs-journal li').allInnerTexts().then((t) => t.map((x) => x.split('\n')[0])), ['Bought a canvas pack', 'Joined the camp']), ['Bought a canvas pack', 'Joined the camp'])
+    await win.locator('.cs-camp-popover .cs-member-back').click()
+    check('Back lists the crew again, the focus on its row', await until(async () => [(await win.locator('.cs-camp-popover .cs-crew-member').count()) > 0, await win.evaluate(() => document.activeElement?.hasAttribute('data-crew') ?? false)], [true, true]), [true, true])
+    // Trails (campsite 3c): the trail signpost from the Camp tab; its planks on the strip count every project's trails
+    await win.locator('.cs-camp-popover [role="tab"]', { hasText: 'Camp' }).click()
+    const signpostRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="signpost"]')
+    await signpostRow.locator('.cs-shop-build').click()
+    check('the camp popover builds the trail signpost', await until(() => signpostRow.locator('.cs-shop-built').count(), 1), 1)
+    check("the signpost's planks count both feature-auth trails", await until(() => win.locator('.campsite .cs-signpost-text').innerText().catch(() => null), '2 trails'), '2 trails')
+    // The counts button again closes it
+    await win.locator('.campsite .cs-camp-button').click()
+    check('the counts button closes the popover again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    // Each feature-auth worktree is a trail: a flag on the mountain; api's PR is linked, so its flag is on the ridge
+    const flags = win.locator('.campsite .cs-flag')
+    const flagLabels = async () => (await flags.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))).sort()
+    check('the mountain carries a flag for each feature-auth worktree, api\'s on the ridge', await until(flagLabels, ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead']), ['feature-auth — Ridge (PR open)', 'feature-auth — Trailhead'])
+    await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
+    const trailRow = win.locator('.cs-camp-popover .cs-trail-row[data-trail]')
+    check('a flag opens the Trails tab at its row, focused', await until(async () => [await trailRow.count(), await win.evaluate(() => document.activeElement?.closest('.cs-trail-row')?.textContent?.includes('feature-auth') ?? false)], [2, true]), [2, true])
+    check('the Trails tab reads the history (none ended yet)', await until(() => win.locator('.cs-camp-popover .cs-trails').innerText().then((t) => t.includes('No ended trails yet.')), true), true)
+    await win.keyboard.press('Escape')
+    check('Escape closes the Trails tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    // Wildlife (campsite 3d-2): the ranger tower from the Camp tab stands at the strip's left end
+    await win.locator('.campsite .cs-camp-button').click()
+    const towerRow = win.locator('.cs-camp-popover .cs-shop-row[data-building="tower"]')
+    await towerRow.locator('.cs-shop-build').click()
+    check('the camp popover builds the ranger tower (its row offers Ranger tower II next), and it stands on the strip', await until(async () => [await towerRow.locator('.cs-shop-tier').innerText(), await win.locator('.campsite .cs-building[aria-label^="Ranger tower"]').count()], ['Tier 2 of 2', 1]), ['Tier 2 of 2', 1])
+    await win.locator('.campsite .cs-camp-button').click()
+    check('the counts button closes the popover', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    // A sighting every minute (forced): an animal crosses the strip, its button named for it; a click
+    // (dispatched: the button moves with the animal) opens the Guide tab at its card, focused
+    // The label is read from the very button clicked, in one step in the page, so a crossing that
+    // ends (and the next one's animal) between steps can't mismatch them
+    const clickAnimal = () =>
+      win.evaluate(() => {
+        const button = document.querySelector('.campsite .cs-animal')
+        if (!button) return null
+        const label = button.getAttribute('aria-label')
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        return label
+      })
+    const animalLabel = await first(clickAnimal)
+    check('a sighting sends an animal across the strip, its button named for it', / — open the field guide$/.test(animalLabel ?? ''), true)
+    const animalName = (animalLabel ?? '').split(' — ')[0]
+    console.log(`     (the animal: ${animalName})`)
+    const guideOpen = async () => [
+      await win.locator('.cs-camp-popover [role="tab"][aria-selected="true"]').innerText().then((t) => /^Guide \d+\/24$/.test(t)).catch(() => false),
+      await win.evaluate((name) => document.activeElement?.closest('.cs-guide-card')?.getAttribute('aria-label')?.startsWith(`${name}, seen`) ?? false, animalName)
+    ]
+    check("the animal's button opens the Guide tab at its card, focused", await until(guideOpen, [true, true]), [true, true])
+    await win.keyboard.press('Escape')
+    check('Escape closes the Guide tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    // Agents (campsite 5): the camp's MCP tools over trek-dev, as an agent calls them: the server
+    // launched the fake agent with --mcp-config <file> (trek-dev's URL and the project's token)
+    const launched = readFileSync(agentArgs, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((args) => args.includes('--mcp-config'))
+    const mcpConfig = launched.at(-1)?.[launched.at(-1).indexOf('--mcp-config') + 1]
+    if (!mcpConfig) throw new Error(`the fake agent was never launched with --mcp-config: ${readFileSync(agentArgs, 'utf8')}`)
+    const trekDev = JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers['trek-dev']
+    const mcp = async (method, params) => {
+      const res = await fetch(trekDev.url, { method: 'POST', headers: { ...trekDev.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.result === undefined) throw new Error(`trek-dev MCP ${method} failed: HTTP ${res.status}${json?.error?.message ? `: ${json.error.message}` : ''}`)
+      return json.result
+    }
+    check('trek-dev MCP lists the camp tools where Campsite is on', (await mcp('tools/list', {})).tools.map((tool) => tool.name).filter((name) => name.startsWith('camp_')), ['camp_note', 'camp_trail_report'])
+    const noted = await mcp('tools/call', { name: 'camp_note', arguments: { text: 'Tests are green; left the flaky one skipped.', terminalId: sessionId } })
+    check("camp_note from api's main session pins a note", [noted.isError, JSON.parse(noted.content[0].text)], [false, 'Pinned to the noticeboard.'])
+    const apiAuth = (await project()).repositories[0].worktrees.find((w) => w.branch === 'feature-auth')
+    const reported = await mcp('tools/call', { name: 'camp_trail_report', arguments: { summary: 'Wired the sign-in form to the auth API; its tests pass.', worktreeId: apiAuth.id } })
+    check("camp_trail_report posts a report on api's feature-auth trail", [reported.isError, JSON.parse(reported.content[0].text)], [false, 'Report posted on feature-auth.'])
+    const board = win.locator('.campsite .cs-board')
+    check('a noticeboard stands on the strip, its button counting one new note', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard, 1 new note'), 'Noticeboard, 1 new note')
+    await board.click()
+    const pinnedNote = win.locator('.cs-camp-popover .cs-notes-list li').first()
+    const noteSays = async () => [
+      await pinnedNote.locator('.cs-note-head').innerText().then((t) => /^Claude( · \w+)? on main — just now$/.test(t)).catch(() => false),
+      await pinnedNote.locator('.cs-note-text').innerText().catch(() => null)
+    ]
+    check("its button opens the Noticeboard with the note, Claude's on main", await until(noteSays, [true, 'Tests are green; left the flaky one skipped.']), [true, 'Tests are green; left the flaky one skipped.'])
+    check('opened, the note is read: the board says Noticeboard', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard'), 'Noticeboard')
+    await win.keyboard.press('Escape')
+    check('Escape closes the Noticeboard', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
+    check("the Trails tab shows the report under api's feature-auth row", await until(() => win.locator('.cs-camp-popover .cs-trail-report .cs-report-text').first().innerText().catch(() => null), 'Wired the sign-in form to the auth API; its tests pass.'), 'Wired the sign-in form to the auth API; its tests pass.')
+    await win.keyboard.press('Escape')
+    check('Escape closes the Trails tab again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  } else console.log('SKIP the campsite strip checks (chores, shop, crew, trails, wildlife, agents): no WebGL on this runner')
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 

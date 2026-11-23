@@ -1082,7 +1082,8 @@ try {
       // Windows: the env plugin isn't available there, so it is grouped after the plugins that are.
       : ['Claude Code', 'Codex', 'Gemini', 'Grok', 'Voice summaries', 'Linear', 'Azure DevOps', 'GitHub', 'Campsite', 'Colima environments'], ['Claude Code']],
     // "Saved tokens" is there only when tokens are stored unencrypted (a Linux runner without a keyring).
-    ['Appearance', 'Notifications', 'Local server', ...(tokensUnencrypted ? ['Saved tokens'] : [])]
+    // Tasks' switch (per project) sits after Appearance.
+    ['Appearance', 'Tasks', 'Notifications', 'Local server', ...(tokensUnencrypted ? ['Saved tokens'] : [])]
   ])
   // Plugins A2: the server lists Claude Code as required, so its switch is locked on, and its
   // detail (the first row's, shown) says why; Codex's is a working switch.
