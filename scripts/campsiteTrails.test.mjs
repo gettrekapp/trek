@@ -5,6 +5,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
+import { tentColors } from '../plugins/campsite/shared/layout.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, mountain, sparksAt } from '../plugins/campsite/shared/mountain.ts'
 import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
@@ -223,4 +225,88 @@ test('summits: counted once per merged pull request, when its merge is first pai
 
 test('cairnSize: none below 1 summit, then sizes 1–6 at 1, 3, 10, 25, 50 and 100', () => {
   assert.deepEqual([0, 1, 2, 3, 9, 10, 24, 25, 49, 50, 99, 100, 500].map(cairnSize), [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
+})
+
+const inside = (rects, grid) => rects.every((r) => r.x >= 0 && r.y >= 0 && r.w > 0 && r.h > 0 && r.x + r.w <= grid.w && r.y + r.h <= grid.h && /^#[0-9a-f]{6}$/.test(r.fill))
+const ft = (worktreeId, stage) => ({ worktreeId, branch: `feature/${worktreeId}`, stage })
+
+test("mountain: a peak behind the fire, five ledges above the waiting hikers' signs (the trailhead lowest, then up the zigzag to the summit in the middle)", () => {
+  const m = mountain(600, 800)
+  assert.deepEqual(m.ledges.map((l) => l.y), [...LEDGE_Y])
+  assert.ok(LEDGE_Y.every((y, i) => y <= 30 && (i === 0 || y < LEDGE_Y[i - 1])), "at or above the signs at the fire (y 30), climbing")
+  assert.ok(LEDGE_Y[SUMMIT] - PLANTED.h >= 0, 'a planted flag stays on the strip')
+  assert.ok(m.ledges[0].x + m.ledges[0].w <= 600 && m.ledges[1].x >= 600 - m.ledges[1].w, 'left, then right')
+  const summit = m.ledges[SUMMIT]
+  assert.ok(Math.abs(summit.x + summit.w / 2 - 600) <= 1, 'the summit in the middle')
+  assert.deepEqual(m.ledges.slice(0, 4).map((l) => l.holds), [6, 6, 6, 6])
+  assert.ok(summit.holds >= 2)
+  const xs = m.peak.points.filter((_, i) => i % 2 === 0)
+  const ys = m.peak.points.filter((_, i) => i % 2 === 1)
+  assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)], [600 - PEAK_HALF, 600 + PEAK_HALF, PEAK_TOP, 98])
+  assert.equal(m.peak.fill, MOUNTAIN_FILL)
+  assert.ok(m.path.length > 10 && m.path.every((b) => b.y >= PEAK_TOP && b.y <= 30))
+  assert.deepEqual(mountain(700, 800).ledges.map((l) => l.x - 100), m.ledges.map((l) => l.x), 'it moves with the fire')
+})
+
+test('mountain: a narrow middle scales the peak sideways (never dropped); its ledges hold fewer flags, at least one', () => {
+  const wide = mountain(200, 800)
+  const narrow = mountain(150, 300)
+  const span = (m) => Math.max(...m.peak.points.filter((_, i) => i % 2 === 0)) - Math.min(...m.peak.points.filter((_, i) => i % 2 === 0))
+  assert.ok(span(narrow) < span(wide))
+  assert.deepEqual(narrow.ledges.map((l) => l.y), [...LEDGE_Y], 'the heights stay')
+  assert.ok(narrow.ledges.every((l) => l.holds >= 1 && l.holds <= LEDGE_MAX))
+  assert.ok(mountain(50, 40).ledges.every((l) => l.holds >= 1), 'even a sliver')
+})
+
+test('flagSpots: side by side on their ledge, oldest first, planted at the summit; past what a ledge holds, "+n" after its last flag', () => {
+  const m = mountain(600, 800)
+  const trails = [ft('a', 2), ...Array.from({ length: 8 }, (_, i) => ft(`z${i}`, 0)), ft('b', 2), ft('s', SUMMIT)]
+  const { flags, more } = flagSpots(m, trails)
+  const zero = flags.filter((f) => f.stage === 0)
+  assert.equal(zero.length, 6)
+  assert.deepEqual(zero.map((f) => f.x - m.ledges[0].x), [0, 6, 12, 18, 24, 30])
+  assert.ok(zero.every((f) => f.y === LEDGE_Y[0] && !f.planted))
+  assert.deepEqual(more, [{ stage: 0, count: 2, x: m.ledges[0].x + m.ledges[0].w + 3, y: LEDGE_Y[0] }])
+  assert.deepEqual(flags.filter((f) => f.stage === 2).map((f) => f.worktreeId), ['a', 'b'])
+  const s = flags.find((f) => f.stage === SUMMIT)
+  assert.deepEqual([s.planted, s.x, s.y], [true, m.ledges[SUMMIT].x, LEDGE_Y[SUMMIT]])
+  assert.deepEqual(flagBox(s), { x: s.x, y: LEDGE_Y[SUMMIT] - PLANTED.h, w: PLANTED.w, h: PLANTED.h })
+  assert.deepEqual(flagBox(zero[0]), { x: zero[0].x, y: LEDGE_Y[0] - FLAG.h, w: FLAG.w, h: FLAG.h })
+  assert.deepEqual(flagSpots(m, []), { flags: [], more: [] })
+})
+
+test("flags: a pole and a cloth in the worktree's tent colours, 5×7 (7×11 planted), on their grids", () => {
+  const flag = flagRects('w1', false)
+  assert.ok(inside(flag, FLAG))
+  assert.deepEqual([flag[1].fill, flag[2].fill], [...tentColors('w1')])
+  assert.ok(inside(flagRects('w1', true), PLANTED))
+  assert.deepEqual([FLAG.w, FLAG.h, PLANTED.w, PLANTED.h], [5, 7, 7, 11])
+})
+
+test('the climb: eased from the last ledge to the peak over 1.5 s, then planted; sparks rise from the fire for 3 s', () => {
+  const from = { x: 100, y: 46 }
+  const to = { x: 200, y: 17 }
+  assert.deepEqual(climbAt(from, to, 0), from)
+  assert.deepEqual(climbAt(from, to, CLIMB_MS / 2), { x: 150, y: 32 })
+  assert.equal(climbAt(from, to, CLIMB_MS), null)
+  assert.equal(climbAt(from, to, -1), null)
+  assert.equal(CLIMB_MS, 1500)
+  assert.equal(SPARK_MS, 3000)
+  const mid = sparksAt(500, 1000)
+  assert.ok(mid.length > 0 && mid.every((s) => Math.abs(s.x - 500) < 30 && s.y < 102 - 20 && s.alpha > 0 && s.alpha <= 1))
+  assert.deepEqual(sparksAt(500, SPARK_MS), [])
+  assert.deepEqual(sparksAt(500, -5), [])
+  assert.deepEqual(sparksAt(600, 1000).map((s) => s.x - 100), mid.map((s) => s.x), 'from the fire')
+})
+
+test('the cairn: nothing at size 0, then size n stacks n + 1 rows of stones; it stands on the feet line left of the hearth, clear of the log', () => {
+  assert.deepEqual(cairnRects(0), [])
+  for (let n = 1; n <= 6; n++) {
+    const rects = cairnRects(n)
+    assert.ok(inside(rects, CAIRN_GRID), `size ${n}`)
+    assert.equal(new Set(rects.map((r) => r.y)).size, n + 1, `size ${n}: ${n + 1} rows`)
+  }
+  const box = cairnBox(500)
+  assert.deepEqual(box, { x: 500 - 24 - 20, y: 102 - 28, w: 20, h: 28 })
+  assert.ok(box.x >= 500 - 44 && box.x + box.w <= 500 - 23, "between the log's end and the hearth")
 })
