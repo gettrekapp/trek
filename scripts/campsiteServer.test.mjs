@@ -684,11 +684,20 @@ test("the journal through the host: a trip names the project and the worktree's 
 const MAIN_W = { id: 'm', repoId: 'r', repoPath: '/r', path: '/r', branch: 'main', present: true }
 const W = { id: 'w', repoId: 'r', repoPath: '/r', path: '/r/app-w', branch: 'b', present: true }
 
+/** A camp server whose grace period is over (started TRAIL_GRACE_MS before T0; its first full reconcile ran at T0): `c.now` is its clock, `c.tick()` its minute tick */
+function pastGrace(t, h, o = {}) {
+  const c = { now: T0 - TRAIL_GRACE_MS, tick: () => {} }
+  const inst = createCampServer(h.host, { now: () => c.now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { c.tick = fn; return { clear() {} } }, minuteMs: 60_000, ...o })
+  t.after(() => inst.dispose?.())
+  c.now = T0
+  c.tick()
+  return { inst, c }
+}
+
 test("trails (3c): the first event from a project reconciles its worktrees (not the main checkout); the pull request's events move them; the merge first paid sends summit", async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
   const clock = manual()
-  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
-  t.after(() => inst.dispose?.())
+  const { inst } = pastGrace(t, h, { schedule: clock.schedule })
   h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null })
   let snap = await inst.handlers.state({}, {})
   assert.deepEqual(snap.trails, [{ projectId: 'p', projectName: 'Trek', worktreeId: 'w', branch: 'b', stage: 0, start: T0, stageAt: T0 }])
@@ -708,15 +717,13 @@ test("trails (3c): the first event from a project reconciles its worktrees (not 
 test('trails (3c): a worktree event reconciles its project; a removed worktree turns back into the history, which trailLog answers (not the snapshot)', async (t) => {
   const worktrees = { m: MAIN_W, w: W }
   const h = fakeHost(t, { worktrees })
-  let now = T0
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
-  t.after(() => inst.dispose?.())
+  const { inst, c } = pastGrace(t, h)
   worktrees.x = { id: 'x', repoId: 'r', repoPath: '/r', path: '/r/app-x', branch: 'feature/x', present: true }
-  h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: c.now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId).sort(), ['w', 'x'])
-  now += 5
+  c.now += 5
   delete worktrees.x
-  h.fire({ kind: 'worktree.removed', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
+  h.fire({ kind: 'worktree.removed', projectId: 'p', at: c.now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId), ['w'])
   assert.deepEqual(await inst.handlers.trailLog({ projectId: 'p' }, {}), { log: [{ branch: 'feature/x', result: 'turned-back', start: T0, end: T0 + 5 }] })
   assert.deepEqual(await inst.handlers.trailLog({ projectId: 'nope' }, {}), { log: [] })
@@ -725,23 +732,20 @@ test('trails (3c): a worktree event reconciles its project; a removed worktree t
 
 test("trails (3c): a window's state naming its project reconciles it once; the 10-minute tick turns back a gone project's trails and leaves a project with the plugin off as it is", async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
-  let now = T0
-  let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
-  t.after(() => inst.dispose?.())
+  const { inst, c } = pastGrace(t, h)
   assert.deepEqual((await inst.handlers.state({}, {})).trails, [], 'no project named: nothing yet')
   assert.equal((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.length, 1)
   h.off.add('p')
   h.host.worktrees = () => [MAIN_W]
-  now += TRAIL_EVERY_MS
-  tickFn()
+  c.now += TRAIL_EVERY_MS
+  c.tick()
   assert.equal((await inst.handlers.state({}, {})).trails.length, 1, 'the plugin off there: left as it is')
   h.off.delete('p')
   h.host.worktrees = () => {
     throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
   }
-  now += TRAIL_EVERY_MS
-  tickFn()
+  c.now += TRAIL_EVERY_MS
+  c.tick()
   assert.deepEqual((await inst.handlers.state({}, {})).trails, [], 'gone: turned back')
   assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log.map((r) => r.result), ['turned-back'])
 })
@@ -759,7 +763,7 @@ test('trails (3c): the first full reconcile saves a change to the summited memor
   t.after(() => inst.dispose?.())
   clock.run()
   assert.equal(existsSync(h.host.dataFile('camp.json.tmp')), false)
-  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).trailsDone, camp.trailsDone, 'start-up is open-only: nothing forgotten')
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).trailsDone, camp.trailsDone, 'no reconcile at start-up: nothing forgotten')
   now += TRAIL_GRACE_MS
   tickFn()
   clock.run()
@@ -768,7 +772,7 @@ test('trails (3c): the first full reconcile saves a change to the summited memor
   assert.deepEqual(saved.trails, camp.trails)
 })
 
-test('trails (3c): at start-up the projects with trails in camp.json get their missing trails; the first tick after the grace period ends the gone ones; the signpost builds for 150 wood', async (t) => {
+test("trails (3c): at start-up camp.json's trails stand as they are (no reconcile: the saved listing may be stale); the first tick after the grace period ends the gone ones and opens the missing ones; the signpost builds for 150 wood", async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
   const camp = newCamp(7, T0)
   camp.wood = 200
@@ -778,14 +782,14 @@ test('trails (3c): at start-up the projects with trails in camp.json get their m
   let tickFn = null
   const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
-  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId).sort(), ['gone', 'w'], 'open-only: nothing ended yet')
+  assert.deepEqual((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.map((t) => t.worktreeId), ['gone'], 'nothing opened or ended yet')
   now += 60_000
   tickFn()
-  assert.equal((await inst.handlers.state({}, {})).trails.length, 2, 'still in the grace period')
+  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => t.worktreeId), ['gone'], 'still in the grace period')
   now = T0 + TRAIL_GRACE_MS
   tickFn()
   const snap = await inst.handlers.state({}, {})
-  assert.deepEqual(snap.trails.map((t) => t.worktreeId), ['w'])
+  assert.deepEqual(snap.trails.map((t) => [t.worktreeId, t.start]), [['w', T0 + TRAIL_GRACE_MS]])
   assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, [{ branch: 'old', result: 'turned-back', start: T0 - 9, end: T0 + TRAIL_GRACE_MS }])
   const built = await inst.handlers.build({ id: 'signpost', tier: 1, cost: { wood: 150, markers: 0 } }, {})
   assert.deepEqual([built.built.signpost, built.wood], [1, 50])
@@ -812,16 +816,13 @@ test('trails (3c): a pull request linked as the first event from a project puts 
 
 test('trails (3c): a host.worktrees error other than NOT_FOUND leaves the trails as they are and is logged', async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
-  let now = T0
-  let tickFn = null
-  const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
-  t.after(() => inst.dispose?.())
+  const { inst, c } = pastGrace(t, h)
   assert.equal((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.length, 1)
   h.host.worktrees = () => {
     throw Object.assign(new Error('git is busy'), { code: 'EBUSY' })
   }
-  now += TRAIL_EVERY_MS
-  tickFn()
+  c.now += TRAIL_EVERY_MS
+  c.tick()
   assert.equal((await inst.handlers.state({}, {})).trails.length, 1, 'left as it is')
   assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, [])
   assert.ok(h.warnings.some((w) => w.includes('reading the worktrees') && w.includes('git is busy')))
@@ -845,7 +846,7 @@ test('trails (3c): a restart whose host still reports a stale branch keeps the t
   now += 60_000
   tickFn()
   h.fire({ kind: 'pr.checks', projectId: 'p', at: now, repoId: 'r', branch: 'B', url: 'u', result: 'failed', headSha: 's' })
-  assert.equal(staleCalls, 2, 'start-up and the event read the stale branch')
+  assert.equal(staleCalls, 1, 'only the event read the stale branch (no reconcile at start-up)')
   assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => [t.branch, t.stage]), [['B', 2]])
   now = T0 + TRAIL_GRACE_MS
   tickFn()
@@ -856,15 +857,16 @@ test('trails (3c): a restart whose host still reports a stale branch keeps the t
   assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, [], 'no false "Turned back"')
 })
 
-test('trails (3c): in the grace period a worktree event only opens trails; after it a real branch change and a gone worktree are handled', async (t) => {
+test('trails (3c): in the grace period a worktree event reconciles nothing (its own trail opens); after it a real branch change and a gone worktree are handled', async (t) => {
   const worktrees = { m: MAIN_W, w: W, x: { id: 'x', repoId: 'r', repoPath: '/r', path: '/r/app-x', branch: 'feature/x', present: true } }
   const h = fakeHost(t, { worktrees })
   let now = T0
   let tickFn = null
   const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
   t.after(() => inst.dispose?.())
-  await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })
-  assert.equal((await inst.handlers.state({}, {})).trails.length, 2)
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'w', branch: 'b' })
+  h.fire({ kind: 'worktree.created', projectId: 'p', at: now, repoId: 'r', worktreeId: 'x', branch: 'feature/x' })
+  assert.equal((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails.length, 2)
   // Listed on another branch and gone, in the grace period: nothing is closed
   worktrees.w = { ...W, branch: 'other' }
   delete worktrees.x
@@ -892,5 +894,46 @@ test('trails (3c): a worktree made outside Trek (no worktree.created) gets its t
   h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'feat-z', url: 'uz' })
   const stages = Object.fromEntries((await inst.handlers.state({}, {})).trails.map((t) => [t.worktreeId, t.stage]))
   assert.deepEqual(stages, { w: 0, x: 1, z: 2 })
+  await new Promise((r) => setImmediate(r))
+})
+
+test('trails (3c): a restart whose saved listing still has a worktree on a branch whose trail already ended (detached since, or its folder gone) writes no new history line', async (t) => {
+  for (const real of [{ ...W, branch: null }, { ...W, present: false }]) {
+    const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+    const camp = newCamp(7, T0)
+    camp.trailLog = { p: [{ branch: 'b', result: 'turned-back', start: T0 - 9, end: T0 - 5 }] }
+    writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+    let now = T0
+    // The saved project file says w is on b until the poller's first refresh
+    const refreshedAt = T0 + 90_000
+    h.host.worktrees = () => (now < refreshedAt ? [MAIN_W, W] : [MAIN_W, real])
+    let tickFn = null
+    const inst = createCampServer(h.host, { now: () => now, seed: () => 1, schedule: manual().schedule, interval: (fn) => { tickFn = fn; return { clear() {} } }, minuteMs: 60_000 })
+    t.after(() => inst.dispose?.())
+    // In the grace period, before the refresh: a window's state and a session's first event from the project
+    assert.deepEqual((await inst.handlers.state({ projectId: 'p' }, { projectId: 'p', caller: 'c' })).trails, [])
+    h.fire({ kind: 'session.started', projectId: 'p', at: now, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null })
+    now += 60_000
+    tickFn()
+    now = T0 + TRAIL_GRACE_MS
+    tickFn()
+    now += TRAIL_EVERY_MS
+    tickFn()
+    assert.deepEqual((await inst.handlers.state({}, {})).trails, [], JSON.stringify(real))
+    assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log, camp.trailLog.p, 'no second "Turned back"')
+  }
+})
+
+test("trails (3c): a worktree that summited a branch and moved to another: its first commit there starts the new trail at stage 1, and that branch's pull request moves it to 2", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: { ...W, branch: 'B' } }, git: { 'merge-base --is-ancestor a c': '', 'rev-list --count a..c': '1\n' } })
+  const camp = newCamp(7, T0)
+  camp.trailsDone = { 'p:w': 'A' }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: manual().schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  h.fire({ kind: 'worktree.head', projectId: 'p', at: T0, repoId: 'r', worktreeId: 'w', branch: 'B', from: 'a', to: 'c' })
+  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => [t.branch, t.stage]), [['B', 1]])
+  h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'B', url: 'u' })
+  assert.deepEqual((await inst.handlers.state({}, {})).trails.map((t) => [t.branch, t.stage]), [['B', 2]])
   await new Promise((r) => setImmediate(r))
 })

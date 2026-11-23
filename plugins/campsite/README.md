@@ -54,13 +54,15 @@ the summit (or whose branch changes) turns back. Merges build a cairn at the tra
 the **trail signpost** (150 wood, at the right end inside the garden, the first building dropped
 there) adds every other project's trails and counts them on its planks. The history is not pushed:
 the tab asks for it (`trailLog { projectId }`). The server reconciles a project's trails with its
-worktrees at start-up (the projects with trails), the first time it hears from a project (an event,
-or a window's `state`, which names its project), after each worktree event, and every 10 minutes;
-before a commit or pull request event it opens any missing trail first (a worktree made outside Trek,
-`git worktree add -b feat`, has its trail before that event moves it). For 2 minutes after the server
-starts (the restart grace period) reconciles only open missing trails: until core's poller first
-refreshes, the worktrees' branches come from the saved project file and can be stale, so nothing is
-ended, turned back or restarted then; the first tick after the grace period reconciles fully.
+worktrees the first time it hears from a project (an event, or a window's `state`, which names its
+project), after each worktree event, and every 10 minutes; before a commit or pull request event it
+opens any missing trail first (a worktree made outside Trek, `git worktree add -b feat`, has its trail
+before that event moves it; a commit in a worktree that summited another branch starts its new
+trail). For 2 minutes after the server starts (the restart grace period) only those openings before a
+commit or pull request event run: until core's poller first refreshes, the worktrees' branches come
+from the saved project file and can be stale, so the trails stay as `camp.json` saved them (a new
+worktree's own event still opens or ends its trail) and nothing is ended, turned back or restarted;
+the first tick after the grace period reconciles fully.
 
 Some trails end as "Turned back" though their work goes on: promoting a worktree to primary, moving
 a worktree to another server, and removing a worktree before its merge is seen. The merge still

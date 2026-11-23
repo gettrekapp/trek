@@ -8,7 +8,7 @@ import { SIGNPOST_HINT, cairnText, dayText, flagLabel, forText, historyText, met
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
 import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, PLANT_WAIT_MS, SPARK_MS, SUMMIT_FRESH_MS, FLAG_PAD, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagTargets, flagsKey, flagsOf, moreBox, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
-import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
+import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, freshOf, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
@@ -254,6 +254,26 @@ test("reconcile open-only: adds the missing trails and ends, turns back, restart
   assert.deepEqual(camp.trailsDone, before.trailsDone, 'nothing forgotten')
   reconcile(camp, 'p', null, T0 + 3 * SUMMIT_HOLD_MS, 'open-only')
   assert.equal(Object.keys(camp.trails).length, 4, 'a gone project is left for a full reconcile')
+})
+
+test("reconcile open-only: a commit naming a worktree's listed branch vouches for it, so one summited on another branch starts its trail (and forgets the summit); nothing else is vouched for", () => {
+  const head = (o = {}) => ev('worktree.head', { worktreeId: 'done', branch: 'feature/next', from: 'a', to: 'b', ...o })
+  assert.deepEqual(freshOf(head()), { worktreeId: 'done', branch: 'feature/next' })
+  assert.equal(freshOf(head({ branch: null })), undefined, 'detached: nothing')
+  assert.equal(freshOf(ev('pr.linked', { branch: 'feature/next', url: 'u' })), undefined, "a pull request's event names no worktree")
+  const listing = [MAIN, wt('done', { branch: 'feature/next' }), wt('other', { branch: 'feature/other' })]
+  const camp = fresh()
+  camp.trailsDone['p:done'] = 'feature/done'
+  camp.trailsDone['p:other'] = 'feature/o'
+  reconcile(camp, 'p', listing, T0, 'open-only', freshOf(head({ branch: 'feature/listed-elsewhere' })))
+  reconcile(camp, 'p', listing, T0, 'open-only', freshOf(head({ worktreeId: 'x' })))
+  assert.deepEqual([Object.keys(camp.trails), camp.trailsDone], [[], { 'p:done': 'feature/done', 'p:other': 'feature/o' }], 'another branch or worktree: still skipped')
+  reconcile(camp, 'p', listing, T0 + 1, 'open-only', freshOf(head()))
+  assert.deepEqual(camp.trails['p:done'], trail({ worktreeId: 'done', branch: 'feature/next', start: T0 + 1, stageAt: T0 + 1 }))
+  assert.deepEqual(camp.trailsDone, { 'p:other': 'feature/o' })
+  trailEvent(camp, head(), T0 + 2)
+  trailEvent(camp, ev('pr.linked', { branch: 'feature/next', url: 'u' }), T0 + 3)
+  assert.equal(camp.trails['p:done'].stage, 2)
 })
 
 test('history: newest last, the last 20 per project', () => {

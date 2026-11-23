@@ -157,22 +157,32 @@ export const isTrailWorktree = (w: PluginWorktree): boolean => w.present && w.br
  */
 export type ReconcileMode = 'full' | 'open-only'
 
+/** A worktree's branch an event vouches for: a commit (`worktree.head`) names its worktree's branch as it is now */
+export interface Fresh {
+  worktreeId: string
+  branch: string
+}
+/** The worktree and branch an event vouches for (a commit on a branch), else undefined */
+export const freshOf = (e: ActivityEvent): Fresh | undefined => (e.kind === 'worktree.head' && e.branch !== null ? { worktreeId: e.worktreeId, branch: e.branch } : undefined)
+
 /**
  * A project's trails against its worktrees now (null: the project is gone): a qualifying worktree
  * without one starts at the trailhead (unless its branch already summited); one whose worktree is
  * gone or no longer qualifies ends; one whose branch changed turns back and starts again on the new
  * branch; a summited one ends after SUMMIT_HOLD_MS. A summited branch is forgotten once its worktree
  * is gone or on another branch. `open-only` only starts trails for listed worktrees that have none,
- * and skips a worktree remembered as summited on another branch (its listed branch may be stale):
- * it never ends, turns back or restarts a trail, nor forgets a summited branch.
+ * and skips a worktree remembered as summited on another branch (its listed branch may be stale),
+ * unless `fresh` vouches for it (a commit naming that worktree's listed branch): it never ends, turns
+ * back or restarts a trail, nor forgets a summited branch (other than by opening a vouched-for one).
  */
-export function reconcile(camp: Trails, projectId: string, worktrees: readonly PluginWorktree[] | null, now: number, mode: ReconcileMode = 'full'): void {
+export function reconcile(camp: Trails, projectId: string, worktrees: readonly PluginWorktree[] | null, now: number, mode: ReconcileMode = 'full', fresh?: Fresh): void {
   const listed = new Map<string, PluginWorktree & { branch: string }>()
   for (const w of worktrees ?? []) if (isTrailWorktree(w)) listed.set(w.id, w as PluginWorktree & { branch: string })
   if (mode === 'open-only') {
     for (const w of listed.values()) {
       const key = trailKey(projectId, w.id)
-      if (Object.hasOwn(camp.trailsDone, key) && camp.trailsDone[key] !== w.branch) continue
+      const vouched = fresh !== undefined && fresh.worktreeId === w.id && fresh.branch === w.branch
+      if (!vouched && Object.hasOwn(camp.trailsDone, key) && camp.trailsDone[key] !== w.branch) continue
       open(camp, projectId, w.id, w.repoId, w.branch, now)
     }
     return
