@@ -140,6 +140,7 @@ export interface FlagMore {
  * its "+n" alone, in the first clear place along it (or nothing: the Trails tab lists them all). */
 export function flagSpots(m: Mountain, trails: readonly FlagTrail[]): { flags: FlagSpot[]; more: FlagMore[] } {
   const taken: Box4[] = [cairnBox(m)]
+  const lowest = Math.min(m.cairn.x, ...m.ledges.map((l) => l.x))
   const free = (box: Box4, except: readonly Box4[] = []): boolean => !taken.some((b) => !except.includes(b) && meets(b, box))
   interface Row {
     l: Ledge
@@ -175,8 +176,13 @@ export function flagSpots(m: Mountain, trails: readonly FlagTrail[]): { flags: F
       break
     }
     if (r.xs.length === 0) {
+      // No flag fits: a lone "+n" for them all, on the ledge if it can, else just before its start
+      // (never left of the cairn and the ledges: the header keeps clear of those, peakClear)
       r.done = true
-      for (let x = r.l.x; x <= r.l.x + r.l.w + 3; x++) {
+      const xs: number[] = []
+      for (let x = r.l.x; x <= r.l.x + r.l.w + 3; x++) xs.push(x)
+      for (let x = r.l.x - 1; x >= Math.max(lowest, r.l.x - MORE_W); x--) xs.push(x)
+      for (const x of xs) {
         const more = moreAt(r, x, r.on.length)
         if (free(more)) {
           taken.push((r.more = more))

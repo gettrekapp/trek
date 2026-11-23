@@ -462,6 +462,37 @@ test("flagSpots places nothing where it meets a flag, a \"+n\" or the cairn (the
   assert.equal(flagSpots(m, [ft('p1', SUMMIT), ft('f1', 3)]).flags.find((f) => f.worktreeId === 'f1').x, m.ledges[3].x)
 })
 
+/** Every way to put each of `counts` trails on each of the five ledges (none on some) */
+const spreads = (counts) => {
+  const out = [[]]
+  for (let st = 0; st < 5; st++) {
+    const next = []
+    for (const t of out) for (const c of [0, ...counts]) next.push([...t, ...Array.from({ length: c }, (_, i) => ft(`s${st}-${i}`, st))])
+    out.splice(0, out.length, ...next)
+  }
+  return out.filter((t) => t.length > 0)
+}
+
+test('flagSpots: from 132 px (up to 9 a ledge) and from 235 px (any number) every trail is a flag or counted, however the trails are spread; nothing meets, and nothing sits left of the cairn and the ledges', () => {
+  for (const [from, counts] of [[132, [1, 2, 8, 9]], [235, [1, 10, 12, 30]]]) {
+    const cases = spreads(counts)
+    for (let room = from; room <= 1600; room += room < from + 80 ? 1 : 37) {
+      const m = mountain(room / 2, room)
+      const lowest = Math.min(m.cairn.x, ...m.ledges.map((l) => l.x))
+      for (const t of cases) {
+        const spots = flagSpots(m, t)
+        assert.equal(spots.flags.length + spots.more.reduce((k, x) => k + x.count, 0), t.length, `room ${room}: ${t.length} trails`)
+        const boxes = [cairnBox(m), ...spots.more.map(moreBox), ...spots.flags.map((f) => ({ ...flagBox(f), w: flagBox(f).w + 1 }))]
+        for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(!meets(boxes[i], boxes[j]), `room ${room}`)
+        for (const x of spots.more) assert.ok(x.x >= lowest, `room ${room}: a "+n" left of the peak's clear span`)
+      }
+    }
+  }
+  // Below that, a narrow middle can drop a ledge's trails (the known gap, spec: planning departures)
+  const m = mountain(234 / 2, 234)
+  assert.ok(spreads([1, 10, 12, 30]).some((t) => { const spots = flagSpots(m, t); return spots.flags.length + spots.more.reduce((k, x) => k + x.count, 0) < t.length }))
+})
+
 test("flagTargets: each flag's button is its sprite and the gap after it, up to FLAG_PAD px taller where nothing else is, and never meets another, a \"+n\" or the cairn", () => {
   for (const room of [1600, 800, 360, 132]) {
     const m = mountain(room / 2, room)
