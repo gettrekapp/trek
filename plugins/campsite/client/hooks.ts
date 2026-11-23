@@ -61,10 +61,17 @@ export function useCamp(host: ClientPluginHost): CampSnapshot | null {
   return useSyncExternalStore(store.subscribe, store.snapshot)
 }
 
-/** A session's hiker: its own look (from its id and agent), wearing its crew member's gear (campsite part 3b); the same object while neither changes */
+/**
+ * A session's hiker: its own look (from its id and agent), wearing its crew member's gear (campsite
+ * part 3b); the same object while neither changes. It listens for its kit alone (a string), so a push
+ * that changes only the wood doesn't render it again.
+ */
 export function useHikerLook(host: ClientPluginHost, terminalId: string, provider: string): Look {
-  const camp = useCamp(host)
-  const kit = camp ? sessionKit(camp, terminalId) : ''
+  const store = campStore(host)
+  const kit = useSyncExternalStore(store.subscribe, () => {
+    const camp = store.snapshot()
+    return camp ? sessionKit(camp, terminalId) : ''
+  })
   return useMemo(() => withKit(lookFor(terminalId, provider), kitOf(kit)), [terminalId, provider, kit])
 }
 

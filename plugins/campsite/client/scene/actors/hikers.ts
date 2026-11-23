@@ -63,7 +63,9 @@ export class HikersActor implements Actor {
       const kit = Object.hasOwn(s.kits, id) ? s.kits[id] : ''
       const hiker = existing ?? this.add(session, kit)
       const lookKey = `${id}:${session.provider}:${kit}`
-      if (hiker.lookKey !== lookKey) {
+      // A leaving hiker keeps the look it had (its member is already back at camp, its gear with it)
+      const leaving = existing !== undefined && this.movers.get(id)?.leaving === true
+      if (!leaving && hiker.lookKey !== lookKey) {
         // The old look's textures go (a new agent, or the member's gear changed)
         this.textures.evict(`hiker:${hiker.lookKey}:`)
         hiker.look = withKit(lookFor(id, session.provider), kitOf(kit))
