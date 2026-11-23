@@ -106,9 +106,9 @@ test('the away tally: wood by source, markers; a level-up noted once per member 
 test('creditXp notes a level-up in the tally; levelXp and memberLook', () => {
   const camp = newCamp(1, T0)
   assign(camp, 't1', 'p', T0)
-  creditXp(camp, 't1', 99)
+  creditXp(camp, 't1', 99, T0)
   assert.deepEqual(camp.away.levelUps, [])
-  creditXp(camp, 't1', 1)
+  creditXp(camp, 't1', 1, T0)
   assert.deepEqual(camp.away.levelUps, [{ crewId: camp.crew[0].id, level: 2 }])
   assert.deepEqual([1, 2, 3, 4].map(levelXp), [0, 100, 400, 900])
   assert.deepEqual(memberLook(5), memberLook(5))
