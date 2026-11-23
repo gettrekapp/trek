@@ -47,6 +47,8 @@ const SHOTS = [
   // A middle narrower than the peak (440 px) scales it sideways (never dropped): only a window this
   // narrow has one, since the buildings give way before the camps and the middle never drops below ~500 px
   { name: 'trails-narrow', scenario: 'few', trails: 'all', width: 360 },
+  // The same with failing checks: no room for the header's 🌧 beside the counts, so it is dropped (the counts' title and label say why)
+  { name: 'trails-narrow-rain', scenario: 'few', trails: 'all', width: 360, weather: 'rain' },
   // A summit mid-celebration: the planted flag climbing, sparks over the fire, the header's line (caught 700 ms in)
   { name: 'summit', scenario: 'few', trails: 'all', built: 'out', width: 1600, summit: true },
   // The Trails tab, opened from a flag: this project's rows and history, the other project (the signpost is built)
@@ -134,7 +136,9 @@ try {
     if (await page.evaluate(() => document.querySelector('button[title*="accessibility"]') !== null)) {
       problems.push(`${shot.name}: Pixi's accessibility button is on the page`)
     }
-    // The trails' buttons (flags, a ledge's "+n", the cairn) overlap neither each other nor a hiker's
+    // The trails' buttons (flags, a ledge's "+n", the cairn) overlap neither each other nor a hiker's;
+    // the header's controls stay out of the peak's keep-out band (peakClear: between the start
+    // group's room and the end group's) and off the trails' buttons
     const overlaps = await page.evaluate(() => {
       const boxes = [...document.querySelectorAll('.cs-flag, .cs-flag-more, .cs-cairn, .cs-camp-hiker')].map((el) => ({ el, r: el.getBoundingClientRect() }))
       const name = (el) => el.getAttribute('aria-label') ?? el.className
@@ -147,9 +151,25 @@ try {
           if (a.r.left < b.r.right && b.r.left < a.r.right && a.r.top < b.r.bottom && b.r.top < a.r.bottom) found.push(`${name(a.el)} / ${name(b.el)}`)
         }
       }
+      const header = document.querySelector('.cs-header')
+      const start = document.querySelector('.cs-header-start')
+      const end = document.querySelector('.cs-header-end')
+      if (header && start?.style.maxWidth && end?.style.maxWidth) {
+        const h = header.getBoundingClientRect()
+        const band = { left: h.left + parseFloat(start.style.maxWidth) + 6, right: h.right - parseFloat(end.style.maxWidth) }
+        const controls = [...header.querySelectorAll('button, .cs-weather, .cs-away, .cs-summit-line')].map((el) => ({ el, r: el.getBoundingClientRect() })).filter((c) => c.r.width > 1 && c.r.height > 1)
+        const EPS = 0.01
+        for (const c of controls) {
+          if (c.r.right > band.left + EPS && c.r.left < band.right - EPS) found.push(`header ${name(c.el)} / the peak's band (${Math.round(band.left)}–${Math.round(band.right)})`)
+          for (const b of boxes) {
+            if (b.el.classList.contains('cs-camp-hiker')) continue
+            if (c.r.left < b.r.right && b.r.left < c.r.right && c.r.top < b.r.bottom && b.r.top < c.r.bottom) found.push(`header ${name(c.el)} / ${name(b.el)}`)
+          }
+        }
+      }
       return found
     })
-    for (const o of overlaps) problems.push(`${shot.name}: trail buttons overlap: ${o}`)
+    for (const o of overlaps) problems.push(`${shot.name}: buttons overlap: ${o}`)
     const path = join(out, `${shot.name}.png`)
     if (shot.summit) {
       await page.evaluate(() => window.__summit('ship', 'feature/ship'))

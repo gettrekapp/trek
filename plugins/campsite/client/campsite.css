@@ -958,11 +958,16 @@
   clip-path: inset(50%);
 }
 
-/* The header's weather glyph (part 3d-1), after the counts: its title says why */
+/* The header's weather glyph (part 3d-1), after the counts: its title says why. A fixed width
+   (Campsite's GLYPH_W): expanded, it is dropped when the end group has no room for it */
 .cs-weather {
   flex: none;
+  box-sizing: border-box;
+  width: 26px;
   height: 20px;
-  padding: 0 5px;
+  padding: 0;
+  overflow: hidden;
+  text-align: center;
   background: rgba(26, 22, 34, 0.85);
   border-radius: 5px;
   font: 12px/20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

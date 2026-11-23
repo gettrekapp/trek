@@ -9,7 +9,7 @@
 // this window's clock and the seasons the month (both settings), and the weather this project's
 // trails and activity, with a glyph after the counts saying why. Collapsed, it is one line: everyone
 // at tab size, those waiting first.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
@@ -35,6 +35,36 @@ const tiersKey = (built: Readonly<Record<BuildingId, number>> | undefined): stri
 function tiersOf(key: string): Record<BuildingId, number> {
   const tiers = key.split(',').map(Number)
   return Object.fromEntries(BUILDING_IDS.map((id, i) => [id, tiers[i]])) as Record<BuildingId, number>
+}
+
+/** The header's weather glyph: its fixed width (.cs-weather) and the end group's gap (.cs-header-end) */
+const GLYPH_W = 26
+const HEADER_GAP = 6
+
+/**
+ * The least room the expanded header's end group needs without the weather glyph: the counts
+ * button, the away card without its text (which is cut short) and the summit's line without its
+ * text (padding only), and the gaps between them. The glyph is shown only when it fits beside that.
+ */
+function endGroupNeeds(end: HTMLElement): number {
+  let total = 0
+  let items = 0
+  for (const el of end.children) {
+    if (!(el instanceof HTMLElement) || el.classList.contains('cs-weather')) continue
+    let w: number
+    if (el.classList.contains('cs-summit-line')) {
+      // Empty, it is out of the flex row (no room, no gap)
+      if (el.textContent === '') continue
+      const style = getComputedStyle(el)
+      w = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+    } else if (el.classList.contains('cs-away')) {
+      const text = el.querySelector('.cs-away-text')
+      w = el.getBoundingClientRect().width - (text?.getBoundingClientRect().width ?? 0)
+    } else w = el.getBoundingClientRect().width
+    total += w
+    items += 1
+  }
+  return Math.ceil(total + Math.max(0, items - 1) * HEADER_GAP)
 }
 
 /** How long the header says "⛳ Summited …" */
@@ -125,6 +155,14 @@ export function Campsite(): React.JSX.Element | null {
   }, [])
   // The counts button (collapsed or expanded): focus goes back to it when the away card is dismissed
   const countsButton = useRef<HTMLButtonElement | null>(null)
+  // The expanded header's end group, and the least room it needs without the weather glyph (measured after each render)
+  const headerEnd = useRef<HTMLDivElement | null>(null)
+  const [endNeeds, setEndNeeds] = useState(0)
+  useLayoutEffect(() => {
+    const end = headerEnd.current
+    const needs = end ? endGroupNeeds(end) : 0
+    setEndNeeds((n) => (n === needs ? n : needs))
+  })
   // The camp's state gone (the plugin's server half went away), or the strip collapsed or expanded: the popover's opener is gone
   const hasCamp = camp !== null
   useEffect(() => {
@@ -161,7 +199,7 @@ export function Campsite(): React.JSX.Element | null {
   /** The Trails tab from `opener` (the signpost, a flag, a ledge's "+n" or the cairn), at a trail of this project or at its top */
   const openTrails = (el: HTMLElement, opener: string, trail?: string): void => openCamp(el, null, 'trails', trail, opener)
   const sky = weatherBadge(weather)
-  // After the counts: why it rains, snows or is foggy over this project's camp
+  // After the counts: why it rains, snows or is foggy over this project's camp (also in the counts' title and label, for when the glyph is dropped and for the keyboard)
   const weatherGlyph = sky && (
     <span className="cs-weather" role="img" title={sky.text} aria-label={sky.text}>
       {sky.glyph}
@@ -171,7 +209,8 @@ export function Campsite(): React.JSX.Element | null {
     <button
       ref={countsButton}
       className="cs-camp-button"
-      title="Open the camp"
+      title={sky ? `Open the camp · ${sky.text}` : 'Open the camp'}
+      aria-label={sky ? `${campCounts(camp)} · ${sky.text}` : undefined}
       aria-haspopup="dialog"
       aria-expanded={campOpen !== null && openKey(campOpen) === 'camp:'}
       onClick={(e) => openCamp(e.currentTarget, null)}
@@ -240,6 +279,9 @@ export function Campsite(): React.JSX.Element | null {
     const r = el.getBoundingClientRect()
     setOpenTent((o) => (o !== null && o.worktreeId === worktreeId ? null : { worktreeId, left: r.left, right: r.right, top: r.top, side }))
   }
+  // Right of the peak's keep-out band; the glyph goes before the counts would be pushed into it
+  const endRoom = Math.max(0, width - 8 - clear.right)
+  const glyphFits = width > 0 && endNeeds + (endNeeds > 0 ? HEADER_GAP : 0) + GLYPH_W <= endRoom
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       {/* Left of the peak, the toggle and the summary (cut short); right of it, at the header's end, the counts, the summit's line and the away card (the header starts 6 px in, ends 8 px in) */}
@@ -250,9 +292,9 @@ export function Campsite(): React.JSX.Element | null {
           </button>
           <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
         </div>
-        <div className="cs-header-end" style={width > 0 ? { maxWidth: Math.max(0, width - 8 - clear.right) } : undefined}>
+        <div ref={headerEnd} className="cs-header-end" style={width > 0 ? { maxWidth: endRoom } : undefined}>
           {campButton}
-          {weatherGlyph}
+          {glyphFits && weatherGlyph}
           {summitNote}
           {awayCard}
         </div>
