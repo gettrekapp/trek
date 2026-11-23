@@ -2,7 +2,8 @@
 // dusk, night, blended over the last 30 minutes before the next), the season by the month (northern
 // or southern, or off), the backdrop's colours for both (dusk is exactly the strip's colours before
 // 3d), and the weather over a project's camp from its trails and its last activity (rain while
-// checks fail, snow in winter, fog after 12 quiet hours). Looks only: nothing here pays. Pure.
+// checks fail, snow in winter, fog after 12 quiet hours). Looks only: nothing here pays. The wall
+// clock in another time zone, for the server's wildlife (part 3d-2). Pure.
 import { HOUR_MS } from './catalog.ts'
 
 export type Phase = 'dawn' | 'day' | 'dusk' | 'night'
@@ -31,6 +32,46 @@ export function phaseAt(date: Date): PhaseAt {
   let until = STARTS[next] - mins
   if (until < 0) until += 24 * 60
   return { phase, next, blend: until < BLEND_MIN ? 1 - until / BLEND_MIN : 0 }
+}
+
+/** One formatter per time zone (making one is the slow part) */
+const ZONES = new Map<string, Intl.DateTimeFormat>()
+function zoneFormat(tz: string): Intl.DateTimeFormat {
+  let f = ZONES.get(tz)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    ZONES.set(tz, f)
+  }
+  return f
+}
+
+/** An IANA time zone this runtime knows ("Europe/Oslo"; at most 64 characters) */
+export function isTimeZone(tz: unknown): tz is string {
+  if (typeof tz !== 'string' || tz.length === 0 || tz.length > 64) return false
+  try {
+    zoneFormat(tz)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A Date whose local fields (hours, month) read the wall clock in `tz` at `now` (part 3d-2: the
+ * server gates wildlife by a window's time zone), for phaseAt and seasonAt; null, or a zone this
+ * runtime doesn't know, reads the runtime's own. (A wall time that the runtime's own zone skips for
+ * daylight saving moves an hour; the phases change at 5, 8, 17 and 20 h, away from those.)
+ */
+export function zonedDate(now: number, tz: string | null): Date {
+  if (tz === null || !Number.isFinite(now)) return new Date(now)
+  let parts: Intl.DateTimeFormatPart[]
+  try {
+    parts = zoneFormat(tz).formatToParts(new Date(now))
+  } catch {
+    return new Date(now)
+  }
+  const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value)
+  return new Date(part('year'), part('month') - 1, part('day'), part('hour') % 24, part('minute'), part('second'))
 }
 
 export type Season = 'winter' | 'spring' | 'summer' | 'autumn'
