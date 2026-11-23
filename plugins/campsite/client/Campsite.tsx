@@ -40,6 +40,8 @@ function tiersOf(key: string): Record<BuildingId, number> {
 /** The header's weather glyph: its fixed width (.cs-weather) and the end group's gap (.cs-header-end) */
 const GLYPH_W = 26
 const HEADER_GAP = 6
+/** Slack so a sub-pixel change in the measured need can't flip the glyph on and off at the exact threshold */
+const GLYPH_SLACK = 2
 
 /**
  * The least room the expanded header's end group needs without the weather glyph: the counts
@@ -283,7 +285,7 @@ export function Campsite(): React.JSX.Element | null {
   }
   // Right of the peak's keep-out band; the glyph goes before the counts would be pushed into it
   const endRoom = Math.max(0, width - 8 - clear.right)
-  const glyphFits = width > 0 && endNeeds + (endNeeds > 0 ? HEADER_GAP : 0) + GLYPH_W <= endRoom
+  const glyphFits = width > 0 && endNeeds + (endNeeds > 0 ? HEADER_GAP : 0) + GLYPH_W + GLYPH_SLACK <= endRoom
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
       {/* Left of the peak, the toggle and the summary (cut short); right of it, at the header's end, the counts, the summit's line and the away card (the header starts 6 px in, ends 8 px in) */}
