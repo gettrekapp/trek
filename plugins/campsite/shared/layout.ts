@@ -190,20 +190,19 @@ export function popoverLeft(badge: { left: number; right: number }, side: FireSi
   return Math.max(EDGE, Math.min(wanted, viewportWidth - popoverWidth - EDGE))
 }
 
-/** The strip's header line; with the camp's state loaded, its wood and (after the first summit) its markers at the end */
-export function campSummary(sessions: readonly Pick<PluginSession, 'status' | 'decision'>[], moreCamps = 0, camp?: { wood: number; markers: number } | null): string {
+/** The strip's header line (the camp's counts are a button beside it: campCounts) */
+export function campSummary(sessions: readonly Pick<PluginSession, 'status' | 'decision'>[], moreCamps = 0): string {
   const parts = ['Campsite']
   if (sessions.length > 0) parts.push(`${sessions.length} ${sessions.length === 1 ? 'hiker' : 'hikers'}`)
   const waiting = sessions.filter(isWaiting).length
   if (waiting > 0) parts.push(`${waiting} waiting`)
   // Camps the strip has no room for (grouped mode)
   if (moreCamps > 0) parts.push(`+${moreCamps} ${moreCamps === 1 ? 'camp' : 'camps'} not shown`)
-  if (camp) {
-    parts.push(`🪵 ${camp.wood}`)
-    if (camp.markers > 0) parts.push(`⛳ ${camp.markers}`)
-  }
   return parts.join(' · ')
 }
+
+/** The header's camp button: the camp's wood and (after the first summit) its markers */
+export const campCounts = (camp: { wood: number; markers: number }): string => (camp.markers > 0 ? `🪵 ${camp.wood} · ⛳ ${camp.markers}` : `🪵 ${camp.wood}`)
 
 /** A 1× hiker (12 px) and the gap after it, in the collapsed bar */
 export const MINI_SLOT = 18

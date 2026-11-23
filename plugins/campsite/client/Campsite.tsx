@@ -1,15 +1,19 @@
 // The campsite strip along the bottom of the window: a night scene with the fire in the middle, a
-// tent per worktree with sessions, Global on a log, every session's hiker, and the camp dog, drawn by
-// Pixi (scene/PixiStrip.tsx). Tent signs, camp badges and their popover are DOM over it. Click a
-// hiker to show its session. Collapsed, it is one line: everyone at tab size, those waiting first.
+// tent per worktree with sessions, Global on a log, every session's hiker, the camp dog and the
+// camp's buildings at the two ends, drawn by Pixi (scene/PixiStrip.tsx). Tent signs, camp badges
+// and their popover are DOM over it. Click a hiker to show its session. The header's counts (and
+// each building) open the camp's popover: build and hire. Collapsed, it is one line: everyone at
+// tab size, those waiting first.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel } from '../shared/crew.ts'
-import { campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
+import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
-import { useCamp, useDocumentHidden, useNow, usePrefs, useSelected, useSessions, useWidth } from './hooks.ts'
+import { CampPopover, type OpenCamp } from './CampPopover.tsx'
+import { campStore } from './campStore.ts'
+import { useCamp, useDocumentHidden, useNow, usePrefs, useSeen, useSelected, useSessions, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -29,6 +33,7 @@ export function Campsite(): React.JSX.Element | null {
   const [{ loaded, prefs }, setPref] = usePrefs(host)
   const sessions = useSessions(host)
   const camp = useCamp(host)
+  useSeen(host)
   const selected = useSelected(host)
   const now = useNow()
   const hidden = useDocumentHidden()
@@ -48,6 +53,13 @@ export function Campsite(): React.JSX.Element | null {
     if (refocus) badge.current?.focus()
   }, [])
   useCloseOnOutside(openTent !== null, closeTent)
+  // The camp's popover, and what opened it (the counts, or a building)
+  const [campOpen, setCampOpen] = useState<OpenCamp | null>(null)
+  const campOpener = useRef<HTMLElement | null>(null)
+  const closeCamp = useCallback((refocus: boolean) => {
+    setCampOpen(null)
+    if (refocus) campOpener.current?.focus()
+  }, [])
   // Out of grouped mode, or its tent gone: nothing to show
   const openGone =
     openTent !== null &&
@@ -69,6 +81,20 @@ export function Campsite(): React.JSX.Element | null {
   }
   if (!loaded || !prefs.showCampsite) return null
 
+  /** Opens the camp above `el` at `focus`'s row; the same opener again closes it */
+  const openCamp = (el: HTMLElement, focus: BuildingId | null): void => {
+    campOpener.current = el
+    const r = el.getBoundingClientRect()
+    setCampOpen((o) => (o !== null && o.focus === focus ? null : { left: r.left, top: r.top, focus }))
+  }
+  const campButton = camp && (
+    <button className="cs-camp-button" title="Open the camp" aria-haspopup="dialog" aria-expanded={campOpen !== null} onClick={(e) => openCamp(e.currentTarget, null)}>
+      {campCounts(camp)}
+    </button>
+  )
+  // Fixed to the window, so neither the collapsed bar nor the stage clips it
+  const campPopover = camp && campOpen && <CampPopover key={campOpen.focus ?? 'camp'} camp={camp} at={campOpen} sessions={sessions} store={campStore(host)} onClose={closeCamp} />
+
   if (prefs.campsiteCollapsed) {
     const waiting = sessions.filter(isWaiting)
     const row = collapsedRow(sessions, rowWidth)
@@ -77,7 +103,8 @@ export function Campsite(): React.JSX.Element | null {
         <button ref={toggle} className="cs-toggle" title="Show the campsite" aria-label="Show the campsite" onClick={() => flip(false)}>
           <Chevron up />
         </button>
-        <span className="cs-summary">{campSummary(sessions, 0, camp)}</span>
+        <span className="cs-summary">{campSummary(sessions)}</span>
+        {campButton}
         {waiting.length > 0 && (
           <button className="cs-waiting-chip" title={`Show ${hikerLabel(waiting[0])}`} onClick={() => host.focusSession(waiting[0].terminalId)}>
             {waiting.length} waiting
@@ -89,6 +116,7 @@ export function Campsite(): React.JSX.Element | null {
           ))}
           {row.more > 0 && <span className="cs-mini-more">+{row.more}</span>}
         </div>
+        {campPopover}
       </div>
     )
   }
@@ -108,7 +136,8 @@ export function Campsite(): React.JSX.Element | null {
         <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
           <Chevron />
         </button>
-        <span className="cs-summary">{campSummary(sessions, layout.moreTents, camp)}</span>
+        <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
+        {campButton}
       </div>
       {width > 0 && (
         <div className="cs-stage">
@@ -133,7 +162,19 @@ export function Campsite(): React.JSX.Element | null {
             />
           ))}
           {/* After the camps' badges in tab order, as the dog and hikers were; the canvas sits under everything (z-index 0) */}
-          <PixiStrip layout={layout} edges={edges} built={built} sessions={sessions} camp={camp} now={now} selected={selected} paused={hidden} showDog={prefs.showDog} onPick={(id) => host.focusSession(id)} />
+          <PixiStrip
+            layout={layout}
+            edges={edges}
+            built={built}
+            sessions={sessions}
+            camp={camp}
+            now={now}
+            selected={selected}
+            paused={hidden}
+            showDog={prefs.showDog}
+            onPick={(id) => host.focusSession(id)}
+            onBuilding={(id, el) => openCamp(el, id)}
+          />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>
       )}
@@ -151,6 +192,7 @@ export function Campsite(): React.JSX.Element | null {
           }}
         />
       )}
+      {campPopover}
     </div>
   )
 }

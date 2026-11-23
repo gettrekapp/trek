@@ -353,9 +353,9 @@ try {
   // Back on, the hiker toggles it the same way, and its title says so (once it is done again).
   await win.evaluate(() => window.__store.getState().setPluginEnabled('campsite', true))
   check('the campsite back on, on the server', await until(campsiteEnabled, true), true)
-  // The strip's header counts the camp's wood ("🪵 n"); a working session's minutes (200 ms here) raise it
+  // The strip's camp button counts the camp's wood ("🪵 n"); a working session's minutes (200 ms here) raise it
   const wood = async () => {
-    const m = /🪵 (\d+)/.exec(await win.locator('.campsite .cs-summary').innerText())
+    const m = /🪵 (\d+)/.exec(await win.locator('.campsite .cs-camp-button').innerText())
     return m ? Number(m[1]) : null
   }
   const woodBefore = await until(async () => (await wood()) !== null, true) ? await wood() : null

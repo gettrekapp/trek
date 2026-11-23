@@ -10,6 +10,7 @@ import { TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
 import { bunks, build, candidates, dayOf, offers, recruit, shortfall, todaysCandidates } from '../plugins/campsite/shared/shop.ts'
 import { tick } from '../plugins/campsite/shared/economy.ts'
 import { whole } from '../plugins/campsite/shared/catalog.ts'
+import { hireState, memberStatus, placedTitle, shopRow, xpProgress } from '../plugins/campsite/shared/campView.ts'
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
@@ -346,4 +347,41 @@ test('XP drift: a level and the XP shown agree (both whole)', () => {
   camp.crew[0].xp = 400 - 1e-9
   const entry = snapshot(camp, T0).crew[0]
   assert.deepEqual([entry.level, entry.xp, entry.next], [3, 400, levelXp(4)])
+})
+
+test("shopRow: the next tier with its price; short of wood or markers says so; a fully built one says so", () => {
+  const camp = newCamp(1, T0)
+  camp.wood = 180
+  let snap = snapshot(camp, T0)
+  assert.deepEqual(shopRow(snap, 'fire'), { id: 'fire', name: 'Fire ring II', tier: 'Tier 2 of 3', effect: 'Warmth lifts working wood up to ×1.75', offer: { tier: 2, cost: { wood: 300, markers: 0 } }, price: '🪵 300', short: 'Need 120 more wood' })
+  assert.equal(shopRow(snap, 'lights').short, null)
+  assert.equal(shopRow(snap, 'cabins').short, 'Need 220 more wood and 1 more marker')
+  assert.equal(shopRow(snap, 'cabins').price, '🪵 400 · ⛳ 1')
+  camp.built.lights = 1
+  snap = snapshot(camp, T0)
+  assert.deepEqual(shopRow(snap, 'lights'), { id: 'lights', name: 'String lights', tier: 'Tier 1 of 1', effect: 'Lights glow over the camp', offer: null, price: '', short: null })
+})
+
+test('hireState, memberStatus, xpProgress, placedTitle', () => {
+  const camp = newCamp(1, T0)
+  camp.wood = 150
+  assert.deepEqual(hireState(snapshot(camp, T0)), { disabled: true, reason: 'No free bunk: build a cabin first' })
+  camp.built.cabins = 1
+  assert.deepEqual(hireState(snapshot(camp, T0)), { disabled: true, reason: 'Need 50 more wood' })
+  camp.wood = 200
+  assert.deepEqual(hireState(snapshot(camp, T0)), { disabled: false, reason: null })
+  assign(camp, 't1', 'p', T0)
+  assign(camp, 't2', 'p', T0)
+  const labels = new Map([['t1', 'Agent 1']])
+  let snap = snapshot(camp, T0)
+  assert.equal(memberStatus(snap, camp.crew[0].id, labels), 'with Agent 1')
+  assert.equal(memberStatus(snap, camp.crew[1].id, labels), 'out on another project')
+  assert.equal(memberStatus(snap, camp.crew[2].id, labels), 'resting')
+  camp.built.lake = 1
+  snap = snapshot(camp, T0)
+  assert.equal(memberStatus(snap, camp.crew[2].id, labels), 'fishing')
+  assert.equal(xpProgress({ level: 2, xp: 250, next: 400 }), 0.5)
+  assert.equal(xpProgress({ level: 1, xp: 0, next: 100 }), 0)
+  assert.equal(placedTitle({ id: 'cabins', tier: 2 }), 'Two cabins (tier 2 of 3)')
+  assert.equal(placedTitle({ id: 'lake', tier: 2 }), 'Dock (tier 2 of 2)')
 })

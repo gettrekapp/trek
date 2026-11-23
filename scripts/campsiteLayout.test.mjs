@@ -2,7 +2,7 @@
 // (right, left, …), Global on a log, waiting hikers at the fire, grouped mode when it is crowded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HIKER_W, MAX_SPREAD, MINI_SLOT, TENT_COLORS, campLayout, campSummary, campTone, collapsedRow, popoverLeft, signText, tentBadge, tentColors } from '../plugins/campsite/shared/layout.ts'
+import { HIKER_W, MAX_SPREAD, MINI_SLOT, TENT_COLORS, campLayout, campCounts, campSummary, campTone, collapsedRow, popoverLeft, signText, tentBadge, tentColors } from '../plugins/campsite/shared/layout.ts'
 
 let n = 0
 const s = (worktreeId, over = {}) => ({ terminalId: `t${++n}`, label: 'Claude', provider: 'claude', status: 'working', decision: false, worktreeId, worktreeName: worktreeId, branch: worktreeId && `b/${worktreeId}`, ...over })
@@ -179,12 +179,11 @@ test('campSummary: one waiting hiker; camps the strip has no room for are counte
   assert.equal(campSummary([s('w1')], 1), 'Campsite · 1 hiker · +1 camp not shown')
 })
 
-test("campSummary: the camp's wood and markers at the end once the state is loaded; no flag before the first summit", () => {
-  assert.equal(campSummary([s('w1')], 0, { wood: 340, markers: 2 }), 'Campsite · 1 hiker · 🪵 340 · ⛳ 2')
-  assert.ok(campSummary([s('w1'), s('w2')], 3, { wood: 340, markers: 2 }).endsWith('· 🪵 340 · ⛳ 2'))
-  assert.equal(campSummary([s('w1')], 0, { wood: 340, markers: 0 }), 'Campsite · 1 hiker · 🪵 340')
-  assert.equal(campSummary([s('w1')], 0, null), 'Campsite · 1 hiker')
-  assert.equal(campSummary([s('w1')], 0), 'Campsite · 1 hiker')
+test("campCounts: the camp button's wood, and its markers after the first summit; campSummary no longer carries them", () => {
+  assert.equal(campCounts({ wood: 340, markers: 2 }), '🪵 340 · ⛳ 2')
+  assert.equal(campCounts({ wood: 340, markers: 0 }), '🪵 340')
+  assert.equal(campSummary([s('w1')]), 'Campsite · 1 hiker')
+  assert.equal(campSummary([s('w1'), s('w2')], 3), 'Campsite · 2 hikers · +3 camps not shown')
 })
 
 test('hikers at 3×: each is whole inside the strip, none overlaps another, and those at the fire clear its hearth', () => {

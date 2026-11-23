@@ -464,3 +464,158 @@
   outline: 1px solid #ffe680;
   outline-offset: 1px;
 }
+/* The header's camp counts: a button that opens the camp */
+.cs-camp-button {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  background: rgba(26, 22, 34, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  color: #ededf0;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cs-camp-button:hover {
+  background: #2a2a30;
+}
+.cs-camp-button:focus-visible,
+.cs-building:focus-visible {
+  outline: 1px solid #ffe680;
+  outline-offset: 2px;
+}
+/* Over a building's sprite (placed from campEdges): invisible, but it takes the click, the focus ring and the tooltip; under the dog and hikers */
+.cs-building {
+  position: absolute;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 1;
+}
+/* Fixed, so the stage and the collapsed bar don't clip it: placed above its opener */
+.cs-camp-popover {
+  position: fixed;
+  transform: translateY(-100%);
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 6px;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #ededf0;
+  font-size: 12px;
+  z-index: 50;
+}
+.cs-camp-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.cs-camp-tabs button {
+  flex: 1;
+  height: 24px;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #9a9aa2;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cs-camp-tabs button.on {
+  background: #2a2a30;
+  color: #ededf0;
+}
+.cs-shop-row,
+.cs-crew-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 5px;
+}
+.cs-shop-row:focus {
+  outline: 1px solid #ffe680;
+  outline-offset: -1px;
+}
+.cs-shop-icon {
+  flex: none;
+  width: 40px;
+  display: flex;
+  justify-content: center;
+}
+.cs-shop-text,
+.cs-crew-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cs-shop-tier,
+.cs-crew-level,
+.cs-shop-effect,
+.cs-crew-status {
+  color: #9a9aa2;
+  font-size: 11px;
+}
+.cs-shop-error {
+  color: var(--attention, #e2a336);
+  font-size: 11px;
+}
+.cs-shop-cost {
+  flex: none;
+  color: #c9ccd1;
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.cs-shop-build {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  background: #3a6e4a;
+  border: none;
+  border-radius: 5px;
+  color: #ededf0;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-shop-build:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cs-shop-short,
+.cs-shop-built {
+  flex: none;
+  color: #6f6f78;
+  font-size: 11px;
+}
+.cs-crew-heading {
+  margin: 8px 6px 2px;
+  color: #9a9aa2;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cs-crew-empty {
+  padding: 6px;
+  color: #6f6f78;
+  font-size: 11px;
+}
+.cs-xp {
+  display: block;
+  width: 120px;
+  height: 3px;
+  background: #2a2a30;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.cs-xp > span {
+  display: block;
+  height: 100%;
+  background: #c8a24a;
+}

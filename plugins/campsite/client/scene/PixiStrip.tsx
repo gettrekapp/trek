@@ -6,10 +6,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../../shared/camp.ts'
 import type { Edges } from '../../shared/campEdges.ts'
+import { placedTitle } from '../../shared/campView.ts'
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { choreFor, hikerLabel, hikerTooltip } from '../../shared/pose.ts'
+import { STAGE_H } from '../../shared/stage.ts'
 import { useReducedMotion } from '../hooks.ts'
 import { MiniHiker } from '../MiniHiker.tsx'
 import type { CampStage, SignColors } from './CampStage.ts'
@@ -30,6 +32,8 @@ interface Props {
   paused: boolean
   showDog: boolean
   onPick: (terminalId: string) => void
+  /** A building's button was clicked: open the camp at its row */
+  onBuilding: (id: BuildingId, el: HTMLButtonElement) => void
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -44,7 +48,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, now, selected, paused, showDog, onPick }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, now, selected, paused, showDog, onPick, onBuilding }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -97,6 +101,18 @@ export function PixiStrip({ layout, edges, built, sessions, camp, now, selected,
   return (
     <>
       <div ref={host} className="cs-canvas" aria-hidden="true" />
+      {/* Over each building's sprite (they don't move), under the dog's and hikers' buttons */}
+      {stage &&
+        [...edges.left, ...edges.right].map((p) => (
+          <button
+            key={p.key}
+            className="cs-building"
+            style={{ left: p.x, width: p.w, height: p.h, bottom: STAGE_H - p.bottom }}
+            title={placedTitle(p)}
+            aria-label={placedTitle(p)}
+            onClick={(e) => onBuilding(p.id, e.currentTarget)}
+          />
+        ))}
       {stage && showDog && <button ref={(el) => stage.bindDog(el)} className="cs-dog" title="Pet the dog" aria-label="Pet the dog" onClick={() => stage.petDog()} />}
       {stage &&
         layout.hikers.map((h) => {
