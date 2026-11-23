@@ -4,8 +4,10 @@
 // (ledger), and the busy ones have hourly caps. The rules change the camp in place and return what
 // they paid. Pure: the caller passes the time.
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
+import { addAway, type AwaySource } from './away.ts'
 import type { Camp } from './camp.ts'
-import { assign, creditXp, release } from './crew.ts'
+import { FISH_PER_HOUR, GARDEN_PER_HOUR, fireCeiling } from './catalog.ts'
+import { assign, creditXp, release, restingCount } from './crew.ts'
 
 export interface Rules {
   /** A working minute (shorter in tests and smokes) */
@@ -26,13 +28,15 @@ export interface Reward {
   key?: string
   wood: number
   markers: number
+  /** Where it goes in the away tally */
+  source: AwaySource
   /** The session it is credited to (its member's XP) */
   terminalId?: string
   reason: string
 }
 
-/** The trickle's multiplier: ×1 cold, ×1.5 at full warmth */
-export const warmthFactor = (warmth: number): number => 1 + 0.5 * warmth
+/** The trickle's multiplier: ×1 cold, up to the fire ring's ceiling (×1.5, ×1.75, ×2 by tier) at full warmth */
+export const warmthFactor = (warmth: number, fireTier = 1): number => 1 + (fireCeiling(fireTier) - 1) * warmth
 const hourOf = (t: number): number => Math.floor(t / HOUR_MS)
 
 /** Takes one use of `cap` in `at`'s hour; false at the limit */
@@ -53,6 +57,7 @@ function pay(camp: Camp, r: Reward, out: Reward[]): boolean {
   }
   camp.wood += r.wood
   camp.markers += r.markers
+  addAway(camp, r.source, r.wood, r.markers)
   if (r.terminalId !== undefined) creditXp(camp, r.terminalId, r.wood)
   out.push(r)
   return true
@@ -67,7 +72,7 @@ function payMinutes(camp: Camp, terminalId: string, now: number, rules: Rules, o
     span.paid++
     camp.worked[terminalId] = (camp.worked[terminalId] ?? 0) + 1
     const at = span.start + span.paid * rules.minuteMs
-    if (bump(camp, `work:${terminalId}`, CAPS.workPerHour, at)) pay(camp, { wood: WOOD.minute * warmthFactor(camp.warmth), markers: 0, terminalId, reason: 'working' }, out)
+    if (bump(camp, `work:${terminalId}`, CAPS.workPerHour, at)) pay(camp, { wood: WOOD.minute * warmthFactor(camp.warmth, camp.built.fire), markers: 0, source: 'work', terminalId, reason: 'working' }, out)
     else {
       // The hour's cap is spent: the rest of its minutes pay nothing, so skip them (still counted as worked)
       const last = Math.min(whole, Math.ceil(((hourOf(at) + 1) * HOUR_MS - span.start) / rules.minuteMs) - 1)
@@ -96,7 +101,7 @@ function answer(camp: Camp, terminalId: string, now: number, rules: Rules, out: 
   const key = `answer:${terminalId}:${w.since}`
   if (wood === 0 || camp.ledger.includes(key)) return
   if (!bump(camp, 'answers', CAPS.answersPerHour, now)) return
-  if (pay(camp, { key, wood, markers: 0, terminalId, reason: 'answered a waiting hiker' }, out)) camp.warmth = Math.min(1, camp.warmth + 0.1)
+  if (pay(camp, { key, wood, markers: 0, source: 'outcomes', terminalId, reason: 'answered a waiting hiker' }, out)) camp.warmth = Math.min(1, camp.warmth + 0.1)
 }
 
 /** One activity event's effect on the camp; what it paid */
@@ -126,7 +131,7 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       setWaiting(camp, id, now, e.projectId, { attention: e.to === 'attention' })
       if (e.to === 'complete' && e.cause === 'marked' && (camp.worked[id] ?? 0) >= 1) {
         camp.worked[id] = 0
-        pay(camp, { wood: WOOD.complete, markers: 0, terminalId: id, reason: 'marked complete' }, out)
+        pay(camp, { wood: WOOD.complete, markers: 0, source: 'outcomes', terminalId: id, reason: 'marked complete' }, out)
       }
       break
     }
@@ -147,13 +152,13 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       break
     case 'pr.linked':
       if (camp.ledger.includes(`pr:${e.url}`) || !bump(camp, 'prs', CAPS.prLinksPerHour, now)) break
-      pay(camp, { key: `pr:${e.url}`, wood: WOOD.prLinked, markers: 0, reason: 'pull request opened' }, out)
+      pay(camp, { key: `pr:${e.url}`, wood: WOOD.prLinked, markers: 0, source: 'outcomes', reason: 'pull request opened' }, out)
       break
     case 'pr.checks':
-      if (e.result === 'passed') pay(camp, { key: `checks:${e.url}:${e.headSha}`, wood: WOOD.checksPassed, markers: 0, reason: 'checks passed' }, out)
+      if (e.result === 'passed') pay(camp, { key: `checks:${e.url}:${e.headSha}`, wood: WOOD.checksPassed, markers: 0, source: 'outcomes', reason: 'checks passed' }, out)
       break
     case 'pr.ended':
-      if (e.result === 'merged') pay(camp, { key: `merged:${e.url}`, wood: WOOD.merged, markers: 1, reason: 'summit: pull request merged' }, out)
+      if (e.result === 'merged') pay(camp, { key: `merged:${e.url}`, wood: WOOD.merged, markers: 1, source: 'outcomes', reason: 'summit: pull request merged' }, out)
       break
     default:
       break
@@ -181,16 +186,25 @@ export function applyCommits(camp: Camp, c: { worktreeId: string; head: string; 
     if (camp.ledger.length > LEDGER_MAX) camp.ledger.splice(0, camp.ledger.length - LEDGER_MAX)
     return out
   }
-  pay(camp, { key, wood: counted * WOOD.commit, markers: 0, reason: `${counted} commit${counted === 1 ? '' : 's'}` }, out)
+  pay(camp, { key, wood: counted * WOOD.commit, markers: 0, source: 'outcomes', reason: `${counted} commit${counted === 1 ? '' : 's'}` }, out)
   return out
 }
 
-/** Every minute: pays finished working minutes, cools the fire while anyone waits, drops past hours' caps */
+/** `minutes` whole minutes of the garden and the lake: wood an hour / 60 each minute, fractions kept; no XP */
+function passive(camp: Camp, minutes: number, out: Reward[]): void {
+  const garden = GARDEN_PER_HOUR[camp.built.garden] ?? 0
+  if (garden > 0) pay(camp, { wood: (garden / 60) * minutes, markers: 0, source: 'garden', reason: 'the garden' }, out)
+  const fish = (FISH_PER_HOUR[camp.built.lake] ?? 0) * restingCount(camp)
+  if (fish > 0) pay(camp, { wood: (fish / 60) * minutes, markers: 0, source: 'fishing', reason: 'fishing' }, out)
+}
+
+/** Every minute: pays finished working minutes, the garden and fishing, cools the fire while anyone waits, drops past hours' caps */
 export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
   const out: Reward[] = []
   for (const id of Object.keys(camp.spans)) payMinutes(camp, id, now, rules, out)
   const minutes = Math.floor((now - camp.lastTick) / rules.minuteMs)
   if (minutes > 0) {
+    passive(camp, minutes, out)
     if (Object.keys(camp.waiting).length > 0) camp.warmth = Math.max(0, camp.warmth - 0.02 * minutes)
     camp.lastTick += minutes * rules.minuteMs
   }

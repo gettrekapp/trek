@@ -2,8 +2,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
-import { assign, crewLabel, levelFor, release, START_CREW, titleFor, TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
-import { applyActivity, applyCommits, CAPS, forget, restore, RULES, tick, WOOD } from '../plugins/campsite/shared/economy.ts'
+import { assign, crewLabel, levelFor, release, restingCount, START_CREW, titleFor, TRAIL_NAMES } from '../plugins/campsite/shared/crew.ts'
+import { applyActivity, applyCommits, CAPS, forget, restore, RULES, tick, warmthFactor, WOOD } from '../plugins/campsite/shared/economy.ts'
 
 const T0 = 1_800_000_000_000
 const M = RULES.minuteMs
@@ -318,4 +318,57 @@ test('a span thirty days long pays at most the hourly cap, quickly', () => {
   assert.ok(Date.now() - t < 1000)
   assert.equal(camp.wood, 30 * 24 * CAPS.workPerHour + 1, "720 full hours at the cap, plus the minute that lands on the next hour")
   assert.equal(camp.worked.t1, 30 * 24 * 60)
+})
+
+test("the fire ring's tier raises the warmth factor's ceiling: ×1.5, ×1.75, ×2 at full warmth", () => {
+  assert.equal(warmthFactor(1), 1.5)
+  assert.equal(warmthFactor(1, 2), 1.75)
+  assert.equal(warmthFactor(1, 3), 2)
+  assert.equal(warmthFactor(0.5, 3), 1.5)
+  const camp = fresh()
+  camp.built.fire = 3
+  camp.warmth = 1
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
+  tick(camp, T0 + 2 * M)
+  assert.equal(camp.wood, 4)
+})
+
+test('the garden pays every whole minute, always: 2 wood an hour for the plot, 5 for the beds', () => {
+  const camp = newCamp(1, T0)
+  tick(camp, T0 + 30 * M)
+  assert.equal(camp.wood, 0, 'nothing built')
+  camp.built.garden = 1
+  const out = tick(camp, T0 + 60 * M)
+  assert.ok(Math.abs(camp.wood - 1) < 1e-9, `half an hour of the plot (${camp.wood})`)
+  assert.deepEqual(out.map((r) => [r.source, r.reason]), [['garden', 'the garden']])
+  camp.built.garden = 2
+  tick(camp, T0 + 120 * M + 30_000)
+  assert.ok(Math.abs(camp.wood - 6) < 1e-9, 'an hour of the beds; the half minute waits')
+  assert.ok(Math.abs(camp.away.wood.garden - 6) < 1e-9)
+})
+
+test('the lake: each resting member fishes 1 wood an hour (2 with the dock); members out with a session do not', () => {
+  const camp = newCamp(1, T0)
+  camp.built.lake = 1
+  assign(camp, 't1', 'p', T0)
+  assert.equal(restingCount(camp), 2)
+  tick(camp, T0 + 60 * M)
+  assert.ok(Math.abs(camp.wood - 2) < 1e-9, `two resting members for an hour (${camp.wood})`)
+  camp.built.lake = 2
+  release(camp, 't1', T0 + 60 * M)
+  tick(camp, T0 + 90 * M)
+  assert.ok(Math.abs(camp.wood - 5) < 1e-9, 'three members, half an hour, 2 an hour each')
+  assert.ok(Math.abs(camp.away.wood.fishing - 5) < 1e-9)
+  assert.ok(camp.crew.every((m) => m.xp === 0), 'fishing earns no XP')
+})
+
+test("every payment adds to the away tally under its source; a merge's marker too", () => {
+  const camp = fresh()
+  applyActivity(camp, S('t1', 'idle', 'working', 'output', T0), T0)
+  tick(camp, T0 + 2 * M)
+  applyActivity(camp, { kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' }, T0 + 2 * M)
+  applyActivity(camp, { kind: 'pr.ended', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'merged' }, T0 + 2 * M)
+  applyCommits(camp, { worktreeId: 'w', head: 'h1', count: 2 }, T0 + 2 * M)
+  assert.deepEqual(camp.away.wood, { work: 2.5, outcomes: 20 + 50 + 10, garden: 0, fishing: 0 })
+  assert.equal(camp.away.markers, 1)
 })
