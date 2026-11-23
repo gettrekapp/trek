@@ -191,10 +191,21 @@ const isMember = (m: unknown): boolean =>
   num(m.seed) &&
   isGear(m.gear) &&
   isPin(m.pin) &&
-  Array.isArray(m.journal) &&
-  m.journal.every((e) => isRecord(e) && typeof e.kind === 'string' && num(e.at))
+  Array.isArray(m.journal)
 
-/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely) */
+/** An assignment this version can read (restore drops any other; a bad one doesn't make camp.json no camp) */
+export const isAssignment = (a: unknown): a is Assignment =>
+  isRecord(a) &&
+  typeof a.crew === 'string' &&
+  typeof a.project === 'string' &&
+  (a.worktreeId === null || typeof a.worktreeId === 'string') &&
+  typeof a.provider === 'string' &&
+  typeof a.projectName === 'string' &&
+  typeof a.place === 'string' &&
+  num(a.start) &&
+  num(a.wood)
+
+/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries and assignments are checked one by one in restore, which drops the bad ones) */
 export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false

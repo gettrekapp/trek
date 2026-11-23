@@ -5,8 +5,9 @@
 // they paid. Pure: the caller passes the time.
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { addAway, type AwaySource } from './away.ts'
-import type { Camp } from './camp.ts'
+import { isAssignment, type Camp } from './camp.ts'
 import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus } from './catalog.ts'
+import { isEntry } from './journal.ts'
 import { NO_WHERE, assign, creditXp, memberOf, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
 
 export interface Rules {
@@ -121,22 +122,23 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       // An automation's run tab is always a day hiker (one stored before that rule is let go)
       if (e.automation) release(camp, e.terminalId, now)
       else {
-        noteKinds(camp, launchOf(e), now)
+        noteKinds(camp, launchOf(e), now, e.projectId)
         assign(camp, e.terminalId, e.projectId, now, launchOf(e), where)
       }
       break
     case 'session.status': {
       const id = e.terminalId
+      // The span's minutes first, while the session still has its member (its gear's bonus, XP, the trip's wood)
+      if (e.from === 'working') {
+        payMinutes(camp, id, now, rules, out)
+        delete camp.spans[id]
+      }
       // The agent stopped running: its member comes back to camp
       if (e.to === 'exited') release(camp, id, now)
       // A live session with no member (it started while the campsite was off there, or as a day
       // hiker when the crew was out) gets a free one, if any, on its next change only a running agent
       // makes; assign keeps a member it has and changes nothing when nobody is free
       else if (!e.automation && LIVE_CAUSES.has(e.cause)) assign(camp, id, e.projectId, now, launchOf(e), where)
-      if (e.from === 'working') {
-        payMinutes(camp, id, now, rules, out)
-        delete camp.spans[id]
-      }
       if (e.to === 'working') camp.spans[id] = { start: now, paid: 0, project: e.projectId }
       // Before the wait is cleared: it says how long the hiker waited
       if (e.from === 'attention' && e.cause === 'input') answer(camp, id, now, rules, out)
@@ -231,9 +233,12 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
  * After a server restart (nothing runs, statuses came back idle): open spans close at the last save,
  * paying their whole minutes; nobody is waiting; every member is back in camp from the last save. The
  * fire's clock starts at `now`: nobody waited through the down time, and quiet minutes before it were
- * not saved, so the last save can be long before it.
+ * not saved, so the last save can be long before it. Journal entries and assignments this version
+ * can't read are dropped first (camp.json is otherwise kept).
  */
 export function restore(camp: Camp, rules: Rules = RULES, now: number = camp.savedAt): void {
+  for (const m of camp.crew) m.journal = m.journal.filter(isEntry)
+  for (const [id, a] of Object.entries(camp.assignments)) if (!isAssignment(a)) delete camp.assignments[id]
   for (const id of Object.keys(camp.spans)) {
     payMinutes(camp, id, camp.savedAt, rules, [])
     delete camp.spans[id]

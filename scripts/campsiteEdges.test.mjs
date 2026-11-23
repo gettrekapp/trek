@@ -219,5 +219,5 @@ test('placeBuildings: the shed stands inside the cabins at the left end, and is 
   const bare = campLayout(sessions, 1600)
   const now = campLayout(sessions, 1600, crowded.reserve)
   assert.ok(now.moreTents <= bare.moreTents && now.grouped === bare.grouped, 'every camp the bare strip shows')
-  if (crowded.left.length < 4) assert.ok(!crowded.left.some((p) => p.key === 'shed'), 'the shed went first')
+  assert.deepEqual(crowded.left.map((p) => p.key), ['cabin2', 'cabin3'], 'the shed went first, then the outermost cabin')
 })

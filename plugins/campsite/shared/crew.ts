@@ -46,14 +46,38 @@ export interface Launch {
 }
 export const NO_LAUNCH: Launch = { worktreeId: null, provider: '', sessionType: null }
 
-/** What the server can say about where a session is (the host's lookups), for the journal */
+/**
+ * What the server can say about where a session is (the host's lookups), for the journal. Neither
+ * method throws: when the host can't say, `project` returns the id and `worktree` null. (The rules
+ * guard against one that throws anyway: a throw counts as "can't say".)
+ */
 export interface Where {
   /** The project's name (its id when the server can't say) */
   project(projectId: string): string
-  /** A worktree's repository, branch (null: detached) and folder name; null when it is gone */
+  /** A worktree's repository, branch (null: detached) and folder name; null when it is gone or the server can't say */
   worktree(projectId: string, worktreeId: string): { repoId: string; branch: string | null; name: string } | null
 }
 export const NO_WHERE: Where = { project: (id) => id, worktree: () => null }
+
+/** `where.project`, the id if it throws */
+function projectName(where: Where, projectId: string): string {
+  try {
+    return where.project(projectId)
+  } catch {
+    return projectId
+  }
+}
+/** `where.worktree`, null if it throws */
+function worktreeOf(where: Where, projectId: string, worktreeId: string): ReturnType<Where['worktree']> {
+  try {
+    return where.worktree(projectId, worktreeId)
+  } catch {
+    return null
+  }
+}
+
+/** A session type's id among the seen kinds and pins: per project (two projects' types may share an id); agents are not */
+export const typeKey = (projectId: string, typeId: string): string => `${projectId}:${typeId}`
 
 const MINUTE_MS = 60_000
 
@@ -63,8 +87,8 @@ export function memberOf(camp: Pick<Camp, 'crew' | 'assignments'>, terminalId: s
   return a && camp.crew.find((m) => m.id === a.crew)
 }
 
-/** A session started with `launch`: its type and its agent are seen now (kinds unseen for SEEN_KIND_MS are dropped) */
-export function noteKinds(camp: Pick<Camp, 'seenKinds'>, launch: Launch, now: number): void {
+/** A session started with `launch` in `projectId`: its type (keyed by the project) and its agent are seen now (kinds unseen for SEEN_KIND_MS are dropped) */
+export function noteKinds(camp: Pick<Camp, 'seenKinds'>, launch: Launch, now: number, projectId: string): void {
   const see = (kind: SeenKind['kind'], id: string, name: string): void => {
     const had = camp.seenKinds.find((k) => k.kind === kind && k.id === id)
     if (had) {
@@ -72,7 +96,7 @@ export function noteKinds(camp: Pick<Camp, 'seenKinds'>, launch: Launch, now: nu
       had.at = now
     } else camp.seenKinds.push({ kind, id, name, at: now })
   }
-  if (launch.sessionType) see('type', launch.sessionType.id, launch.sessionType.name)
+  if (launch.sessionType) see('type', typeKey(projectId, launch.sessionType.id), launch.sessionType.name)
   if (launch.provider) see('provider', launch.provider, providerName(launch.provider))
   camp.seenKinds = camp.seenKinds.filter((k) => now - k.at <= SEEN_KIND_MS)
 }
@@ -87,18 +111,18 @@ export function assign(camp: Camp, terminalId: string, projectId: string, now: n
   if (have) return have.crew
   const busy = new Set(Object.values(camp.assignments).map((a) => a.crew))
   const free = camp.crew.filter((m) => !busy.has(m.id)).sort((a, b) => a.restedAt - b.restedAt)
-  const type = launch.sessionType
+  const type = launch.sessionType && typeKey(projectId, launch.sessionType.id)
   const pick =
-    (type ? free.find((m) => m.pin?.kind === 'type' && m.pin.id === type.id) : undefined) ??
+    (type ? free.find((m) => m.pin?.kind === 'type' && m.pin.id === type) : undefined) ??
     free.find((m) => m.pin?.kind === 'provider' && m.pin.id === launch.provider) ??
     free.find((m) => m.pin === null)
   if (!pick) return null
   let place = 'Global'
   if (launch.worktreeId !== null) {
-    const worktree = where.worktree(projectId, launch.worktreeId)
+    const worktree = worktreeOf(where, projectId, launch.worktreeId)
     place = worktree ? (worktree.branch ?? worktree.name) : 'a worktree'
   }
-  camp.assignments[terminalId] = { crew: pick.id, project: projectId, worktreeId: launch.worktreeId, provider: launch.provider, projectName: where.project(projectId), place, start: now, wood: 0 }
+  camp.assignments[terminalId] = { crew: pick.id, project: projectId, worktreeId: launch.worktreeId, provider: launch.provider, projectName: projectName(where, projectId), place, start: now, wood: 0 }
   return pick.id
 }
 
@@ -134,7 +158,7 @@ export function creditXp(camp: Camp, terminalId: string, xp: number, now: number
 export function summit(camp: Camp, pr: { projectId: string; repoId: string; branch: string }, now: number, where: Where): void {
   for (const a of Object.values(camp.assignments)) {
     if (a.project !== pr.projectId || a.worktreeId === null) continue
-    const worktree = where.worktree(a.project, a.worktreeId)
+    const worktree = worktreeOf(where, a.project, a.worktreeId)
     if (!worktree || worktree.repoId !== pr.repoId || worktree.branch !== pr.branch) continue
     const member = camp.crew.find((m) => m.id === a.crew)
     if (member) note(member, { kind: 'summit', at: now, branch: pr.branch, project: a.projectName })
@@ -160,8 +184,10 @@ export function liveKinds(camp: Pick<Camp, 'seenKinds'>, now: number): Omit<Seen
 }
 
 /**
- * Pins `{ crewId, pin }`: to a session type or an agent the camp saw start a session in the last 30
- * days, or null (any session). The same pin again changes nothing; a change goes in the journal.
+ * Pins `{ crewId, pin }`: to a session type (its typeKey) or an agent the camp saw start a session in
+ * the last 30 days, or null (any session). The same pin again changes nothing; a change goes in the
+ * journal. A pin only steers the next pick: a member already out on a session that doesn't match
+ * finishes its current trip there.
  */
 export function pinMember(camp: Camp, params: Record<string, unknown>, now: number): ShopRefusal | null {
   const { crewId, pin } = params

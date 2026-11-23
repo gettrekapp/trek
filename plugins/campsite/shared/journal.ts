@@ -1,6 +1,6 @@
 // A crew member's trail journal (campsite part 3b): what it did, as data (the words are made where
 // it is shown, so they can change). Newest last, at most JOURNAL_MAX. Pure.
-import type { GearSlot } from './catalog.ts'
+import { GEAR_TOP, isGearSlot, isRecord, type GearSlot } from './catalog.ts'
 
 export type JournalEntry =
   /** Joined the camp */
@@ -25,4 +25,29 @@ export const providerName = (id: string): string => (Object.hasOwn(PROVIDER_NAME
 export function note(member: { journal: JournalEntry[] }, entry: JournalEntry): void {
   member.journal.push(entry)
   if (member.journal.length > JOURNAL_MAX) member.journal.splice(0, member.journal.length - JOURNAL_MAX)
+}
+
+const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+const str = (x: unknown): x is string => typeof x === 'string'
+
+/** Whether camp.json held a journal entry this version can read: a known kind with its fields */
+export function isEntry(x: unknown): x is JournalEntry {
+  if (!isRecord(x) || !num(x.at)) return false
+  switch (x.kind) {
+    case 'hired':
+      return true
+    case 'trip':
+      return num(x.minutes) && str(x.project) && str(x.place) && str(x.provider) && num(x.wood)
+    case 'summit':
+      return str(x.branch) && str(x.project)
+    case 'level':
+      return num(x.level) && str(x.title)
+    case 'gear':
+      return isGearSlot(x.slot) && Number.isInteger(x.tier) && (x.tier as number) >= 1 && (x.tier as number) <= GEAR_TOP
+    case 'pinned':
+    case 'unpinned':
+      return str(x.name)
+    default:
+      return false
+  }
 }

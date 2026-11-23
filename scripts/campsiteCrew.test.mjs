@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { GEAR, GEAR_BONUS, GEAR_COST, GEAR_NEEDS, GEAR_SLOTS, SEEN_KIND_MS, gearBonus, gearGate, gearItem, isGearSlot, noGear } from '../plugins/campsite/shared/catalog.ts'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { assign, creditXp, liveKinds, noteKinds, pinMember, release } from '../plugins/campsite/shared/crew.ts'
-import { applyActivity, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
+import { applyActivity, restore, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
 import { buyGear } from '../plugins/campsite/shared/shop.ts'
 import { JOURNAL_MAX, note, providerName } from '../plugins/campsite/shared/journal.ts'
 
@@ -55,7 +55,7 @@ test('camp v3: members start with no gear, no pin and a journal that says they j
   }
   assert.ok(isCamp(JSON.parse(JSON.stringify(camp))))
   const member = camp.crew[0]
-  const badMembers = [{ gear: { ...member.gear, hat: 4 } }, { gear: { ...member.gear, hat: 1.5 } }, { gear: { pack: 0 } }, { pin: 'claude' }, { pin: { kind: 'agent', id: 'x' } }, { journal: null }, { journal: [{ kind: 'hired' }] }]
+  const badMembers = [{ gear: { ...member.gear, hat: 4 } }, { gear: { ...member.gear, hat: 1.5 } }, { gear: { pack: 0 } }, { pin: 'claude' }, { pin: { kind: 'agent', id: 'x' } }, { journal: null }]
   for (const b of badMembers) assert.equal(isCamp({ ...camp, crew: [{ ...member, ...b }] }), false, JSON.stringify(b))
   assert.equal(isCamp({ ...camp, crew: [{ ...member, pin: { kind: 'provider', id: 'codex' } }] }), true)
   for (const k of [null, [{ kind: 'type', id: 'r', name: 'Review' }], [{ kind: 'x', id: 'r', name: 'R', at: 1 }]]) assert.equal(isCamp({ ...camp, seenKinds: k }), false, JSON.stringify(k))
@@ -129,17 +129,17 @@ const where = {
 
 test('noteKinds: a session type and an agent seen now (named, the name kept current); kinds unseen for 30 days dropped', () => {
   const camp = newCamp(1, T0)
-  noteKinds(camp, launch('claude', REVIEW), T0)
-  noteKinds(camp, launch('codex'), T0 + 1)
-  noteKinds(camp, launch('claude', { id: 'rev', name: 'Code review' }), T0 + 2)
+  noteKinds(camp, launch('claude', REVIEW), T0, 'p')
+  noteKinds(camp, launch('codex'), T0 + 1, 'p')
+  noteKinds(camp, launch('claude', { id: 'rev', name: 'Code review' }), T0 + 2, 'p')
   assert.deepEqual(camp.seenKinds, [
-    { kind: 'type', id: 'rev', name: 'Code review', at: T0 + 2 },
+    { kind: 'type', id: 'p:rev', name: 'Code review', at: T0 + 2 },
     { kind: 'provider', id: 'claude', name: 'Claude', at: T0 + 2 },
     { kind: 'provider', id: 'codex', name: 'Codex', at: T0 + 1 }
   ])
-  noteKinds(camp, launch('gemini'), T0 + 3 + SEEN_KIND_MS)
+  noteKinds(camp, launch('gemini'), T0 + 3 + SEEN_KIND_MS, 'p')
   assert.deepEqual(camp.seenKinds.map((k) => k.id), ['gemini'])
-  noteKinds(camp, launch(''), T0)
+  noteKinds(camp, launch(''), T0, 'p')
   assert.equal(camp.seenKinds.length, 1, 'an unknown agent is not a kind')
   assert.deepEqual(['claude', 'codex', 'gemini', 'grok', 'local-llm'].map(providerName), ['Claude', 'Codex', 'Gemini', 'Grok', 'Local-llm'])
 })
@@ -148,7 +148,7 @@ test('assign with pins: a member pinned to the type first, then one pinned to th
   const camp = newCamp(1, T0)
   const [a, b, c] = camp.crew
   b.pin = { kind: 'provider', id: 'codex' }
-  c.pin = { kind: 'type', id: 'rev' }
+  c.pin = { kind: 'type', id: 'p:rev' }
   assert.equal(assign(camp, 't1', 'p', T0, launch('codex', REVIEW)), c.id, 'the type beats the agent')
   assert.equal(assign(camp, 't2', 'p', T0, launch('codex', REVIEW)), b.id, 'then the agent')
   assert.equal(assign(camp, 't3', 'p', T0, launch('codex', REVIEW)), a.id, 'then an unpinned one')
@@ -197,11 +197,11 @@ const ev = (kind, terminalId, over = {}) => ({ kind, projectId: 'p', at: T0, ter
 
 test('applyActivity: a start notes its kinds and assigns by pin; a live status assigns lazily by pin too; an automation notes nothing', () => {
   const camp = newCamp(1, T0)
-  camp.crew[0].pin = { kind: 'type', id: 'rev' }
+  camp.crew[0].pin = { kind: 'type', id: 'p:rev' }
   applyActivity(camp, ev('session.started', 't1', { sessionType: REVIEW }), T0, undefined, where)
   assert.equal(camp.assignments.t1.crew, camp.crew[0].id)
   assert.equal(camp.assignments.t1.projectName, 'trek')
-  assert.deepEqual(camp.seenKinds.map((k) => k.id), ['rev', 'claude'])
+  assert.deepEqual(camp.seenKinds.map((k) => k.id), ['p:rev', 'claude'])
   applyActivity(camp, ev('session.started', 'run', { automation: true, provider: 'grok', worktreeId: null }), T0)
   assert.equal(camp.seenKinds.some((k) => k.id === 'grok'), false)
   camp.crew[1].pin = { kind: 'provider', id: 'codex' }
@@ -308,11 +308,11 @@ test('buyGear: refusals — malformed, nobody, out of order, the shed, the level
 
 test('pinMember: to a kind seen in the last 30 days, or null; the journal notes it; the same pin again is nothing', () => {
   const camp = newCamp(1, T0)
-  noteKinds(camp, launch('codex', REVIEW), T0)
+  noteKinds(camp, launch('codex', REVIEW), T0, 'p')
   const m = camp.crew[0]
-  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'rev' } }, T0 + 1), null)
-  assert.deepEqual(m.pin, { kind: 'type', id: 'rev' })
-  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'rev' } }, T0 + 2), null)
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'p:rev' } }, T0 + 1), null)
+  assert.deepEqual(m.pin, { kind: 'type', id: 'p:rev' })
+  assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'type', id: 'p:rev' } }, T0 + 2), null)
   assert.equal(pinMember(camp, { crewId: m.id, pin: { kind: 'provider', id: 'codex' } }, T0 + 3), null)
   assert.equal(pinMember(camp, { crewId: m.id, pin: null }, T0 + 4), null)
   assert.equal(m.pin, null)
@@ -325,7 +325,7 @@ test('pinMember: to a kind seen in the last 30 days, or null; the journal notes 
 
 test('pinMember: refusals — malformed, nobody, a kind not seen (or seen too long ago)', () => {
   const camp = newCamp(1, T0)
-  noteKinds(camp, launch('codex'), T0)
+  noteKinds(camp, launch('codex'), T0, 'p')
   const bad = { code: 'BAD_REQUEST', message: 'A pin needs { crewId, pin: { kind, id } or null }' }
   assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: 'codex' }, T0), bad)
   assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'agent', id: 'codex' } }, T0), bad)
@@ -335,4 +335,54 @@ test('pinMember: refusals — malformed, nobody, a kind not seen (or seen too lo
   assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'provider', id: 'claude' } }, T0), unseen)
   assert.deepEqual(pinMember(camp, { crewId: 'c1', pin: { kind: 'provider', id: 'codex' } }, T0 + SEEN_KIND_MS + 1), unseen)
   assert.equal(camp.crew[0].pin, null)
+})
+
+test('the bonus: a geared member\'s last minutes, paid as its agent exits, carry the bonus into its XP, its trip\'s wood and the journal', () => {
+  const camp = newCamp(1, T0)
+  camp.crew[0].gear = { pack: 3, boots: 3, hat: 3, tool: 3 }
+  applyActivity(camp, ev('session.started', 't1'), T0)
+  applyActivity(camp, ev('session.status', 't1', { from: 'idle', to: 'working', cause: 'output' }), T0)
+  const paid = applyActivity(camp, ev('session.status', 't1', { from: 'working', to: 'exited', cause: 'other' }), T0 + 3 * M)
+  const wood = 3 * warmthFactor(0.5, 1) * 1.24
+  assert.equal(paid.length, 3)
+  assert.ok(Math.abs(camp.wood - wood) < 1e-9, `${camp.wood}`)
+  assert.ok(Math.abs(camp.crew[0].xp - wood) < 1e-9, 'XP with the bonus')
+  assert.equal(Object.hasOwn(camp.assignments, 't1'), false, 'released after the pay')
+  assert.deepEqual(camp.crew[0].journal.at(-1), { kind: 'trip', at: T0 + 3 * M, minutes: 3, project: 'p', place: 'a worktree', provider: 'claude', wood: Math.floor(wood) })
+  assert.equal(Object.hasOwn(camp.spans, 't1'), false)
+})
+
+test('seen kinds: a session type is per project (two projects\' "rev" are two kinds); agents are seen across projects', () => {
+  const camp = newCamp(1, T0)
+  noteKinds(camp, launch('claude', REVIEW), T0, 'p')
+  noteKinds(camp, launch('claude', { id: 'rev', name: 'Docs review' }), T0, 'q')
+  assert.deepEqual(camp.seenKinds.map((k) => [k.kind, k.id, k.name]), [['type', 'p:rev', 'Review'], ['provider', 'claude', 'Claude'], ['type', 'q:rev', 'Docs review']])
+  camp.crew[0].pin = { kind: 'type', id: 'q:rev' }
+  assert.equal(assign(camp, 't1', 'p', T0, launch('claude', REVIEW)), camp.crew[1].id, "p's rev is not q's")
+  assert.equal(assign(camp, 't2', 'q', T0, launch('claude', REVIEW)), camp.crew[0].id)
+})
+
+test('a Where that throws names nothing: the id for the project, no worktree; summits skip what it cannot place', () => {
+  const camp = newCamp(1, T0)
+  const throwing = { project: () => { throw new Error('gone') }, worktree: () => { throw new Error('gone') } }
+  assert.equal(assign(camp, 't1', 'p', T0, launch('claude'), throwing), camp.crew[0].id)
+  assert.deepEqual([camp.assignments.t1.projectName, camp.assignments.t1.place], ['p', 'a worktree'])
+  const merged = { kind: 'pr.ended', projectId: 'p', at: T0, repoId: 'r1', branch: 'feature/x', url: 'https://example.test/pr/1', result: 'merged' }
+  assert.equal(applyActivity(camp, merged, T0 + 1, undefined, throwing).length, 1, 'still paid')
+  assert.equal(camp.crew[0].journal.some((e) => e.kind === 'summit'), false)
+})
+
+test('restore drops journal entries and assignments it cannot read, and keeps the camp', () => {
+  const camp = newCamp(1, T0)
+  const m = camp.crew[0]
+  const good = [{ kind: 'hired', at: 1 }, { kind: 'trip', at: 2, minutes: 3, project: 'trek', place: 'main', provider: 'claude', wood: 4 }, { kind: 'summit', at: 3, branch: 'b', project: 'trek' }, { kind: 'level', at: 4, level: 2, title: 'Trailblazer' }, { kind: 'gear', at: 5, slot: 'hat', tier: 2 }, { kind: 'pinned', at: 6, name: 'Codex' }, { kind: 'unpinned', at: 7, name: 'Codex' }]
+  const bad = [{ kind: 'hired' }, { kind: 'trip', at: 2, minutes: 3 }, { kind: 'summit', at: 3, branch: 1, project: 'x' }, { kind: 'level', at: 4, level: '2', title: 'x' }, { kind: 'gear', at: 5, slot: 'cape', tier: 1 }, { kind: 'gear', at: 5, slot: 'hat', tier: 4 }, { kind: 'pinned', at: 6 }, { kind: 'party', at: 8 }, null]
+  m.journal = [...good.slice(0, 3), ...bad, ...good.slice(3)]
+  camp.assignments = { t1: { crew: m.id, project: 'p', worktreeId: null, provider: 'claude', projectName: 'p', place: 'Global', start: 'x', wood: 0 } }
+  const raw = JSON.parse(JSON.stringify(camp))
+  assert.ok(isCamp(raw), 'a bad entry or assignment does not make it no camp')
+  for (const a of [null, { crew: 'c1' }]) assert.equal(isCamp({ ...raw, assignments: { t1: a } }), true)
+  restore(raw, undefined, T0)
+  assert.deepEqual(raw.crew[0].journal, good)
+  assert.deepEqual(raw.assignments, {})
 })
