@@ -75,13 +75,17 @@ clock: dawn 05–08, day 08–17, dusk 17–20 and night 20–05, each blending 
 last 30 minutes. Day is a muted blue-grey with a pale sun and dark string lights; night is darker,
 with more stars and a wider glow from the fire. The seasons follow the month (northern, or southern:
 six months on): winter frosts the pines, whitens the ground's edge, caps the ridge and the peak with
-snow and lets a few flakes fall; spring puts small flowers on the ground (between the camps and the
-buildings, never under a button); summer brings fireflies at dusk and night; autumn rusts some pines
-and drops leaves. The weather is the window's project's: rain while any of its trails' pull requests
-has failing checks (for at most 24 hours after their last result; snow in winter), fog once it has
-been quiet for 12 hours (no activity event and no working minute), else clear; the header shows 🌧️,
-❄️ or 🌫️ after the counts, its title saying why ("Rain: checks failing on feature/x", "Fog: quiet
-for 14 h"). Under reduced motion nothing falls or drifts: a few still streaks, flakes, leaves or
+snow and lets a few flakes fall; spring puts small flowers on the ground (clear of the tents, the
+log, the hikers, the fire and the buildings; the dog's button can pass over one); summer brings
+fireflies at dusk and night; autumn rusts some pines and drops leaves. The weather is the window's
+project's: rain while any of its trails' *watched* pull requests has failing checks (for at most 24
+hours after their last result, so unlinking the pull request or turning its watch off leaves the
+rain up for the rest of those 24 hours; snow in winter), fog once it has been quiet for 12 hours
+(no activity event and no working minute; right after upgrading, a project has no last activity
+and shows no fog until its next event), else clear. The header shows 🌧️, ❄️ or 🌫️ after the
+counts when there is room for it (a narrow strip drops it before the counts would reach the peak),
+its title saying why ("Rain: checks failing on feature/x", "Fog: quiet for 14 h"); the counts
+button's title and label always say it too ("… · Rain: checks failing on feature/x"). Under reduced motion nothing falls or drifts: a few still streaks, flakes, leaves or
 fireflies, and still fog. Settings → Plugins → Campsite has **Sky** (Follow the clock, or Always
 dusk: the strip's look before 3d) and **Seasons** (Northern, Southern, Off). Dusk with the seasons
 off and clear weather is exactly the strip before 3d-1.
@@ -116,7 +120,7 @@ off and clear weather is exactly the strip before 3d-1.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared; a member's journal on request), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), a session's hiker look in its member's gear (`useHikerLook`: it listens for the session's kit alone, so a push that only moves the wood doesn't render the hikers again), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` pins its clock and `?weather=rain|fog` forces the weather; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has nine methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which
