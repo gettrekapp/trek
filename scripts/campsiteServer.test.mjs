@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openCampStore } from '../plugins/campsite/server/store.ts'
 import { createCampServer, seedWoodFromEnv } from '../plugins/campsite/server/camp.ts'
-import { newCamp } from '../plugins/campsite/shared/camp.ts'
+import { newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 
 const T0 = 1_800_000_000_000
 const tempDir = (t) => {
@@ -362,7 +362,7 @@ test('a commit count that fails after dispose logs nothing', async (t) => {
   assert.deepEqual(h.warnings, [])
 })
 
-test('a version 1 camp.json is migrated on load: its wood kept, the new fields at their defaults, seen at its last save', (t) => {
+test('a version 1 camp.json is migrated on load: its wood kept, the new fields at their defaults, seen at load (its last save, moved on by the downtime)', (t) => {
   const file = join(tempDir(t), 'camp.json')
   const { built, away, seenAt, hired, ...v1 } = newCamp(7, T0)
   writeFileSync(file, JSON.stringify({ ...v1, version: 1, wood: 42, savedAt: T0 + 9 }))
@@ -372,11 +372,29 @@ test('a version 1 camp.json is migrated on load: its wood kept, the new fields a
   assert.equal(store.camp.version, 2)
   assert.equal(store.camp.wood, 42)
   assert.equal(store.camp.seed, 7)
-  assert.equal(store.camp.seenAt, T0 + 9)
+  // Seen at its last save, then shifted by the downtime: seen now
+  assert.equal(store.camp.seenAt, T0 + 60_000)
   assert.deepEqual(store.camp.built, { lights: 0, fire: 1, garden: 0, lake: 0, cabins: 0 })
   assert.equal(existsSync(`${file}.bak`), false)
   store.flush()
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 2)
+})
+
+test('a restart after 9 hours down: the unpaid minute is paid, but the seen clocks move by the downtime, so no away card', (t) => {
+  const file = join(tempDir(t), 'camp.json')
+  const HOUR = 3_600_000
+  const { built, away, seenAt, hired, ...v1 } = newCamp(7, T0)
+  const crewId = v1.crew[0].id
+  // A span open at the save: 150 s worked, 1 minute paid; restore pays the second, unpaid minute up to the save
+  const camp = { ...v1, version: 1, wood: 42, savedAt: T0, assignments: { t1: { crew: crewId, project: 'p' } }, spans: { t1: { start: T0 - 150_000, paid: 1, project: 'p' } } }
+  writeFileSync(file, JSON.stringify(camp))
+  const store = openCampStore(file, { now: () => T0 + 9 * HOUR, seed: () => 9, warn: () => {}, schedule: manual().schedule })
+  assert.ok(store.camp.wood > 42, 'the unpaid minute is paid')
+  assert.ok(store.camp.away.wood.work > 0, 'into the tally')
+  assert.equal(store.camp.seenAt, T0 + 9 * HOUR)
+  assert.equal(store.camp.away.since, T0 + 9 * HOUR)
+  assert.equal(snapshot(store.camp, T0 + 9 * HOUR).away, undefined)
+  assert.equal(snapshot(store.camp, T0 + 9 * HOUR + HOUR).away, undefined)
 })
 
 test('start: a fresh camp (no camp.json) begins with the given wood and markers; a loaded one keeps its own', (t) => {

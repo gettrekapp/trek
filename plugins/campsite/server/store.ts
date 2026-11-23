@@ -50,7 +50,13 @@ function load(file: string, o: CampStoreOptions): { camp: Camp; writable: boolea
       return { camp: newCamp(o.seed(), o.now()), writable: false }
     }
     if (!isCamp(raw)) throw new Error('not a camp')
-    restore(raw, o.rules ?? RULES, o.now())
+    const now = o.now()
+    restore(raw, o.rules ?? RULES, now)
+    // The server was down, not the user away: the seen clocks move on by the downtime, so the
+    // minutes restore just paid (and a restart or the upgrade) don't make the away card due
+    const down = Math.max(0, now - raw.savedAt)
+    raw.seenAt += down
+    raw.away.since += down
     return { camp: raw, writable: true }
   } catch (err) {
     try {
