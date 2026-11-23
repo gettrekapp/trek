@@ -33,6 +33,8 @@ export interface Trail {
   stageAt: number
   /** Its pull request's last checks (part 3d-1: failing, it rains on the camp); null: none yet, or a new PR, or merged or closed */
   checks: TrailChecks
+  /** When `checks` was last set by a result (ms); null with `checks` (the weather's rain lasts CHECKS_RAIN_MS from it) */
+  checksAt: number | null
 }
 export type TrailChecks = 'passed' | 'failed' | null
 export type TrailResult = 'summited' | 'turned-back'
@@ -57,11 +59,14 @@ export const isTrail = (x: unknown): x is Trail =>
 /** A history entry this version can read */
 export const isTrailRecord = (x: unknown): x is TrailRecord => isRecord(x) && str(x.branch) && (x.result === 'summited' || x.result === 'turned-back') && num(x.start) && num(x.end)
 
-/** Drops what camp.json held that this version can't read: trails (or ones under another key), histories that aren't lists, history entries, summited branches that aren't names; past TRAIL_LOG_MAX, the oldest. A trail's checks it can't read become null (the trail stays) */
+/** Drops what camp.json held that this version can't read: trails (or ones under another key), histories that aren't lists, history entries, summited branches that aren't names; past TRAIL_LOG_MAX, the oldest. A trail's checks it can't read (or without a time it can read) become null, with their time (the trail stays) */
 export function dropBadTrails(camp: { trails: Record<string, unknown>; trailLog: Record<string, unknown>; trailsDone: Record<string, unknown> }): void {
   for (const [key, t] of Object.entries(camp.trails)) {
     if (!isTrail(t) || key !== trailKey(t.projectId, t.worktreeId)) delete camp.trails[key]
-    else if (t.checks !== 'passed' && t.checks !== 'failed') t.checks = null
+    else if ((t.checks !== 'passed' && t.checks !== 'failed') || !num(t.checksAt)) {
+      t.checks = null
+      t.checksAt = null
+    }
   }
   for (const [key, branch] of Object.entries(camp.trailsDone)) if (!str(branch)) delete camp.trailsDone[key]
   for (const [projectId, log] of Object.entries(camp.trailLog)) {
@@ -77,7 +82,7 @@ function open(camp: Trails, projectId: string, worktreeId: string, repoId: strin
   const key = trailKey(projectId, worktreeId)
   if (Object.hasOwn(camp.trails, key) || (Object.hasOwn(camp.trailsDone, key) && camp.trailsDone[key] === branch)) return
   delete camp.trailsDone[key]
-  camp.trails[key] = { projectId, worktreeId, repoId, branch, stage: 0, start: now, stageAt: now, checks: null }
+  camp.trails[key] = { projectId, worktreeId, repoId, branch, stage: 0, start: now, stageAt: now, checks: null, checksAt: null }
 }
 
 /** A trail ends: into its project's history (summited if it reached the summit, else turned back), the newest TRAIL_LOG_MAX kept; a summited one's worktree starts no trail on that branch again */
@@ -109,7 +114,7 @@ export function trailsOn(camp: Pick<Camp, 'trails'>, pr: { projectId: string; re
  * events set every trail on its branch: linked the ridge, checks passed the false summit (failed: back
  * from it to the ridge), merged the summit, closed back to the switchbacks. A PR event lifts a trail
  * straight to its stage; only checks failing and a close move one down. The checks' result is kept
- * on the trail (part 3d-1: the weather) until a new pull request is linked or it is merged or closed.
+ * on the trail with its time (part 3d-1: the weather) until a new pull request is linked or it is merged or closed.
  */
 export function trailEvent(camp: Trails, e: ActivityEvent, now: number): void {
   switch (e.kind) {
@@ -138,12 +143,14 @@ export function trailEvent(camp: Trails, e: ActivityEvent, now: number): void {
     case 'pr.linked':
       for (const t of trailsOn(camp, e)) {
         t.checks = null
+        t.checksAt = null
         if (t.stage < 2) setStage(t, 2, now)
       }
       break
     case 'pr.checks':
       for (const t of trailsOn(camp, e)) {
         t.checks = e.result
+        t.checksAt = now
         if (e.result === 'passed' && t.stage < 3) setStage(t, 3, now)
         else if (e.result === 'failed' && t.stage === 3) setStage(t, 2, now)
       }
@@ -151,6 +158,7 @@ export function trailEvent(camp: Trails, e: ActivityEvent, now: number): void {
     case 'pr.ended':
       for (const t of trailsOn(camp, e)) {
         t.checks = null
+        t.checksAt = null
         if (e.result === 'merged') setStage(t, SUMMIT, now)
         else if (t.stage < SUMMIT) setStage(t, 1, now)
       }

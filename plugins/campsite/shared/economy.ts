@@ -6,7 +6,7 @@
 import type { ActivityEvent } from '../../../src/shared/plugins/activity.ts'
 import { addAway, type AwaySource } from './away.ts'
 import { isAssignment, type Camp } from './camp.ts'
-import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus } from './catalog.ts'
+import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus, isRecord } from './catalog.ts'
 import { isEntry } from './journal.ts'
 import { NO_WHERE, assign, creditXp, memberOf, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
 import { dropBadTrails, trailEvent } from './trails.ts'
@@ -112,6 +112,12 @@ function answer(camp: Camp, terminalId: string, now: number, rules: Rules, out: 
   if (pay(camp, { key, wood, markers: 0, source: 'outcomes', terminalId, reason: 'answered a waiting hiker' }, out, now)) camp.warmth = Math.min(1, camp.warmth + 0.1)
 }
 
+/** A project's last activity moves only by a minute or more, so an event that changes nothing else leaves the snapshot as it was (publish skips it) */
+export const ACTIVE_STEP_MS = 60_000
+function stampActive(camp: Camp, projectId: string, now: number): void {
+  if (!Object.hasOwn(camp.lastActive, projectId) || Math.abs(now - camp.lastActive[projectId]) >= ACTIVE_STEP_MS) camp.lastActive[projectId] = now
+}
+
 /** A session event's launch: where it runs, its agent and type (an event from before part 3b has neither) */
 const launchOf = (e: { worktreeId: string | null; provider?: string; sessionType?: Launch['sessionType'] }): Launch => ({ worktreeId: e.worktreeId, provider: e.provider ?? '', sessionType: e.sessionType ?? null })
 
@@ -119,7 +125,7 @@ const launchOf = (e: { worktreeId: string | null; provider?: string; sessionType
 export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: Rules = RULES, where: Where = NO_WHERE): Reward[] {
   const out: Reward[] = []
   trailEvent(camp, e, now)
-  camp.lastActive[e.projectId] = now
+  stampActive(camp, e.projectId, now)
   switch (e.kind) {
     case 'session.started':
       // An automation's run tab is always a day hiker (one stored before that rule is let go)
@@ -225,7 +231,7 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
   const out: Reward[] = []
   for (const [id, span] of Object.entries(camp.spans)) {
     payMinutes(camp, id, now, rules, out)
-    camp.lastActive[span.project] = now
+    stampActive(camp, span.project, now)
   }
   const minutes = Math.floor((now - camp.lastTick) / rules.minuteMs)
   if (minutes > 0) {
@@ -248,6 +254,7 @@ export function tick(camp: Camp, now: number, rules: Rules = RULES): Reward[] {
 export function restore(camp: Camp, rules: Rules = RULES, now: number = camp.savedAt): void {
   for (const m of camp.crew) m.journal = m.journal.filter(isEntry)
   dropBadTrails(camp)
+  if (!isRecord(camp.lastActive)) camp.lastActive = {}
   for (const [projectId, at] of Object.entries(camp.lastActive)) if (typeof at !== 'number' || !Number.isFinite(at)) delete camp.lastActive[projectId]
   for (const [id, a] of Object.entries(camp.assignments)) if (!isAssignment(a)) delete camp.assignments[id]
   for (const id of Object.keys(camp.spans)) {

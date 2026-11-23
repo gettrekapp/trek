@@ -6,9 +6,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { weatherBadge } from '../plugins/campsite/shared/campView.ts'
-import { applyActivity, restore, tick } from '../plugins/campsite/shared/economy.ts'
+import { ACTIVE_STEP_MS, applyActivity, restore, tick } from '../plugins/campsite/shared/economy.ts'
 import { trailEvent } from '../plugins/campsite/shared/trails.ts'
-import { BLEND_MIN, DUSK, DUSK_WORLD, PALETTES, QUIET_MS, capsAbove, mix, paletteAt, phaseAt, seasonAt, weatherOf, worldAt, worldKey, worldPalette } from '../plugins/campsite/shared/world.ts'
+import { BLEND_MIN, CHECKS_RAIN_MS, DUSK, DUSK_WORLD, PALETTES, QUIET_MS, capsAbove, mix, paletteAt, phaseAt, seasonAt, weatherOf, worldAt, worldKey, worldPalette } from '../plugins/campsite/shared/world.ts'
 
 const H = 3_600_000
 /** A local time on 2026-11-23 */
@@ -109,13 +109,32 @@ test('season tints: winter frosts the pines, whitens the ground edge and brings 
 })
 
 const T = 1_800_000_000_000
-const tr = (o = {}) => ({ projectId: 'p', branch: 'feature/x', checks: null, ...o })
+const tr = (o = {}) => ({ projectId: 'p', branch: 'feature/x', checks: null, checksAt: null, ...o })
 
 test("weatherOf: rain while a project's trail has failing checks (snow in winter), with its branch; another project's or passing checks don't count", () => {
-  assert.deepEqual(weatherOf([tr({ checks: 'passed' }), tr({ branch: 'feature/y', checks: 'failed' })], { p: T }, 'p', T, null), { kind: 'rain', branch: 'feature/y' })
-  assert.deepEqual(weatherOf([tr({ checks: 'failed' })], { p: T }, 'p', T, 'winter'), { kind: 'snow', branch: 'feature/x' })
-  assert.deepEqual(weatherOf([tr({ projectId: 'q', checks: 'failed' })], { p: T }, 'p', T, null), { kind: 'clear' })
-  assert.deepEqual(weatherOf([tr({ checks: 'failed' })], { p: T - 20 * H }, 'p', T, null).kind, 'rain', 'rain before fog')
+  const failed = { checks: 'failed', checksAt: T }
+  assert.deepEqual(weatherOf([tr({ checks: 'passed', checksAt: T }), tr({ branch: 'feature/y', ...failed })], { p: T }, 'p', T, null), { kind: 'rain', branch: 'feature/y' })
+  assert.deepEqual(weatherOf([tr(failed)], { p: T }, 'p', T, 'winter'), { kind: 'snow', branch: 'feature/x' })
+  assert.deepEqual(weatherOf([tr({ projectId: 'q', ...failed })], { p: T }, 'p', T, null), { kind: 'clear' })
+  assert.deepEqual(weatherOf([tr(failed)], { p: T - 20 * H }, 'p', T, null).kind, 'rain', 'rain before fog')
+})
+
+test('weatherOf: failing checks rain for CHECKS_RAIN_MS (24 h) after their last result, then clear (or fog); a new failing result starts the 24 h again', () => {
+  assert.equal(CHECKS_RAIN_MS, 24 * H)
+  const at = T - 24 * H
+  assert.equal(weatherOf([tr({ checks: 'failed', checksAt: at })], { p: T }, 'p', at + 24 * H - 60_000, null).kind, 'rain', 'at 23 h 59 m')
+  assert.deepEqual(weatherOf([tr({ checks: 'failed', checksAt: at })], { p: T }, 'p', at + 24 * H, null), { kind: 'clear' }, 'at 24 h')
+  assert.deepEqual(weatherOf([tr({ checks: 'failed', checksAt: at })], { p: at }, 'p', at + 24 * H, null), { kind: 'fog', hours: 24 }, 'quiet too: fog')
+  assert.equal(weatherOf([tr({ checks: 'failed', checksAt: null })], { p: T }, 'p', T, null).kind, 'clear', 'no time: no rain')
+  const camp = newCamp(1, at)
+  trailEvent(camp, { kind: 'worktree.created', projectId: 'p', at, repoId: 'r', worktreeId: 'a', branch: 'feature/a' }, at)
+  trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 's' }), at)
+  assert.equal(camp.trails['p:a'].checksAt, at)
+  trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 't' }), at + 20 * H)
+  assert.equal(camp.trails['p:a'].checksAt, at + 20 * H, 'a new result')
+  const trails = Object.values(camp.trails)
+  assert.equal(weatherOf(trails, { p: at + 30 * H }, 'p', at + 30 * H, null).kind, 'rain', 'restarted: still raining at 30 h')
+  assert.equal(weatherOf(trails, { p: at + 44 * H }, 'p', at + 44 * H, null).kind, 'clear', '24 h after the new result')
 })
 
 test('weatherOf: fog from 12 quiet hours (whole hours as the reason); clear before; a project with no last activity is active now', () => {
@@ -170,20 +189,32 @@ test('migrateCamp: version 4 gains no checks on each trail and no last activity'
   const out = migrateCamp(raw)
   assert.ok(isCamp(out))
   assert.equal(out.version, 5)
-  assert.deepEqual(out.trails['p:w'], { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: null })
+  assert.deepEqual(out.trails['p:w'], { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: null, checksAt: null })
   assert.deepEqual(out.lastActive, {})
   assert.equal(migrateCamp({ version: 4, trails: 'x' }).trails, 'x', 'a malformed one is left for isCamp to refuse')
 })
 
 test('restore: checks it cannot read become null (the trail stays); last activity that is not a time is dropped', () => {
   const camp = newCamp(1, T)
-  camp.trails = { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T, stageAt: T, checks: 'maybe' }, 'p:v': { projectId: 'p', worktreeId: 'v', repoId: 'r', branch: 'c', stage: 2, start: T, stageAt: T, checks: 'failed' } }
+  const trail = (worktreeId, o) => ({ projectId: 'p', worktreeId, repoId: 'r', branch: worktreeId, stage: 2, start: T, stageAt: T, ...o })
+  camp.trails = { 'p:w': trail('w', { checks: 'maybe', checksAt: T }), 'p:v': trail('v', { checks: 'failed', checksAt: T }), 'p:u': trail('u', { checks: 'failed' }), 'p:t': trail('t', { checks: 'failed', checksAt: 'x' }) }
   camp.lastActive = { p: T, q: 'yesterday', r: null, s: T - 5 }
   const raw = JSON.parse(JSON.stringify(camp))
   assert.ok(isCamp(raw))
   restore(raw)
-  assert.deepEqual([raw.trails['p:w'].checks, raw.trails['p:v'].checks], [null, 'failed'])
+  assert.deepEqual(['w', 'v', 'u', 't'].map((k) => [raw.trails[`p:${k}`].checks, raw.trails[`p:${k}`].checksAt]), [[null, null], ['failed', T], [null, null], [null, null]], 'no readable time: no checks')
   assert.deepEqual(raw.lastActive, { p: T, s: T - 5 })
+})
+
+test('restore: a missing or unreadable last activity is no reason to lose the camp: it becomes empty', () => {
+  for (const bad of [undefined, null, [], 'x', 5]) {
+    const raw = JSON.parse(JSON.stringify(newCamp(1, T)))
+    if (bad === undefined) delete raw.lastActive
+    else raw.lastActive = bad
+    assert.ok(isCamp(raw), JSON.stringify(bad))
+    restore(raw)
+    assert.deepEqual(raw.lastActive, {})
+  }
 })
 
 const pr = (kind, o = {}) => ({ kind, projectId: 'p', at: T, repoId: 'r', branch: 'feature/a', url: 'u', ...o })
@@ -194,18 +225,18 @@ test("trailEvent: a pull request's checks are kept on its trails; a new pull req
   assert.equal(camp.trails['p:a'].checks, null)
   trailEvent(camp, pr('pr.linked'), T + 1)
   trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 's' }), T + 2)
-  assert.equal(camp.trails['p:a'].checks, 'failed')
+  assert.deepEqual([camp.trails['p:a'].checks, camp.trails['p:a'].checksAt], ['failed', T + 2])
   trailEvent(camp, pr('pr.checks', { result: 'passed', headSha: 't' }), T + 3)
   assert.equal(camp.trails['p:a'].checks, 'passed')
   trailEvent(camp, pr('pr.checks', { result: 'failed', headSha: 'u' }), T + 4)
   trailEvent(camp, pr('pr.linked', { url: 'v' }), T + 5)
-  assert.equal(camp.trails['p:a'].checks, null, 'a new pull request')
+  assert.deepEqual([camp.trails['p:a'].checks, camp.trails['p:a'].checksAt], [null, null], 'a new pull request')
   trailEvent(camp, pr('pr.checks', { url: 'v', result: 'failed', headSha: 'w' }), T + 6)
   trailEvent(camp, pr('pr.ended', { url: 'v', result: 'closed' }), T + 7)
-  assert.equal(camp.trails['p:a'].checks, null, 'closed')
+  assert.deepEqual([camp.trails['p:a'].checks, camp.trails['p:a'].checksAt], [null, null], 'closed')
   trailEvent(camp, pr('pr.checks', { url: 'v', result: 'failed', headSha: 'x' }), T + 8)
   trailEvent(camp, pr('pr.ended', { url: 'v', result: 'merged' }), T + 9)
-  assert.equal(camp.trails['p:a'].checks, null, 'merged')
+  assert.deepEqual([camp.trails['p:a'].checks, camp.trails['p:a'].checksAt], [null, null], 'merged')
 })
 
 test("lastActive: every activity event stamps its project; the tick stamps the projects of working sessions; the snapshot carries trails' checks and every project's last activity", () => {
@@ -216,17 +247,41 @@ test("lastActive: every activity event stamps its project; the tick stamps the p
   applyActivity(camp, { kind: 'session.status', projectId: 'p', at: T, terminalId: 't1', worktreeId: null, provider: 'claude', automation: false, sessionType: null, from: 'idle', to: 'working', cause: 'output' }, T + 10)
   tick(camp, T + 3 * 60_000)
   assert.deepEqual(camp.lastActive, { p: T + 3 * 60_000, q: T + 5 })
-  camp.trails['p:a'] = { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/a', stage: 2, start: T, stageAt: T, checks: 'failed' }
+  camp.trails['p:a'] = { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/a', stage: 2, start: T, stageAt: T, checks: 'failed', checksAt: T + 7 }
   const snap = snapshot(camp, T + 3 * 60_000)
-  assert.equal(snap.trails[0].checks, 'failed')
+  assert.deepEqual([snap.trails[0].checks, snap.trails[0].checksAt], ['failed', T + 7])
   assert.deepEqual(snap.lastActive, { p: T + 3 * 60_000, q: T + 5 })
   snap.lastActive.p = 0
   assert.equal(camp.lastActive.p, T + 3 * 60_000, 'a copy')
 })
 
 test("weatherBadge: the header's glyph and its reason; none when clear", () => {
-  assert.deepEqual(weatherBadge({ kind: 'rain', branch: 'feature/x' }), { glyph: '🌧', text: 'Rain: checks failing on feature/x' })
+  assert.deepEqual(weatherBadge({ kind: 'rain', branch: 'feature/x' }), { glyph: '🌧\uFE0F', text: 'Rain: checks failing on feature/x' })
   assert.deepEqual(weatherBadge({ kind: 'snow', branch: 'feature/x' }), { glyph: '❄\uFE0F', text: 'Snow: checks failing on feature/x' })
   assert.deepEqual(weatherBadge({ kind: 'fog', hours: 14 }), { glyph: '🌫\uFE0F', text: 'Fog: quiet for 14 h' })
   assert.equal(weatherBadge({ kind: 'clear' }), null)
+})
+
+test('lastActive moves only by ACTIVE_STEP_MS (a minute) or more, so an event that changes nothing else leaves the camp as it was', () => {
+  assert.equal(ACTIVE_STEP_MS, 60_000)
+  const camp = newCamp(1, T)
+  const linked = (at) => applyActivity(camp, pr('pr.linked', { branch: 'none' }), at)
+  linked(T)
+  linked(T + 59_999)
+  assert.equal(camp.lastActive.p, T, 'under a minute: as it was')
+  linked(T + 60_000)
+  assert.equal(camp.lastActive.p, T + 60_000)
+  linked(T - 1)
+  assert.equal(camp.lastActive.p, T - 1, 'a clock set back a minute or more moves it too')
+})
+
+test('mix and paletteAt hold the share to 0–1 (NaN: 0); the palettes are frozen', () => {
+  assert.equal(mix('#000000', '#ffffff', 2), '#ffffff')
+  assert.equal(mix('#000000', '#ffffff', -1), '#000000')
+  assert.equal(mix('#000000', '#ffffff', NaN), '#000000')
+  assert.deepEqual(paletteAt('dusk', 'night', 7, null), PALETTES.night)
+  assert.deepEqual(paletteAt('dusk', 'night', NaN, null), PALETTES.dusk)
+  assert.ok(Object.isFrozen(PALETTES))
+  for (const p of Object.values(PALETTES)) assert.ok(Object.isFrozen(p))
+  assert.throws(() => { PALETTES.dusk.sky = '#ffffff' }, TypeError)
 })

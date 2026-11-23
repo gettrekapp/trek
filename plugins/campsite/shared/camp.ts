@@ -134,6 +134,8 @@ export interface TrailEntry {
   start: number
   stageAt: number
   checks: TrailChecks
+  /** When the checks' result came (ms); null with no checks */
+  checksAt: number | null
 }
 
 /** What windows see (campsite.state) */
@@ -199,7 +201,7 @@ const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinit
  * empty journal, each trip its start (the last save) and no wood, and no seen kinds; a version 3 pin
  * without a name (from before pins carried one) is named; version 3 gains the signpost (not built),
  * no trails (the server's reconcile finds them), no history and no summits; version 4's trails gain
- * no checks, and it gains no last activity (every project counts as active now). Anything else as it is.
+ * no checks (nor their time), and it gains no last activity (every project counts as active now). Anything else as it is.
  */
 export function migrateCamp(raw: unknown): unknown {
   if (!isRecord(raw)) return raw
@@ -213,7 +215,7 @@ export function migrateCamp(raw: unknown): unknown {
     out = { ...v3, version: 4, built, trails: {}, trailLog: {}, trailsDone: {}, summits: 0 }
   }
   if (out.version !== 4) return out
-  const trails = isRecord(out.trails) ? Object.fromEntries(Object.entries(out.trails).map(([k, t]) => [k, isRecord(t) ? { ...t, checks: null } : t])) : out.trails
+  const trails = isRecord(out.trails) ? Object.fromEntries(Object.entries(out.trails).map(([k, t]) => [k, isRecord(t) ? { ...t, checks: null, checksAt: null } : t])) : out.trails
   return { ...out, version: 5, trails, lastActive: {} }
 }
 
@@ -275,7 +277,7 @@ export const isAssignment = (a: unknown): a is Assignment =>
   num(a.start) &&
   num(a.wood)
 
-/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries, assignments, trails, history entries and last activity are checked one by one in restore, which drops the bad ones) */
+/** Whether camp.json held a camp of this version (top-level shape; members checked, maps loosely; journal entries, assignments, trails, history entries and last activity are checked one by one in restore, which drops the bad ones; a missing or unreadable last activity doesn't make it no camp: restore makes it empty) */
 export function isCamp(x: unknown): x is Camp {
   if (!isRecord(x) || x.version !== CAMP_VERSION) return false
   if (![x.seed, x.wood, x.markers, x.warmth, x.lastTick, x.savedAt, x.seenAt].every(num)) return false
@@ -288,7 +290,7 @@ export function isCamp(x: unknown): x is Camp {
   if (!Number.isInteger(x.summits) || (x.summits as number) < 0) return false
   const hired = x.hired
   if (!isRecord(hired) || typeof hired.day !== 'string' || !Array.isArray(hired.names) || !hired.names.every((n) => typeof n === 'string')) return false
-  return [x.assignments, x.spans, x.worked, x.waiting, x.caps, x.trails, x.trailLog, x.trailsDone, x.lastActive].every(isRecord)
+  return [x.assignments, x.spans, x.worked, x.waiting, x.caps, x.trails, x.trailLog, x.trailsDone].every(isRecord)
 }
 
 function awaySnapshot(camp: Camp, now: number): AwaySnapshot {
@@ -322,7 +324,7 @@ export function snapshot(camp: Camp, now: number, where: Pick<Where, 'project'> 
     seenKinds: liveKinds(camp, now),
     trails: Object.values(camp.trails)
       .sort((a, b) => a.start - b.start || (a.worktreeId < b.worktreeId ? -1 : a.worktreeId > b.worktreeId ? 1 : 0))
-      .map((t) => ({ projectId: t.projectId, projectName: projectName(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt, checks: t.checks })),
+      .map((t) => ({ projectId: t.projectId, projectName: projectName(where, t.projectId), worktreeId: t.worktreeId, branch: t.branch, stage: t.stage, start: t.start, stageAt: t.stageAt, checks: t.checks, checksAt: t.checksAt })),
     summits: camp.summits,
     lastActive: { ...camp.lastActive }
   }

@@ -70,7 +70,7 @@ test('camp v5: the fire ring at tier 1, nothing else built, an empty tally seen 
   assert.equal(camp.seenAt, T0)
   assert.deepEqual(camp.hired, { day: '', names: [] })
   assert.ok(isCamp(JSON.parse(JSON.stringify(camp))))
-  const bad = [{ built: { ...camp.built, fire: 'x' } }, { built: null }, { seenAt: 'x' }, { away: { ...camp.away, levelUps: [{ crewId: 1, level: 2 }] } }, { away: { ...camp.away, wood: { work: 0 } } }, { hired: { day: 1, names: [] } }, { version: 2 }, { built: { ...camp.built, garden: 0.5 } }, { built: { ...camp.built, lake: 3 } }, { built: { ...camp.built, fire: 0 } }, { built: { ...camp.built, fire: 1.5 } }, { version: 3 }, { trails: [] }, { trailLog: null }, { trailsDone: null }, { summits: -1 }, { summits: 1.5 }, { built: { ...camp.built, signpost: 2 } }, { version: 4 }, { lastActive: null }, { lastActive: [] }]
+  const bad = [{ built: { ...camp.built, fire: 'x' } }, { built: null }, { seenAt: 'x' }, { away: { ...camp.away, levelUps: [{ crewId: 1, level: 2 }] } }, { away: { ...camp.away, wood: { work: 0 } } }, { hired: { day: 1, names: [] } }, { version: 2 }, { built: { ...camp.built, garden: 0.5 } }, { built: { ...camp.built, lake: 3 } }, { built: { ...camp.built, fire: 0 } }, { built: { ...camp.built, fire: 1.5 } }, { version: 3 }, { trails: [] }, { trailLog: null }, { trailsDone: null }, { summits: -1 }, { summits: 1.5 }, { built: { ...camp.built, signpost: 2 } }, { version: 4 }]
   for (const b of bad) assert.equal(isCamp({ ...camp, ...b }), false, JSON.stringify(b))
 })
 

@@ -204,7 +204,7 @@ export const summitLine = (branch: string): string => `⛳ Summited ${branch}`
 export function weatherBadge(w: Weather): { glyph: string; text: string } | null {
   switch (w.kind) {
     case 'rain':
-      return { glyph: '🌧', text: `Rain: checks failing on ${w.branch ?? 'a branch'}` }
+      return { glyph: '🌧\uFE0F', text: `Rain: checks failing on ${w.branch ?? 'a branch'}` }
     case 'snow':
       return { glyph: '❄\uFE0F', text: `Snow: checks failing on ${w.branch ?? 'a branch'}` }
     case 'fog':

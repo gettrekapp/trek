@@ -12,7 +12,7 @@ import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, c
 
 const T0 = 1_800_000_000_000
 const H = 3_600_000
-const trail = (o = {}) => ({ projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'feature/x', stage: 0, start: T0, stageAt: T0, checks: null, ...o })
+const trail = (o = {}) => ({ projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'feature/x', stage: 0, start: T0, stageAt: T0, checks: null, checksAt: null, ...o })
 
 test('trails: five stages, their hints, a 24 h summit hold, 20 ended trails kept, the cairn at 1, 3, 10, 25, 50 and 100 summits', () => {
   assert.deepEqual([...STAGES], ['Trailhead', 'Switchbacks', 'Ridge', 'False summit', 'Summit'])
@@ -77,9 +77,9 @@ test("snapshot: every project's open trails, oldest first, by their project's na
   camp.summits = 3
   const snap = snapshot(camp, T0, { project: (id) => (id === 'p' ? 'Trek' : 'Other') })
   assert.deepEqual(snap.trails, [
-    { projectId: 'q', projectName: 'Other', worktreeId: 'a', branch: 'one', stage: 0, start: T0, stageAt: T0, checks: null },
-    { projectId: 'p', projectName: 'Trek', worktreeId: 'a', branch: 'three', stage: 0, start: T0 + 5, stageAt: T0, checks: null },
-    { projectId: 'p', projectName: 'Trek', worktreeId: 'b', branch: 'two', stage: 2, start: T0 + 5, stageAt: T0 + 9, checks: null }
+    { projectId: 'q', projectName: 'Other', worktreeId: 'a', branch: 'one', stage: 0, start: T0, stageAt: T0, checks: null, checksAt: null },
+    { projectId: 'p', projectName: 'Trek', worktreeId: 'a', branch: 'three', stage: 0, start: T0 + 5, stageAt: T0, checks: null, checksAt: null },
+    { projectId: 'p', projectName: 'Trek', worktreeId: 'b', branch: 'two', stage: 2, start: T0 + 5, stageAt: T0 + 9, checks: null, checksAt: null }
   ])
   assert.equal(snap.summits, 3)
   assert.equal(snap.built.signpost, 0)
@@ -101,7 +101,7 @@ test('trailEvent: a worktree made through Trek starts at the trailhead (not a de
   const camp = fresh()
   trailEvent(camp, ev('worktree.created', { worktreeId: 'a', branch: 'feature/a' }), T0)
   trailEvent(camp, ev('worktree.created', { worktreeId: 'd', branch: null }), T0)
-  assert.deepEqual(camp.trails['p:a'], { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/a', stage: 0, start: T0, stageAt: T0, checks: null })
+  assert.deepEqual(camp.trails['p:a'], { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/a', stage: 0, start: T0, stageAt: T0, checks: null, checksAt: null })
   assert.equal(Object.hasOwn(camp.trails, 'p:d'), false)
   trailEvent(camp, ev('worktree.head', { worktreeId: 'a', branch: 'feature/a', from: 'x', to: 'y' }), T0 + 5)
   assert.deepEqual([stageOf(camp), camp.trails['p:a'].stageAt], [1, T0 + 5])
@@ -149,7 +149,7 @@ test('trailEvent: a branch change turns the trail back and starts one on the new
   trailEvent(camp, ev('worktree.created', { worktreeId: 'a', branch: 'feature/a' }), T0)
   trailEvent(camp, ev('pr.linked', { branch: 'feature/a', url: 'u' }), T0 + 1)
   trailEvent(camp, ev('worktree.head', { worktreeId: 'a', branch: 'feature/b', from: 'x', to: 'y' }), T0 + 2)
-  assert.deepEqual(camp.trails['p:a'], { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/b', stage: 0, start: T0 + 2, stageAt: T0 + 2, checks: null })
+  assert.deepEqual(camp.trails['p:a'], { projectId: 'p', worktreeId: 'a', repoId: 'r', branch: 'feature/b', stage: 0, start: T0 + 2, stageAt: T0 + 2, checks: null, checksAt: null })
   assert.deepEqual(camp.trailLog.p, [{ branch: 'feature/a', result: 'turned-back', start: T0, end: T0 + 2 }])
   trailEvent(camp, ev('worktree.head', { worktreeId: 'a', branch: null, from: 'y', to: 'z' }), T0 + 3)
   assert.equal(Object.hasOwn(camp.trails, 'p:a'), false)

@@ -76,8 +76,13 @@ export interface Palette {
   lights: boolean
 }
 
-/** Each phase's palette. Dusk is the strip's colours before part 3d, exactly */
-export const PALETTES: Readonly<Record<Phase, Palette>> = {
+function freezeAll(palettes: Record<Phase, Palette>): Readonly<Record<Phase, Readonly<Palette>>> {
+  for (const p of Object.values(palettes)) Object.freeze(p)
+  return Object.freeze(palettes)
+}
+
+/** Each phase's palette. Dusk is the strip's colours before part 3d, exactly. Frozen (each palette holds only strings, numbers and booleans, so that is all the way down): paletteAt hands them out as they are */
+export const PALETTES: Readonly<Record<Phase, Readonly<Palette>>> = freezeAll({
   dusk: {
     sky: '#1a1622',
     stars: '#5a5068',
@@ -162,7 +167,7 @@ export const PALETTES: Readonly<Record<Phase, Palette>> = {
     glow: 0.6,
     lights: false
   }
-}
+})
 
 const hex2 = (n: number): string => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, '0')
 /** '#rrggbb' → [r, g, b] */
@@ -170,8 +175,12 @@ const channels = (hex: string): [number, number, number] => {
   const n = parseInt(hex.slice(1, 7), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
-/** From colour `a` toward `b` by t (0: `a` as it is) */
+/** A share held to 0–1 (NaN or none: 0) */
+const unit = (t: number): number => Math.min(1, Math.max(0, t || 0))
+
+/** From colour `a` toward `b` by t, held to 0–1 (0: `a` as it is) */
 export function mix(a: string, b: string, t: number): string {
+  t = unit(t)
   if (t <= 0) return a
   if (t >= 1) return b
   const x = channels(a)
@@ -181,8 +190,9 @@ export function mix(a: string, b: string, t: number): string {
 
 const COLOURS = ['sky', 'stars', 'moon', 'ridge', 'peak', 'ledge', 'path', 'pineLight', 'pineDark', 'ground', 'groundEdge', 'trail'] as const
 
-/** One palette toward another by t: colours and amounts mixed, the lights switched halfway */
+/** One palette toward another by t, held to 0–1: colours and amounts mixed, the lights switched halfway */
 function between(a: Palette, b: Palette, t: number): Palette {
+  t = unit(t)
   if (t <= 0) return a
   const out: Palette = { ...a, starAlpha: a.starAlpha + (b.starAlpha - a.starAlpha) * t, moreStars: a.moreStars + (b.moreStars - a.moreStars) * t, bite: a.bite + (b.bite - a.bite) * t, glow: a.glow + (b.glow - a.glow) * t, lights: t < 0.5 ? a.lights : b.lights }
   for (const k of COLOURS) out[k] = mix(a[k], b[k], t)
@@ -220,20 +230,25 @@ export interface Weather {
 /** Fog after this long without activity */
 export const QUIET_MS = 12 * HOUR_MS
 
+/** Failing checks rain only this long after their last result: unlinking a pull request or turning its watch off says nothing, so they can't rain forever */
+export const CHECKS_RAIN_MS = 24 * HOUR_MS
+
 /** A trail as the weather reads it (the camp's, or a snapshot's) */
 export interface WeatherTrail {
   projectId: string
   branch: string
   checks: 'passed' | 'failed' | null
+  /** When the checks' result came (ms) */
+  checksAt: number | null
 }
 
 /**
- * A project's weather: rain while any of its open trails has failing checks (snow in winter), the
- * first such trail's branch the reason; else fog once QUIET_MS have passed since its last activity
+ * A project's weather: rain while any of its open trails has failing checks from the last
+ * CHECKS_RAIN_MS (snow in winter), the first such trail's branch the reason; else fog once QUIET_MS have passed since its last activity
  * (a project with none yet, as just after the upgrade, counts as active now); else clear
  */
 export function weatherOf(trails: readonly WeatherTrail[], lastActive: Readonly<Record<string, number>>, projectId: string, now: number, season: Season | null): Weather {
-  const failing = trails.find((t) => t.projectId === projectId && t.checks === 'failed')
+  const failing = trails.find((t) => t.projectId === projectId && t.checks === 'failed' && t.checksAt !== null && now - t.checksAt < CHECKS_RAIN_MS)
   if (failing) return { kind: season === 'winter' ? 'snow' : 'rain', branch: failing.branch }
   const at = Object.hasOwn(lastActive, projectId) ? lastActive[projectId] : now
   const quiet = now - at

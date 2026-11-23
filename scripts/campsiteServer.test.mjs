@@ -258,9 +258,15 @@ test('emits are throttled to one a second and skipped when nothing changed', asy
   h.fire(failed)
   clock.run()
   assert.equal(h.emitted.length, 3, "failing checks show on the trail (the weather's rain)")
-  h.fire(failed)
+  // Later (past the second's throttle, under the last activity's minute): an event that moves nothing
+  now += 30_000
+  h.fire({ kind: 'pr.checks', projectId: 'p', at: now, repoId: 'r', branch: 'no-trail', url: 'z', result: 'failed', headSha: 'y' })
   clock.run()
-  assert.equal(h.emitted.length, 3, 'unchanged snapshot, no emit')
+  assert.equal(h.emitted.length, 3, 'unchanged snapshot (the last activity moved under a minute), no emit')
+  now += 30_000
+  h.fire({ kind: 'pr.checks', projectId: 'p', at: now, repoId: 'r', branch: 'no-trail', url: 'z', result: 'failed', headSha: 'y' })
+  clock.run()
+  assert.equal(h.emitted.length, 4, 'a minute on, the last activity moves: emitted')
 })
 
 test('git failures: a real error is logged and pays nothing; a worktree that cannot be checked is logged too', async (t) => {
@@ -704,7 +710,7 @@ test("trails (3c): the first event from a project reconciles its worktrees (not 
   const { inst } = pastGrace(t, h, { schedule: clock.schedule })
   h.fire({ kind: 'session.started', projectId: 'p', at: T0, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null })
   let snap = await inst.handlers.state({}, {})
-  assert.deepEqual(snap.trails, [{ projectId: 'p', projectName: 'Trek', worktreeId: 'w', branch: 'b', stage: 0, start: T0, stageAt: T0, checks: null }])
+  assert.deepEqual(snap.trails, [{ projectId: 'p', projectName: 'Trek', worktreeId: 'w', branch: 'b', stage: 0, start: T0, stageAt: T0, checks: null, checksAt: null }])
   h.fire({ kind: 'pr.linked', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u' })
   h.fire({ kind: 'pr.checks', projectId: 'p', at: T0, repoId: 'r', branch: 'b', url: 'u', result: 'passed', headSha: 's' })
   assert.equal((await inst.handlers.state({}, {})).trails[0].stage, 3)
@@ -757,7 +763,7 @@ test("trails (3c): a window's state naming its project reconciles it once; the 1
 test('trails (3c): the first full reconcile saves a change to the summited memory alone (a done worktree gone, no trail moved)', async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
   const camp = newCamp(7, T0)
-  camp.trails = { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 1, start: T0 - 9, stageAt: T0 - 5, checks: null } }
+  camp.trails = { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 1, start: T0 - 9, stageAt: T0 - 5, checks: null, checksAt: null } }
   camp.trailsDone = { 'p:x': 'feature/x' }
   writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
   const clock = manual()
@@ -952,7 +958,7 @@ test("the world (3d-1): every event stamps its project's last activity, a workin
   h.fire({ kind: 'pr.linked', projectId: 'p', at: c.now, repoId: 'r', branch: 'b', url: 'u' })
   h.fire({ kind: 'pr.checks', projectId: 'p', at: c.now, repoId: 'r', branch: 'b', url: 'u', result: 'failed', headSha: 's' })
   const snap = await inst.handlers.state({}, {})
-  assert.deepEqual([snap.trails[0].checks, snap.lastActive.p], ['failed', T0 + 1000])
+  assert.deepEqual([snap.trails[0].checks, snap.trails[0].checksAt, snap.lastActive.p], ['failed', T0 + 1000, T0], 'the checks and their time; last activity moves only by a minute or more')
   h.fire({ kind: 'session.status', projectId: 'p', at: c.now, terminalId: 't1', worktreeId: 'w', provider: 'claude', automation: false, sessionType: null, from: 'idle', to: 'working', cause: 'output' })
   c.now += 3 * 60_000
   c.tick()
