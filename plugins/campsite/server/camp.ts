@@ -177,8 +177,8 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const firstHeard = (projectId: string): boolean => fullYet && !reconciled.has(projectId)
   /**
    * A project's trails against the host's worktrees (no git refresh): a project that is gone
-   * (NOT_FOUND) turns its trails back (fully only); one where the plugin is off is left as it is. True
-   * when a trail, the history or the done count changed.
+   * (NOT_FOUND) turns its trails back and drops its last activity (fully only); one where the plugin
+   * is off is left as it is. True when a trail, the history, the done count or the last activity changed.
    */
   const reconcileProject = (projectId: string, how: ReconcileMode = mode(), fresh?: Fresh): boolean => {
     let worktrees: PluginWorktree[] | null
@@ -195,14 +195,32 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     if (worktrees === null && how === 'open-only') return false
     const before = JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone])
     reconcile(camp, projectId, worktrees, now(), how, fresh)
+    // A removed project's last activity goes with it (nothing reads it again)
+    const forgot = worktrees === null && Object.hasOwn(camp.lastActive, projectId)
+    if (forgot) delete camp.lastActive[projectId]
     if (worktrees === null) reconciled.delete(projectId)
     else reconciled.add(projectId)
-    return JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
+    return forgot || JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
-  /** Every project with trails, and every one reconciled this run; true when a trail, the history or the done count changed */
+  /** Every project with trails, and every one reconciled this run; then (fully) the last activity of the other projects that are gone. True when a trail, the history, the done count or a last activity changed */
   const reconcileAll = (how: ReconcileMode = mode()): boolean => {
     let any = false
-    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) if (reconcileProject(projectId, how)) any = true
+    const projects = new Set([...trailProjects(camp), ...reconciled])
+    for (const projectId of projects) if (reconcileProject(projectId, how)) any = true
+    if (how !== 'full') return any
+    for (const projectId of Object.keys(camp.lastActive)) {
+      if (projects.has(projectId)) continue
+      try {
+        host.worktrees(projectId)
+      } catch (err) {
+        if ((err as { code?: string }).code !== 'NOT_FOUND') {
+          warn('reading the worktrees', err)
+          continue
+        }
+        delete camp.lastActive[projectId]
+        any = true
+      }
+    }
     return any
   }
 

@@ -967,3 +967,28 @@ test("the world (3d-1): every event stamps its project's last activity, a workin
   assert.equal(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastActive.p, T0 + 1000 + 3 * 60_000, 'saved')
   assert.equal(h.emitted.filter(([e]) => e === 'state').at(-1)[1].trails[0].checks, 'failed', 'pushed with the state')
 })
+
+test("the world (3d-1): a removed project's last activity is dropped by the full reconcile (one with the plugin off keeps it), and saved", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const camp = newCamp(7, T0)
+  camp.lastActive = { p: T0 - 5, gone: T0 - 9, off: T0 - 7 }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const worktrees = h.host.worktrees
+  h.host.worktrees = (projectId) => (projectId === 'off' ? [] : worktrees(projectId))
+  h.off.add('off')
+  const clock = manual()
+  const { inst, c } = pastGrace(t, h, { schedule: clock.schedule })
+  clock.run()
+  assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { p: T0 - 5, off: T0 - 7 }, 'gone: dropped at the first full reconcile')
+  assert.deepEqual(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).lastActive, { p: T0 - 5, off: T0 - 7 }, 'saved')
+  // p removed later: its last activity goes at the next full pass too
+  h.host.worktrees = (projectId) => {
+    if (projectId === 'off') return []
+    throw Object.assign(new Error('no project'), { code: 'NOT_FOUND' })
+  }
+  c.now += TRAIL_EVERY_MS
+  c.tick()
+  clock.run()
+  assert.deepEqual((await inst.handlers.state({}, {})).lastActive, { off: T0 - 7 })
+  assert.deepEqual(h.emitted.filter(([e]) => e === 'state').at(-1)[1].lastActive, { off: T0 - 7 }, 'pushed')
+})
