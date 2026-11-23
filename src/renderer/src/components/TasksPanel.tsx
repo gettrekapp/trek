@@ -73,28 +73,41 @@ interface StartState {
   taskId: string
   busy: boolean
   error?: string
-  warnings?: string[]
+  /** Not an error: what the window could not show yet */
+  notice?: string
 }
 
 interface DetailProps {
   task: Task
   repositories: Repository[]
   offline: boolean
+  /** This task's start, when it is the last one asked for */
   start: StartState | null
+  /** Any task is starting: one start at a time */
+  anyStarting: boolean
   picking: boolean
   onStart: () => void
   onPick: (repoId: string) => void
   onCancelPick: () => void
-  onDeleted: () => void
+  /** Runs a change that can take the task out of its place in the list, keeping the focus on the page */
+  leaving: (fn: () => Promise<unknown>) => Promise<void>
 }
 
 /** One task in full: its fields (saved as they are typed), its actions and where it was started. */
-function TaskDetail({ task, repositories, offline, start, picking, onStart, onPick, onCancelPick, onDeleted }: DetailProps): React.JSX.Element {
+function TaskDetail({ task, repositories, offline, start, anyStarting, picking, onStart, onPick, onCancelPick, leaving }: DetailProps): React.JSX.Element {
   const title = useTaskField(task, 'title')
   const status = useTaskField(task, 'status')
   const details = useTaskField(task, 'details')
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  /** Cancel in the delete question hands the focus back to Delete… */
+  const deleteButton = useRef<HTMLButtonElement>(null)
+  const cancelledDelete = useRef(false)
+  useLayoutEffect(() => {
+    if (confirmDelete || !cancelledDelete.current) return
+    cancelledDelete.current = false
+    deleteButton.current?.focus()
+  }, [confirmDelete])
   const act = async (fn: () => Promise<unknown>): Promise<void> => {
     setError(null)
     try {
@@ -111,7 +124,7 @@ function TaskDetail({ task, repositories, offline, start, picking, onStart, onPi
   const repoName = (id: string): string => repositories.find((r) => r.id === id)?.name ?? 'removed repository'
   const worktreeOf = (repoId: string, worktreeId: string) => repositories.find((r) => r.id === repoId)?.worktrees.find((w) => w.id === worktreeId)
   const enterCommits = (state: TaskFieldState) => (e: React.KeyboardEvent): void => {
-    if (e.key === 'Enter') state.commit()
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) state.commit()
   }
   return (
     <div className="tasks-detail-body">
@@ -141,17 +154,17 @@ function TaskDetail({ task, repositories, offline, start, picking, onStart, onPi
       <Clash state={status} label="The status" />
       <FieldError state={status} />
       <div className="tasks-actions">
-        <button className="primary-action" disabled={offline || archived || starting} onClick={onStart}>
+        <button className="primary-action" disabled={offline || archived || anyStarting} onClick={onStart}>
           {starting ? 'Starting…' : 'Start in new worktree'}
         </button>
-        <button disabled={offline} onClick={() => void act(() => tasks.setCompleted(task.id, !completed))}>
+        <button disabled={offline} onClick={() => void act(() => leaving(() => tasks.setCompleted(task.id, !completed)))}>
           {completed ? 'Reopen' : 'Complete'}
         </button>
-        <button disabled={offline} onClick={() => void act(() => tasks.setArchived(task.id, !archived))}>
+        <button disabled={offline} onClick={() => void act(() => leaving(() => tasks.setArchived(task.id, !archived)))}>
           {archived ? 'Unarchive' : 'Archive'}
         </button>
         {archived && !confirmDelete && (
-          <button disabled={offline} onClick={() => setConfirmDelete(true)}>
+          <button ref={deleteButton} disabled={offline} onClick={() => setConfirmDelete(true)}>
             Delete…
           </button>
         )}
@@ -163,28 +176,26 @@ function TaskDetail({ task, repositories, offline, start, picking, onStart, onPi
             <button
               className="danger"
               disabled={offline}
-              autoFocus
-              onClick={() =>
-                void act(async () => {
-                  await tasks.remove(task.id)
-                  onDeleted()
-                })
-              }
+              onClick={() => void act(() => leaving(() => tasks.remove(task.id)))}
             >
               Delete
             </button>
-            <button onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button
+              autoFocus
+              onClick={() => {
+                cancelledDelete.current = true
+                setConfirmDelete(false)
+              }}
+            >
+              Cancel
+            </button>
           </span>
         </div>
       )}
       {picking && <RepoPicker repositories={repositories} onPick={onPick} onCancel={onCancelPick} />}
       {archived && <p className="muted tasks-note">Unarchive this task to start it.</p>}
       {start?.error && <div className="error">{start.error}</div>}
-      {start?.warnings && (
-        <div className="muted tasks-note tasks-warning">
-          The worktree was made, but some linked folders could not be linked: {start.warnings.join('; ')}
-        </div>
-      )}
+      {start?.notice && <div className="muted tasks-note tasks-warning">{start.notice}</div>}
       {error && <div className="error">{error}</div>}
       <label className="tasks-details-label" htmlFor={`task-details-${task.id}`}>
         Details <span className="muted">Markdown. Agents read this with get_task.</span>
@@ -243,12 +254,18 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
   const [showCompleted, setShowCompleted] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [addError, setAddError] = useState<string | null>(null)
+  const adding = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [start, setStart] = useState<StartState | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
-  /** A row moved with Alt+↑/↓: its button takes the focus back once the list has the new order */
-  const refocus = useRef<string | null>(null)
+  /**
+   * Where the focus goes once the list changes: back to a row moved with Alt+↑/↓ (`row`), or, after a
+   * change that takes a task out of its place (`after`), to the selected row (or the detail's title,
+   * when the list is hidden) if the focus fell to the page.
+   */
+  const refocus = useRef<{ row: string } | { after: string } | null>(null)
   const lastIndex = useRef(-1)
 
   const groups = groupTasks(tasks)
@@ -257,25 +274,54 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
   const selected = tasks.find((t) => t.id === selectedId)
   useEffect(() => {
     lastIndex.current = selectedId ? visibleIds.indexOf(selectedId) : -1
-    // The chosen task left the list: the row that took its place is the chosen one now.
-    if (chosen !== null && selectedId !== undefined && selectedId !== chosen) setChosen(selectedId)
+    // What shows selected is the chosen one: the first open task when the page opens, then it stays
+    // put while tasks are added or moved; when it leaves the list, the row that took its place.
+    if (selectedId !== undefined && selectedId !== chosen) setChosen(selectedId)
   })
+  // Another task: the repository question was about the last one.
+  useEffect(() => setPicking(false), [selectedId])
   const pane = useListDetail({ hasSelection: selected !== undefined, scroller: '.tasks-panel', selectedRow: '.ld-row.selected .ld-row-main' })
   const { root } = pane
   useLayoutEffect(() => {
-    const id = refocus.current
-    if (!id) return
+    const want = refocus.current
+    if (!want) return
+    const rowButton = (id: string | undefined): HTMLElement | null =>
+      id === undefined ? null : (root.current?.querySelector<HTMLElement>(`[data-task="${CSS.escape(id)}"] .ld-row-main`) ?? null)
+    if ('row' in want) {
+      refocus.current = null
+      const button = rowButton(want.row)
+      if (button && document.activeElement !== button) button.focus({ preventScroll: true })
+      return
+    }
+    // Still selected and in the list: nothing moved yet.
+    if (selectedId === want.after && rowButton(want.after)) return
     refocus.current = null
-    const button = root.current?.querySelector<HTMLElement>(`[data-task="${CSS.escape(id)}"] .ld-row-main`)
-    if (button && document.activeElement !== button) button.focus({ preventScroll: true })
-  }, [tasks, root])
+    // A narrow page going back to the list has already put it on the row.
+    if (document.activeElement && document.activeElement !== document.body) return
+    const button = rowButton(selectedId)
+    const target = button && button.getClientRects().length > 0 ? button : root.current?.querySelector<HTMLElement>('.tasks-title-input')
+    target?.focus({ preventScroll: true })
+  }, [tasks, selectedId, root])
+  /** Runs a change that may take `taskId` out of its place, with the focus kept on the page; rethrows */
+  const leaving = async (taskId: string, fn: () => Promise<unknown>): Promise<void> => {
+    const want = { after: taskId }
+    refocus.current = want
+    try {
+      await fn()
+    } finally {
+      if (refocus.current === want) refocus.current = null
+    }
+  }
 
-  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+  /** Runs a change; false when it failed (the error shows on the page) */
+  const act = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError(null)
     try {
       await fn()
+      return true
     } catch (err) {
       setError(getBackend().errors.inline(err))
+      return false
     }
   }
   const choose = (id: string): void => {
@@ -283,36 +329,49 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
     setPicking(false)
     pane.open()
   }
-  const add = (): void => {
+  const add = async (): Promise<void> => {
     const title = newTitle.trim()
-    if (!title) return
-    void act(async () => {
+    if (!title || adding.current) return
+    adding.current = true
+    setAddError(null)
+    try {
       const { id } = await getBackend().tasks.save({ title })
       setNewTitle('')
       choose(id)
-    })
+    } catch (err) {
+      setAddError(getBackend().errors.inline(err) ?? 'Not added: the connection dropped')
+    } finally {
+      adding.current = false
+    }
   }
-  const reorder = (id: string, to: number): void => {
+  /** Moves an open task; null when that changes nothing, else whether the server took it */
+  const reorder = (id: string, to: number): Promise<boolean> | null => {
     const openIds = groups.open.map((t) => t.id)
     const moved = moveTask(openIds, id, to)
-    if (moved.join() === openIds.join()) return
+    if (moved.join() === openIds.join()) return null
     const rest = tasks.filter((t) => !openIds.includes(t.id)).map((t) => t.id)
-    void act(() => getBackend().tasks.reorder([...moved, ...rest]))
+    return act(() => getBackend().tasks.reorder([...moved, ...rest]))
   }
   const startIn = async (task: Task, repositoryId: string): Promise<void> => {
     setPicking(false)
     setStart({ taskId: task.id, busy: true })
     try {
       const { sessionId, windowWorktreeId, linkWarnings } = await getBackend().tasks.start(task.id, repositoryId)
-      setStart(linkWarnings?.length ? { taskId: task.id, busy: false, warnings: linkWarnings } : null)
-      // The new worktree and its tab, as a click on the tab would show them (the page closes).
+      // The page closes on the new tab: a warning goes where it is seen.
+      if (linkWarnings?.length) {
+        getBackend().errors.show('Some linked folders were not linked', `The task's worktree was made, but: ${linkWarnings.join('; ')}`)
+      }
       if (windowWorktreeId) {
+        setStart(null)
+        // The new worktree and its tab, as a click on the tab would show them (the page closes).
         revealTerminal(sessionId)
         requestAnimationFrame(() => focusTerminal(sessionId))
+      } else {
+        setStart({ taskId: task.id, busy: false, notice: "The worktree was made, but its session's tab has not shown up here yet. Check the sidebar for it." })
       }
     } catch (err) {
-      const error = getBackend().errors.inline(err)
-      setStart(error ? { taskId: task.id, busy: false, error } : null)
+      const error = getBackend().errors.inline(err) ?? 'The start may not have finished: the connection dropped. Check the sidebar for the new worktree.'
+      setStart({ taskId: task.id, busy: false, error })
     }
   }
   const onStart = (task: Task): void => {
@@ -340,7 +399,7 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
         }}
         onDrop={(e) => {
           e.preventDefault()
-          if (dragging && draggable) reorder(dragging, index)
+          if (dragging && draggable) void reorder(dragging, index)
           setDragging(null)
         }}
       >
@@ -350,18 +409,24 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
           aria-label={`${t.title} complete`}
           checked={done}
           disabled={offline}
-          onChange={() => void act(() => getBackend().tasks.setCompleted(t.id, !done))}
+          onChange={() => void act(() => leaving(t.id, () => getBackend().tasks.setCompleted(t.id, !done)))}
         />
         <button
           type="button"
           className="ld-row-main"
           aria-current={isSelected ? 'true' : undefined}
+          aria-keyshortcuts={draggable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
           onClick={() => choose(t.id)}
           onKeyDown={(e) => {
             if (!draggable || offline || !e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
             e.preventDefault()
-            refocus.current = t.id
-            reorder(t.id, e.key === 'ArrowUp' ? index - 1 : index + 1)
+            const sent = reorder(t.id, e.key === 'ArrowUp' ? index - 1 : index + 1)
+            if (!sent) return
+            const want = { row: t.id }
+            refocus.current = want
+            void sent.then((ok) => {
+              if (!ok && refocus.current === want) refocus.current = null
+            })
           }}
         >
           <span className="ld-row-text">
@@ -386,7 +451,7 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
         <h2>Tasks</h2>
         <span className="muted">{taskCountLine(groups)}</span>
         <button className={`tasks-archived-toggle${showArchived ? ' active' : ''}`} aria-pressed={showArchived} onClick={() => setShowArchived((v) => !v)}>
-          {showArchived ? 'Hide archived' : 'Show archived'}
+          Show archived
         </button>
       </div>
       {offline && <div className="muted tasks-offline">Not connected. Tasks can be read but not changed.</div>}
@@ -400,11 +465,15 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
             value={newTitle}
             maxLength={MAX_TASK_TITLE}
             disabled={offline}
-            onChange={(e) => setNewTitle(e.target.value)}
+            onChange={(e) => {
+              setNewTitle(e.target.value)
+              setAddError(null)
+            }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') add()
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) void add()
             }}
           />
+          {addError && <div className="error">{addError}</div>}
           {tasks.length === 0 && <p className="muted tasks-empty">No tasks yet. Add one above, or ask an agent to add some with the Tasks tools.</p>}
           {groups.open.map((t, i) => row(t, true, i))}
           {groups.completed.length > 0 && (
@@ -428,11 +497,16 @@ export function TasksPanel({ visible }: Props): React.JSX.Element {
                 repositories={repositories}
                 offline={offline}
                 start={start?.taskId === selected.id ? start : null}
+                anyStarting={start?.busy === true}
                 picking={picking}
                 onStart={() => onStart(selected)}
                 onPick={(repoId) => void startIn(selected, repoId)}
                 onCancelPick={() => setPicking(false)}
-                onDeleted={() => pane.back()}
+                leaving={async (fn) => {
+                  await leaving(selected.id, fn)
+                  // A narrow page showed a task that is gone now: back to the list.
+                  if (!useAppStore.getState().project?.tasks?.some((t) => t.id === selected.id)) pane.back()
+                }}
               />
             </>
           )}
