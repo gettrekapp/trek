@@ -1,14 +1,15 @@
-// What the camp popover says (campsite parts 3a, 3b and 3c): a building's row, whether a hire can be
+// What the camp popover says (campsite parts 3a, 3b, 3c and 3d-1): a building's row, whether a hire can be
 // made, a member's status line, how far it is through its level, and a building's tooltip on the
 // strip; a member's view: its gear rows, its bonus, and the pin's choices; the trails: a flag's
 // label, a trail's row and its history's lines, the Trails tab's groups, the signpost's and the
-// cairn's words, the summit's line. Pure.
+// cairn's words, the summit's line; the header's weather glyph and its reason. Pure.
 import type { CampSnapshot, CrewEntry, Pin, PinRef, TrailEntry } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
 import { providerName } from './journal.ts'
 import { shortfall } from './shop.ts'
 import { STAGES, STAGE_HINTS, SUMMIT, type TrailRecord } from './trails.ts'
+import type { Weather } from './world.ts'
 
 export interface ShopRow {
   id: BuildingId
@@ -198,3 +199,17 @@ export const signpostText = (n: number): string => (n === 1 ? '1 trail' : `${n} 
 export const cairnText = (n: number): string => (n === 1 ? '1 summit' : `${n} summits`)
 /** The header's line while a summit is celebrated */
 export const summitLine = (branch: string): string => `⛳ Summited ${branch}`
+
+/** The header's weather glyph (none when clear) and what it says: its title and label */
+export function weatherBadge(w: Weather): { glyph: string; text: string } | null {
+  switch (w.kind) {
+    case 'rain':
+      return { glyph: '🌧', text: `Rain: checks failing on ${w.branch ?? 'a branch'}` }
+    case 'snow':
+      return { glyph: '❄\uFE0F', text: `Snow: checks failing on ${w.branch ?? 'a branch'}` }
+    case 'fog':
+      return { glyph: '🌫\uFE0F', text: `Fog: quiet for ${w.hours ?? 12} h` }
+    default:
+      return null
+  }
+}

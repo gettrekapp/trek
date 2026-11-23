@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
+import { weatherBadge } from '../plugins/campsite/shared/campView.ts'
 import { applyActivity, restore, tick } from '../plugins/campsite/shared/economy.ts'
 import { trailEvent } from '../plugins/campsite/shared/trails.ts'
 import { BLEND_MIN, DUSK, DUSK_WORLD, PALETTES, QUIET_MS, capsAbove, mix, paletteAt, phaseAt, seasonAt, weatherOf, worldAt, worldKey, worldPalette } from '../plugins/campsite/shared/world.ts'
@@ -221,4 +222,11 @@ test("lastActive: every activity event stamps its project; the tick stamps the p
   assert.deepEqual(snap.lastActive, { p: T + 3 * 60_000, q: T + 5 })
   snap.lastActive.p = 0
   assert.equal(camp.lastActive.p, T + 3 * 60_000, 'a copy')
+})
+
+test("weatherBadge: the header's glyph and its reason; none when clear", () => {
+  assert.deepEqual(weatherBadge({ kind: 'rain', branch: 'feature/x' }), { glyph: '🌧', text: 'Rain: checks failing on feature/x' })
+  assert.deepEqual(weatherBadge({ kind: 'snow', branch: 'feature/x' }), { glyph: '❄\uFE0F', text: 'Snow: checks failing on feature/x' })
+  assert.deepEqual(weatherBadge({ kind: 'fog', hours: 14 }), { glyph: '🌫\uFE0F', text: 'Fog: quiet for 14 h' })
+  assert.equal(weatherBadge({ kind: 'clear' }), null)
 })
