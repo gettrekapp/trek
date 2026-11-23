@@ -409,11 +409,14 @@ test('several candidate paths: each is polled until one exists; the first existi
   f.clock.run()
   assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}'])
   assert.deepEqual(looked, [b])
-  // b goes: all are looked at again, and a, the first, is followed from its top
+  // b goes: all are looked at again at once, and a, the first, already there, is followed from its end
   rmSync(b)
   f.clock.run()
   f.clock.run()
-  assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}', '{"a":1}'])
+  assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}'])
+  appendFileSync(a, '{"a":2}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"b":1}', '{"b":2}', '{"a":2}'])
   assert.deepEqual(f.warnings, [])
 })
 
@@ -425,6 +428,110 @@ test('several candidate paths, the first look: the first existing one is read fr
   appendFileSync(b, '{"new":1}\n')
   f.clock.run()
   assert.deepEqual(f.lines, ['{"new":1}'])
+})
+
+test('several candidate paths: one whose stat fails (EACCES) is skipped and a later one followed; all failing is logged once and stops it', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  writeFileSync(b, '{"old":1}\n')
+  failFs(t, 'statSync', 'EACCES', ([path]) => path === a)
+  const f = follow(t, [a, b])
+  appendFileSync(b, '{"new":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"new":1}'], 'b followed, from its end')
+  assert.deepEqual(f.warnings, [], 'nothing logged')
+  assert.deepEqual(f.clock.live().map((j) => j.ms), [POLL_MS])
+})
+
+test('several candidate paths, all failing with EACCES: logged once, stopped', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  writeFileSync(a, '')
+  writeFileSync(b, '')
+  failFs(t, 'statSync', 'EACCES', ([path]) => path === a || path === b)
+  const f = follow(t, [a, b])
+  f.clock.run()
+  assert.equal(f.warnings.length, 1)
+  assert.match(f.warnings[0], /EACCES: mocked statSync$/)
+  assert.deepEqual(f.clock.live(), [], 'stopped')
+})
+
+test('several candidate paths: an EACCES one with none other there is the failure: logged once, stopped', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  failFs(t, 'statSync', 'EACCES', ([path]) => path === a)
+  const f = follow(t, [a, b])
+  assert.equal(f.warnings.length, 1, 'b missing, a unreadable: the failure')
+  assert.deepEqual(f.clock.live(), [])
+})
+
+test('several candidate paths: EBUSY on the first, the second there: the second is followed, no failure counted', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  writeFileSync(b, '')
+  failFs(t, 'statSync', 'EBUSY', ([path]) => path === a)
+  const f = follow(t, [a, b])
+  // Many more polls than FAILS_MAX: a stays busy (b is followed, so a isn't looked at), nothing fails
+  for (let i = 0; i < FAILS_MAX + 5; i++) {
+    appendFileSync(b, `{"n":${i}}\n`)
+    f.clock.run()
+  }
+  assert.equal(f.lines.length, FAILS_MAX + 5)
+  assert.deepEqual(f.warnings, [])
+  // b goes and a is still busy: now the busy polls count, FAILS_MAX of them stop it
+  rmSync(b)
+  f.clock.run()
+  for (let i = 0; i < FAILS_MAX - 1; i++) f.clock.run()
+  assert.deepEqual(f.warnings, [])
+  f.clock.run()
+  assert.equal(f.warnings.length, 1)
+  assert.match(f.warnings[0], /EBUSY: mocked statSync$/)
+  assert.deepEqual(f.clock.live(), [])
+})
+
+test('ENAMETOOLONG is as if the file were missing: polling goes on quietly', (t) => {
+  const dir = tempDir(t)
+  const [a, b] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl')]
+  failFs(t, 'statSync', 'ENAMETOOLONG', ([path]) => path === a)
+  const f = follow(t, [a, b])
+  f.clock.run()
+  assert.deepEqual(f.warnings, [])
+  assert.deepEqual(f.clock.live().map((j) => j.ms), [POLL_MS], 'still polling')
+  writeFileSync(b, '{"b":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"b":1}'], 'b, appearing later, from its top')
+  // A real over-long path, no mock
+  const g = follow(t, join(dir, 'x'.repeat(5000), 's.jsonl'))
+  g.clock.run()
+  assert.deepEqual(g.warnings, [])
+  assert.deepEqual(g.clock.live().map((j) => j.ms), [POLL_MS])
+})
+
+test('the followed file goes: another candidate already there is read from its end; one that appears later, from its top', (t) => {
+  const dir = tempDir(t)
+  const [a, b, c] = [join(dir, 'a.jsonl'), join(dir, 'b.jsonl'), join(dir, 'c.jsonl')]
+  writeFileSync(a, '')
+  const f = follow(t, [a, b, c])
+  appendFileSync(a, '{"a":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}'])
+  // b is there with history while a is followed; a goes: b is followed from its end
+  writeFileSync(b, '{"b-old":1}\n')
+  rmSync(a)
+  f.clock.run()
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}'], "b's history isn't replayed")
+  appendFileSync(b, '{"b":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}', '{"b":1}'])
+  // b goes and none is there; c appears later: from its top
+  rmSync(b)
+  f.clock.run()
+  f.clock.run()
+  writeFileSync(c, '{"c":1}\n')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}', '{"b":1}', '{"c":1}'])
+  assert.deepEqual(f.warnings, [])
 })
 
 test('transcriptFiles: the resolved cwd then the cwd as given, under $CLAUDE_CONFIG_DIR then ~/.claude; no path twice; at most 4', (t) => {

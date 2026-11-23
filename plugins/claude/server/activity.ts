@@ -6,12 +6,14 @@
 // well where it works (the poll keeps going: fs.watch can miss changes). Only what is appended is read, at most 256 KB a wake-up
 // (more is read on the next turn); a file there when the watch starts is read from its end, so a
 // resumed session's old history isn't replayed, and one that appears later is this run's, read from
-// its top. A partial last line waits for the rest; a file that shrinks or is replaced is read again
-// from its top. A file busy or locked for a moment (EBUSY; EPERM on Windows only, where a share mode
-// or a virus scanner causes it) is tried again on the next poll, up to FAILS_MAX polls in a row (an
-// fs.watch wake-up that finds it busy doesn't count: the poll comes anyway); any other error is
-// logged once and ends the watch: the hiker falls back to random chores. Sync reads, bounded per
-// wake-up.
+// its top; when the followed file goes, another candidate found at once already existed: it too is
+// read from its end. A partial last line waits for the rest; a file that shrinks or is replaced is
+// read again from its top. A file busy or locked for a moment (EBUSY; EPERM on Windows only, where a
+// share mode or a virus scanner causes it) is tried again on the next poll, up to FAILS_MAX polls in
+// a row (an fs.watch wake-up that finds it busy doesn't count: the poll comes anyway); any other
+// error on the followed file is logged once and ends the watch: the hiker falls back to random
+// chores. While searching, a candidate that can't be read is skipped; only when none is there does
+// its error count (a busy one as above, any other ends the watch). Sync reads, bounded per wake-up.
 import { closeSync, fstatSync, openSync, readSync, statSync, watch as fsWatch, type Stats } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import type { AgentActivity } from '../../../src/shared/plugins/agents.ts'
@@ -55,8 +57,8 @@ const defaultWatchFile = (file: string, onChange: () => void): (() => void) | nu
 }
 
 const codeOf = (err: unknown): string | undefined => (err as { code?: string } | null)?.code
-/** Not there: ENOENT, or ENOTDIR (a part of the path is a file) */
-const isMissing = (err: unknown): boolean => codeOf(err) === 'ENOENT' || codeOf(err) === 'ENOTDIR'
+/** Not there: ENOENT, ENOTDIR (a part of the path is a file), or ENAMETOOLONG (a very long cwd) */
+const isMissing = (err: unknown): boolean => ['ENOENT', 'ENOTDIR', 'ENAMETOOLONG'].includes(codeOf(err) ?? '')
 /**
  * Busy or locked for a moment, tried again: EBUSY anywhere; EPERM on Windows only (its share modes,
  * a virus scanner), elsewhere a real error
@@ -80,6 +82,8 @@ export function followLines(files: string | readonly string[], onLine: (line: st
   /** Whether the first look has been taken, and whether the file was there then */
   let looked = false
   let thereAtStart = false
+  /** The file just lost (it went): another candidate found at once already existed, read from its end */
+  let lost: string | null = null
   /** Where the next read starts, and which file it is; null: not seen yet (or gone) */
   let pos: number | null = null
   let ino = 0
@@ -100,32 +104,58 @@ export function followLines(files: string | readonly string[], onLine: (line: st
     unwatch = watchFile(file as string, () => wake(false))
   }
 
-  /** Gone (or not there yet): when it comes back it is read from its top */
-  const missing = (): false => {
+  /**
+   * Gone (or not there yet): when it comes back it is read from its top. One followed till now is
+   * `lost`, and the candidates are looked at again at once (true: wake again now)
+   */
+  const missing = (): boolean => {
     if (!looked) looked = true
+    const was = file
     file = null
     if (pos !== null) {
       pos = null
       unwatch?.()
       unwatch = null
     }
-    return false
+    if (was === null) return false
+    lost = was
+    return true
+  }
+
+  /**
+   * Each place it may be, in order: the first there is followed. A candidate whose stat fails
+   * otherwise than missing is skipped; only when none is there is the first such error thrown (a
+   * real one before a busy one, which the poll tries again)
+   */
+  const search = (): Stats | undefined => {
+    let failed: unknown
+    let busy: unknown
+    for (const candidate of candidates) {
+      try {
+        const st = statSync(candidate)
+        file = candidate
+        return st
+      } catch (err) {
+        if (isMissing(err)) continue
+        if (isBusy(err, platform)) busy ??= err
+        else failed ??= err
+      }
+    }
+    if (failed !== undefined) throw failed
+    if (busy !== undefined) throw busy
+    return undefined
   }
 
   const read = (): boolean => {
     let st: Stats | undefined
+    /** Found right after the followed file went, and not that file again: it already existed */
+    let existed = false
     if (file === null) {
-      // Each place it may be, in order: the first there is followed
-      for (const candidate of candidates) {
-        try {
-          st = statSync(candidate)
-          file = candidate
-          break
-        } catch (err) {
-          if (!isMissing(err)) throw err
-        }
-      }
+      st = search()
+      const was = lost
+      lost = null
       if (file === null || st === undefined) return missing()
+      existed = was !== null && file !== was
     } else {
       try {
         st = statSync(file)
@@ -138,7 +168,7 @@ export function followLines(files: string | readonly string[], onLine: (line: st
       looked = true
       thereAtStart = true
     }
-    if (pos === null) restart(thereAtStart ? st.size : 0, st.ino)
+    if (pos === null) restart(thereAtStart || existed ? st.size : 0, st.ino)
     // Replaced or truncated: read again from the top
     else if (st.ino !== ino || st.size < pos) restart(0, st.ino)
     thereAtStart = false
@@ -150,8 +180,12 @@ export function followLines(files: string | readonly string[], onLine: (line: st
     try {
       fd = openSync(file, 'r')
     } catch (err) {
-      // Removed between the stat and the open: as if it were missing
-      if (isMissing(err)) return missing()
+      // Removed between the stat and the open: as if it were missing (looked for again on the next
+      // poll, not at once: a stat that keeps finding it mustn't spin)
+      if (isMissing(err)) {
+        missing()
+        return false
+      }
       throw err
     }
     let n: number

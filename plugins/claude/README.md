@@ -24,8 +24,11 @@ then the cwd as given (Claude on Windows keeps a junction unresolved), each unde
 `CLAUDE_CONFIG_DIR` is read from the server's env, not your shell's: set only in a shell profile,
 with Trek started from the Dock (or the server from a service), a custom config dir is missed
 unless it is `~/.claude`, and those hikers do the random chores. A file busy for a moment (EBUSY,
-or EPERM on Windows) is tried again for up to 30 polls; any other error ends the follow, logged
-once.
+or EPERM on Windows) is tried again for up to 30 polls; any other error on the followed file ends
+the follow, logged once. While searching, a path that can't be read (EACCES, say) is skipped; its
+error counts only when none of the paths is there. When the followed file goes, another path
+already there is followed from its end (its history isn't replayed); one that appears later, from
+its top.
 A `/clear` starts a new transcript that isn't followed: its hiker thinks for two minutes after the
 last call it saw, then goes back to the random chores. Newer Claude versions may shorten a very
 long cwd's folder name with a hash (unverified); such a session's transcript isn't found, and its
