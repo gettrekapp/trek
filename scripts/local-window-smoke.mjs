@@ -22,6 +22,11 @@
 //     and a flag opens the Trails tab at its row, with the history read; the ranger tower is built
 //     and stands on the strip; with every minute rolling a sighting (TREK_CAMPSITE_FORCE_SIGHTINGS)
 //     an animal crosses the strip, and its button opens the Guide tab at its card, focused;
+//     agents (campsite 5): the trek-dev MCP (its URL and token from the --mcp-config file the fake
+//     agent was launched with) lists camp_note and camp_trail_report; a note from api's main
+//     session raises a noticeboard on the strip ("1 new note") whose button opens the Noticeboard
+//     with it (Claude's, on main), then reads "Noticeboard"; a report on api's feature-auth trail
+//     shows under its row in the Trails tab;
 //     a bell puts the row in attention (on the server too); showing the session
 //     clears it, and so does a key typed into it (over the SDK) while it is not shown;
 //   - collapsing a section keeps its attention; a tag filter hides a section with no match;
@@ -108,6 +113,8 @@ const userData = join(work, 'user-data')
 const profile = smokeLocalProfile(home, 'dev')
 const logPath = join(profile, 'server.log')
 const agentPids = join(work, 'agent-pids')
+// Each launch's arguments, one JSON line each: the smoke finds the trek-dev MCP config there (campsite 5)
+const agentArgs = join(work, 'agent-args')
 // From here on, the work dir goes on exit, whatever throws (the fixtures below included).
 const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
@@ -152,6 +159,7 @@ const fakeAgent = writeFakeAgent(
     "import { appendFileSync } from 'node:fs'",
     "import { createInterface } from 'node:readline'",
     `appendFileSync(${JSON.stringify(agentPids)}, process.pid + '\\n')`,
+    `appendFileSync(${JSON.stringify(agentArgs)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
     "console.log('FAKE_AGENT ready')",
     "createInterface({ input: process.stdin })",
     "  .on('line', (line) => (line === 'work' ? console.log('esc to interrupt') : line === 'bell' ? process.stdout.write('\\x07') : console.log('GOT:' + line)))",
@@ -504,6 +512,38 @@ try {
   check("the animal's button opens the Guide tab at its card, focused", await until(guideOpen, [true, true]), [true, true])
   await win.keyboard.press('Escape')
   check('Escape closes the Guide tab', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  // Agents (campsite 5): the camp's MCP tools over trek-dev, as an agent calls them: the server
+  // launched the fake agent with --mcp-config <file> (trek-dev's URL and the project's token)
+  const launched = readFileSync(agentArgs, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((args) => args.includes('--mcp-config'))
+  const mcpConfig = launched.at(-1)?.[launched.at(-1).indexOf('--mcp-config') + 1]
+  if (!mcpConfig) throw new Error(`the fake agent was never launched with --mcp-config: ${readFileSync(agentArgs, 'utf8')}`)
+  const trekDev = JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers['trek-dev']
+  const mcp = async (method, params) => {
+    const res = await fetch(trekDev.url, { method: 'POST', headers: { ...trekDev.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
+    return (await res.json()).result
+  }
+  check('trek-dev MCP lists the camp tools where Campsite is on', (await mcp('tools/list', {})).tools.map((tool) => tool.name).filter((name) => name.startsWith('camp_')), ['camp_note', 'camp_trail_report'])
+  const noted = await mcp('tools/call', { name: 'camp_note', arguments: { text: 'Tests are green; left the flaky one skipped.', terminalId: sessionId } })
+  check("camp_note from api's main session pins a note", [noted.isError, JSON.parse(noted.content[0].text)], [false, 'Pinned to the noticeboard.'])
+  const apiAuth = (await project()).repositories[0].worktrees.find((w) => w.branch === 'feature-auth')
+  const reported = await mcp('tools/call', { name: 'camp_trail_report', arguments: { summary: 'Wired the sign-in form to the auth API; its tests pass.', worktreeId: apiAuth.id } })
+  check("camp_trail_report posts a report on api's feature-auth trail", [reported.isError, JSON.parse(reported.content[0].text)], [false, 'Report posted on feature-auth.'])
+  const board = win.locator('.campsite .cs-board')
+  check('a noticeboard stands on the strip, its button counting one new note', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard, 1 new note'), 'Noticeboard, 1 new note')
+  await board.click()
+  const pinnedNote = win.locator('.cs-camp-popover .cs-notes-list li').first()
+  const noteSays = async () => [
+    await pinnedNote.locator('.cs-note-head').innerText().then((t) => /^Claude( · \w+)? on main — just now$/.test(t)).catch(() => false),
+    await pinnedNote.locator('.cs-note-text').innerText().catch(() => null)
+  ]
+  check("its button opens the Noticeboard with the note, Claude's on main", await until(noteSays, [true, 'Tests are green; left the flaky one skipped.']), [true, 'Tests are green; left the flaky one skipped.'])
+  check('opened, the note is read: the board says Noticeboard', await until(() => board.getAttribute('aria-label').catch(() => null), 'Noticeboard'), 'Noticeboard')
+  await win.keyboard.press('Escape')
+  check('Escape closes the Noticeboard', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+  await win.locator('.campsite .cs-flag[aria-label="feature-auth — Ridge (PR open)"]').click()
+  check("the Trails tab shows the report under api's feature-auth row", await until(() => win.locator('.cs-camp-popover .cs-trail-report .cs-report-text').first().innerText().catch(() => null), 'Wired the sign-in form to the auth API; its tests pass.'), 'Wired the sign-in form to the auth API; its tests pass.')
+  await win.keyboard.press('Escape')
+  check('Escape closes the Trails tab again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------
 
