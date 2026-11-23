@@ -1,10 +1,25 @@
 // Tasks' v2 methods (PROTOCOL.md, "Tasks"). Every change is on the project (`tasks`), so the
 // project topic carries it to every window. Each refuses while the project has Tasks off.
+import { existsSync } from 'node:fs'
+import * as gitService from '../../../src/host/gitService.ts'
 import type { Task } from '../../../src/shared/model/types'
+import { slugifyTaskTitle, taskBranchName, taskPrompt } from '../../../src/shared/tasks.ts'
 import { codedError } from '../errors.ts'
+import { repoIn } from '../projects/model.ts'
 import { requireBoolean, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
-import { checkTaskInput, deleteTask, reorderTasks, requireTasksOn, saveTask, setTaskArchived, setTaskCompleted } from './model.ts'
+import { defaultWorktreePath, worktreeHandlers } from '../worktreeHandlers.ts'
+import {
+  checkTaskInput,
+  deleteTask,
+  findTask,
+  recordTaskStart,
+  reorderTasks,
+  requireTasksOn,
+  saveTask,
+  setTaskArchived,
+  setTaskCompleted
+} from './model.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -23,6 +38,20 @@ export function withTasks<T>(ctx: V2Context, projectId: unknown, change: (list: 
     else delete d.tasks
     return result
   })
+}
+
+/** A task session's terminal size until a window shows it (as start_session's). */
+const START_COLS = 120
+const START_ROWS = 32
+const MAX_BRANCH_TRIES = 99
+
+/** The first of task/<slug>, task/<slug>-2 … that names no local branch and no existing default worktree folder. */
+export async function freeTaskBranch(repoPath: string, slug: string): Promise<string> {
+  for (let n = 1; n <= MAX_BRANCH_TRIES; n++) {
+    const branch = taskBranchName(slug, n)
+    if ((await gitService.localBranchSha(repoPath, branch)) === null && !existsSync(defaultWorktreePath(repoPath, branch))) return branch
+  }
+  throw codedError('BAD_REQUEST', `${taskBranchName(slug, 1)} and its -2 … -${MAX_BRANCH_TRIES} are all taken; rename the task or delete some of those branches`)
 }
 
 export const taskHandlers: Record<string, Handler> = {
@@ -52,5 +81,46 @@ export const taskHandlers: Record<string, Handler> = {
     return withTasks(ctx, p.projectId, (list) => ({ list: deleteTask(list, id), result: null }))
   },
 
-  'task.reorder': (p, ctx) => withTasks(ctx, p.projectId, (list) => ({ list: reorderTasks(list, p.taskIds), result: null }))
+  'task.reorder': (p, ctx) => withTasks(ctx, p.projectId, (list) => ({ list: reorderTasks(list, p.taskIds), result: null })),
+
+  // A new worktree on task/<slug> in the repository asked for, and a session there with the task as
+  // its first message. The worktree is made by worktree.create's own handler. A session that fails
+  // to start leaves the worktree (as create_worktree then start_session would) and is recorded
+  // without a session id; the error names the branch.
+  'task.start': async (p, ctx) => {
+    const projectId = requireString(p.projectId, 'projectId')
+    const taskId = requireString(p.taskId, 'taskId')
+    const project = ctx.projects.require(projectId)
+    requireTasksOn(project)
+    const task = findTask(project.tasks ?? [], taskId)
+    if (task.archivedAt !== undefined) throw codedError('BAD_REQUEST', 'An archived task cannot be started; unarchive it first')
+    const repo = repoIn(project, requireString(p.repositoryId, 'repositoryId'))
+    const branch = await freeTaskBranch(repo.path, slugifyTaskTitle(task.title))
+    const { worktreeId } = (await worktreeHandlers['worktree.create']({ projectId, repoId: repo.id, branch, createBranch: true }, ctx)) as { worktreeId: string }
+    let sessionId: string | undefined
+    let failure: unknown
+    try {
+      ;({ sessionId } = ctx.sessions.start({
+        projectId,
+        worktreeId,
+        initialMessage: taskPrompt(task),
+        ...(p.llm !== undefined ? { llm: p.llm } : {}),
+        cols: START_COLS,
+        rows: START_ROWS
+      }))
+    } catch (err) {
+      failure = err
+    }
+    // The task may have changed (or gone) during the git work: record on what is there now.
+    ctx.projects.apply(projectId, (d) => {
+      if (!d.tasks?.some((t) => t.id === taskId)) return
+      const at = Date.now()
+      d.tasks = recordTaskStart(d.tasks, taskId, { at, repositoryId: repo.id, worktreeId, branch, ...(sessionId ? { sessionId } : {}) }, at)
+    })
+    if (failure !== undefined) {
+      const e = failure as { code?: string; message?: string }
+      throw codedError((e.code ?? 'TOOL_ERROR') as Parameters<typeof codedError>[0], `Created the worktree on ${branch}, but its session did not start: ${e.message ?? String(failure)}`)
+    }
+    return { worktreeId, sessionId: sessionId!, branch }
+  }
 }
