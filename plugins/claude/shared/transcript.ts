@@ -74,7 +74,8 @@ export function toolLabelOf(name: string, input: Record<string, unknown>): strin
 export function toolsInLine(line: string): AgentTool[] {
   let value: unknown
   try {
-    value = JSON.parse(line)
+    // A byte-order mark (a file's first line) is not the line's; a CRLF's \r is whitespace to JSON.parse
+    value = JSON.parse(line.charCodeAt(0) === 0xfeff ? line.slice(1) : line)
   } catch {
     return []
   }

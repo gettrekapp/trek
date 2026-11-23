@@ -170,7 +170,11 @@ export interface AgentTool {
 
 /** The session an agent's activity is watched for */
 export interface AgentActivitySession {
-  /** The agent's own conversation id, as the session launched it */
+  /**
+   * The agent's own conversation id as the session launched with it (`launch.sessionId`). It names
+   * the conversation only for an agent that presets its id at launch (Claude's `--session-id`); an
+   * agent that learns its id later (Codex) would need more than this to find its transcript.
+   */
   sessionId: string
   /** Where the session runs */
   cwd: string
@@ -188,15 +192,19 @@ export interface AgentActivity {
   watch(session: AgentActivitySession, onTool: (tool: AgentTool) => void): () => void
 }
 
-/** Text cut to AGENT_TOOL_LABEL_MAX characters (one line, spaces collapsed; an ellipsis where cut) */
+/**
+ * Text cut to AGENT_TOOL_LABEL_MAX characters (one line, spaces collapsed; an ellipsis where cut).
+ * Counted and cut by code point, so an emoji is never split into a lone surrogate.
+ */
 export function toolLabel(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim()
-  return line.length <= AGENT_TOOL_LABEL_MAX ? line : `${line.slice(0, AGENT_TOOL_LABEL_MAX - 1).trimEnd()}…`
+  const chars = Array.from(line)
+  return chars.length <= AGENT_TOOL_LABEL_MAX ? line : `${chars.slice(0, AGENT_TOOL_LABEL_MAX - 1).join('').trimEnd()}…`
 }
 
-/** A tool as core passes it on: a known kind (else other) and a cut label; null when it is not a tool at all */
+/** A tool as core passes it on: a known kind (else other) and a cut label; null when it is not a tool at all (not an object, or an array) */
 export function agentTool(value: unknown): AgentTool | null {
-  if (!value || typeof value !== 'object') return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const v = value as { kind?: unknown; label?: unknown }
   const kind = (AGENT_TOOL_KINDS as readonly unknown[]).includes(v.kind) ? (v.kind as AgentToolKind) : 'other'
   return { kind, label: typeof v.label === 'string' ? toolLabel(v.label) : '' }

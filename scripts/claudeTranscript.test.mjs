@@ -28,6 +28,12 @@ test('toolLabel: one line, spaces collapsed, cut to 40 characters with an ellips
   assert.equal(cut.length, 40)
   assert.equal(cut, `${'y'.repeat(39)}…`)
   assert.equal(toolLabel('a'.repeat(38) + '  bc'), `${'a'.repeat(38)}…`, 'no space before the ellipsis')
+  // Counted and cut by code point: an emoji at the cut stays whole
+  const emoji = toolLabel('a'.repeat(38) + '🏕️🏕️🏕️')
+  assert.equal(Array.from(emoji).length, 40)
+  assert.equal(emoji, `${'a'.repeat(38)}🏕…`)
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(emoji), 'no lone surrogate')
+  assert.equal(toolLabel('🌲'.repeat(40)), '🌲'.repeat(40), '40 emoji fit')
 })
 
 test('agentTool: a known kind (else other) and a cut label; not an object is null', () => {
@@ -38,6 +44,8 @@ test('agentTool: a known kind (else other) and a cut label; not an object is nul
   assert.equal(agentTool({ kind: 'read', label: 'z'.repeat(99) }).label.length, 40)
   assert.equal(agentTool(null), null)
   assert.equal(agentTool('edit'), null)
+  assert.equal(agentTool([]), null, 'an array is not a tool')
+  assert.equal(agentTool([{ kind: 'edit', label: 'x' }]), null)
 })
 
 test('toolKind: Claude Code tools by kind; mcp__ names are MCP; anything else is other', () => {
@@ -87,6 +95,10 @@ test('toolsInLine: the tool_use blocks of an assistant line, in order; text, thi
   assert.deepEqual(toolsInLine(assistant({ type: 'thinking', thinking: '…', signature: 's' })), [])
   // A user line carrying a tool's result, and the transcript's other kinds of line
   assert.deepEqual(toolsInLine(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_Edit', content: 'ok' }] } })), [])
+  // A CRLF line and a byte-order mark read as the line
+  const edit = assistant(use('Edit', { file_path: '/w/Campsite.tsx' }))
+  assert.deepEqual(toolsInLine(`${edit}\r`), [{ kind: 'edit', label: 'Campsite.tsx' }], 'CRLF')
+  assert.deepEqual(toolsInLine(`\uFEFF${edit}`), [{ kind: 'edit', label: 'Campsite.tsx' }], 'BOM')
   assert.deepEqual(toolsInLine(JSON.stringify({ type: 'system', subtype: 'x', content: 'y' })), [])
   assert.deepEqual(toolsInLine(JSON.stringify({ type: 'summary', summary: 'z', leafUuid: 'u' })), [])
   // Malformed: not JSON, a string content, a block without a name, a non-object input

@@ -1974,3 +1974,84 @@ test('activity (campsite part 4): a throwing watch, stop or feed, and a call tha
   s5.sessions.stopAll()
   assert.deepEqual(quiet.watches.map((w) => w.stopped), [1])
 })
+
+test('activity (campsite part 4): renew, suspend and forgetting a project or repo each stop the watch; exit then close stops it exactly once', async (t) => {
+  const fake = fakeToolAgents()
+  const s = setup(t, { activity: recorder(), agents: fake.agents })
+  // renew: the old run's watch stops, the new run gets its own
+  const global = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.renew({ projectId: s.projectId, sessionId: global.sessionId, initialMessage: 'go', title: 'T', ...size })
+  assert.deepEqual(fake.watches.map((w) => w.stopped), [1, 0], 'renew')
+  // suspend
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.suspendSessions(s.projectId, [one.sessionId])
+  assert.equal(fake.watches[2].stopped, 1, 'suspend')
+  // exit, then close: stopped once
+  const two = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned.at(-1).exit(0)
+  await tick()
+  s.sessions.close({ projectId: s.projectId, sessionId: two.sessionId })
+  assert.equal(fake.watches[3].stopped, 1, 'exit then close: once')
+  // forgetRepo and forgetProject
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories.push({ id: 'rb', name: 'b', path: s.b, branchData: {}, worktrees: [{ id: 'mb', name: 'b', path: s.b, isMain: true, loaded: true, sessions: [] }] })
+  })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'mb', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.forgetRepo(s.projectId, 'rb')
+  assert.deepEqual(fake.watches.slice(4).map((w) => w.stopped), [1, 0], 'forgetRepo: that repository only')
+  s.sessions.forgetProject(s.projectId)
+  assert.deepEqual(fake.watches.map((w) => w.stopped), [1, 1, 1, 1, 1, 1], 'forgetProject: every one, once')
+  await tick()
+  assert.ok(fake.watches.every((w) => w.stopped === 1), 'the kills’ exits stop nothing twice')
+})
+
+test('activity (campsite part 4): a failed spawn leaves no watch behind', async (t) => {
+  const fake = fakeToolAgents()
+  const s = setup(t, { activity: recorder(), agents: fake.agents })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].exit(0)
+  await tick()
+  // The spawn itself throws: no watch
+  s.hooks.failAt.add(2)
+  assert.throws(() => s.sessions.restart({ projectId: s.projectId, sessionId, ...size }), /spawn 2 failed/)
+  assert.deepEqual(fake.watches.map((w) => w.stopped), [1], 'the old run stopped once; none started')
+  // The record can't take the new pty: the pty is killed and nothing is followed
+  const apply = s.projects.apply.bind(s.projects)
+  s.hooks.onSpawn = () => {
+    s.hooks.onSpawn = undefined
+    s.projects.apply = () => {
+      s.projects.apply = apply
+      throw new Error('record gone')
+    }
+  }
+  assert.throws(() => s.sessions.restart({ projectId: s.projectId, sessionId, ...size }), /record gone/)
+  assert.equal(s.spawned.at(-1).killed, true)
+  assert.equal(fake.watches.length, 1, 'no watch for a run that never recorded')
+  s.sessions.restart({ projectId: s.projectId, sessionId, ...size })
+  assert.equal(fake.watches.length, 2)
+})
+
+test('activity (campsite part 4): a feed that throws on the held (trailing) send is contained and logged once', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {})
+  const fake = fakeToolAgents()
+  let calls = 0
+  const s = setup(t, { activity: { emit: (e) => { if (e.kind === 'session.tool' && ++calls > 1) throw new Error('boom') } }, agents: fake.agents })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const [w] = fake.watches
+  w.onTool({ kind: 'read', label: 'one' })
+  s.clock.t += 500
+  w.onTool({ kind: 'read', label: 'two' })
+  const held = s.scheduled.filter((j) => j.ms === 1500 && !j.cancelled)
+  assert.equal(held.length, 1)
+  s.clock.t += 1500
+  assert.doesNotThrow(() => held[0].fn())
+  assert.equal(calls, 2)
+  assert.equal(warn.mock.callCount(), 1)
+  assert.match(String(warn.mock.calls[0].arguments[0]), /tool calls of session/)
+  // Later failures in the run are silent
+  s.clock.t += 2000
+  w.onTool({ kind: 'read', label: 'three' })
+  assert.equal(calls, 3)
+  assert.equal(warn.mock.callCount(), 1)
+})

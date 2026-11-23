@@ -1192,6 +1192,11 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Logs a watch's first failure. Later failures in the same run are deliberately silent (a feed
+   * that throws on every call would flood the log); the next launch (a restart, a resume) gets a
+   * fresh watch and so logs again.
+   */
   private warnTools(watch: ToolWatch, sessionId: string, err: unknown): void {
     if (watch.warned) return
     watch.warned = true
@@ -1213,7 +1218,13 @@ export class SessionManager {
       watch.timer = undefined
       const latest = watch.pending
       watch.pending = undefined
-      if (latest && !this.stopped && this.toolWatches.get(sessionId) === watch) this.sendTool(projectId, sessionId, watch, latest)
+      if (!latest || this.stopped || this.toolWatches.get(sessionId) !== watch) return
+      // Off the agent's call stack: a throwing feed is contained here as on the synchronous path
+      try {
+        this.sendTool(projectId, sessionId, watch, latest)
+      } catch (err) {
+        this.warnTools(watch, sessionId, err)
+      }
     }, Math.max(0, wait))
   }
 
