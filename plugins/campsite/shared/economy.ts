@@ -9,7 +9,7 @@ import { isAssignment, type Camp } from './camp.ts'
 import { FISH_PER_HOUR, GARDEN_PER_HOUR, HOUR_MS, fireCeiling, gearBonus } from './catalog.ts'
 import { isEntry } from './journal.ts'
 import { NO_WHERE, assign, creditXp, memberOf, noteKinds, release, restingCount, summit, type Launch, type Where } from './crew.ts'
-import { dropBadTrails } from './trails.ts'
+import { dropBadTrails, trailEvent } from './trails.ts'
 
 export interface Rules {
   /** A working minute (shorter in tests and smokes) */
@@ -115,9 +115,10 @@ function answer(camp: Camp, terminalId: string, now: number, rules: Rules, out: 
 /** A session event's launch: where it runs, its agent and type (an event from before part 3b has neither) */
 const launchOf = (e: { worktreeId: string | null; provider?: string; sessionType?: Launch['sessionType'] }): Launch => ({ worktreeId: e.worktreeId, provider: e.provider ?? '', sessionType: e.sessionType ?? null })
 
-/** One activity event's effect on the camp; what it paid. `where` names projects and worktrees for the journal */
+/** One activity event's effect on the camp (its trails too); what it paid. `where` names projects and worktrees for the journal */
 export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: Rules = RULES, where: Where = NO_WHERE): Reward[] {
   const out: Reward[] = []
+  trailEvent(camp, e, now)
   switch (e.kind) {
     case 'session.started':
       // An automation's run tab is always a day hiker (one stored before that rule is let go)
@@ -173,8 +174,11 @@ export function applyActivity(camp: Camp, e: ActivityEvent, now: number, rules: 
       if (e.result === 'passed') pay(camp, { key: `checks:${e.url}:${e.headSha}`, wood: WOOD.checksPassed, markers: 0, source: 'outcomes', reason: 'checks passed' }, out, now)
       break
     case 'pr.ended':
-      // Paid once (its key), so each summit is noted once
-      if (e.result === 'merged' && pay(camp, { key: `merged:${e.url}`, wood: WOOD.merged, markers: 1, source: 'outcomes', reason: 'summit: pull request merged' }, out, now)) summit(camp, e, now, where)
+      // Paid once (its key), so each summit is noted, and counted toward the cairn, once
+      if (e.result === 'merged' && pay(camp, { key: `merged:${e.url}`, wood: WOOD.merged, markers: 1, source: 'outcomes', reason: 'summit: pull request merged' }, out, now)) {
+        summit(camp, e, now, where)
+        camp.summits++
+      }
       break
     default:
       break
