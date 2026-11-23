@@ -139,14 +139,21 @@ terminalId?, worktreeId? }` puts a report (1–280 characters) on the session's 
 `worktreeId`'s), replacing its last one, and in its member's journal ("Reported on feature/x: …");
 a Global session, or a worktree with no trail, is refused. Each is allowed once a minute per session
 (or per project without one) and per trail; bad input is a clear error result. A project keeps its
-newest 20 notes; an ended trail's history entry keeps its report. Once the project has a note, a
+newest 20 notes (a removed project's go at the next full trails pass); an ended trail's history
+entry keeps its report. Once the project has a note, a
 noticeboard stands on the strip in a free spot near the fire (dropped when there's no room), with a
 red pin while a note is newer than the Noticeboard was last opened (`notesSeenAt`, per app); its
 button ("Noticeboard, 2 new notes") opens the camp popover's Camp tab at its **Noticeboard**: the
-notes, newest first ("Claude · Juniper on feature/x — 12 m ago" over the text). The Trails tab shows
-a trail's report under its row (one line, More for the rest) and an ended trail's under its entry.
-Agent-written text is shown as plain text only (zero-width and bidi control characters are
-cleaned out), and a member's journal keeps one report per branch. Notes and reports are
+notes, newest first ("Claude · Juniper on feature/x — 12 m ago" over the text), the newest three
+and then "Show all (n)" / "Show fewer", so the Buildings below stay in reach. Its read answered, it
+marks the notes seen (not when the popover opened at a building's row). The Trails tab shows a
+trail's report under its row (one line, More for the rest) and an ended trail's under its entry.
+Notes stay in their project's windows. Reports don't: the crew and the trails are camp-wide (as in
+3b and 3c), so a report's summary can be read from another project's window too, in its member's
+journal and in the Trails tab, where another project's open trails show their reports (and its
+ended trails theirs) once its "Show history" is pressed. Agent-written text is shown as plain text
+only (zero-width, bidi, tag and other invisible formatting characters are cleaned out; emoji
+variation selectors stay), and a member's journal keeps one report per branch. Notes and reports are
 self-reported: `terminalId` and `worktreeId` are arguments, so an agent with the project's MCP
 token can name another session of the project or post on another worktree's trail. That is
 accepted: it is flavour text, its storage is bounded (the limits above), and the token already
@@ -187,7 +194,7 @@ allows far more.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared; a member's journal on request; each session's latest tool call, stamped with the window's clock; the window's project's notes), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), a session's hiker look in its member's gear (`useHikerLook`: it listens for the session's kit alone, so a push that only moves the wood doesn't render the hikers again), the sessions' tool calls (`useTools`, `useTool`), the notes (`useNotes`), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `?tower=1|2`, `?guide=some`, `?away=sightings`, `?animal=<species>&age=<ms>&dir=left|right&r=<0–1>` (an animal that far into its crossing; `r` pins the crossing's die, its length, pause and spot, default 0.5) and `?sheet=1` (every species' two frames) show the wildlife; `?tool=read|edit|run|delegate|web|mcp|other|think` gives the working t1 a tool call (`think`: one 20 s old) and `?sheet=hikers` shows every hiker pose at scales 1–3; `?notes=some|read` pins three notes (two unread, or none) and, with `?trails=all`, reports on a trail and in the history; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` (a local time) starts its clock there and lets it run on (it stands still with `--freeze`) and turns on the clock's sky, `?seasons=north|south|off` picks the seasons with it (northern by default), and `?weather=rain|fog` forces the weather; `?tower=1|2`, `?guide=some`, `?away=sightings`, `?animal=<species>&age=<ms>&dir=left|right&r=<0–1>` (an animal that far into its crossing; `r` pins the crossing's die, its length, pause and spot, default 0.5) and `?sheet=1` (every species' two frames) show the wildlife; `?tool=read|edit|run|delegate|web|mcp|other|think` gives the working t1 a tool call (`think`: one 20 s old) and `?sheet=hikers` shows every hiker pose at scales 1–3; `?notes=some|read|many` pins three notes (two unread, or none; `many`: five, two of them older) and, with `?trails=all`, reports on a trail and in the history; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has ten methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which
