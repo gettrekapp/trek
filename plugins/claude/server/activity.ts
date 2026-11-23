@@ -5,8 +5,9 @@
 // (more is read on the next turn); a file there when the watch starts is read from its end, so a
 // resumed session's old history isn't replayed, and one that appears later is this run's, read from
 // its top. A partial last line waits for the rest; a file that shrinks or is replaced is read again
-// from its top. Any other error is logged once and ends the watch: the hiker falls back to random
-// chores. Sync reads, bounded per wake-up.
+// from its top. A file busy or locked for a moment (EBUSY, EPERM: Windows) is tried again on the
+// next poll, up to FAILS_MAX times in a row; any other error is logged once and ends the watch: the
+// hiker falls back to random chores. Sync reads, bounded per wake-up.
 import { closeSync, fstatSync, openSync, readSync, statSync, watch as fsWatch } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import type { AgentActivity } from '../../../src/shared/plugins/agents.ts'
@@ -19,6 +20,8 @@ export const POLL_MS = 2000
 export const READ_MAX = 256 * 1024
 /** A line longer than this (a huge Write's content) is skipped, not kept in memory */
 export const LINE_MAX = 4 * 1024 * 1024
+/** How many polls in a row may find the file busy or locked before the watch gives up */
+export const FAILS_MAX = 30
 
 export interface FollowOptions {
   /** A timer (default setTimeout, unref'd) */
@@ -45,7 +48,10 @@ const defaultWatchFile = (file: string, onChange: () => void): (() => void) | nu
   }
 }
 
-const isMissing = (err: unknown): boolean => (err as { code?: string }).code === 'ENOENT'
+const codeOf = (err: unknown): string | undefined => (err as { code?: string } | null)?.code
+const isMissing = (err: unknown): boolean => codeOf(err) === 'ENOENT'
+/** Busy or locked for a moment (an editor, a virus scanner, Windows' share modes): tried again */
+const isBusy = (err: unknown): boolean => codeOf(err) === 'EBUSY' || codeOf(err) === 'EPERM'
 
 /**
  * Follows `file`'s complete lines as they are appended, each passed to `onLine`; returns the stop.
@@ -78,20 +84,24 @@ export function followLines(file: string, onLine: (line: string) => void, option
     unwatch = watchFile(file, wake)
   }
 
+  /** Gone (or not there yet): when it comes back it is read from its top */
+  const missing = (): false => {
+    if (!looked) looked = true
+    if (pos !== null) {
+      pos = null
+      unwatch?.()
+      unwatch = null
+    }
+    return false
+  }
+
   const read = (): boolean => {
     let st
     try {
       st = statSync(file)
     } catch (err) {
       if (!isMissing(err)) throw err
-      if (!looked) looked = true
-      // Gone (or not there yet): when it comes back it is read from its top
-      if (pos !== null) {
-        pos = null
-        unwatch?.()
-        unwatch = null
-      }
-      return false
+      return missing()
     }
     if (!looked) {
       looked = true
@@ -105,7 +115,14 @@ export function followLines(file: string, onLine: (line: string) => void, option
     if (st.size <= start) return false
     const length = Math.min(st.size - start, READ_MAX)
     const buffer = Buffer.alloc(length)
-    const fd = openSync(file, 'r')
+    let fd: number
+    try {
+      fd = openSync(file, 'r')
+    } catch (err) {
+      // Removed between the stat and the open: as if it were missing
+      if (isMissing(err)) return missing()
+      throw err
+    }
     let n: number
     try {
       // The file read may be a newer one than the stat saw: its size and inode are checked again
@@ -132,15 +149,22 @@ export function followLines(file: string, onLine: (line: string) => void, option
     return st.size > (pos as number)
   }
 
+  /** Polls in a row that found the file busy or locked */
+  let fails = 0
+
   function wake(): void {
     if (stopped) return
     let more: boolean
     try {
       more = read()
+      fails = 0
     } catch (err) {
-      options.warn(`[claude] following ${file} failed; its tool calls are no longer shown: ${err instanceof Error ? err.message : String(err)}`)
-      stop()
-      return
+      if (isBusy(err) && ++fails < FAILS_MAX) more = false
+      else {
+        options.warn(`[claude] following ${file} failed; its tool calls are no longer shown: ${err instanceof Error ? err.message : String(err)}`)
+        stop()
+        return
+      }
     }
     if (stopped) return
     timer?.cancel()

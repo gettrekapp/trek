@@ -2,10 +2,11 @@
 // file that grows by appends, with a timer the test runs by hand.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import fs, { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LINE_MAX, POLL_MS, READ_MAX, claudeActivity, followLines } from '../plugins/claude/server/activity.ts'
+import { FAILS_MAX, LINE_MAX, POLL_MS, READ_MAX, claudeActivity, followLines } from '../plugins/claude/server/activity.ts'
 import { projectDir } from '../plugins/claude/server/history.ts'
 
 const tempDir = (t) => {
@@ -28,6 +29,19 @@ const manual = () => {
       for (const j of jobs.splice(0)) if (!j.cancelled) j.fn()
     }
   }
+}
+/** Makes node:fs's `name` throw `code` while `failing()` says so (the follower's named imports see it) */
+function failFs(t, name, code, failing) {
+  const real = fs[name]
+  t.mock.method(fs, name, (...args) => {
+    if (failing(args)) throw Object.assign(new Error(`${code}: mocked ${name}`), { code })
+    return real(...args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
 }
 /** Follows `file` with a manual timer and no fs.watch: `lines` gets each line, `warnings` each warning */
 function follow(t, file, more = {}) {
@@ -169,4 +183,102 @@ test("claudeActivity: a session's tool calls from its transcript under HOME, in 
   clock.run()
   assert.deepEqual(tools, [{ kind: 'edit', label: 'Campsite.tsx' }, { kind: 'run', label: 'npm test' }])
   assert.throws(() => activity.watch({ sessionId: 'not-an-id', cwd, terminalId: 't2' }, () => {}), /Invalid session id/)
+})
+
+test('ENOENT from the open (removed between the stat and the open) is as if the file were missing: polling goes on, from its top when back', (t) => {
+  const file = join(tempDir(t), 's.jsonl')
+  writeFileSync(file, '{"old":1}\n')
+  const f = follow(t, file)
+  appendFileSync(file, '{"a":1}\n')
+  let fail = true
+  failFs(t, 'openSync', 'ENOENT', ([path]) => path === file && fail)
+  f.clock.run()
+  assert.deepEqual(f.lines, [])
+  assert.deepEqual(f.warnings, [], 'not an error')
+  assert.deepEqual(f.clock.live().map((j) => j.ms), [POLL_MS], 'still polling')
+  fail = false
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"old":1}', '{"a":1}'], 'read again from its top')
+  assert.deepEqual(f.warnings, [])
+})
+
+test('EBUSY or EPERM from the stat or the open is tried again on the next poll; FAILS_MAX in a row stops it, one success resets the count', (t) => {
+  const file = join(tempDir(t), 's.jsonl')
+  writeFileSync(file, '')
+  let failing = null
+  failFs(t, 'statSync', 'EBUSY', ([path]) => path === file && failing === 'stat')
+  failFs(t, 'openSync', 'EPERM', ([path]) => path === file && failing === 'open')
+  const f = follow(t, file)
+  appendFileSync(file, '{"a":1}\n')
+  failing = 'stat'
+  for (let i = 0; i < FAILS_MAX - 1; i++) f.clock.run()
+  assert.deepEqual(f.warnings, [])
+  assert.deepEqual(f.clock.live().map((j) => j.ms), [POLL_MS], 'polling on')
+  failing = null
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}'], 'read once the file is free')
+  // The count starts again; the open's EPERM counts the same
+  appendFileSync(file, '{"b":1}\n')
+  failing = 'open'
+  for (let i = 0; i < FAILS_MAX - 1; i++) f.clock.run()
+  assert.deepEqual(f.warnings, [])
+  f.clock.run()
+  assert.equal(f.warnings.length, 1, `stopped after ${FAILS_MAX} in a row`)
+  assert.match(f.warnings[0], /failed; its tool calls are no longer shown: EPERM: mocked openSync$/)
+  assert.deepEqual(f.clock.live(), [])
+  assert.equal(FAILS_MAX, 30)
+})
+
+test('a file swapped between the stat and the open (another inode) is read at once again, from the new file', (t) => {
+  const dir = tempDir(t)
+  const file = join(dir, 's.jsonl')
+  writeFileSync(file, '')
+  const f = follow(t, file)
+  appendFileSync(file, '{"a":1}\n')
+  const real = fs.fstatSync
+  let swapped = false
+  t.mock.method(fs, 'fstatSync', (fd, ...rest) => {
+    const st = real(fd, ...rest)
+    if (swapped) return st
+    swapped = true
+    // As if the open found another file than the stat
+    return { ...st, ino: st.ino + 1 }
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  f.clock.run()
+  assert.deepEqual(f.lines, [], 'nothing read from the file it did not expect')
+  assert.deepEqual(f.clock.live().map((j) => j.ms), [0], 'looked at again at once')
+  f.clock.run()
+  assert.deepEqual(f.lines, ['{"a":1}'])
+  assert.deepEqual(f.warnings, [])
+})
+
+test('a file replaced while a long line is being skipped is read from its top, its first line whole', (t) => {
+  const dir = tempDir(t)
+  const file = join(dir, 's.jsonl')
+  writeFileSync(file, '')
+  const f = follow(t, file)
+  const drain = () => {
+    do f.clock.run()
+    while (f.clock.live().some((j) => j.ms === 0))
+  }
+  appendFileSync(file, 'y'.repeat(LINE_MAX + 10))
+  drain()
+  // Replaced before the long line ended: the skip ends with it
+  const other = join(dir, 'other.jsonl')
+  writeFileSync(other, '{"first":1}\n{"second":2}\n')
+  renameSync(other, file)
+  drain()
+  assert.deepEqual(f.lines, ['{"first":1}', '{"second":2}'])
+  // And truncated in the middle of one, the same
+  appendFileSync(file, 'z'.repeat(LINE_MAX + 10))
+  drain()
+  truncateSync(file, 0)
+  appendFileSync(file, '{"third":3}\n')
+  drain()
+  assert.deepEqual(f.lines, ['{"first":1}', '{"second":2}', '{"third":3}'])
 })
