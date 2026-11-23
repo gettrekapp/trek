@@ -385,3 +385,11 @@ test('hireState, memberStatus, xpProgress, placedTitle', () => {
   assert.equal(placedTitle({ id: 'cabins', tier: 2 }), 'Two cabins (tier 2 of 3)')
   assert.equal(placedTitle({ id: 'lake', tier: 2 }), 'Dock (tier 2 of 2)')
 })
+
+test('shopRow: a marker-only shortfall says only the markers', () => {
+  const camp = newCamp(1, T0)
+  camp.wood = 1000
+  const row = shopRow(snapshot(camp, T0), 'cabins')
+  assert.equal(row.short, 'Need 1 more marker')
+  assert.equal(row.price, '🪵 400 · ⛳ 1')
+})

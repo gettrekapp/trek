@@ -62,3 +62,49 @@ test('recruit sends the candidate and the price; seen swallows an error; awaySee
   assert.deepEqual(calls.slice(-3).map((c) => c[0]), ['seen', 'awaySeen', 'state'])
   off()
 })
+
+test('awaySeen reloads the state even when the request throws, and rethrows', async () => {
+  const { host, calls } = fakeHost({ state: { wood: 1 }, awaySeen: new Error('offline') })
+  const store = campStore(host)
+  const off = store.subscribe(() => {})
+  await flush()
+  await assert.rejects(store.awaySeen(), /offline/)
+  await flush()
+  assert.deepEqual(calls.map((c) => c[0]), ['state', 'awaySeen', 'state'])
+  off()
+})
+
+test('an event during a purchase shows at once; the answer (the purchase) wins; a load asked before both is dropped', async () => {
+  let emit = null
+  let answer = null
+  let loads = 0
+  let firstLoad = null
+  const host = {
+    request: (method) => {
+      if (method === 'state') {
+        loads++
+        // The first load answers only when asked to (after the purchase)
+        if (loads === 1) return new Promise((r) => (firstLoad = r))
+        return Promise.resolve({ wood: 999 })
+      }
+      return new Promise((r) => (answer = r))
+    },
+    onEvent: (_name, fn) => {
+      emit = fn
+      return () => {}
+    },
+    onChanged: () => () => {}
+  }
+  const store = campStore(host)
+  const off = store.subscribe(() => {})
+  const bought = store.build({ id: 'lights', tier: 1, cost: { wood: 25, markers: 0 } })
+  emit({ wood: 80 })
+  assert.equal(store.snapshot().wood, 80)
+  answer({ wood: 75 })
+  await bought
+  assert.equal(store.snapshot().wood, 75)
+  firstLoad({ wood: 100 })
+  await flush()
+  assert.equal(store.snapshot().wood, 75)
+  off()
+})
