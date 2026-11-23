@@ -98,7 +98,8 @@ among those the project's time of day, season and weather allow (by the windows'
 Seasons setting, which each window's `seen` ping reports; the Sky setting doesn't gate), and the
 lake (swimmers) and the ranger tower (the rares, one draw in 80) let in; never the species just
 seen there. Each sighting goes into the field guide (how many, first and last), the last 30
-sightings and the away card ("12 sightings · 2 new species: Great blue heron, Lynx"), and the
+sightings and the away card ("2 new species: Great blue heron, Lynx · … · 12 sightings", the new
+species first so the one line never cuts them off), and the
 `sighting` event goes to that project's windows only. In an expanded, visible strip its animal
 crosses, one at a time (one arriving during a crossing is logged but not drawn): a walker on the
 treeline behind the buildings, tents and hikers (15–25 s, one pause), a flier between the header

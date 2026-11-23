@@ -82,17 +82,20 @@ export function awaySeen(camp: Seen, now: number): void {
   camp.seenAt = now
 }
 
-/** "While you were away (9 h): 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer · 12 sightings · 2 new species: Great blue heron, Lynx" */
+/**
+ * "While you were away (9 h): 2 new species: Great blue heron, Lynx · 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer · 12 sightings".
+ * The new species come first: the card is one line cut short with an ellipsis, and they are the rarest news
+ */
 export function awayText(a: AwaySnapshot): string {
   // The sum of the floored parts, so the line adds up as shown
   const total = AWAY_SOURCES.reduce((sum, k) => sum + a.wood[k], 0)
   const out: string[] = []
+  const fresh = a.newSpecies ?? []
+  if (fresh.length > 0) out.push(`${fresh.length} new species: ${fresh.join(', ')}`)
   if (total > 0) out.push(`🪵 +${total} — ${AWAY_SOURCES.filter((k) => a.wood[k] > 0).map((k) => `${k} ${a.wood[k]}`).join(' · ')}`)
   if (a.markers > 0) out.push(`⛳ +${a.markers}`)
   for (const u of a.levelUps) out.push(`${u.name} reached Lv ${u.level} ${u.title}`)
   const seen = a.sightings ?? 0
   if (seen > 0) out.push(seen === 1 ? '1 sighting' : `${seen} sightings`)
-  const fresh = a.newSpecies ?? []
-  if (fresh.length > 0) out.push(`${fresh.length} new species: ${fresh.join(', ')}`)
   return `While you were away (${a.hours} h): ${out.join(' · ')}`
 }

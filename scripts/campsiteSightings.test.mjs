@@ -138,7 +138,12 @@ test('the snapshot carries the guide (a copy); the away card the sightings and t
   assert.deepEqual(snap.guide, { heron: { count: 2, first: T0, last: T0 + 2 }, lynx: { count: 1, first: T0 + 1, last: T0 + 1 } })
   assert.notEqual(snap.guide.heron, camp.guide.heron)
   assert.deepEqual([snap.away.sightings, snap.away.newSpecies], [3, ['Great blue heron', 'Lynx']], 'a new species makes the card due')
-  assert.equal(awayText(snap.away), 'While you were away (5 h): 3 sightings · 2 new species: Great blue heron, Lynx')
+  assert.equal(awayText(snap.away), 'While you were away (5 h): 2 new species: Great blue heron, Lynx · 3 sightings')
+  // The new species come first, so the card's one line (cut short) shows them
+  assert.equal(
+    awayText({ ...snap.away, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ name: 'Mira', level: 3, title: 'Mountaineer' }], sightings: 12 }),
+    'While you were away (5 h): 2 new species: Great blue heron, Lynx · 🪵 +212 — work 136 · garden 40 · fishing 36 · ⛳ +1 · Mira reached Lv 3 Mountaineer · 12 sightings'
+  )
   assert.equal(awayText({ ...snap.away, sightings: 1, newSpecies: [] }), 'While you were away (5 h): 1 sighting')
   const { sightings, newSpecies, ...older } = snap.away
   assert.equal(awayText({ ...older, markers: 1 }), 'While you were away (5 h): ⛳ +1', 'an older server sends neither')
