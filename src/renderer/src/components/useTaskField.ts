@@ -1,9 +1,17 @@
-// One task field's editor state: the text being typed, saved 800 ms after the last key and on blur.
-// A save sends the whole task as the window has it now, with this field replaced, against the
-// task's current updatedAt. updatedAt moves for many reasons (a start, another field edited
-// elsewhere), so only a change to THIS field's stored value since the edit began is a clash: the
-// field then shows both versions and the user picks. A CONFLICT from the server while this field
-// is unchanged is retried once against the newest updatedAt. A failed save keeps the text.
+// One task field's editor state. The rules:
+// - The typed text (the draft) is saved 800 ms after the last key, on blur or Enter (`commit`), and
+//   when the editor goes away with a save still waiting.
+// - A save sends the whole task as the window has it, with this field replaced, against the
+//   task's updatedAt. updatedAt moves for many reasons (a start, another field edited elsewhere),
+//   so only a change to THIS field's stored value since the edit began is a clash: the field then
+//   shows both versions and the user picks. A stored value equal to the typed one is no clash.
+// - Typing is never rewritten: the draft goes only when it is exactly the stored text, or, on a
+//   commit, when it trims to it (the server trims what it stores).
+// - Right after our own save, until the window's mirror has it, our value and updatedAt stand in
+//   for the stored ones.
+// - A CONFLICT while this field is unchanged waits (up to 1 s) for the mirror to move, then
+//   retries once against the newest updatedAt.
+// - A failed save keeps the text and offers Retry.
 import { useEffect, useRef, useState } from 'react'
 import type { Task, TaskInput } from '../../../shared/model/types'
 import { getBackend } from '../backend'
@@ -25,28 +33,44 @@ export interface TaskFieldState {
   useTheirs(): void
 }
 
-const SAVE_DELAY_MS = 800
-/** How long a CONFLICT waits for the window's mirror to catch up before the one retry */
-const MIRROR_WAIT_MS = 100
+/** `auto`: the typing pause; `commit`: blur, Enter, Retry, unmount; `force`: Keep mine */
+type Mode = 'auto' | 'commit' | 'force'
 
-const valueOf = (task: Task, field: TaskField): string => task[field] ?? ''
+interface Stored {
+  value: string
+  updatedAt: number
+}
+
+const SAVE_DELAY_MS = 800
+const MIRROR_POLL_MS = 50
+const MIRROR_WAIT_MS = 1000
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 export function useTaskField(task: Task, field: TaskField): TaskFieldState {
-  const stored = valueOf(task, field)
   const [draft, setDraft] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [theirs, setTheirs] = useState<string | null>(null)
-  /** The stored value when the edit began: a change to it from elsewhere is a clash */
-  const base = useRef(stored)
   const latest = useRef(task)
   latest.current = task
+  /** Our last save, while the mirror has not caught up with it */
+  const known = useRef<Stored | null>(null)
+  /** This field as stored: the mirror's, or our own save while the mirror lags behind it */
+  const storedNow = (): Stored => {
+    const t = latest.current
+    const k = known.current
+    return k && t.updatedAt < k.updatedAt ? k : { value: t[field] ?? '', updatedAt: t.updatedAt }
+  }
+  const stored = storedNow().value
+  /** The stored value when the edit began: a change to it from elsewhere is a clash */
+  const base = useRef(stored)
   const draftRef = useRef(draft)
   draftRef.current = draft
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** A save is on the wire; `again` sends once more after it (typing went on meanwhile) */
+  /** A save is on the wire; `again` is the send asked for meanwhile, made after it */
   const busy = useRef(false)
-  const again = useRef(false)
+  const again = useRef<Mode | null>(null)
 
   // Not editing: follow the stored value.
   if (draft === null) base.current = stored
@@ -55,41 +79,57 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
   }
-  useEffect(() => clearTimer, [])
+  /** Drops the draft, unless typing changed it meanwhile */
+  const dropDraft = (text: string): void => {
+    if (draftRef.current === text) draftRef.current = null
+    setDraft((d) => (d === text ? null : d))
+  }
 
   /** The whole task as the window has it now, with this field replaced */
-  const inputFor = (current: Task, text: string): TaskInput => ({
-    id: current.id,
-    title: current.title,
-    details: current.details ?? '',
-    status: current.status ?? '',
-    [field]: text
-  })
+  const inputFor = (text: string): TaskInput => {
+    const t = latest.current
+    return { id: t.id, title: t.title, details: t.details ?? '', status: t.status ?? '', [field]: text }
+  }
 
-  /** Saves `text`; on a CONFLICT while this field is unchanged, once more against the newest updatedAt. */
-  const save = async (text: string): Promise<'saved' | 'clash'> => {
+  /** Saves `text`; a CONFLICT while this field is unchanged is retried once. Null: it clashes. */
+  const save = async (text: string): Promise<Stored | null> => {
+    const attempt = async (): Promise<Stored> => {
+      const result = await getBackend().tasks.save(inputFor(text), storedNow().updatedAt)
+      return { value: text.trim(), updatedAt: result.updatedAt }
+    }
+    const sentAt = storedNow().updatedAt
     try {
-      await getBackend().tasks.save(inputFor(latest.current, text), latest.current.updatedAt)
-      return 'saved'
+      return await attempt()
     } catch (err) {
       if (errorCode(err) !== 'CONFLICT') throw err
     }
-    await new Promise((resolve) => setTimeout(resolve, MIRROR_WAIT_MS))
-    if (valueOf(latest.current, field) !== base.current) return 'clash'
-    await getBackend().tasks.save(inputFor(latest.current, text), latest.current.updatedAt)
-    return 'saved'
+    // The server has a newer task than the window: wait for the mirror to have it too.
+    for (let waited = 0; latest.current.updatedAt <= sentAt && waited < MIRROR_WAIT_MS; waited += MIRROR_POLL_MS) await sleep(MIRROR_POLL_MS)
+    if (storedNow().value !== base.current) return null
+    return attempt()
   }
 
-  const send = async (force: boolean): Promise<void> => {
+  const send = async (mode: Mode): Promise<void> => {
     clearTimer()
     if (busy.current) {
-      again.current = true
+      again.current = again.current === 'force' ? 'force' : mode
       return
     }
     const text = draftRef.current
     if (text === null) return
-    const now = valueOf(latest.current, field)
-    if (!force && now !== base.current) {
+    const now = storedNow().value
+    // Already stored: nothing to send (and nothing to clash with).
+    if (text === now || (mode !== 'auto' && text.trim() === now)) {
+      setTheirs(null)
+      dropDraft(text)
+      return
+    }
+    if (text.trim() === now) {
+      base.current = now
+      setTheirs(null)
+      return
+    }
+    if (mode !== 'force' && now !== base.current) {
       setTheirs(now)
       return
     }
@@ -97,20 +137,23 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
       setError('A task needs a title')
       return
     }
-    if (text.trim() === now) {
-      setDraft((d) => (d === text ? null : d))
-      return
-    }
     busy.current = true
     setSaving(true)
     setError(null)
     try {
-      if ((await save(text)) === 'clash') {
-        setTheirs(valueOf(latest.current, field))
-      } else {
-        base.current = text.trim()
+      const saved = await save(text)
+      const current = storedNow().value
+      if (saved) {
+        known.current = saved
+        base.current = saved.value
         setTheirs(null)
-        setDraft((d) => (d === text ? null : d))
+        if (text === saved.value || mode !== 'auto') dropDraft(text)
+      } else if (current === text.trim()) {
+        base.current = current
+        setTheirs(null)
+        if (text === current || mode !== 'auto') dropDraft(text)
+      } else {
+        setTheirs(current)
       }
     } catch (err) {
       // A dropped connection shows nothing inline elsewhere; here the typed text still needs Retry.
@@ -119,11 +162,23 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
       busy.current = false
       setSaving(false)
     }
-    if (again.current) {
-      again.current = false
-      if (draftRef.current !== text) void send(false)
-    }
+    const next = again.current
+    again.current = null
+    if (next) void send(next)
   }
+
+  // Going away (another task selected) with a save still waiting: send it now. Through a ref, as
+  // the cleanup closes over the first render.
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(
+    () => () => {
+      if (!timer.current) return
+      clearTimer()
+      void sendRef.current('commit')
+    },
+    []
+  )
 
   return {
     value: draft ?? stored,
@@ -136,18 +191,19 @@ export function useTaskField(task: Task, field: TaskField): TaskFieldState {
       draftRef.current = text
       setError(null)
       clearTimer()
-      timer.current = setTimeout(() => void send(false), SAVE_DELAY_MS)
+      timer.current = setTimeout(() => void send('auto'), SAVE_DELAY_MS)
     },
-    commit: () => void send(false),
+    commit: () => void send('commit'),
     keepMine: () => {
       setTheirs(null)
-      base.current = valueOf(latest.current, field)
-      void send(true)
+      base.current = storedNow().value
+      void send('force')
     },
     useTheirs: () => {
       clearTimer()
       setTheirs(null)
       setError(null)
+      draftRef.current = null
       setDraft(null)
     }
   }
