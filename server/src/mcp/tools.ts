@@ -19,6 +19,8 @@ import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
+import { describeTask, listTasks, resolveTask, taskSaveInput } from './tasks.ts'
+import { findTask, requireTasksOn } from '../tasks/model.ts'
 import { automationInput, describeAutomation, resolveAutomation } from './automations.ts'
 import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
@@ -69,6 +71,10 @@ const SESSION_TYPE_PARAM = {
 const AUTOMATION_PARAM = {
   type: 'string',
   description: 'Automation id or name (case-insensitive), as returned by list_automations. A name several automations share is an error: pass the id.'
+}
+const TASK_PARAM = {
+  type: 'string',
+  description: 'Task id or title (case-insensitive), as returned by list_tasks. A title several tasks share is an error: pass the id.'
 }
 
 const STACK_DESCRIPTION =
@@ -562,6 +568,44 @@ export function coreTools(agentIds: readonly string[], mcpAgentIds: readonly str
         },
         required: ['automation']
       }
+    },
+    {
+      name: 'list_tasks',
+      description:
+        "List the project's tasks (the user's to-do list on the Tasks page), in the user's order. Each has id, title, status (free text, when set), createdAt, updatedAt, completedAt and archivedAt (when set) and startCount (how many times it was started in a new worktree). get_task has a task's details.",
+      inputSchema: {
+        type: 'object',
+        properties: { filter: { type: 'string', enum: ['open', 'completed', 'archived', 'all'], description: 'Which tasks: open (default: neither completed nor archived), completed (and not archived), archived, or all' } }
+      }
+    },
+    {
+      name: 'get_task',
+      description: "One task in full: list_tasks' fields, its details (markdown) and its starts (each new worktree it was started in: at, repositoryId, worktreeId, branch, terminalId).",
+      inputSchema: { type: 'object', properties: { task: TASK_PARAM }, required: ['task'] }
+    },
+    {
+      name: 'save_task',
+      description:
+        "Create a task, or update the one `task` names: use it to help the user define a task (a clear title, details with context and acceptance criteria, a status). An update changes only the arguments you pass; \"\" clears details or status. Without `task` it always creates (titles are not unique) and needs title. Fails with CONFLICT if the task changed since this call read it: get_task and try again. Returns the task as get_task does.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: { ...TASK_PARAM, description: `The task to update; omit to create one. ${TASK_PARAM.description}` },
+          title: { type: 'string', description: 'One line, at most 200 characters' },
+          details: { type: 'string', description: 'Markdown, at most 20000 characters' },
+          status: { type: 'string', description: 'Free text, one line, at most 80 characters, e.g. "waiting on design"' }
+        }
+      }
+    },
+    {
+      name: 'complete_task',
+      description: 'Mark a task complete (completed: true, the default) or reopen it (completed: false). Returns the task as list_tasks does.',
+      inputSchema: { type: 'object', properties: { task: TASK_PARAM, completed: { type: 'boolean' } }, required: ['task'] }
+    },
+    {
+      name: 'archive_task',
+      description: 'Archive a task (archived: true, the default) or bring it back (archived: false). Archived tasks are hidden from the open list. Returns the task as list_tasks does.',
+      inputSchema: { type: 'object', properties: { task: TASK_PARAM, archived: { type: 'boolean' } }, required: ['task'] }
     }
   ]
 }
@@ -570,7 +614,7 @@ export function coreTools(agentIds: readonly string[], mcpAgentIds: readonly str
 export const MCP_TOOLS: ToolDefinition[] = coreTools([], [])
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID; get_selected_worktree says which worktree and session the user is looking at, and focus_session shows them one. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID; get_selected_worktree says which worktree and session the user is looking at, and focus_session shows them one. list_tasks, get_task, save_task, complete_task and archive_task read and edit the project's task list (the user's to-dos on the Tasks page): help the user define a task with save_task, and mark one done with complete_task when its work is finished. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -1331,6 +1375,39 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         }
         const { sessionId } = (await v2('automation.runNow', { automationId: automation.id })) as { sessionId: string }
         return { terminalId: sessionId }
+      },
+
+      list_tasks: (args, project) => {
+        requireTasksOn(project)
+        return listTasks(project, args.filter)
+      },
+
+      get_task: (args, project) => {
+        requireTasksOn(project)
+        return describeTask(resolveTask(project, args.task), true)
+      },
+
+      save_task: async (args, project) => {
+        requireTasksOn(project)
+        const existing = args.task === undefined || args.task === null ? undefined : resolveTask(project, args.task)
+        const { id } = (await v2('task.save', { task: taskSaveInput(existing, args), ...(existing ? { expectedUpdatedAt: existing.updatedAt } : {}) })) as { id: string }
+        return describeTask(findTask(deps.projects.require(projectId).tasks ?? [], id), true)
+      },
+
+      complete_task: async (args, project) => {
+        requireTasksOn(project)
+        const t = resolveTask(project, args.task)
+        if (args.completed !== undefined && typeof args.completed !== 'boolean') throw bad('completed must be a boolean')
+        await v2('task.setCompleted', { taskId: t.id, completed: args.completed ?? true })
+        return describeTask(findTask(deps.projects.require(projectId).tasks ?? [], t.id), false)
+      },
+
+      archive_task: async (args, project) => {
+        requireTasksOn(project)
+        const t = resolveTask(project, args.task)
+        if (args.archived !== undefined && typeof args.archived !== 'boolean') throw bad('archived must be a boolean')
+        await v2('task.setArchived', { taskId: t.id, archived: args.archived ?? true })
+        return describeTask(findTask(deps.projects.require(projectId).tasks ?? [], t.id), false)
       },
 
       save_session_type: async (args, project) => {

@@ -38,7 +38,8 @@ const FREE_TOOLS = new Set([
   'get_stack', 'stop_stack', 'read_stack_log',
   'set_worktree_tag', 'set_worktree_custom_tag', 'set_worktree_note',
   'set_worktree_ticket', 'set_worktree_pull_request', 'request_approval',
-  'get_review_comments', 'add_review_comment', 'remove_review_comment', 'get_pull_request'
+  'get_review_comments', 'add_review_comment', 'remove_review_comment', 'get_pull_request',
+  'list_tasks', 'get_task', 'save_task', 'complete_task', 'archive_task'
 ])
 
 /**

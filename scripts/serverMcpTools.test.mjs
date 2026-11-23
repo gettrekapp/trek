@@ -151,9 +151,9 @@ async function toolSetup(t, opts = {}) {
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'focus_session', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_selected_worktree', 'get_stack', 'get_worktree_history',
-    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
-    'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
+    'add_review_comment', 'archive_task', 'close_session', 'complete_task', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'focus_session', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_selected_worktree', 'get_stack', 'get_task', 'get_worktree_history',
+    'list_automations', 'list_session_types', 'list_tasks', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
+    'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'save_task', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
   ])
@@ -1393,4 +1393,32 @@ test('plugins A1b: save_automation { enabled: false } on an automation whose age
   const saved = await s.call('save_automation', { automation: created.id, enabled: false })
   assert.equal(saved.enabled, false)
   assert.deepEqual(s.projects.require(s.projectId).automations[0].llm, { provider: 'gone' })
+})
+
+test('task tools: create, read, edit, complete and archive', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_task', { title: 'Fix login', status: 'new' })
+  assert.equal(created.title, 'Fix login')
+  assert.deepEqual(created.starts, [])
+  const edited = await s.call('save_task', { task: 'fix LOGIN', details: 'It 500s on submit.' })
+  assert.deepEqual([edited.id, edited.status, edited.details], [created.id, 'new', 'It 500s on submit.'])
+  assert.deepEqual((await s.call('list_tasks', {})).map((x) => x.title), ['Fix login'])
+  const done = await s.call('complete_task', { task: created.id })
+  assert.equal(typeof done.completedAt, 'string')
+  assert.deepEqual(await s.call('list_tasks', {}), [])
+  assert.deepEqual((await s.call('list_tasks', { filter: 'completed' })).map((x) => x.id), [created.id])
+  const reopened = await s.call('complete_task', { task: created.id, completed: false })
+  assert.equal('completedAt' in reopened, false)
+  await s.call('archive_task', { task: created.id })
+  assert.deepEqual((await s.call('list_tasks', { filter: 'archived' })).map((x) => x.id), [created.id])
+  assert.equal((await s.call('get_task', { task: created.id })).details, 'It 500s on submit.')
+  await assert.rejects(s.call('complete_task', { task: created.id, completed: 'yes' }), (e) => e.code === 'BAD_REQUEST')
+})
+
+test('task tools say Tasks is off when the project switched it off', async (t) => {
+  const s = await toolSetup(t)
+  s.projects.apply(s.projectId, (d) => { d.settings = { ...d.settings, tasksEnabled: false } })
+  for (const [name, args] of [['list_tasks', {}], ['get_task', { task: 'x' }], ['save_task', { title: 'x' }], ['complete_task', { task: 'x' }], ['archive_task', { task: 'x' }]]) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'TOOL_ERROR' && /turned off/.test(e.message), name)
+  }
 })
