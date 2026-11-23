@@ -3,10 +3,10 @@
 // the windows' clock, camp version 6 and what restore drops.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { awayText } from '../plugins/campsite/shared/away.ts'
+import { awayHolds, awaySeen, awayText } from '../plugins/campsite/shared/away.ts'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { restore } from '../plugins/campsite/shared/economy.ts'
-import { ACTIVE_MS, SIGHTINGS_MAX, contextFor, isActive, recordSighting, rollSighting, setClock } from '../plugins/campsite/shared/wildlife.ts'
+import { ACTIVE_MS, SIGHTINGS_MAX, contextFor, dropBadWildlife, isActive, recordSighting, rollSighting, setClock } from '../plugins/campsite/shared/wildlife.ts'
 
 const T0 = Date.UTC(2026, 10, 23, 12)
 const H = 3_600_000
@@ -115,6 +115,20 @@ test("setClock: a window's time zone and seasons are kept when valid; an unknown
   assert.deepEqual(camp.clock, { tz: 'Europe/Oslo', seasons: 'off' })
 })
 
+test('setClock: a time zone is kept by its canonical name; another spelling of the same zone is no change', () => {
+  const camp = newCamp(1, T0)
+  assert.equal(setClock(camp, { tz: 'europe/oslo' }), true)
+  assert.equal(camp.clock.tz, 'Europe/Oslo')
+  for (const tz of ['EUROPE/OSLO', 'Europe/Oslo']) assert.equal(setClock(camp, { tz }), false, tz)
+  assert.equal(setClock(camp, { tz: 'US/Pacific' }), true)
+  assert.equal(camp.clock.tz, 'America/Los_Angeles')
+  assert.equal(setClock(camp, { tz: 'america/los_angeles' }), false)
+  // Restore canonicalises a saved spelling too
+  const saved = { ...newCamp(1, T0), clock: { tz: 'europe/oslo', seasons: 'south' } }
+  dropBadWildlife(saved)
+  assert.deepEqual(saved.clock, { tz: 'Europe/Oslo', seasons: 'south' })
+})
+
 test('the snapshot carries the guide (a copy); the away card the sightings and the new species by name; awayText says so', () => {
   const camp = newCamp(1, T0)
   recordSighting(camp, 'heron', 'p', T0)
@@ -123,11 +137,28 @@ test('the snapshot carries the guide (a copy); the away card the sightings and t
   const snap = snapshot(camp, T0 + 5 * H)
   assert.deepEqual(snap.guide, { heron: { count: 2, first: T0, last: T0 + 2 }, lynx: { count: 1, first: T0 + 1, last: T0 + 1 } })
   assert.notEqual(snap.guide.heron, camp.guide.heron)
-  assert.deepEqual([snap.away.sightings, snap.away.newSpecies], [3, ['Great blue heron', 'Lynx']], 'sightings alone make the card due')
+  assert.deepEqual([snap.away.sightings, snap.away.newSpecies], [3, ['Great blue heron', 'Lynx']], 'a new species makes the card due')
   assert.equal(awayText(snap.away), 'While you were away (5 h): 3 sightings · 2 new species: Great blue heron, Lynx')
   assert.equal(awayText({ ...snap.away, sightings: 1, newSpecies: [] }), 'While you were away (5 h): 1 sighting')
   const { sightings, newSpecies, ...older } = snap.away
   assert.equal(awayText({ ...older, markers: 1 }), 'While you were away (5 h): ⛳ +1', 'an older server sends neither')
+})
+
+test('the away card: sightings of species already in the guide are no reason to show it; a new species is; on a card due for something else they still count', () => {
+  const camp = newCamp(1, T0)
+  recordSighting(camp, 'fox', 'p', T0)
+  awaySeen(camp, T0)
+  recordSighting(camp, 'fox', 'p', T0 + 1)
+  recordSighting(camp, 'fox', 'q', T0 + 2)
+  assert.equal(awayHolds(camp.away), false)
+  assert.equal(snapshot(camp, T0 + 5 * H).away, undefined, 'two known sightings alone: no card')
+  camp.away.markers = 1
+  assert.deepEqual([snapshot(camp, T0 + 5 * H).away.sightings, snapshot(camp, T0 + 5 * H).away.newSpecies], [2, []], 'due for a marker: the sightings show')
+  camp.away.markers = 0
+  recordSighting(camp, 'owl', 'p', T0 + 3)
+  assert.deepEqual([snapshot(camp, T0 + 5 * H).away.sightings, snapshot(camp, T0 + 5 * H).away.newSpecies], [3, ['Great horned owl']], 'a new species: due')
+  camp.away.newSpecies = ['dragon']
+  assert.equal(awayHolds(camp.away), false, 'an unknown id is nothing to tell')
 })
 
 test('migrateCamp: version 5 gains the ranger tower (not built), an empty guide, no sightings or last species, the default clock and no sightings while away', () => {
@@ -143,6 +174,49 @@ test('migrateCamp: version 5 gains the ranger tower (not built), an empty guide,
   assert.equal(out.built.tower, 0)
   assert.deepEqual([out.guide, out.sightings, out.lastSeen, out.clock], [{}, [], {}, { tz: null, seasons: 'north' }])
   assert.deepEqual([out.away.sightings, out.away.newSpecies], [0, []])
+})
+
+/** A camp.json as version `v` (2–5) wrote it: newCamp's fields, without those later versions added */
+function older(v) {
+  const { guide, sightings, lastSeen, clock, ...camp } = JSON.parse(JSON.stringify(newCamp(1, T0)))
+  const { tower, ...built } = camp.built
+  const { sightings: s, newSpecies, ...away } = camp.away
+  let out = { ...camp, version: 5, built, away, wood: 77, trails: { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T0, stageAt: T0, checks: null, checksAt: null } }, lastActive: { p: T0 } }
+  if (v <= 4) {
+    const { lastActive, ...rest } = out
+    out = { ...rest, version: 4, trails: { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 2, start: T0, stageAt: T0 } } }
+  }
+  if (v <= 3) {
+    const { trails, trailLog, trailsDone, summits, ...rest } = out
+    const { signpost, ...b } = rest.built
+    out = { ...rest, version: 3, built: b }
+  }
+  if (v <= 2) {
+    const { seenKinds, ...rest } = out
+    const { shed, ...b } = rest.built
+    out = { ...rest, version: 2, built: b, crew: rest.crew.map(({ gear, pin, journal, ...m }) => m) }
+  }
+  return out
+}
+
+test('migrateCamp: versions 2, 3, 4 and 5 go straight to 6, with the wildlife defaults and their wood kept', () => {
+  for (const v of [2, 3, 4, 5]) {
+    const raw = older(v)
+    assert.equal(raw.version, v)
+    assert.equal(isCamp(raw), false, `version ${v} is not a camp before the migration`)
+    const out = migrateCamp(raw)
+    assert.ok(isCamp(out), `version ${v} migrates to a camp`)
+    assert.equal(out.version, 6)
+    assert.equal(out.wood, 77)
+    assert.equal(out.built.tower, 0)
+    assert.deepEqual([out.guide, out.sightings, out.lastSeen, out.clock], [{}, [], {}, { tz: null, seasons: 'north' }], `version ${v}`)
+    assert.deepEqual([out.away.sightings, out.away.newSpecies], [0, []])
+    assert.deepEqual(out.lastActive, v === 5 ? { p: T0 } : {})
+    assert.deepEqual(Object.keys(out.trails), v >= 4 ? ['p:w'] : [])
+    // The migrated camp survives restore unchanged in its wildlife
+    restore(out, undefined, T0)
+    assert.deepEqual([out.guide, out.sightings, out.clock], [{}, [], { tz: null, seasons: 'north' }])
+  }
 })
 
 test('restore: guide pages, sightings, last species and a clock it cannot read are dropped or defaulted; the camp is kept', () => {
