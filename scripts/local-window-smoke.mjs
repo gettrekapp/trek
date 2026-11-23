@@ -28,7 +28,8 @@
 //     listed as gone, and its delete (asked again in the confirm bar) clears it on the server; a
 //     note edited on the page is saved on the server;
 //   - Settings: Audio alerts and the session mode (Settings → Plugins → Claude Code), saved on the
-//     server, and Server default removing it;
+//     server, and Server default removing it; the campsite's Sky and Seasons (Settings → Plugins →
+//     Campsite) change the strip's world (its stage's data-phase and data-season);
 //   - the overflow menus: the primary's (Open in VS Code, Reveal and Promote branch to worktree; no
 //     Move or Delete) and a worktree's (Delete and Promote to primary; no Move);
 //   - Unload (shown on the row's hover) unloads the worktree on the server (no tab, a dormant dot, ▸1, "1 saved session") and ▸1
@@ -545,6 +546,31 @@ try {
   // Server default ('') removes the project's key, as Settings → Agents did.
   await mode.selectOption('')
   check('Server default removes the mode on the server', await until(async () => 'claudePermissionMode' in (await project()).settings, false), false)
+  // The campsite's world (campsite 3d-1): Sky and Seasons in its section; each changes the strip's
+  // stage (data-phase, data-season). Its weather needs failing pull request checks, which this smoke
+  // can't drive (no gh): the server and harness tests cover the 🌧.
+  await openPlugin(settings, 'campsite')
+  const skySelect = settings.locator('select[aria-label="Campsite sky"]')
+  const seasonsSelect = settings.locator('select[aria-label="Campsite seasons"]')
+  check('Settings: the campsite has Sky (Follow the clock) and Seasons (Northern)', [await skySelect.inputValue(), await seasonsSelect.inputValue()], ['clock', 'north'])
+  const csStage = win.locator('.campsite .cs-stage')
+  const phase = () => csStage.getAttribute('data-phase')
+  const season = () => csStage.getAttribute('data-season')
+  const PHASES = ['dawn', 'day', 'dusk', 'night']
+  check("the strip's sky follows the clock: a phase of the day", await until(async () => PHASES.includes(await phase()), true), true)
+  // The month's season, northern then southern (as shared/world.ts's seasonAt)
+  const month = new Date().getMonth()
+  const seasonOf = (m) => (m === 11 || m < 2 ? 'winter' : m < 5 ? 'spring' : m < 8 ? 'summer' : 'autumn')
+  check("and the seasons the month's (northern)", await until(season, seasonOf(month)), seasonOf(month))
+  await skySelect.selectOption('dusk')
+  check('Always dusk: the strip is at dusk', await until(phase, 'dusk'), 'dusk')
+  await seasonsSelect.selectOption('south')
+  check('Southern: the season six months on', await until(season, seasonOf((month + 6) % 12)), seasonOf((month + 6) % 12))
+  await seasonsSelect.selectOption('off')
+  check('Seasons off: no season on the strip', await until(season, 'none'), 'none')
+  await skySelect.selectOption('clock')
+  await seasonsSelect.selectOption('north')
+  check('back to the clock and the northern seasons', [await until(async () => PHASES.includes(await phase()), true), await until(season, seasonOf(month))], [true, seasonOf(month)])
   if (SERVER_HAS_ENVS) {
     const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
     await openSettingsTab(settings, 'Environments')

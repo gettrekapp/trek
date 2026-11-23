@@ -70,8 +70,24 @@ counts as a summit (and grows the cairn) when it arrives later. A branch that su
 checked out in its worktree shows no trail (after its 24 hours at the peak) until that worktree
 changes branch.
 
+**The world** (part 3d-1, looks only: nothing here pays). The strip's sky follows the window's
+clock: dawn 05–08, day 08–17, dusk 17–20 and night 20–05, each blending into the next over its
+last 30 minutes. Day is a muted blue-grey with a pale sun and dark string lights; night is darker,
+with more stars and a wider glow from the fire. The seasons follow the month (northern, or southern:
+six months on): winter frosts the pines, whitens the ground's edge, caps the ridge and the peak with
+snow and lets a few flakes fall; spring puts small flowers on the ground (between the camps and the
+buildings, never under a button); summer brings fireflies at dusk and night; autumn rusts some pines
+and drops leaves. The weather is the window's project's: rain while any of its trails' pull requests
+has failing checks (for at most 24 hours after their last result; snow in winter), fog once it has
+been quiet for 12 hours (no activity event and no working minute), else clear; the header shows 🌧️,
+❄️ or 🌫️ after the counts, its title saying why ("Rain: checks failing on feature/x", "Fog: quiet
+for 14 h"). Under reduced motion nothing falls or drifts: a few still streaks, flakes, leaves or
+fireflies, and still fog. Settings → Plugins → Campsite has **Sky** (Follow the clock, or Always
+dusk: the strip's look before 3d) and **Seasons** (Northern, Southern, Off). Dusk with the seasons
+off and clear weather is exactly the strip before 3d-1.
+
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
-- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 4; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear`, `pin` and `journal` (part 3b), `trailLog` and the `summit` event (part 3c); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
+- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`, version 5; older versions migrate on load), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a), `gear`, `pin` and `journal` (part 3b), `trailLog` and the `summit` event (part 3c); each project's last activity and the trails' checks for the weather (part 3d-1); the host's `projectName` and `worktree` name the journal's places (`hostWhere`); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
 - `shared/`: pure, tested in `scripts/campsite*.test.mjs`
   - `hiker.ts`: a look from the session id (provider = jacket color); `withKit` dresses it in a member's gear
   - `pixels.ts`: the 12×16 pixels of each pose, with the gear's pack, boots, hat and tool
@@ -79,7 +95,7 @@ changes branch.
   - `layout.ts`: where tents, the log and hikers stand; grouped mode when crowded (`moreWaiting` and `moreTents` count what does not fit); badge wording and color, tent colors, which way a camp's list opens, the header line, the collapsed row
   - `dog.ts`: the camp dog's pixels, and where it runs next
   - `stage.ts`: the Pixi strip's pure half: pixels to RGBA, the motions' timing, walks in and off (`reconcileMovers`), the dog's wander, and where the backdrop, fire, tents, log and signs go
-  - `prefs.ts`: the per-app switches
+  - `prefs.ts`: the per-app switches, and the sky and seasons choices
   - `camp.ts`: the camp and its snapshot
   - `crew.ts`: names, assignment (pins first), trips, levels, summits, pinning, the seen session types and agents, each session's gear for its hiker
   - `journal.ts`: a member's journal entries and their words
@@ -91,14 +107,16 @@ changes branch.
   - `campEdges.ts`: where buildings stand at the strip's ends, and the middle left for the tents
   - `buildingPixels.ts`: the buildings' pixels, the fire ring's stones, the string lights, the popover's icons
   - `trails.ts`: the trails' stages, what moves them (`trailEvent`), `reconcile` with a project's worktrees, the history, the cairn's size
-  - `mountain.ts`: the peak, its ledges and path, the flags' places and pixels, the summit's climb and sparks, the cairn's pixels and place
+  - `mountain.ts`: the peak, its ledges and path (in the world's colours, `mountainLook`), the flags' places and pixels, the summit's climb and sparks, the cairn's pixels and place
+  - `world.ts`: the time of day (`phaseAt`), the season (`seasonAt`), the backdrop's palettes (`paletteAt`; dusk is the strip's colours before 3d), the weather (`weatherOf`), the world's key, the snow caps (`capsAbove`)
+  - `touches.ts`: spring's flowers, the particle pool (rain, snow, leaves, fireflies; at most 60, moved in place), fog's bands
 - `client/`: the slots `sessionIndicator`, `terminalBarEnd`, `bottomBar` and `settings`
   - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `MemberView.tsx` (a member: pin, gear, journal), `TrailsTab.tsx` (the trails and their history), `AwayCard.tsx` (While you were away)
-  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the buildings, the flags, the cairn, the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the backdrop, tents and log; `scene/actors/` (mountain and cairn, hikers, dog, fire, buildings) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
+  - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the buildings, the flags, the cairn, the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the tents and log; `scene/actors/` (the world: the backdrop, flowers and fog; mountain and cairn, hikers, dog, fire, buildings, particles) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
   - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared; a member's journal on request), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), a session's hiker look in its member's gear (`useHikerLook`: it listens for the session's kit alone, so a push that only moves the wood doesn't render the hikers again), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
-- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages)
+- `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages); `?at=` pins its clock and `?weather=rain|fog` forces the weather; `npm run campsite:render -- <dir> --freeze` stops the page's clocks (and seeds `Math.random`), so two runs can be compared byte for byte
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has nine methods (`state`, the camp's snapshot; `build`, `recruit`, `gear` and `pin`, which
