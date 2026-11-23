@@ -62,9 +62,14 @@ export function useCamp(host: ClientPluginHost): CampSnapshot | null {
 /** How often a visible window tells the server the camp was seen */
 const SEEN_EVERY_MS = 5 * 60_000
 
-/** Tells the server this window saw the camp: on load, when the document becomes visible, and every 5 minutes while it is (campsite part 3a: the away card) */
-export function useSeen(host: ClientPluginHost): void {
+/**
+ * Tells the server this window saw the camp: on load, when the document becomes visible, and every
+ * 5 minutes while it is (campsite part 3a: the away card). Only while `active` (the strip is shown):
+ * a hidden strip is time away from the camp.
+ */
+export function useSeen(host: ClientPluginHost, active: boolean): void {
   useEffect(() => {
+    if (!active) return
     const store = campStore(host)
     const ping = (): void => {
       if (!document.hidden) store.seen()
@@ -76,7 +81,7 @@ export function useSeen(host: ClientPluginHost): void {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', ping)
     }
-  }, [host])
+  }, [host, active])
 }
 
 function subscribeVisibility(listener: () => void): () => void {

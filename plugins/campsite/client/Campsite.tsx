@@ -34,7 +34,8 @@ export function Campsite(): React.JSX.Element | null {
   const [{ loaded, prefs }, setPref] = usePrefs(host)
   const sessions = useSessions(host)
   const camp = useCamp(host)
-  useSeen(host)
+  // A hidden strip is time away from the camp: no pings
+  useSeen(host, loaded && prefs.showCampsite)
   const selected = useSelected(host)
   const now = useNow()
   const hidden = useDocumentHidden()
@@ -61,6 +62,13 @@ export function Campsite(): React.JSX.Element | null {
     setCampOpen(null)
     if (refocus) campOpener.current?.focus()
   }, [])
+  // The counts button (collapsed or expanded): focus goes back to it when the away card is dismissed
+  const countsButton = useRef<HTMLButtonElement | null>(null)
+  // The camp's state gone (the plugin's server half went away), or the strip collapsed or expanded: the popover's opener is gone
+  const hasCamp = camp !== null
+  useEffect(() => {
+    setCampOpen(null)
+  }, [hasCamp, prefs.campsiteCollapsed])
   // Out of grouped mode, or its tent gone: nothing to show
   const openGone =
     openTent !== null &&
@@ -89,7 +97,14 @@ export function Campsite(): React.JSX.Element | null {
     setCampOpen((o) => (o !== null && o.focus === focus ? null : { left: r.left, top: r.top, focus }))
   }
   const campButton = camp && (
-    <button className="cs-camp-button" title="Open the camp" aria-haspopup="dialog" aria-expanded={campOpen !== null} onClick={(e) => openCamp(e.currentTarget, null)}>
+    <button
+      ref={countsButton}
+      className="cs-camp-button"
+      title="Open the camp"
+      aria-haspopup="dialog"
+      aria-expanded={campOpen !== null && campOpen.focus === null}
+      onClick={(e) => openCamp(e.currentTarget, null)}
+    >
       {campCounts(camp)}
     </button>
   )
@@ -99,6 +114,8 @@ export function Campsite(): React.JSX.Element | null {
     <AwayCard
       away={camp.away}
       onDismiss={() => {
+        // The card goes; its focus would be lost
+        countsButton.current?.focus()
         campStore(host)
           .awaySeen()
           .catch(() => {
@@ -152,6 +169,7 @@ export function Campsite(): React.JSX.Element | null {
         </button>
         <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
         {campButton}
+        {awayCard}
       </div>
       {width > 0 && (
         <div className="cs-stage">
@@ -206,7 +224,6 @@ export function Campsite(): React.JSX.Element | null {
           }}
         />
       )}
-      {awayCard}
       {campPopover}
     </div>
   )

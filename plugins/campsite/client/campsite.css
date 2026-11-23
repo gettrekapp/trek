@@ -222,7 +222,10 @@
 .cs-header {
   position: absolute;
   left: 6px;
+  right: 8px;
   top: 6px;
+  /* As wide as the strip (the away card sits at its right end): only its controls take the pointer */
+  pointer-events: none;
   z-index: 5;
   display: flex;
   align-items: center;
@@ -464,6 +467,10 @@
   outline: 1px solid #ffe680;
   outline-offset: 1px;
 }
+.cs-header > button,
+.cs-header > .cs-away {
+  pointer-events: auto;
+}
 /* The header's camp counts: a button that opens the camp */
 .cs-camp-button {
   flex: none;
@@ -517,6 +524,7 @@
   margin-bottom: 6px;
 }
 .cs-camp-tabs button {
+  font-family: inherit;
   flex: 1;
   height: 24px;
   background: none;
@@ -573,6 +581,7 @@
   font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .cs-shop-build {
+  font-family: inherit;
   flex: none;
   height: 24px;
   padding: 0 10px;
@@ -601,6 +610,10 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.cs-crew-gone {
+  display: block;
+  padding: 2px 6px;
+}
 .cs-crew-empty {
   padding: 6px;
   color: #6f6f78;
@@ -619,36 +632,50 @@
   height: 100%;
   background: #c8a24a;
 }
+/* "While you were away": one line at the end of the expanded strip's header (cut short, the whole
+   line in its tooltip), so it covers neither the counts nor a tent's sign; fixed above the bar,
+   collapsed (the bar clips) */
 .cs-away {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 6;
-  max-width: min(560px, calc(100% - 16px));
+  position: static;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 560px;
+  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
+  gap: 8px;
+  height: 24px;
+  padding: 0 2px 0 8px;
   background: #1c1d1f;
   border: 1px solid rgba(255, 210, 122, 0.4);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
   color: #ededf0;
   font-size: 12px;
 }
 .campsite.collapsed .cs-away {
   position: fixed;
-  top: auto;
   bottom: 44px;
   right: 12px;
   z-index: 50;
+  max-width: min(560px, calc(100vw - 24px));
+  height: auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 .cs-away-text {
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.campsite.collapsed .cs-away-text {
+  white-space: normal;
 }
 .cs-away-dismiss {
   flex: none;
-  height: 22px;
+  height: 20px;
+  font-family: inherit;
   padding: 0 8px;
   background: #2a2a30;
   border: 1px solid rgba(255, 255, 255, 0.14);

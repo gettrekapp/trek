@@ -21,11 +21,14 @@ always), the lake and its dock (each resting crew member fishes 1, then 2 wood a
 three cabins (3 more bunks each). **Crew** lists the members (level, XP, where they are) and three
 walk-ins a day to hire into a free bunk (200 wood, 50 more for each hire after). Cabins stand at the
 strip's left end, the lake and the garden at its right (narrow windows drop the outermost first);
-click one to open its row. A window that hasn't seen the camp for more than 4 hours gets a "While
-you were away" card with what it earned, until one window dismisses it.
+click one to open its row. When no window has seen the camp for more than 4 hours, every window
+shows a "While you were away" card with what it earned until one dismisses it. A window sees the
+camp only while its strip is shown (expanded or collapsed): with the strip turned off you are away
+from the camp, so the card may cover a long time when you turn it back on. A server restart or
+upgrade is not time away (the seen clock moves on by the downtime).
 
 - `manifest.ts`: id `campsite`, on by default, no secrets or settings
-- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a); `TREK_CAMPSITE_SEED_WOOD` gives a fresh camp wood and 3 markers for the smokes
+- `server/`: the camp (part 2): `server/camp.ts` wires core's activity feed (`host.onActivity`) through the reward rules into `camp.json` (`server/store.ts`), answers `campsite.state` and sends `state` to every project's windows (`host.emitAll`); `TREK_CAMPSITE_MINUTE_MS` shortens a working minute for tests; the shop's handlers `build`, `recruit`, `seen` and `awaySeen` (part 3a); `TREK_CAMPSITE_SEED_WOOD` (test-only) gives a fresh camp wood and 3 markers for the smokes
 - `shared/`: pure, tested in `scripts/campsite*.test.mjs`
   - `hiker.ts`: a look from the session id (provider = jacket color)
   - `pixels.ts`: the 12×16 pixels of each pose
@@ -47,11 +50,11 @@ you were away" card with what it earned, until one window dismisses it.
   - `Campsite.tsx` (the strip and its collapsed bar), `Tent.tsx` (a tent's sign, a camp's badge and its grouped popover; Pixi draws the tent), `MiniHiker.tsx` (a tab-size hiker in the collapsed bar), `CampPopover.tsx` (the camp: build and hire), `AwayCard.tsx` (While you were away)
   - `scene/`: the expanded strip, drawn by Pixi. `PixiStrip.tsx` loads `CampStage.ts` on first use and lays a DOM overlay of buttons over the hikers and the dog (names, focus, clicks); `CampStage.ts` runs the app and draws the backdrop, tents and log; `scene/actors/` (hikers, dog, fire, buildings) draw and animate the rest; `textures.ts` and `draw.ts` turn the pixel data and geometry into Pixi objects. Without a renderer (WebGL, else WebGPU) the strip shows a note and a row of tab-size hikers.
   - `Hiker.tsx`, `SessionIndicator.tsx`, `TerminalHiker.tsx`, `Settings.tsx`
-  - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared), `hooks.ts` (sessions, selection, prefs, the camp, width, reduced motion)
+  - `prefsStore.ts` (the per-app prefs, shared by the slots), `campStore.ts` (the camp's snapshot, shared), `hooks.ts` (sessions, selection, prefs, the camp, the seen heartbeat (`useSeen`: on load, when the window is visible again and every 5 minutes, while the strip is shown), width, reduced motion)
   - `campsite.css`: the tab and terminal-bar hikers' animations, the overlay, header, badges and popover; `prefers-reduced-motion` is handled here and in `CampStage` (hikers stand still)
 - `dev/`: a page with the strip on a fake host; `npm run campsite:render` screenshots it per scenario into `.campsite-render/` (gitignored; not `out/`, which the app packages)
 
 Besides the host's session view (`sessions`, `onSessionsChanged`, `selectedTerminalId`,
 `focusSession`), it has five methods (`state`, the camp's snapshot; `build` and `recruit`, which
-answer the new snapshot; `seen`, sent on load and every 5 minutes while a window is visible;
+answer the new snapshot; `seen`, sent on load and every 5 minutes while a window and its strip are shown;
 `awaySeen`, the card's dismiss) and one event (`state`, sent when the snapshot changes).
