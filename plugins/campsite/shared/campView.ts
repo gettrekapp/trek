@@ -226,6 +226,15 @@ export function monthDay(at: number): string {
 const cap = (s: string): string => `${s[0].toUpperCase()}${s.slice(1)}`
 const and = (words: readonly string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`)
 const PHASE_ORDER: readonly Phase[] = ['dawn', 'day', 'dusk', 'night']
+/** Two times of day in words, keyed in PHASE_ORDER */
+const PHASE_PAIRS: Readonly<Record<string, string>> = {
+  'dawn+day': 'Mornings and by day',
+  'dawn+dusk': 'At dawn and dusk',
+  'dawn+night': 'At night and dawn',
+  'day+dusk': 'By day and at dusk',
+  'day+night': 'By day and at night',
+  'dusk+night': 'Dusk and night'
+}
 
 /** An unseen species' hint (ranger tower II), from its gates: "At night · Near water · Winter only"; "Any time, anywhere" with none */
 export function speciesHint(s: SpeciesDef): string {
@@ -235,7 +244,7 @@ export function speciesHint(s: SpeciesDef): string {
     const missing = PHASE_ORDER.filter((x) => !p.includes(x))
     if (p.length === 1) parts.push(p[0] === 'day' ? 'By day' : `At ${p[0]}`)
     else if (missing.length === 1) parts.push(missing[0] === 'day' ? 'Not by day' : `Not at ${missing[0]}`)
-    else parts.push(cap(and(PHASE_ORDER.filter((x) => p.includes(x)))))
+    else if (missing.length === 2) parts.push(PHASE_PAIRS[PHASE_ORDER.filter((x) => p.includes(x)).join('+')])
   }
   if (s.needs === 'lake') parts.push('Near water')
   const q = s.seasons

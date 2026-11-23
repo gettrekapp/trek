@@ -9,22 +9,45 @@ import { SPECIES, species } from '../plugins/campsite/shared/wildlife.ts'
 const D = 86_400_000
 const NOV23 = new Date(2026, 10, 23, 15).getTime()
 
-test('speciesHint: the gates in words', () => {
-  const hint = (id) => speciesHint(species(id))
-  assert.equal(hint('owl'), 'At night')
-  assert.equal(hint('hawk'), 'By day')
-  assert.equal(hint('raccoon'), 'Dusk and night')
-  assert.equal(hint('squirrel'), 'Not at night')
-  assert.equal(hint('woodpecker'), 'Dawn and day')
-  assert.equal(hint('chipmunk'), 'By day · Not in winter')
-  assert.equal(hint('beaver'), 'Not by day · Near water')
-  assert.equal(hint('frog'), 'Near water · Spring and summer · More in the rain')
-  assert.equal(hint('stag'), 'Winter only')
-  assert.equal(hint('lynx'), 'Dusk and night · Autumn and winter')
-  assert.equal(hint('moose'), 'More in fog')
-  assert.equal(hint('elk'), 'More in autumn')
-  assert.equal(hint('deer'), 'More at dawn and dusk')
-  assert.equal(hint('fox'), 'Any time, anywhere')
+test('speciesHint: every species\' gates in words', () => {
+  const want = {
+    deer: 'More at dawn and dusk',
+    fox: 'Any time, anywhere',
+    rabbit: 'Any time, anywhere',
+    squirrel: 'Not at night',
+    chipmunk: 'By day · Not in winter',
+    raccoon: 'Dusk and night',
+    skunk: 'Dusk and night · Not in winter',
+    porcupine: 'Any time, anywhere',
+    marmot: 'By day · Not in winter',
+    bear: 'Not in winter',
+    elk: 'More in autumn',
+    owl: 'At night',
+    bat: 'Dusk and night · Not in winter',
+    hawk: 'By day',
+    woodpecker: 'Mornings and by day',
+    heron: 'Near water · Not in winter',
+    duck: 'Near water',
+    beaver: 'Not by day · Near water',
+    otter: 'Near water',
+    frog: 'Near water · Spring and summer · More in the rain',
+    moose: 'More in fog',
+    lynx: 'Dusk and night · Autumn and winter',
+    wolf: 'Dusk and night',
+    stag: 'Winter only'
+  }
+  assert.deepEqual(Object.fromEntries(SPECIES.map((s) => [s.id, speciesHint(s)])), want)
+})
+
+test('speciesHint: any two times of day read naturally; all four say nothing', () => {
+  const two = (phases) => speciesHint({ id: 'x', name: 'X', weight: 1, phases })
+  assert.equal(two(['day', 'dawn']), 'Mornings and by day')
+  assert.equal(two(['dawn', 'dusk']), 'At dawn and dusk')
+  assert.equal(two(['night', 'dawn']), 'At night and dawn')
+  assert.equal(two(['dusk', 'day']), 'By day and at dusk')
+  assert.equal(two(['day', 'night']), 'By day and at night')
+  assert.equal(two(['night', 'dusk']), 'Dusk and night')
+  assert.equal(two(['dawn', 'day', 'dusk', 'night']), 'Any time, anywhere')
 })
 
 test('guideCards: 20 commons then 4 rares; a seen card names it, its count and first day; unseen "???" with nothing, a hint at tower II, and a rare without the tower needs it', () => {
