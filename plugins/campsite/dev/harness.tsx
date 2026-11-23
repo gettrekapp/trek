@@ -1,6 +1,6 @@
 // The campsite strip without the app: the real Campsite component on a fake plugin host, with the
 // sessions of the scenario named in ?scenario= (default "few"); ?dog=0 hides the dog.
-// ?built=out builds every building.
+// ?built=out builds every building; ?away=1 shows the away card.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
 import { PluginHostContext, type ClientPluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
@@ -41,6 +41,11 @@ state.crew[0].name = 'Aspen'
 state.crew[0].xp = 150
 state.assignments.t1 = { crew: state.crew[0].id, project: 'harness' }
 if (params.get('built') === 'out') state.built = { lights: 1, fire: 3, garden: 2, lake: 2, cabins: 3 }
+// ?away=1: unseen for 9 hours, with something to tell (the card)
+if (params.get('away') === '1') {
+  state.seenAt = T - 9 * 3_600_000
+  state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 1, levelUps: [{ crewId: state.crew[1].id, level: 3 }] }
+}
 const camp = snapshot(state, T)
 const host = {
   id: 'campsite',

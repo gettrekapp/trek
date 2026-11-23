@@ -11,6 +11,7 @@ import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel } from '../shared/crew.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
+import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
 import { useCamp, useDocumentHidden, useNow, usePrefs, useSeen, useSelected, useSessions, useWidth } from './hooks.ts'
@@ -94,6 +95,18 @@ export function Campsite(): React.JSX.Element | null {
   )
   // Fixed to the window, so neither the collapsed bar nor the stage clips it
   const campPopover = camp && campOpen && <CampPopover key={campOpen.focus ?? 'camp'} camp={camp} at={campOpen} sessions={sessions} store={campStore(host)} onClose={closeCamp} />
+  const awayCard = camp?.away && (
+    <AwayCard
+      away={camp.away}
+      onDismiss={() => {
+        campStore(host)
+          .awaySeen()
+          .catch(() => {
+            // An older server: the card stays until the next push
+          })
+      }}
+    />
+  )
 
   if (prefs.campsiteCollapsed) {
     const waiting = sessions.filter(isWaiting)
@@ -116,6 +129,7 @@ export function Campsite(): React.JSX.Element | null {
           ))}
           {row.more > 0 && <span className="cs-mini-more">+{row.more}</span>}
         </div>
+        {awayCard}
         {campPopover}
       </div>
     )
@@ -192,6 +206,7 @@ export function Campsite(): React.JSX.Element | null {
           }}
         />
       )}
+      {awayCard}
       {campPopover}
     </div>
   )
