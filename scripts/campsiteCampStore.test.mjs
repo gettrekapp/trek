@@ -90,8 +90,9 @@ test('an event during a purchase shows at once; the answer (the purchase) wins; 
       }
       return new Promise((r) => (answer = r))
     },
-    onEvent: (_name, fn) => {
-      emit = fn
+    onEvent: (name, fn) => {
+      // The pushed state (the store also listens for `tool`, part 4)
+      if (name === 'state') emit = fn
       return () => {}
     },
     onChanged: () => () => {}
@@ -159,4 +160,74 @@ test('trailLog: a reply without a list (an older server, a bad answer) is a fail
     const { host } = fakeHost({ state: { wood: 1 }, trailLog: reply })
     await assert.rejects(campStore(host).trailLog('p'), /shape/, JSON.stringify(reply))
   }
+})
+
+/** A host that answers `state` with `answer()` when the test says (`release`), and sends events by name */
+function eventHost(answer) {
+  const listeners = new Map()
+  const pending = []
+  const host = {
+    request: (method) => (method === 'state' ? new Promise((resolve) => pending.push(() => resolve(answer()))) : Promise.resolve({ ok: true })),
+    onEvent: (event, listener) => {
+      listeners.set(event, listener)
+      return () => listeners.delete(event)
+    },
+    onChanged: () => () => {},
+    projectId: 'p'
+  }
+  return { host, send: (event, data) => listeners.get(event)?.(data), release: () => pending.splice(0).forEach((r) => r()) }
+}
+
+test("tools (campsite part 4): the state answer's tools on this window's clock (by their age), apart from the snapshot; tool events set and drop one", async (t) => {
+  t.mock.method(Date, 'now', () => 50_000)
+  const h = eventHost(() => ({ wood: 5, tools: { t1: { kind: 'edit', label: 'Campsite.tsx', age: 3000 }, t2: { kind: 'dance', label: 9, age: -5 }, t3: 'junk' } }))
+  const store = campStore(h.host)
+  let heard = 0
+  const off = store.subscribe(() => heard++)
+  assert.deepEqual(store.tools(), {})
+  h.release()
+  await flush()
+  assert.deepEqual(store.snapshot(), { wood: 5 }, 'the snapshot without its tools')
+  assert.deepEqual(store.tools(), { t1: { kind: 'edit', label: 'Campsite.tsx', at: 47_000 }, t2: { kind: 'other', label: '', at: 50_000 } })
+  const before = store.tools()
+  h.send('tool', { terminalId: 't3', tool: { kind: 'web', label: 'github.com', at: 1 } })
+  assert.deepEqual(store.tools().t3, { kind: 'web', label: 'github.com', at: 50_000 }, "stamped with this window's clock")
+  assert.notEqual(store.tools(), before, 'a new object')
+  assert.equal(store.tools().t1, before.t1, 'the others kept as they were')
+  h.send('tool', { terminalId: 't1', tool: null })
+  assert.deepEqual(Object.keys(store.tools()), ['t2', 't3'])
+  h.send('tool', { tool: { kind: 'edit', label: 'x' } })
+  h.send('tool', null)
+  assert.deepEqual(Object.keys(store.tools()), ['t2', 't3'], 'no session: ignored')
+  // A pushed state has no tools and leaves them be
+  h.send('state', { wood: 6 })
+  assert.deepEqual(Object.keys(store.tools()), ['t2', 't3'])
+  assert.ok(heard >= 4)
+  off()
+})
+
+test('tools (campsite part 4): a state answer asked before a tool event leaves that session to the event; an older server has none', async () => {
+  let tools = { t1: { kind: 'read', label: 'old.ts', age: 0 }, t2: { kind: 'read', label: 'two.ts', age: 0 } }
+  const h = eventHost(() => ({ wood: 1, tools }))
+  const store = campStore(h.host)
+  const off = store.subscribe(() => {})
+  // Asked; then t1's call goes and t2 gets a new one; then the answer comes (from before both)
+  h.send('tool', { terminalId: 't1', tool: null })
+  h.send('tool', { terminalId: 't2', tool: { kind: 'edit', label: 'new.ts' } })
+  h.release()
+  await flush()
+  assert.deepEqual(Object.keys(store.tools()).sort(), ['t2'])
+  assert.equal(store.tools().t2.label, 'new.ts')
+  assert.deepEqual(store.snapshot(), { wood: 1 }, 'the snapshot lands: tool events do not hold it back')
+  off()
+  // An older server's answer: no tools
+  const old = eventHost(() => ({ wood: 2 }))
+  const oldStore = campStore(old.host)
+  const off2 = oldStore.subscribe(() => {})
+  old.release()
+  await flush()
+  assert.deepEqual(oldStore.tools(), {})
+  assert.deepEqual(oldStore.snapshot(), { wood: 2 })
+  off2()
+  tools = null
 })

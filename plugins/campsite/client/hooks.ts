@@ -1,11 +1,13 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
 // prefs, the camp's snapshot and the seen heartbeat, a session's hiker look (wearing its member's
-// gear), the document's visibility, reduced motion and an element's width.
+// gear), the sessions' latest tool calls (part 4), the document's visibility, reduced motion and an
+// element's width.
 import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../shared/camp.ts'
 import { sessionKit } from '../shared/crew.ts'
 import { kitOf, lookFor, withKit, type Look } from '../shared/hiker.ts'
+import type { HikerTool } from '../shared/pose.ts'
 import type { CampsitePrefKey, CampsitePrefs } from '../shared/prefs.ts'
 import type { Hemisphere } from '../shared/world.ts'
 import { campStore } from './campStore.ts'
@@ -60,6 +62,21 @@ export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, <K extends Cam
 export function useCamp(host: ClientPluginHost): CampSnapshot | null {
   const store = campStore(host)
   return useSyncExternalStore(store.subscribe, store.snapshot)
+}
+
+/** Every session's latest tool call (part 4) by terminalId: the same object while none changes */
+export function useTools(host: ClientPluginHost): Readonly<Record<string, HikerTool>> {
+  const store = campStore(host)
+  return useSyncExternalStore(store.subscribe, store.tools)
+}
+
+/** A session's latest tool call (part 4), or undefined: the same object while it doesn't change */
+export function useTool(host: ClientPluginHost, terminalId: string): HikerTool | undefined {
+  const store = campStore(host)
+  return useSyncExternalStore(store.subscribe, () => {
+    const tools = store.tools()
+    return Object.hasOwn(tools, terminalId) ? tools[terminalId] : undefined
+  })
 }
 
 /**

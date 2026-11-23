@@ -5,12 +5,16 @@
 // the new snapshot; a refusal reloads the state and rethrows, its message saying why. A member's
 // journal and a project's trail history are asked for on their own (the snapshot carries neither).
 // `seen` and `awaySeen` keep the away card; `seen` also tells the server the window's time zone and
-// Seasons setting (part 3d-2: they gate the wildlife). No React.
+// Seasons setting (part 3d-2: they gate the wildlife). Real chores (part 4): each session's latest
+// tool call, from the `state` answer (its project's, with their ages) and the `tool` events, stamped
+// with this window's clock when heard; kept beside the snapshot (a pushed state has none). No React.
+import { agentTool } from '../../../src/shared/plugins/agents.ts'
 import type { ClientPluginHost } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot, PinRef } from '../shared/camp.ts'
 import type { GearSlot } from '../shared/catalog.ts'
 import type { JournalEntry } from '../shared/journal.ts'
 import type { Hemisphere } from '../shared/world.ts'
+import type { HikerTool } from '../shared/pose.ts'
 import type { Offer } from '../shared/shop.ts'
 import type { TrailRecord } from '../shared/trails.ts'
 
@@ -18,6 +22,8 @@ type CampHost = Pick<ClientPluginHost, 'request' | 'onEvent' | 'onChanged'> & Pa
 export interface CampStore {
   subscribe(listener: () => void): () => void
   snapshot(): CampSnapshot | null
+  /** Each session's latest tool call (part 4) by terminalId; a new object when one changes */
+  tools(): Readonly<Record<string, HikerTool>>
   /** Builds a building's next tier at its offered price */
   build(offer: Offer): Promise<void>
   /** Hires one of today's walk-ins at `cost` wood */
@@ -37,6 +43,24 @@ export interface CampStore {
 }
 const stores = new WeakMap<CampHost, CampStore>()
 
+/** A tool call as heard at `at` (this window's ms), or null when it is not one */
+function heardTool(value: unknown, at: number): HikerTool | null {
+  const tool = agentTool(value)
+  return tool && { ...tool, at }
+}
+
+/** The `state` answer's tools (by session, with their ages), placed on this window's clock; none from an older server */
+function toolsFrom(value: unknown, now: number): Record<string, HikerTool> {
+  const out: Record<string, HikerTool> = {}
+  if (!value || typeof value !== 'object') return out
+  for (const [terminalId, entry] of Object.entries(value as Record<string, unknown>)) {
+    const age = (entry as { age?: unknown } | null)?.age
+    const tool = heardTool(entry, now - (typeof age === 'number' && Number.isFinite(age) && age > 0 ? age : 0))
+    if (tool) out[terminalId] = tool
+  }
+  return out
+}
+
 export function campStore(host: CampHost): CampStore {
   let store = stores.get(host)
   if (!store) stores.set(host, (store = createStore(host)))
@@ -45,19 +69,44 @@ export function campStore(host: CampHost): CampStore {
 
 function createStore(host: CampHost): CampStore {
   let state: CampSnapshot | null = null
+  let tools: Readonly<Record<string, HikerTool>> = {}
   const listeners = new Set<() => void>()
   let offs: (() => void)[] = []
   // Bumped by every event and purchase, so a load answer older than it is dropped
   let version = 0
+  // Bumped by every tool event (not `version`: they come every few seconds, and a load must still land); each session's last one
+  let toolSeq = 0
+  const toolSeqOf = new Map<string, number>()
+  const notify = (): void => {
+    for (const l of listeners) l()
+  }
   const set = (next: CampSnapshot | null): void => {
     state = next
-    for (const l of listeners) l()
+    notify()
   }
   const load = (): void => {
     const asked = version
-    host.request<CampSnapshot>('state', host.projectId === undefined ? {} : { projectId: host.projectId }).then(
-      (snap) => {
+    const askedTools = toolSeq
+    host.request<CampSnapshot & { tools?: unknown }>('state', host.projectId === undefined ? {} : { projectId: host.projectId }).then(
+      (answer) => {
+        // The window's project's tools ride on the answer only (an older server has none)
+        let snap: CampSnapshot = answer
+        let ages: unknown
+        if (answer && typeof answer === 'object' && 'tools' in answer) {
+          const { tools: given, ...rest } = answer
+          ages = given
+          snap = rest
+        }
+        // The answer's tools, less the sessions a tool event has spoken for since it was asked
+        const next = toolsFrom(ages, Date.now())
+        for (const [terminalId, seq] of toolSeqOf) {
+          if (seq <= askedTools) continue
+          if (Object.hasOwn(tools, terminalId)) next[terminalId] = tools[terminalId]
+          else delete next[terminalId]
+        }
+        tools = next
         if (asked === version) set(snap)
+        else notify()
       },
       () => {
         // An older server, or the plugin's server half missing: no counts
@@ -85,6 +134,17 @@ function createStore(host: CampHost): CampStore {
             version++
             set(snap)
           }),
+          host.onEvent<{ terminalId?: unknown; tool?: unknown }>('tool', (data) => {
+            const terminalId = data?.terminalId
+            if (typeof terminalId !== 'string') return
+            toolSeqOf.set(terminalId, ++toolSeq)
+            const tool = heardTool(data.tool, Date.now())
+            const next = { ...tools }
+            if (tool) next[terminalId] = tool
+            else delete next[terminalId]
+            tools = next
+            notify()
+          }),
           host.onChanged(load)
         ]
         load()
@@ -98,6 +158,7 @@ function createStore(host: CampHost): CampStore {
       }
     },
     snapshot: () => state,
+    tools: () => tools,
     build: (offer) => buy('build', { id: offer.id, tier: offer.tier, cost: { wood: offer.cost.wood, markers: offer.cost.markers } }),
     recruit: (candidate, cost) => buy('recruit', { candidate, cost: { wood: cost } }),
     gear: (crewId, slot, tier, cost) => buy('gear', { crewId, slot, tier, cost: { wood: cost } }),
