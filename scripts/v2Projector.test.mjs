@@ -595,6 +595,15 @@ test('automations are carried into the project file as they are; none, no key', 
   assert.equal('automations' in projectV2(fixture()).slice.project, false)
 })
 
+test('tasks are carried into the project file as they are; none, no key; tasksEnabled comes with the settings', () => {
+  const tasks = [{ id: 't', title: 'Fix it', createdAt: 1, updatedAt: 2 }]
+  assert.deepEqual(projectV2({ ...fixture(), tasks }).slice.project.tasks, tasks)
+  assert.equal('tasks' in projectV2(fixture()).slice.project, false)
+  const p = fixture()
+  p.settings = { ...p.settings, tasksEnabled: true }
+  assert.equal(projectV2(p).slice.project.tasksEnabled, true)
+})
+
 test("an automation's run tab carries its context; a normal tab has none", () => {
   const p = fixture()
   p.globalSessions.push(session('g3', { context: { kind: 'automation', automationId: 'a1' } }))

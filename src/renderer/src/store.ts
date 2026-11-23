@@ -252,6 +252,8 @@ export interface AppState {
   setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
   setCustomTags: (tags: WorktreeTag[]) => void
   setAudioAlerts: (enabled: boolean) => void
+  /** The Tasks page on or off for the project (its `tasksEnabled` setting) */
+  setTasksEnabled: (enabled: boolean) => void
   /** A plugin on or off for the project (its `plugins` setting) */
   setPluginEnabled: (id: string, enabled: boolean) => void
   setProjectName: (name: string) => void
@@ -301,6 +303,7 @@ export type SessionSetter = (typeof SESSION_SETTERS)[number]
 /** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Docker panel, the plugins' settings). */
 const SETTINGS_SETTERS = [
   'setAudioAlerts',
+  'setTasksEnabled',
   'setPluginEnabled',
   'setTitleBarColor',
   'setLogoImage',

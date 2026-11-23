@@ -949,6 +949,39 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return started
       }
     },
+    tasks: {
+      save: async (task, expectedUpdatedAt) => {
+        const { result, rev } = await requestWithRev('task.save', { projectId, task, ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}) })
+        if (rev) await deps.whenProjected(() => true, rev)
+        return result
+      },
+      setCompleted: async (taskId, completed) => {
+        const { rev } = await requestWithRev('task.setCompleted', { projectId, taskId, completed })
+        if (rev) await deps.whenProjected(() => true, rev)
+      },
+      setArchived: async (taskId, archived) => {
+        const { rev } = await requestWithRev('task.setArchived', { projectId, taskId, archived })
+        if (rev) await deps.whenProjected(() => true, rev)
+      },
+      remove: async (taskId) => {
+        const { rev } = await requestWithRev('task.delete', { projectId, taskId })
+        if (rev) await deps.whenProjected(() => true, rev)
+      },
+      reorder: async (taskIds) => {
+        const { rev } = await requestWithRev('task.reorder', { projectId, taskIds })
+        if (rev) await deps.whenProjected(() => true, rev)
+      },
+      start: async (taskId, repositoryId) => {
+        const { result, rev } = await requestWithRev('task.start', { projectId, taskId, repositoryId })
+        // Wait for the session's tab so the caller can show it.
+        const meta = await deps.whenProjected(() => deps.state().terminals[result.sessionId], rev)
+        return {
+          sessionId: result.sessionId,
+          ...(meta ? { windowWorktreeId: meta.worktreeId } : {}),
+          ...(result.linkWarnings?.length ? { linkWarnings: result.linkWarnings } : {})
+        }
+      }
+    },
     history: {
       list: async (repoId, branch, before) => request('history.list', { ...branchRef(repoId, branch), ...(before ? { before } : {}) }),
       onRecorded: (listener) =>

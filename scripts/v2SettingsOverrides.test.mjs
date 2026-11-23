@@ -42,6 +42,7 @@ function setup({ listsPlugin } = {}) {
 /** The store's SettingsSetter names (store.ts). */
 const SETTINGS_SETTERS = [
   'setAudioAlerts',
+  'setTasksEnabled',
   'setPluginEnabled',
   'setTitleBarColor',
   'setLogoImage',
@@ -73,6 +74,7 @@ test('each setter sends its key in the server form, with the current value as ex
   const type = { id: 't', name: 'Review', systemPrompt: '' }
   const button = { id: 'b', label: 'Go', text: 'go' }
   o.setAudioAlerts(true)
+  o.setTasksEnabled(true)
   // Claude's session mode is the claude plugin's project setting (plugins A2): its host writes it so.
   o.setPluginSetting('claudePermissionMode', '', 'Claude Code')
   o.setPluginSetting('claudePermissionMode', 'plan', 'Claude Code')
@@ -91,6 +93,7 @@ test('each setter sends its key in the server form, with the current value as ex
   o.setPluginSetting('azureDevOpsBaseUrl', '')
   assert.deepEqual(calls, [
     ['updateSettings', { audioAlerts: true }, { audioAlerts: false }],
+    ['updateSettings', { tasksEnabled: true }, { tasksEnabled: null }],
     ['updateSettings', { claudePermissionMode: 'plan' }, { claudePermissionMode: null }],
     ['updateSettings', { titleBarColor: '#123456' }, { titleBarColor: null }],
     ['updateSettings', { sessionSystemPrompt: null }, { sessionSystemPrompt: 'Run the tests' }],

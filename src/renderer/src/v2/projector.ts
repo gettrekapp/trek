@@ -344,7 +344,8 @@ export function projectV2(project: Project, options: ProjectionOptions = {}): V2
     worktreeTags: settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS,
     globalSessions,
     ...(order ? { worktreeOrder: order } : {}),
-    ...(project.automations?.length ? { automations: project.automations } : {})
+    ...(project.automations?.length ? { automations: project.automations } : {}),
+    ...(project.tasks?.length ? { tasks: project.tasks } : {})
   }
 
   return {

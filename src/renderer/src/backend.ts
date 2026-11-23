@@ -34,7 +34,7 @@ import type {
   WorktreeLocator
 } from '../../shared/types'
 import type { PluginWelcome } from './plugins/presence'
-import type { AutomationInput, ReviewComment } from '../../shared/model/types'
+import type { AutomationInput, ReviewComment, TaskInput } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
 import type { HistoryEvent, HistoryPage } from '../../shared/model/history'
 import type { McpToolCatalog } from '../../shared/mcpTools'
@@ -213,6 +213,17 @@ export interface WindowBackend {
     /** The missed-runs answer: `error` per automation whose run did not start */
     resolveMissed(run: string[], dismiss: string[]): Promise<{ automationId: string; sessionId?: string; error?: string }[]>
   }
+  /** The project's tasks (feature `tasks`). Each rejects on failure (its `code` is the wire code), for the caller to show. */
+  readonly tasks: {
+    /** Resolves once the window's mirror holds the save. CONFLICT when `expectedUpdatedAt` is not the stored one. */
+    save(task: TaskInput, expectedUpdatedAt?: number): Promise<{ id: string; updatedAt: number }>
+    setCompleted(taskId: string, completed: boolean): Promise<void>
+    setArchived(taskId: string, archived: boolean): Promise<void>
+    remove(taskId: string): Promise<void>
+    reorder(taskIds: string[]): Promise<void>
+    /** Starts the task in a new worktree; resolves once the window shows the session's tab, with the window's id for that worktree */
+    start(taskId: string, repositoryId: string): Promise<{ sessionId: string; windowWorktreeId?: string; linkWarnings?: string[] }>
+  }
   /** The worktree history (the `history` feature) */
   readonly history: {
     /** A branch's history, newest first: a page, older than the entry `before` names when given */
@@ -333,6 +344,7 @@ export const idleBackend: WindowBackend = {
   },
   pullRequests: { resolve: noProject },
   automations: { save: noProject, remove: noProject, runNow: noProject, resolveMissed: noProject },
+  tasks: { save: noProject, setCompleted: noProject, setArchived: noProject, remove: noProject, reorder: noProject, start: noProject },
   history: { list: noProject, onRecorded: () => () => {} },
   mcpTools: { list: noProject, trek: noProject },
   repos: { add: noProject, remove: noProject },

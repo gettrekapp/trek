@@ -308,6 +308,7 @@ export function v2SettingsOverrides(
   }
   return {
     setAudioAlerts: (enabled) => write('audioAlerts', 'Audio alerts', enabled),
+    setTasksEnabled: (enabled) => write('tasksEnabled', 'Tasks', enabled),
     // The whole `plugins` setting, from what the window shows (pending edits included).
     setPluginEnabled: (id, enabled) => writer.write(pluginsField, withPluginEnabled(overlaid()?.settings.plugins, id, enabled)),
     setTitleBarColor: (color) => write('titleBarColor', 'Title bar color', textOrNull(color)),

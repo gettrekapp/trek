@@ -14,6 +14,7 @@ export type FeatureName =
   | 'promote'
   | 'ui'
   | 'automations'
+  | 'tasks'
   | 'history'
   | 'mcpTools'
   | 'settingsEdit'
@@ -35,6 +36,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'promote',
   'ui',
   'automations',
+  'tasks',
   'history',
   'mcpTools',
   'settingsEdit',
@@ -55,6 +57,7 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Telling the server what the window shows, and showing a session it asks for (`ui.report`,
  *   `ui.focus`), need `ui`: nothing is sent to an older server.
  * - Automations need `automations`: an older server has no `automation.*`.
+ * - Tasks need `tasks`: an older server has no `task.*`.
  * - The History tab needs `history`: an older server records nothing.
  * - The quick button editor's MCP tool list needs `mcpTools`: an older server has no `mcpTools.list`.
  * - Asking the server for a pull request's head branch (Add Worktree) needs `prResolve`: an older
@@ -88,6 +91,7 @@ export const V2_FEATURES: BackendFeatures = {
   promote: true,
   ui: true,
   automations: true,
+  tasks: true,
   history: true,
   mcpTools: true,
   settingsEdit: true,
@@ -113,6 +117,7 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   promote: 'promote',
   ui: 'ui',
   automations: 'automations',
+  tasks: 'tasks',
   history: 'history',
   mcpTools: 'mcpTools',
   prResolve: 'prResolve'
