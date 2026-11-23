@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { NOTES_MAX, NOTE_MAX, POST_EVERY_MS, REPORT_MAX, addNote, cleanText, dropBadNotes, isNote, isReport, noteAtOf, notesOf, takePost, textLength, whoLine } from '../plugins/campsite/shared/notes.ts'
 import { JOURNAL_MAX, entryText, isEntry, note } from '../plugins/campsite/shared/journal.ts'
-import { NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, projectNoteAt, reportBy, reportExcerpt, unreadNotes } from '../plugins/campsite/shared/campView.ts'
+import { NOTES_SHOWN, NO_NOTES, REPORT_EXCERPT, boardLabel, noteHead, notesSeenNow, notesToggle, projectNoteAt, reportBy, reportExcerpt, shownNotes, unreadNotes } from '../plugins/campsite/shared/campView.ts'
 import { CAMP_VERSION, isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { restore } from '../plugins/campsite/shared/economy.ts'
 import { postReport, trailEvent, trailKey, trailLogOf } from '../plugins/campsite/shared/trails.ts'
@@ -163,6 +163,22 @@ test('noticeboard words: who and where, the button, unread notes, the seen time,
   assert.equal(reportExcerpt('🔥'.repeat(REPORT_EXCERPT + 5)).text, `${'🔥'.repeat(REPORT_EXCERPT - 1)}…`, 'code points: never half an emoji')
   assert.equal(reportBy({ by: 'Claude · Juniper', at: T0 - 5 * 60_000 }, T0), 'Claude · Juniper, 5 m ago')
   assert.equal(reportBy({ at: T0 }, T0), 'An agent, just now')
+})
+
+test('the Noticeboard shows the newest three notes, then Show all (n) / Show fewer', () => {
+  assert.equal(NOTES_SHOWN, 3)
+  const list = ['a', 'b', 'c', 'd', 'e'] // oldest first, as kept
+  assert.deepEqual(shownNotes(list, false), ['e', 'd', 'c'], 'the newest three, newest first')
+  assert.deepEqual(shownNotes(list, true), ['e', 'd', 'c', 'b', 'a'])
+  assert.deepEqual(list, ['a', 'b', 'c', 'd', 'e'], 'the list is left as it was')
+  assert.deepEqual(shownNotes(['a', 'b'], false), ['b', 'a'])
+  assert.deepEqual(shownNotes([], false), [])
+  assert.equal(notesToggle(0, false), null)
+  assert.equal(notesToggle(NOTES_SHOWN, false), null, 'every note fits: no toggle')
+  assert.equal(notesToggle(NOTES_SHOWN, true), null)
+  assert.equal(notesToggle(4, false), 'Show all (4)')
+  assert.equal(notesToggle(20, false), 'Show all (20)')
+  assert.equal(notesToggle(20, true), 'Show fewer')
 })
 
 /** An open trail of project p on worktree `w` */

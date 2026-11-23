@@ -25,7 +25,8 @@
 // the terminal bar's and the strip's scales (1, 2, 3) instead of the strip.
 // Agents (campsite 5): ?notes=some pins three notes on the harness project's board (two since the
 // Noticeboard was last opened: the board's red pin) and, with ?trails=all, gives the api trail a
-// report and the oldest ended trail one; ?notes=read, the same notes all seen (no pin). The fake host
+// report and the oldest ended trail one; ?notes=read, the same notes all seen (no pin); ?notes=many,
+// two older notes besides (five: the Noticeboard shows three and "Show all (5)"). The fake host
 // answers `notes` and `trailLog` as the server does.
 // scripts/campsite-render.mjs serves it with Vite and screenshots each scenario. Not shipped: nothing imports it.
 import { createRoot } from 'react-dom/client'
@@ -190,10 +191,16 @@ if (params.get('away') === 'sightings') {
   state.seenAt = T - 9 * 3_600_000
   state.away = { since: T - 9 * 3_600_000, wood: { work: 136, outcomes: 0, garden: 40, fishing: 36 }, markers: 0, levelUps: [], sightings: 12, newSpecies: ['heron', 'lynx'] }
 }
-// ?notes=some|read: three notes on the harness project's board, from three agents; with ?trails=all, reports on a trail and in the history
+// ?notes=some|read|many: three (many: five) notes on the harness project's board; with ?trails=all, reports on a trail and in the history
 const notesParam = params.get('notes')
-if (notesParam === 'some' || notesParam === 'read') {
+if (notesParam === 'some' || notesParam === 'read' || notesParam === 'many') {
   state.notes.harness = [
+    ...(notesParam === 'many'
+      ? [
+          { id: 'n0a', text: 'Bumped the lockfile; nothing else moved.', at: T - 50 * 3_600_000, agent: 'claude', branch: 'main' },
+          { id: 'n0b', text: 'The docs build is slow on CI; cached node_modules for it.', at: T - 40 * 3_600_000, agent: 'codex', branch: 'feature/docs' }
+        ]
+      : []),
     { id: 'n1', text: 'Pinned the flaky auth test as skipped; the note in auth.test.ts says why.', at: T - 26 * 3_600_000, agent: 'codex', branch: 'feature/auth' },
     { id: 'n2', text: 'Global sweep done: three worktrees idle, nothing left running.', at: T - 3 * 3_600_000, agent: 'gemini', branch: 'Global' },
     { id: 'n3', text: 'Tests are green; left the flaky one skipped.', at: T - 12 * 60_000, agent: 'claude', branch: 'feature/api', member: 'Aspen' }

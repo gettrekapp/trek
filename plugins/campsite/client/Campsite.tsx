@@ -12,7 +12,8 @@
 // time; its button opens the field guide (the popover's Guide tab) at it. Agents (part 5): this
 // project's notes are read whenever its newest note's time changes; once it has one, a noticeboard
 // stands on the expanded strip (a free spot near the fire; a red pin while one is unread) and opens
-// the Noticeboard (the popover's Camp tab), which marks them seen. Collapsed, it is one line:
+// the Noticeboard (the popover's Camp tab), which marks them seen once read (not when the popover
+// opened at a building's row). Collapsed, it is one line:
 // everyone at tab size, those waiting first.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
@@ -318,8 +319,8 @@ export function Campsite(): React.JSX.Element | null {
       onGuideSeen={() => setPref('guideSeenAt', guideSeenNow(camp.guide, Date.now()))}
       notes={notes}
       onNotesSeen={() => {
-        // Only when something is unread: opening the camp shouldn't write the prefs each time
-        if (noteAt !== undefined && noteAt > prefs.notesSeenAt) setPref('notesSeenAt', notesSeenNow(noteAt, Date.now()))
+        // Only when something is unread (and the notes are read): opening the camp shouldn't write the prefs each time
+        if (notes.status === 'ready' && noteAt !== undefined && noteAt > prefs.notesSeenAt) setPref('notesSeenAt', notesSeenNow(noteAt, Date.now()))
       }}
       onClose={closeCamp}
     />

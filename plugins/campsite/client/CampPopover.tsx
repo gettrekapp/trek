@@ -55,7 +55,7 @@ interface Props {
   /** When the Guide tab was last opened (the prefs' guideSeenAt), and that it is opened now */
   guideSeenAt: number
   onGuideSeen: () => void
-  /** The window's project's notes (part 5), and that the Noticeboard shows them now */
+  /** The window's project's notes (part 5), and that the Noticeboard showed them (its read answered; not when opened at a building's row) */
   notes: NotesState
   onNotesSeen: () => void
   onClose: (refocus: boolean) => void
@@ -214,7 +214,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
           {/* An older server has no noticeboard (no noteAt) */}
           {camp.noteAt !== undefined && (
             <>
-              <Noticeboard notes={notes} onLoad={store.loadNotes} noteAt={projectNoteAt(camp.noteAt, projectId)} onSeen={onNotesSeen} />
+              <Noticeboard notes={notes} onLoad={store.loadNotes} noteAt={projectNoteAt(camp.noteAt, projectId)} seen={at.focus === null} onSeen={onNotesSeen} />
               <div className="cs-crew-heading">Buildings</div>
             </>
           )}

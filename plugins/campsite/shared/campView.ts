@@ -322,6 +322,21 @@ export const animalLabel = (id: string): string => `${species(id)?.name ?? 'An a
 /** The Noticeboard section with no notes */
 export const NO_NOTES = 'No notes yet. Agents can leave one with camp_note.'
 
+/** The Noticeboard's notes shown before "Show all": the newest few, so the Buildings below stay in the popover's reach */
+export const NOTES_SHOWN = 3
+
+/** The Noticeboard's notes, newest first: all of them, or the newest NOTES_SHOWN */
+export const shownNotes = <T>(list: readonly T[], all: boolean): T[] => {
+  const newest = [...list].reverse()
+  return all ? newest : newest.slice(0, NOTES_SHOWN)
+}
+
+/** The Noticeboard's toggle: "Show all (n)" or "Show fewer"; null when every note fits */
+export function notesToggle(count: number, all: boolean): string | null {
+  if (count <= NOTES_SHOWN) return null
+  return all ? 'Show fewer' : `Show all (${count})`
+}
+
 /** The noticeboard's button: "Noticeboard", "Noticeboard, 1 new note", "Noticeboard, 2 new notes"; null: unread, but not yet counted */
 export function boardLabel(unread: number | null): string {
   if (unread === null) return 'Noticeboard, new notes'

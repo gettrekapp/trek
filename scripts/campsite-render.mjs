@@ -106,7 +106,7 @@ const SHOTS = [
   { name: 'board-read', scenario: 'few', notes: 'read', board: 'Noticeboard' },
   { name: 'board-empty', scenario: 'empty', notes: 'some', board: 'Noticeboard, 2 new notes' },
   { name: 'board-built', scenario: 'few', notes: 'some', built: 'out', trails: 'all', width: 1600, board: 'Noticeboard, 2 new notes' },
-  { name: 'noticeboard', scenario: 'few', notes: 'some', noticeboard: true, height: 720 },
+  { name: 'noticeboard', scenario: 'few', notes: 'many', noticeboard: true, height: 720 },
   { name: 'trails-report', scenario: 'few', notes: 'some', trails: 'all', built: 'out', trailsTab: true, flag: 'feature/api — Ridge (PR open)', height: 1000 },
   { name: 'trails-report-history', scenario: 'few', notes: 'some', trails: 'all', built: 'out', trailsTab: true, flag: 'feature/api — Ridge (PR open)', history: true, height: 1000 }
 ]
@@ -290,6 +290,17 @@ try {
       await page.waitForTimeout(200)
       if (!(await page.evaluate(() => document.activeElement?.hasAttribute('data-noticeboard') ?? false))) problems.push(`${shot.name}: the Noticeboard did not take the focus`)
       await page.screenshot({ path, ...still })
+      // The newest three of five, then "Show all (5)" (aria-expanded false) shows them all and becomes "Show fewer"
+      const board = async () =>
+        page.evaluate(() => {
+          const b = document.querySelector('.cs-camp-popover .cs-notes-toggle')
+          return { notes: document.querySelectorAll('.cs-camp-popover .cs-notes-list li').length, toggle: b?.textContent ?? null, expanded: b?.getAttribute('aria-expanded') ?? null }
+        })
+      const before = await board()
+      if (JSON.stringify(before) !== JSON.stringify({ notes: 3, toggle: 'Show all (5)', expanded: 'false' })) problems.push(`${shot.name}: the Noticeboard shows ${JSON.stringify(before)}, not the newest three and Show all (5)`)
+      await page.locator('.cs-camp-popover .cs-notes-toggle').click()
+      const after = await board()
+      if (JSON.stringify(after) !== JSON.stringify({ notes: 5, toggle: 'Show fewer', expanded: 'true' })) problems.push(`${shot.name}: after Show all the Noticeboard shows ${JSON.stringify(after)}`)
     } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
       await page.locator('.cs-camp-button').click()
