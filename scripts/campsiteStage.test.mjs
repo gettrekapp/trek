@@ -241,8 +241,10 @@ test('the backdrop: stars, a crescent moon, a ridge, 16 pines on the ground line
   const b = backdrop(1000)
   assert.equal(b.stars.length, 10)
   assert.deepEqual(b.stars[0], { x: 70, y: 14, w: 2, h: 2, fill: '#5a5068' })
-  assert.deepEqual(b.moon, { x: 904, y: 18, r: 6, fill: '#f0c9a0' })
-  assert.deepEqual(b.bite, { x: 908, y: 15, r: 5, fill: '#1a1622' })
+  // Left of the header's counts at the right end (180 px kept); 9% in from the right on a strip wide enough
+  assert.deepEqual(b.moon, { x: 826, y: 18, r: 6, fill: '#f0c9a0' })
+  assert.deepEqual(b.bite, { x: 830, y: 15, r: 5, fill: '#1a1622' })
+  assert.equal(backdrop(3000).moon.x, 3000 - 270 - 12 + 6)
   assert.deepEqual(b.ridge.points.slice(0, 2), [0, 98])
   assert.deepEqual(b.ridge.points.slice(-2), [1000, 98])
   for (let i = 1; i < b.ridge.points.length; i += 2) assert.ok(b.ridge.points[i] >= 52 && b.ridge.points[i] <= 98)

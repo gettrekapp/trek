@@ -3,8 +3,10 @@
 // fire, and the string lights, so none of them covers a flag),
 // each of the window's project's trails a flag in its worktree's tent colours on its stage's ledge
 // (side by side, "+n" past what a ledge holds; a larger, planted flag at the summit); a summit's
-// climb and the sparks that rise from the fire; and the cairn of summits just left of the fire.
-// Narrow middles scale the peak sideways; it is never dropped. Pure.
+// climb and the sparks that rise from the fire; and the cairn of summits at the trailhead, on a
+// shelf of the peak's left flank before the first ledge's flags. Narrow middles scale the peak
+// sideways; it is never dropped. The header's controls leave the peak's flags and the cairn clear
+// (peakClear). Pure.
 import { tentColors } from './layout.ts'
 import type { Rect } from './pixels.ts'
 import { FEET_Y, STAGE_H, type Box, type Shape } from './stage.ts'
@@ -42,15 +44,27 @@ export interface Mountain {
   /** The path's dots and the ledges' lips, in drawing order */
   path: Box[]
   ledges: Ledge[]
+  /** The cairn's spot at the trailhead: its left edge and the y it stands on (the first ledge's) */
+  cairn: { x: number; y: number }
 }
+
+/** The cairn's grid, drawn at 1× (as the flags are): stones in rows, the widest at the bottom */
+export const CAIRN_GRID = { w: 10, h: 14 } as const
+/** Between the cairn and the trailhead's first flag */
+const CAIRN_GAP = 3
 
 /** The peak behind the fire at `fireX`, in a middle `room` px wide (narrower than the peak: scaled sideways) */
 export function mountain(fireX: number, room: number): Mountain {
   const s = Math.max(0.3, Math.min(1, room / (2 * PEAK_HALF + 40)))
   const half = (y: number): number => (s * PEAK_HALF * (y - PEAK_TOP)) / (PEAK_FOOT - PEAK_TOP)
   const at = (y: number, side: -1 | 1, jog = 0): number[] => [Math.round(fireX + side * (half(y) + jog * s)), y]
+  // The trailhead's shelf: the left flank juts out at the first ledge's height, room for the cairn
+  // beyond the flank's edge (so the trailhead keeps its flags and their "+n" stays left of the next ledge's)
+  const head = LEDGE_Y[0]
+  const flank = at(head, -1)
+  const cairn = { x: flank[0] - CAIRN_GAP + 2 - CAIRN_GRID.w, y: head }
   const peak: Shape = {
-    points: [...at(PEAK_FOOT, -1), ...at(64, -1, 10), ...at(52, -1), ...at(PEAK_TOP + 2, -1, 2), ...at(PEAK_TOP, -1), ...at(PEAK_TOP, 1), ...at(PEAK_TOP + 3, 1, 3), ...at(44, 1, 6), ...at(58, 1), ...at(PEAK_FOOT, 1)],
+    points: [...at(PEAK_FOOT, -1), ...at(64, -1, 10), ...at(52, -1), cairn.x - 2, head, ...flank, ...at(PEAK_TOP + 2, -1, 2), ...at(PEAK_TOP, -1), ...at(PEAK_TOP, 1), ...at(PEAK_TOP + 3, 1, 3), ...at(44, 1, 6), ...at(58, 1), ...at(PEAK_FOOT, 1)],
     fill: MOUNTAIN_FILL
   }
   const ledges: Ledge[] = LEDGE_Y.map((y, stage) => {
@@ -72,8 +86,26 @@ export function mountain(fireX: number, room: number): Mountain {
     const steps = Math.max(1, Math.round(Math.hypot(bx - ax, b.y - a.y) / 3))
     for (let k = 1; k < steps; k++) path.push({ x: Math.round(ax + ((bx - ax) * k) / steps), y: Math.round(a.y + ((b.y - a.y) * k) / steps), w: 1, h: 1, fill: PATH_FILL })
   }
-  for (const l of ledges) path.push({ x: l.x - 1, y: l.y, w: l.w + 2, h: 1, fill: LEDGE_FILL })
-  return { peak, path, ledges }
+  // The lips; the trailhead's runs under the cairn too
+  for (const l of ledges) {
+    const x0 = l.stage === 0 ? cairn.x - 1 : l.x - 1
+    path.push({ x: x0, y: l.y, w: l.x + l.w + 1 - x0, h: 1, fill: LEDGE_FILL })
+  }
+  return { peak, path, ledges, cairn }
+}
+
+/** A ledge's "+n" button is at most this wide ("+99" at 9 px and its padding) */
+export const MORE_W = 22
+const CLEAR_PAD = 4
+/**
+ * The strip's x span the header's controls leave clear over the peak: every ledge (the summit's
+ * planted flags among them), the right ends' "+n" and the cairn, with a few px to spare. The header
+ * keeps its summary left of `left` and its counts (and the away card, the summit's line) right of `right`.
+ */
+export function peakClear(m: Mountain): { left: number; right: number } {
+  const left = Math.min(m.cairn.x, ...m.ledges.map((l) => l.x))
+  const right = Math.max(...m.ledges.map((l) => l.x + l.w + 3 + MORE_W))
+  return { left: left - CLEAR_PAD, right: right + CLEAR_PAD }
 }
 
 /** A trail as the mountain needs it */
@@ -159,9 +191,6 @@ export function sparksAt(fireX: number, age: number): Spark[] {
   return out
 }
 
-/** The cairn's grid (drawn at 2×): stones in rows, the widest at the bottom */
-export const CAIRN_GRID = { w: 10, h: 14 } as const
-export const CAIRN_SCALE = 2
 const CAIRN_ROWS: readonly number[] = [10, 8, 7, 5, 4, 3, 2]
 const CAIRN_STONES: readonly string[] = ['#5c5c66', '#4c4c55', '#66666f']
 /** A cairn of size 1–6 (cairnSize): size n stacks n + 1 rows of stones; none at 0 */
@@ -177,11 +206,9 @@ export function cairnRects(size: number): Rect[] {
   }
   return out
 }
-/** Where the cairn stands (strip px): on the feet line against the hearth's left stones (the fire ring's are drawn over it), clear of Global's log (from fireX − 44 leftwards) */
-export function cairnBox(fireX: number): { x: number; y: number; w: number; h: number } {
-  const w = CAIRN_GRID.w * CAIRN_SCALE
-  const h = CAIRN_GRID.h * CAIRN_SCALE
-  return { x: fireX - 24 - w, y: FEET_Y - h, w, h }
+/** Where the cairn stands (strip px): on the trailhead's shelf, left of its flags, above the waiting hikers' signs and the tents */
+export function cairnBox(m: Pick<Mountain, 'cairn'>): { x: number; y: number; w: number; h: number } {
+  return { x: m.cairn.x, y: m.cairn.y - CAIRN_GRID.h, w: CAIRN_GRID.w, h: CAIRN_GRID.h }
 }
 
 /** The window's project's trails as one string (JSON of [worktreeId, branch, stage], oldest first): the same while none of its flags change */

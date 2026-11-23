@@ -10,7 +10,7 @@ import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
-import { flagsKey, flagsOf } from '../shared/mountain.ts'
+import { flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type OpenCamp } from './CampPopover.tsx'
@@ -57,6 +57,8 @@ export function Campsite(): React.JSX.Element | null {
   const edges = useMemo(() => placeBuildings(built, width, sessions), [built, width, sessions])
   const { left: reserveLeft, right: reserveRight } = edges.reserve
   const layout = useMemo(() => campLayout(sessions, width, { left: reserveLeft, right: reserveRight }), [sessions, width, reserveLeft, reserveRight])
+  // The header's controls stay off the peak: its ledges, their "+n" and the cairn (shared/mountain.ts)
+  const clear = useMemo(() => peakClear(mountain(layout.fireX, width - reserveLeft - reserveRight)), [layout.fireX, width, reserveLeft, reserveRight])
   const closeTent = useCallback((refocus: boolean) => {
     setOpenTent(null)
     if (refocus) badge.current?.focus()
@@ -170,13 +172,18 @@ export function Campsite(): React.JSX.Element | null {
   }
   return (
     <div ref={ref} className={`campsite${hidden ? ' cs-paused' : ''}`}>
+      {/* Left of the peak, the toggle and the summary (cut short); right of it, at the header's end, the counts and the away card (the header starts 6 px in, ends 8 px in) */}
       <div className="cs-header">
-        <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
-          <Chevron />
-        </button>
-        <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
-        {campButton}
-        {awayCard}
+        <div className="cs-header-start" style={width > 0 ? { maxWidth: Math.max(0, clear.left - 6) } : undefined}>
+          <button ref={toggle} className="cs-toggle" title="Hide the campsite" aria-label="Hide the campsite" onClick={() => flip(true)}>
+            <Chevron />
+          </button>
+          <span className="cs-summary">{campSummary(sessions, layout.moreTents)}</span>
+        </div>
+        <div className="cs-header-end" style={width > 0 ? { maxWidth: Math.max(0, width - 8 - clear.right) } : undefined}>
+          {campButton}
+          {awayCard}
+        </div>
       </div>
       {width > 0 && (
         <div className="cs-stage">

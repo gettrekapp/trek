@@ -1,6 +1,6 @@
 // The campsite strip drawn by Pixi: the backdrop (the trails' mountain between its sky and its
-// ridge), tents and Global's log, and the actors (the mountain's flags, the buildings and lights, the
-// fire and the cairn, the hikers, the camp dog; scene/actors/). It only draws: Campsite
+// ridge), tents and Global's log, and the actors (the mountain's flags and cairn, the buildings and
+// lights, the fire, the hikers, the camp dog; scene/actors/). It only draws: Campsite
 // lays the camp out (layout.ts) and hands it over with update(). The DOM overlay's buttons
 // (bindTarget, bindDog) are moved by the actors every frame to stand over their sprites, so names,
 // focus and clicks stay DOM. Timing and geometry come from shared/stage.ts.

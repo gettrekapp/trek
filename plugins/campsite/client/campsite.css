@@ -224,7 +224,7 @@
   left: 6px;
   right: 8px;
   top: 6px;
-  /* As wide as the strip (the away card sits at its right end): only its controls take the pointer */
+  /* As wide as the strip (the counts and the away card sit at its right end): only its controls take the pointer */
   pointer-events: none;
   z-index: 5;
   display: flex;
@@ -467,9 +467,31 @@
   outline: 1px solid #ffe680;
   outline-offset: 1px;
 }
-.cs-header > button,
-.cs-header > .cs-away {
+.cs-header button,
+.cs-header .cs-away {
   pointer-events: auto;
+}
+/* Either side of the peak (Campsite sets their max widths from peakClear): the summary is cut short
+   left of it; the counts and the away card sit at the header's right end, right of it */
+.cs-header-start,
+.cs-header-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cs-header-start {
+  flex: 0 1 auto;
+}
+.cs-header-end {
+  flex: 0 1 auto;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+.cs-header-start .cs-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The header's camp counts: a button that opens the camp */
 .cs-camp-button {
@@ -735,9 +757,9 @@
   flex: none;
   color: #6f6f78;
 }
-/* "While you were away": one line at the end of the expanded strip's header (cut short, the whole
-   line in its tooltip), so it covers neither the counts nor a tent's sign; fixed above the bar,
-   collapsed (the bar clips) */
+/* "While you were away": one line at the end of the expanded strip's header, after the counts (cut
+   short, the whole line in its tooltip), so it covers neither the counts, the peak nor a tent's sign;
+   fixed above the bar, collapsed (the bar clips) */
 .cs-away {
   position: static;
   flex: 0 1 auto;

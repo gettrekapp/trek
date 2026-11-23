@@ -307,8 +307,11 @@ export interface Backdrop {
   ground: Box[]
 }
 
+/** The header's counts (and their margin) at the strip's right end: the moon stays left of them */
+const MOON_CLEAR = 180
+
 export function backdrop(width: number): Backdrop {
-  const moonLeft = Math.round(width - 0.09 * width) - 12
+  const moonLeft = Math.min(Math.round(width - 0.09 * width) - 12, width - MOON_CLEAR)
   return {
     stars: STARS.map(([left, top]) => ({ x: Math.round((left * width) / 100), y: top, w: 2, h: 2, fill: '#5a5068' })),
     moon: { x: moonLeft + 6, y: 18, r: 6, fill: '#f0c9a0' },

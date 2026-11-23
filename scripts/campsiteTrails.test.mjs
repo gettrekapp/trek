@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
 import { applyActivity, restore } from '../plugins/campsite/shared/economy.ts'
 import { tentColors } from '../plugins/campsite/shared/layout.ts'
-import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagsKey, flagsOf, mountain, sparksAt } from '../plugins/campsite/shared/mountain.ts'
+import { CAIRN_GRID, CLIMB_MS, FLAG, LEDGE_MAX, LEDGE_Y, MORE_W, MOUNTAIN_FILL, PEAK_HALF, PEAK_TOP, PLANTED, SPARK_MS, cairnBox, cairnRects, climbAt, flagBox, flagRects, flagSpots, flagsKey, flagsOf, mountain, peakClear, sparksAt } from '../plugins/campsite/shared/mountain.ts'
 import { CAIRN_AT, STAGES, STAGE_HINTS, SUMMIT, SUMMIT_HOLD_MS, TRAIL_LOG_MAX, cairnSize, isTrail, isTrailRecord, reconcile, trailEvent, trailKey, trailLogOf, trailProjects, trailsOn } from '../plugins/campsite/shared/trails.ts'
 
 const T0 = 1_800_000_000_000
@@ -341,16 +341,43 @@ test('the climb: eased from the last ledge to the peak over 1.5 s, then planted;
   assert.deepEqual(sparksAt(600, 1000).map((s) => s.x - 100), mid.map((s) => s.x), 'from the fire')
 })
 
-test('the cairn: nothing at size 0, then size n stacks n + 1 rows of stones; it stands on the feet line left of the hearth, clear of the log', () => {
+test("the cairn: nothing at size 0, then size n stacks n + 1 rows of stones; it stands on the trailhead's shelf, clear of the flags, the waiting hikers and the tents", () => {
   assert.deepEqual(cairnRects(0), [])
   for (let n = 1; n <= 6; n++) {
     const rects = cairnRects(n)
     assert.ok(inside(rects, CAIRN_GRID), `size ${n}`)
     assert.equal(new Set(rects.map((r) => r.y)).size, n + 1, `size ${n}: ${n + 1} rows`)
+    assert.equal(Math.max(...rects.map((r) => r.y + r.h)), CAIRN_GRID.h, `size ${n}: on its grid's floor`)
   }
-  const box = cairnBox(500)
-  assert.deepEqual(box, { x: 500 - 24 - 20, y: 102 - 28, w: 20, h: 28 })
-  assert.ok(box.x >= 500 - 44 && box.x + box.w <= 500 - 23, "between the log's end and the hearth")
+  for (const [fireX, room] of [[500, 800], [300, 600], [150, 300], [50, 40]]) {
+    const m = mountain(fireX, room)
+    const box = cairnBox(m)
+    const head = m.ledges[0]
+    assert.deepEqual([box.w, box.h, box.y + box.h], [CAIRN_GRID.w, CAIRN_GRID.h, LEDGE_Y[0]], `${room}: 1×, standing on the trailhead's height`)
+    assert.equal(head.x - (box.x + box.w), 3, `${room}: 3 px before the trailhead's first flag`)
+    // The first left waiting hiker (36 px wide at fireX − 48) and its sign reach no higher than y 30; the tents' signs from 48
+    assert.ok(box.y + box.h <= 30, `${room}: above the waiting hikers' signs and the tents`)
+    // Its shelf: the peak's outline reaches under it, and the trailhead's lip runs under it
+    const xs = m.peak.points.filter((_, i) => i % 2 === 0)
+    assert.ok(Math.min(...xs.filter((_, i) => m.peak.points[2 * i + 1] === LEDGE_Y[0])) <= box.x - 1, `${room}: the shelf under it`)
+    const lip = m.path.find((b) => b.y === LEDGE_Y[0] && b.w > 1)
+    assert.ok(lip.x <= box.x && lip.x + lip.w >= head.x + head.w, `${room}: the lip from the cairn to the last flag`)
+  }
+  assert.deepEqual(cairnBox(mountain(600, 800)), { ...cairnBox(mountain(500, 800)), x: cairnBox(mountain(500, 800)).x + 100 }, 'it moves with the fire')
+})
+
+test("peakClear: the header leaves every ledge, the right ends' \"+n\" and the cairn clear", () => {
+  for (const [fireX, room] of [[600, 1200], [300, 600], [240, 480], [150, 300]]) {
+    const m = mountain(fireX, room)
+    const clear = peakClear(m)
+    const box = cairnBox(m)
+    assert.ok(clear.left < box.x && m.ledges.every((l) => clear.left < l.x), `${room}: left of the cairn and every ledge`)
+    assert.ok(m.ledges.every((l) => clear.right > l.x + l.w + 3 + MORE_W), `${room}: right of every ledge's "+n"`)
+    assert.ok(clear.left < fireX && clear.right > fireX)
+  }
+  // A full-size peak: its clear span is about 140 px, so at 480 px a fire in the middle leaves the header room on both sides
+  const c = peakClear(mountain(240, 480))
+  assert.ok(c.left - 36 >= 120 && 480 - 8 - c.right >= 140, JSON.stringify(c))
 })
 
 test("flagsKey: only the window's project's trails, the same string while none of its flags change; flagsOf reads it back", () => {

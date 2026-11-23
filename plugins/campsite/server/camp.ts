@@ -180,11 +180,11 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     else reconciled.add(projectId)
     return JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
-  /** Every project with trails, and every one reconciled this run; true when a trail or the history changed */
+  /** Every project with trails, and every one reconciled this run; true when a trail, the history or the done count changed */
   const reconcileAll = (): boolean => {
-    const before = JSON.stringify([camp.trails, camp.trailLog])
-    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) reconcileProject(projectId)
-    return JSON.stringify([camp.trails, camp.trailLog]) !== before
+    let any = false
+    for (const projectId of new Set([...trailProjects(camp), ...reconciled])) if (reconcileProject(projectId)) any = true
+    return any
   }
 
   /** Sessions that are gone without a `session.closed` (a project, repo or worktree removed; the plugin off in their project) stop earning and free their members */

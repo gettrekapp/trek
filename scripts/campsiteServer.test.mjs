@@ -746,6 +746,21 @@ test("trails (3c): a window's state naming its project reconciles it once; the 1
   assert.deepEqual((await inst.handlers.trailLog({ projectId: 'p' }, {})).log.map((r) => r.result), ['turned-back'])
 })
 
+test('trails (3c): start-up saves a change to the summited memory alone (a done worktree gone, no trail moved)', async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const camp = newCamp(7, T0)
+  camp.trails = { 'p:w': { projectId: 'p', worktreeId: 'w', repoId: 'r', branch: 'b', stage: 1, start: T0 - 9, stageAt: T0 - 5 } }
+  camp.trailsDone = { 'p:x': 'feature/x' }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const clock = manual()
+  const inst = createCampServer(h.host, { now: () => T0, seed: () => 1, schedule: clock.schedule, interval: () => ({ clear() {} }) })
+  t.after(() => inst.dispose?.())
+  clock.run()
+  const saved = JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8'))
+  assert.deepEqual(saved.trailsDone, {}, 'saved, though no trail or ended trail changed')
+  assert.deepEqual(saved.trails, camp.trails)
+})
+
 test('trails (3c): at start-up the projects with trails in camp.json are reconciled; the signpost builds for 150 wood', async (t) => {
   const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
   const camp = newCamp(7, T0)
