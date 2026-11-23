@@ -17,7 +17,7 @@ import { placeBuildings } from '../shared/campEdges.ts'
 import { BUILDING_IDS, building, type BuildingId } from '../shared/catalog.ts'
 import { crewLabel, kitsKey, kitsOf } from '../shared/crew.ts'
 import { admit, crossing, occupiedSpans, type Crossing, type SightingView, type Span } from '../shared/crossing.ts'
-import { summitLine, weatherBadge } from '../shared/campView.ts'
+import { guideSeenNow, summitLine, weatherBadge } from '../shared/campView.ts'
 import { campCounts, campLayout, campSummary, collapsedRow, type FireSide } from '../shared/layout.ts'
 import { SUMMIT_FRESH_MS, flagsKey, flagsOf, mountain, peakClear } from '../shared/mountain.ts'
 import { hikerLabel, isWaiting } from '../shared/pose.ts'
@@ -295,7 +295,7 @@ export function Campsite(): React.JSX.Element | null {
       projectId={host.projectId}
       store={campStore(host)}
       guideSeenAt={prefs.guideSeenAt}
-      onGuideSeen={() => setPref('guideSeenAt', Date.now())}
+      onGuideSeen={() => setPref('guideSeenAt', guideSeenNow(camp.guide, Date.now()))}
       onClose={closeCamp}
     />
   )
@@ -422,6 +422,8 @@ export function Campsite(): React.JSX.Element | null {
             openTrail={campOpen?.tab === 'trails' ? (campOpen.opener ?? null) : null}
             animal={animal}
             onAnimal={(species, el) => openCamp(el, null, 'guide', undefined, 'animal', species)}
+            animalOpen={campOpen?.opener === 'animal'}
+            onAnimalGone={() => countsButton.current?.focus()}
           />
           {sessions.length === 0 && <span className="cs-empty">Nobody at camp yet. Start a session and a hiker walks in.</span>}
         </div>

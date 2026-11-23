@@ -1027,13 +1027,17 @@
   justify-content: center;
   height: 36px;
 }
+/* Up to two lines ("Great horned owl" is never cut), every card keeping room for two so the rows line up */
 .cs-guide-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 2.4em;
+  overflow-wrap: anywhere;
   color: #ededf0;
   font-size: 11px;
+  line-height: 1.2;
 }
 .cs-guide-card.unseen .cs-guide-name {
   color: #6a6670;

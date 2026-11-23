@@ -46,13 +46,15 @@ export function GuideTab({ camp, focus, since, onSeen }: Props): React.JSX.Eleme
     card.scrollIntoView({ block: 'nearest' })
     card.focus()
   }, [])
-  /** The arrows step through the cards (Up and Down by a row), Home and End to the ends; focus follows */
+  /** The arrows step through the cards (Up and Down by a row, staying put on the first or last row), Home and End to the ends; focus follows */
   const onKey = (e: React.KeyboardEvent): void => {
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -COLUMNS, ArrowDown: COLUMNS }[e.key]
     const at = cards.findIndex((c) => c.id === current)
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? cards.length - 1 : step === undefined ? -1 : Math.min(cards.length - 1, Math.max(0, at + step))
-    if (next < 0) return
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? cards.length - 1 : step === undefined ? -1 : Math.abs(step) === COLUMNS ? at + step : Math.min(cards.length - 1, Math.max(0, at + step))
+    if (step === undefined && next < 0) return
     e.preventDefault()
+    // No row above or below: stay put (not sideways to the first or last card)
+    if (next < 0 || next >= cards.length) return
     setCurrent(cards[next].id)
     ref.current?.querySelector<HTMLElement>(`[data-species="${CSS.escape(cards[next].id)}"]`)?.focus()
   }

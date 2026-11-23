@@ -58,6 +58,10 @@ interface Props {
   animal: { seq: number; crossing: Crossing } | null
   /** The animal's button was clicked: open the field guide at its species */
   onAnimal: (species: string, el: HTMLButtonElement) => void
+  /** The popover was opened by the animal (its button's aria-expanded) */
+  animalOpen: boolean
+  /** The animal's button went (its crossing ended) while it had the focus: the focus goes elsewhere (the counts) */
+  onAnimalGone: () => void
 }
 
 type Load = { state: 'loading' } | { state: 'ready'; stage: CampStage } | { state: 'failed' }
@@ -72,7 +76,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -202,18 +206,7 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
         />
       )}
       {/* Under the camps' badges, the dog and the hikers (z-index 0; a swimmer over the lake's button, which would hide it): the stage moves it over the animal */}
-      {stage && animal && (
-        <button
-          key={animal.seq}
-          ref={(el) => stage.bindAnimal(el)}
-          className={animal.crossing.move === 'swimmer' ? 'cs-animal swimmer' : 'cs-animal'}
-          style={{ width: animal.crossing.w, height: animal.crossing.h }}
-          title={animalLabel(animal.crossing.species)}
-          aria-label={animalLabel(animal.crossing.species)}
-          aria-haspopup="dialog"
-          onClick={(e) => onAnimal(animal.crossing.species, e.currentTarget)}
-        />
-      )}
+      {stage && animal && <AnimalButton key={animal.seq} stage={stage} crossing={animal.crossing} expanded={animalOpen} onAnimal={onAnimal} onGone={onAnimalGone} />}
       {stage && showDog && <button ref={(el) => stage.bindDog(el)} className="cs-dog" title="Pet the dog" aria-label="Pet the dog" onClick={() => stage.petDog()} />}
       {stage &&
         layout.hikers.map((h) => {
@@ -231,5 +224,37 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
           )
         })}
     </>
+  )
+}
+
+/**
+ * A sighting's animal button (keyed by the sighting). When it unmounts with the focus (its crossing
+ * ended), `onGone` moves the focus on: the layout cleanup of a deleted component runs before React
+ * removes its button, so the button still has the focus then
+ */
+function AnimalButton({ stage, crossing, expanded, onAnimal, onGone }: { stage: CampStage; crossing: Crossing; expanded: boolean; onAnimal: Props['onAnimal']; onGone: () => void }): React.JSX.Element {
+  const button = useRef<HTMLButtonElement | null>(null)
+  const gone = useRef(onGone)
+  gone.current = onGone
+  useLayoutEffect(
+    () => () => {
+      if (button.current !== null && button.current === document.activeElement) gone.current()
+    },
+    []
+  )
+  return (
+    <button
+      ref={(el) => {
+        button.current = el
+        stage.bindAnimal(el)
+      }}
+      className={crossing.move === 'swimmer' ? 'cs-animal swimmer' : 'cs-animal'}
+      style={{ width: crossing.w, height: crossing.h }}
+      title={animalLabel(crossing.species)}
+      aria-label={animalLabel(crossing.species)}
+      aria-haspopup="dialog"
+      aria-expanded={expanded}
+      onClick={(e) => onAnimal(crossing.species, e.currentTarget)}
+    />
   )
 }

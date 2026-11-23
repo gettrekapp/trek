@@ -271,7 +271,7 @@ export interface GuideCard {
   seen: boolean
   /** "Seen 12 times" (seen), else '' */
   count: string
-  /** "first seen Nov 23" (seen); unseen: its hint (ranger tower II), TOWER_HINT (a rare without the tower), else '' */
+  /** "first Nov 23" (seen); unseen: its hint (ranger tower II), TOWER_HINT (a rare without the tower), else '' */
   line: string
   /** The card's label: "Red fox, seen 12 times, first Nov 23" (", new" with the dot); "Unknown animal, not seen yet" (and its line) */
   label: string
@@ -280,6 +280,15 @@ export interface GuideCard {
 }
 
 const times = (n: number): string => (n === 1 ? 'once' : `${n} times`)
+
+/**
+ * The guide's seen time on opening the tab: now, or the newest page's first sighting when that is
+ * later (the server's clock ahead of this window's), so the dot never comes back for a species seen
+ * before the tab was opened
+ */
+export function guideSeenNow(guide: Readonly<Record<string, GuideEntry>> | undefined, now: number): number {
+  return Object.values(guide ?? {}).reduce((at, page) => Math.max(at, page.first), now)
+}
 
 /** The field guide's cards: the 20 commons, then the 4 rares; `since`: when the tab was last opened (ms), for the new dot */
 export function guideCards(snap: { guide?: Readonly<Record<string, GuideEntry>>; built: { tower?: number } }, since: number): { commons: GuideCard[]; rares: GuideCard[] } {
@@ -290,7 +299,7 @@ export function guideCards(snap: { guide?: Readonly<Record<string, GuideEntry>>;
     if (page) {
       const first = monthDay(page.first)
       const isNew = page.first > since
-      return { id: s.id, name: s.name, seen: true, count: `Seen ${times(page.count)}`, line: `first seen ${first}`, label: `${s.name}, seen ${times(page.count)}, first ${first}${isNew ? ', new' : ''}`, isNew }
+      return { id: s.id, name: s.name, seen: true, count: `Seen ${times(page.count)}`, line: `first ${first}`, label: `${s.name}, seen ${times(page.count)}, first ${first}${isNew ? ', new' : ''}`, isNew }
     }
     const line = isRare(s) && tower < 1 ? TOWER_HINT : tower >= 2 ? speciesHint(s) : ''
     return { id: s.id, name: '???', seen: false, count: '', line, label: line ? `Unknown animal, not seen yet: ${line}` : 'Unknown animal, not seen yet', isNew: false }
