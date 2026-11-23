@@ -1,14 +1,12 @@
 // The hiker on its terminal's quick button row (2×), with what its session is doing. On the row,
 // not over the terminal, so it never covers output. A waiting session shows its tab's chip here
 // too: a sign board over the head would rise into the terminal's last line.
-import { useMemo } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import { DEFAULT_AGENT_ID } from '../../../src/shared/plugins/agents.ts'
 import { crewLabel } from '../shared/crew.ts'
-import { lookFor } from '../shared/hiker.ts'
 import { SIGN_TEXT, choreFor, hikerDoing, hikerLabel, hikerTooltip, stanceFor } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
-import { useCamp, useNow, usePrefs, useSession } from './hooks.ts'
+import { useCamp, useHikerLook, useNow, usePrefs, useSession } from './hooks.ts'
 
 export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX.Element | null {
   const host = usePluginHost()
@@ -17,7 +15,7 @@ export function TerminalHiker({ terminalId }: { terminalId: string }): React.JSX
   const camp = useCamp(host)
   const now = useNow()
   const provider = session?.provider ?? DEFAULT_AGENT_ID
-  const look = useMemo(() => lookFor(terminalId, provider), [terminalId, provider])
+  const look = useHikerLook(host, terminalId, provider)
   if (!loaded || !prefs.showTerminalHiker || !session) return null
   const chore = choreFor(terminalId, now)
   const stance = stanceFor(session, chore)

@@ -2,12 +2,12 @@
 // and Global's log. Grouped (a crowded camp), each carries a badge (name, count, who is waiting)
 // that opens a list of its sessions (TentPopover, drawn beside the tents so it sits over the app,
 // not inside the tent's stacking context).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { PluginSession } from '../../../src/shared/plugins/client.ts'
-import { lookFor } from '../shared/hiker.ts'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { usePluginHost, type PluginSession } from '../../../src/shared/plugins/client.ts'
 import { LOG_W, TENT_W, campTone, popoverLeft, signText, tentBadge, type CampTent, type FireSide } from '../shared/layout.ts'
 import { SIGN_TEXT, choreFor, hikerLabel, stanceFor, statusText } from '../shared/pose.ts'
 import { Hiker } from './Hiker.tsx'
+import { useHikerLook } from './hooks.ts'
 
 interface Props {
   tent: CampTent
@@ -97,7 +97,7 @@ export function TentPopover({ at, name, members, now, onPick }: PopoverProps): R
 }
 
 function PopoverRow({ session, now, onPick }: { session: PluginSession; now: number; onPick: (terminalId: string) => void }): React.JSX.Element {
-  const look = useMemo(() => lookFor(session.terminalId, session.provider), [session.terminalId, session.provider])
+  const look = useHikerLook(usePluginHost(), session.terminalId, session.provider)
   const stance = stanceFor(session, choreFor(session.terminalId, now))
   return (
     <button onClick={() => onPick(session.terminalId)}>

@@ -8,7 +8,7 @@ import type { ActivitySessionType } from '../../../src/shared/plugins/activity.t
 import { noteLevelUp } from './away.ts'
 import { SEEN_KIND_MS, isRecord, noGear, whole } from './catalog.ts'
 import type { Camp, CampSnapshot, CrewMember, SeenKind } from './camp.ts'
-import { fnv1a, lookFor, type Look } from './hiker.ts'
+import { fnv1a, kitKey, lookFor, type Look } from './hiker.ts'
 import { note, providerName } from './journal.ts'
 import type { ShopRefusal } from './shop.ts'
 
@@ -216,4 +216,28 @@ export function crewLabel(snap: CampSnapshot, terminalId: string): string {
   const id = Object.hasOwn(snap.assignments, terminalId) ? snap.assignments[terminalId] : undefined
   const member = id === undefined ? undefined : snap.crew.find((m) => m.id === id)
   return member ? `${member.name} · Lv ${member.level} ${member.title}` : 'Day hiker'
+}
+
+/** The kitKey of the gear the session's member wears ('' for a day hiker, or a member with none) */
+export function sessionKit(snap: Pick<CampSnapshot, 'crew' | 'assignments'>, terminalId: string): string {
+  const id = Object.hasOwn(snap.assignments, terminalId) ? snap.assignments[terminalId] : undefined
+  const member = id === undefined ? undefined : snap.crew.find((m) => m.id === id)
+  return member ? kitKey(member.gear) : ''
+}
+
+/** Each geared session's kitKey, as one string (JSON of [terminalId, kit] pairs by id): the same string while no gear or assignment of a geared member changes */
+export function kitsKey(snap: Pick<CampSnapshot, 'crew' | 'assignments'>): string {
+  const pairs: [string, string][] = []
+  for (const id of Object.keys(snap.assignments).sort()) {
+    const kit = sessionKit(snap, id)
+    if (kit) pairs.push([id, kit])
+  }
+  return JSON.stringify(pairs)
+}
+
+/** The sessions' kits a kitsKey holds (terminalId → kitKey) */
+export function kitsOf(key: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, kit] of JSON.parse(key) as [string, string][]) out[id] = kit
+  return out
 }

@@ -25,6 +25,8 @@ interface Props {
   sessions: readonly PluginSession[]
   /** The camp's snapshot (its crew names the hikers' tooltips); null until it loads */
   camp: CampSnapshot | null
+  /** terminalId → its member's kitKey (the same object while no one's gear changes) */
+  kits: Readonly<Record<string, string>>
   /** The chores' clock */
   now: number
   selected: string | null
@@ -48,7 +50,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, now, selected, paused, showDog, onPick, onBuilding }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, now, selected, paused, showDog, onPick, onBuilding }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -82,8 +84,8 @@ export function PixiStrip({ layout, edges, built, sessions, camp, now, selected,
   const stage = load.state === 'ready' ? load.stage : null
   // Before paint, so a new hiker's overlay button is placed over its sprite in the same frame
   useLayoutEffect(() => {
-    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built })
-  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built])
+    stage?.update({ layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits })
+  }, [stage, layout, sessions, now, selected, reduced, paused, showDog, edges, built, kits])
 
   if (load.state === 'failed') {
     return (

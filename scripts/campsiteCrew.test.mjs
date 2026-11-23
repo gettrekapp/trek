@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { GEAR, GEAR_BONUS, GEAR_COST, GEAR_NEEDS, GEAR_SLOTS, SEEN_KIND_MS, gearBonus, gearGate, gearItem, isGearSlot, noGear } from '../plugins/campsite/shared/catalog.ts'
 import { isCamp, migrateCamp, newCamp, snapshot } from '../plugins/campsite/shared/camp.ts'
-import { assign, creditXp, liveKinds, noteKinds, pinMember, release } from '../plugins/campsite/shared/crew.ts'
+import { assign, creditXp, kitsKey, kitsOf, liveKinds, noteKinds, pinMember, release, sessionKit } from '../plugins/campsite/shared/crew.ts'
 import { applyActivity, restore, tick, warmthFactor } from '../plugins/campsite/shared/economy.ts'
 import { buyGear } from '../plugins/campsite/shared/shop.ts'
 import { JOURNAL_MAX, note, providerName } from '../plugins/campsite/shared/journal.ts'
@@ -385,4 +385,23 @@ test('restore drops journal entries and assignments it cannot read, and keeps th
   restore(raw, undefined, T0)
   assert.deepEqual(raw.crew[0].journal, good)
   assert.deepEqual(raw.assignments, {})
+})
+
+test("sessionKit, kitsKey, kitsOf: a session's member's gear for its hikers; one string for the strip that changes only with the gear", () => {
+  const camp = newCamp(1, T0)
+  camp.crew[0].gear = { pack: 1, boots: 0, hat: 3, tool: 2 }
+  assign(camp, 't2', 'p', T0)
+  assign(camp, 't1', 'p', T0)
+  const snap = snapshot(camp, T0)
+  assert.equal(sessionKit(snap, 't2'), '1032', "t2 has the first member's gear")
+  assert.equal(sessionKit(snap, 't1'), '', 'a member with none')
+  assert.equal(sessionKit(snap, 'day'), '', 'a day hiker')
+  const key = kitsKey(snap)
+  assert.equal(key, '[["t2","1032"]]')
+  assert.deepEqual(kitsOf(key), { t2: '1032' })
+  assert.deepEqual(kitsOf('[]'), {})
+  camp.wood = 99
+  assert.equal(kitsKey(snapshot(camp, T0)), key, 'wood alone: the same string')
+  camp.crew[1].gear.boots = 1
+  assert.equal(kitsKey(snapshot(camp, T0)), '[["t1","0100"],["t2","1032"]]', 'by terminal id')
 })

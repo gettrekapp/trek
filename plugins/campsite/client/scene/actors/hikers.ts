@@ -4,7 +4,7 @@
 import 'pixi.js/unsafe-eval'
 import { Container, Graphics, Sprite } from 'pixi.js'
 import type { PluginSession } from '../../../../../src/shared/plugins/client.ts'
-import { lookFor, type Look } from '../../../shared/hiker.ts'
+import { kitOf, lookFor, withKit, type Look } from '../../../shared/hiker.ts'
 import { HIKER_W, type Place } from '../../../shared/layout.ts'
 import { pixels } from '../../../shared/pixels.ts'
 import { choreFor, stanceFor, type Sign, type Stance } from '../../../shared/pose.ts'
@@ -60,10 +60,13 @@ export class HikersActor implements Actor {
       const existing = this.hikers.get(id)
       const session = byId.get(id) ?? existing?.session
       if (!session) continue
-      const hiker = existing ?? this.add(session)
-      const lookKey = `${id}:${session.provider}`
+      const kit = Object.hasOwn(s.kits, id) ? s.kits[id] : ''
+      const hiker = existing ?? this.add(session, kit)
+      const lookKey = `${id}:${session.provider}:${kit}`
       if (hiker.lookKey !== lookKey) {
-        hiker.look = lookFor(id, session.provider)
+        // The old look's textures go (a new agent, or the member's gear changed)
+        this.textures.evict(`hiker:${hiker.lookKey}:`)
+        hiker.look = withKit(lookFor(id, session.provider), kitOf(kit))
         hiker.lookKey = lookKey
       }
       hiker.session = session
@@ -106,14 +109,14 @@ export class HikersActor implements Actor {
     this.snapshot = null
   }
 
-  private add(session: PluginSession): Hiker {
+  private add(session: PluginSession, kit: string): Hiker {
     const root = new Container()
     const lantern = new Graphics().ellipse(0, 0, 20, 3).fill({ color: '#ffe680', alpha: 0.5 })
     const body = new Sprite()
     body.anchor.set(0.5, 1)
     const sign = new Graphics()
     root.addChild(lantern, body, sign)
-    const hiker: Hiker = { session, look: lookFor(session.terminalId, session.provider), lookKey: `${session.terminalId}:${session.provider}`, place: 'tent', root, lantern, body, sign, signKind: null }
+    const hiker: Hiker = { session, look: withKit(lookFor(session.terminalId, session.provider), kitOf(kit)), lookKey: `${session.terminalId}:${session.provider}:${kit}`, place: 'tent', root, lantern, body, sign, signKind: null }
     this.hikers.set(session.terminalId, hiker)
     return hiker
   }
@@ -121,7 +124,7 @@ export class HikersActor implements Actor {
   private remove(id: string): void {
     this.hikers.get(id)?.root.destroy({ children: true })
     this.hikers.delete(id)
-    // Its textures' keys are `hiker:${lookKey}:…`, and lookKey is `${id}:${provider}`
+    // Its textures' keys are `hiker:${lookKey}:…`, and lookKey is `${id}:${provider}:${kit}`
     this.textures.evict(`hiker:${id}:`)
   }
 

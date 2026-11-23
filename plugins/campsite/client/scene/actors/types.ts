@@ -20,6 +20,8 @@ export interface StageSnapshot {
   edges: Edges
   /** Each building's tier (the fire ring's, the lights'); nothing built until the camp's state loads */
   built: Readonly<Record<BuildingId, number>>
+  /** terminalId → the kitKey of its member's gear (campsite part 3b), for the sessions whose member has any */
+  kits: Readonly<Record<string, string>>
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

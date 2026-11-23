@@ -1,9 +1,11 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
-// prefs, the camp's snapshot and the seen heartbeat, the document's visibility, reduced motion and
-// an element's width.
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
+// prefs, the camp's snapshot and the seen heartbeat, a session's hiker look (wearing its member's
+// gear), the document's visibility, reduced motion and an element's width.
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../shared/camp.ts'
+import { sessionKit } from '../shared/crew.ts'
+import { kitOf, lookFor, withKit, type Look } from '../shared/hiker.ts'
 import type { CampsitePrefKey } from '../shared/prefs.ts'
 import { campStore } from './campStore.ts'
 import { prefsStore, type PrefsSnapshot } from './prefsStore.ts'
@@ -57,6 +59,13 @@ export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, (key: Campsite
 export function useCamp(host: ClientPluginHost): CampSnapshot | null {
   const store = campStore(host)
   return useSyncExternalStore(store.subscribe, store.snapshot)
+}
+
+/** A session's hiker: its own look (from its id and agent), wearing its crew member's gear (campsite part 3b); the same object while neither changes */
+export function useHikerLook(host: ClientPluginHost, terminalId: string, provider: string): Look {
+  const camp = useCamp(host)
+  const kit = camp ? sessionKit(camp, terminalId) : ''
+  return useMemo(() => withKit(lookFor(terminalId, provider), kitOf(kit)), [terminalId, provider, kit])
 }
 
 /** How often a visible window tells the server the camp was seen */
