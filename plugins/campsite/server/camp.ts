@@ -264,17 +264,18 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
   const mode = (): ReconcileMode => (fullYet ? 'full' : 'open-only')
   /** The first time this run a project is heard from, after the grace period (in it, the host's listing may be stale) */
   const firstHeard = (projectId: string): boolean => fullYet && !reconciled.has(projectId)
-  /** A removed project's last activity and last species: dropped. Whether either was there */
+  /** A removed project's last activity, last species and noticeboard notes: dropped. Whether any was there */
   const forgetProject = (projectId: string): boolean => {
-    const had = Object.hasOwn(camp.lastActive, projectId) || Object.hasOwn(camp.lastSeen, projectId)
+    const had = Object.hasOwn(camp.lastActive, projectId) || Object.hasOwn(camp.lastSeen, projectId) || Object.hasOwn(camp.notes, projectId)
     delete camp.lastActive[projectId]
     delete camp.lastSeen[projectId]
+    delete camp.notes[projectId]
     return had
   }
   /**
    * A project's trails against the host's worktrees (no git refresh): a project that is gone
-   * (NOT_FOUND) turns its trails back and drops its last activity and last species (fully only); one where the plugin
-   * is off is left as it is. True when a trail, the history, the done count, the last activity or species changed.
+   * (NOT_FOUND) turns its trails back and drops its last activity, last species and notes (fully only); one where the plugin
+   * is off is left as it is. True when a trail, the history, the done count, the last activity, species or notes changed.
    */
   const reconcileProject = (projectId: string, how: ReconcileMode = mode(), fresh?: Fresh): boolean => {
     let worktrees: PluginWorktree[] | null
@@ -291,19 +292,19 @@ export function createCampServer(host: CampHost, o: CampServerOptions = {}): Plu
     if (worktrees === null && how === 'open-only') return false
     const before = JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone])
     reconcile(camp, projectId, worktrees, now(), how, fresh)
-    // A removed project's last activity and last species go with it (nothing reads them again)
+    // A removed project's last activity, last species and notes go with it (nothing reads them again)
     const forgot = worktrees === null && forgetProject(projectId)
     if (worktrees === null) reconciled.delete(projectId)
     else reconciled.add(projectId)
     return forgot || JSON.stringify([camp.trails, camp.trailLog, camp.trailsDone]) !== before
   }
-  /** Every project with trails, and every one reconciled this run; then (fully) the last activity and species of the other projects that are gone. True when a trail, the history, the done count or a last activity changed */
+  /** Every project with trails, and every one reconciled this run; then (fully) the last activity, species and notes of the other projects that are gone. True when a trail, the history, the done count, a last activity or notes changed */
   const reconcileAll = (how: ReconcileMode = mode()): boolean => {
     let any = false
     const projects = new Set([...trailProjects(camp), ...reconciled])
     for (const projectId of projects) if (reconcileProject(projectId, how)) any = true
     if (how !== 'full') return any
-    for (const projectId of new Set([...Object.keys(camp.lastActive), ...Object.keys(camp.lastSeen)])) {
+    for (const projectId of new Set([...Object.keys(camp.lastActive), ...Object.keys(camp.lastSeen), ...Object.keys(camp.notes)])) {
       if (projects.has(projectId)) continue
       try {
         host.worktrees(projectId)

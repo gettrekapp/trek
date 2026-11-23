@@ -1008,6 +1008,26 @@ test("the world (3d-1): a removed project's last activity is dropped by the full
   assert.deepEqual(h.emitted.filter(([e]) => e === 'state').at(-1)[1].lastActive, { off: T0 - 7 }, 'pushed')
 })
 
+test("agents (5): a removed project's notes (and its noteAt) are dropped by the full reconcile (one with the plugin off keeps them), and saved", async (t) => {
+  const h = fakeHost(t, { worktrees: { m: MAIN_W, w: W } })
+  const camp = newCamp(7, T0)
+  const note = (id, at) => ({ id, text: `note ${id}`, at, agent: 'claude', branch: 'main' })
+  // A project heard of only by its notes still goes
+  camp.notes = { p: [note('a', T0 - 3)], gone: [note('b', T0 - 2)], off: [note('c', T0 - 1)] }
+  writeFileSync(h.host.dataFile('camp.json'), JSON.stringify(camp))
+  const worktrees = h.host.worktrees
+  h.host.worktrees = (projectId) => (projectId === 'off' ? [] : worktrees(projectId))
+  h.off.add('off')
+  const clock = manual()
+  const { inst } = pastGrace(t, h, { schedule: clock.schedule })
+  clock.run()
+  const snap = await inst.handlers.state({}, {})
+  assert.deepEqual(snap.noteAt, { p: T0 - 3, off: T0 - 1 }, 'gone: dropped at the first full reconcile')
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(h.host.dataFile('camp.json'), 'utf8')).notes).sort(), ['off', 'p'], 'saved')
+  assert.deepEqual(await inst.handlers.notes({ projectId: 'gone' }, {}), { notes: [] })
+  assert.deepEqual(h.emitted.filter(([e]) => e === 'state').at(-1)[1].noteAt, { p: T0 - 3, off: T0 - 1 }, 'pushed')
+})
+
 /** rand() answering these numbers in turn, then the last one forever */
 const dice = (...xs) => {
   let i = 0
