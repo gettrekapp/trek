@@ -1,20 +1,23 @@
-// The camp's popover (campsite part 3a), opened from the header's counts or a building on the
-// strip. Camp: each building's next tier with its effect and price, and Build when the camp can
-// pay. Crew: the members (level, XP, where they are) and today's walk-ins to hire. DOM, fixed to
-// the window above what opened it; Escape (focus back to the opener) or a press outside closes it.
-// A refusal shows on its row for 4 s (the store has already reloaded); one for a walk-in who is
-// gone shows under the walk-ins' heading. One purchase at a time; a building's row takes the focus
-// once it is built.
+// The camp's popover (campsite parts 3a and 3b), opened from the header's counts or a building on
+// the strip. Camp: each building's next tier with its effect and price, and Build when the camp can
+// pay. Crew: the members (level, XP, where they are, their gear's bonus), each a button that opens
+// its view (MemberView: pin, gear, journal; Back returns the focus to its row), and today's
+// walk-ins to hire. DOM, fixed to the window above what opened it; Escape (focus back to the
+// opener) or a press outside closes it. A refusal shows on its row for 4 s (the store has already
+// reloaded); one for a walk-in who is gone shows under the walk-ins' heading. One purchase at a
+// time; a building's row takes the focus once it is built.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import { iconArt } from '../shared/buildingPixels.ts'
 import type { CampSnapshot, CrewEntry } from '../shared/camp.ts'
-import { hireState, memberStatus, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
+import { bonusText, hireState, memberStatus, memberSummary, shopRow, xpProgress, type HireState } from '../shared/campView.ts'
 import { CATALOG, type BuildingId } from '../shared/catalog.ts'
 import { memberLook } from '../shared/crew.ts'
+import { kitKey, kitOf, withKit } from '../shared/hiker.ts'
 import type { Candidate } from '../shared/shop.ts'
 import type { CampStore } from './campStore.ts'
 import { Hiker } from './Hiker.tsx'
+import { MemberView } from './MemberView.tsx'
 
 /** Where the popover opens (its opener's left and top, window px) and the building row to show (null: the top) */
 export interface OpenCamp {
@@ -30,7 +33,7 @@ interface Props {
   camp: CampSnapshot
   at: OpenCamp
   sessions: readonly PluginSession[]
-  store: Pick<CampStore, 'build' | 'recruit'>
+  store: Pick<CampStore, 'build' | 'recruit' | 'gear' | 'pin'>
   onClose: (refocus: boolean) => void
 }
 
@@ -48,6 +51,14 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
   const tabId = (t: 'camp' | 'crew'): string => `${ids}-tab-${t}`
   const panelId = (t: 'camp' | 'crew'): string => `${ids}-panel-${t}`
   const labels = useMemo(() => new Map(sessions.map((s) => [s.terminalId, s.label])), [sessions])
+  // The member whose view is open in the Crew tab (null: the list); the row to focus once it closes
+  const [open, setOpen] = useState<string | null>(null)
+  const backTo = useRef<string | null>(null)
+  useEffect(() => {
+    if (open !== null || backTo.current === null) return
+    ref.current?.querySelector<HTMLElement>(`[data-crew="${backTo.current}"]`)?.focus()
+    backTo.current = null
+  }, [open])
 
   // Inside the window once its width is known (before paint)
   useLayoutEffect(() => {
@@ -132,6 +143,7 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
   }
 
   const hire = hireState(camp)
+  const member = open === null ? undefined : camp.crew.find((m) => m.id === open)
   // Refusals for walk-ins no longer listed (hired elsewhere, or the day turned)
   const goneErrors = Object.keys(errors).filter((k) => k.startsWith('hire:') && !camp.candidates.some((c) => `hire:${c.name}` === k))
   return (
@@ -196,19 +208,38 @@ export function CampPopover({ camp, at, sessions, store, onClose }: Props): Reac
         </div>
       ) : (
         <div className="cs-crew" role="tabpanel" id={panelId('crew')} aria-labelledby={tabId('crew')}>
-          {camp.crew.map((m) => (
-            <CrewRow key={m.id} member={m} status={memberStatus(camp, m.id, labels)} />
-          ))}
-          <div className="cs-crew-heading">Walk-ins today</div>
-          {goneErrors.map((k) => (
-            <div key={k} className="cs-shop-error cs-crew-gone" role="alert">
-              {errors[k]}
-            </div>
-          ))}
-          {camp.candidates.length === 0 && <div className="cs-crew-empty">Nobody else came by today.</div>}
-          {camp.candidates.map((c) => (
-            <WalkIn key={c.name} candidate={c} cost={camp.recruitCost} hire={hire} busy={busy} error={errors[`hire:${c.name}`]} onHire={() => act(`hire:${c.name}`, () => store.recruit(c.name, camp.recruitCost))} />
-          ))}
+          {member ? (
+            <MemberView
+              key={member.id}
+              camp={camp}
+              member={member}
+              status={memberStatus(camp, member.id, labels)}
+              store={store}
+              busy={busy}
+              errors={errors}
+              act={act}
+              onBack={() => {
+                backTo.current = member.id
+                setOpen(null)
+              }}
+            />
+          ) : (
+            <>
+              {camp.crew.map((m) => (
+                <CrewRow key={m.id} member={m} status={memberStatus(camp, m.id, labels)} onOpen={() => setOpen(m.id)} />
+              ))}
+              <div className="cs-crew-heading">Walk-ins today</div>
+              {goneErrors.map((k) => (
+                <div key={k} className="cs-shop-error cs-crew-gone" role="alert">
+                  {errors[k]}
+                </div>
+              ))}
+              {camp.candidates.length === 0 && <div className="cs-crew-empty">Nobody else came by today.</div>}
+              {camp.candidates.map((c) => (
+                <WalkIn key={c.name} candidate={c} cost={camp.recruitCost} hire={hire} busy={busy} error={errors[`hire:${c.name}`]} onHire={() => act(`hire:${c.name}`, () => store.recruit(c.name, camp.recruitCost))} />
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -230,31 +261,27 @@ function BuildingIcon({ id, tier }: { id: BuildingId; tier: number }): React.JSX
   )
 }
 
-function CrewRow({ member, status }: { member: CrewEntry; status: string }): React.JSX.Element {
-  const look = useMemo(() => memberLook(member.seed), [member.seed])
+/** A member's row: a button that opens its view; its label says it all (the bar inside is drawn only) */
+function CrewRow({ member, status, onOpen }: { member: CrewEntry; status: string; onOpen: () => void }): React.JSX.Element {
+  const kit = kitKey(member.gear)
+  const look = useMemo(() => withKit(memberLook(member.seed), kitOf(kit)), [member.seed, kit])
   const pct = Math.round(xpProgress(member) * 100)
   return (
-    <div className="cs-crew-row">
+    <button className="cs-crew-row cs-crew-member" data-crew={member.id} aria-label={memberSummary(member, status)} title={`${member.xp} / ${member.next} XP`} onClick={onOpen}>
       <Hiker look={look} pose="stand" scale={2} label={member.name} decorative />
-      <div className="cs-crew-text">
+      <span className="cs-crew-text">
         <span className="cs-crew-name">
           {member.name} <span className="cs-crew-level">Lv {member.level} {member.title}</span>
         </span>
-        <span
-          className="cs-xp"
-          title={`${member.xp} / ${member.next} XP`}
-          role="progressbar"
-          aria-label={`${member.name}'s XP to Lv ${member.level + 1}`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={pct}
-          aria-valuetext={`${member.xp} / ${member.next} XP`}
-        >
+        <span className="cs-xp" aria-hidden="true">
           <span style={{ width: `${pct}%` }} />
         </span>
-        <span className="cs-crew-status">{status}</span>
-      </div>
-    </div>
+        <span className="cs-crew-status">{member.bonus > 0 ? `${status} · ${bonusText(member.bonus)}` : status}</span>
+      </span>
+      <span className="cs-crew-open" aria-hidden="true">
+        ›
+      </span>
+    </button>
   )
 }
 

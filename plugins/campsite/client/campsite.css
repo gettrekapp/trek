@@ -632,6 +632,103 @@
   height: 100%;
   background: #c8a24a;
 }
+/* A member's row is a button that opens its view (campsite part 3b) */
+.cs-crew-member {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.cs-crew-member:hover,
+.cs-crew-member:focus-visible {
+  background: #2a2a30;
+}
+.cs-crew-open {
+  flex: none;
+  color: #6f6f78;
+  font-size: 14px;
+}
+.cs-member-back {
+  font-family: inherit;
+  height: 22px;
+  margin: 2px 6px;
+  padding: 0 8px;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #9a9aa2;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cs-member-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+}
+.cs-member-bonus {
+  color: #b8f28a;
+  font-size: 11px;
+}
+.cs-member-pin {
+  display: block;
+  margin: 6px 6px 2px;
+  color: #9a9aa2;
+  font-size: 11px;
+}
+.cs-member-pin-select {
+  display: block;
+  width: calc(100% - 12px);
+  height: 24px;
+  margin: 0 6px;
+  background: #2a2a30;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  color: #ededf0;
+  font: inherit;
+}
+.cs-member-pin-error {
+  display: block;
+  padding: 2px 6px;
+}
+.cs-gear-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: 5px;
+}
+.cs-gear-row:focus {
+  outline: 1px solid #ffe680;
+  outline-offset: -1px;
+}
+.cs-gear-slot {
+  flex: none;
+  width: 40px;
+  color: #9a9aa2;
+  font-size: 11px;
+}
+.cs-journal {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 2px 6px 6px;
+  list-style: none;
+}
+.cs-journal li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.cs-journal-when {
+  flex: none;
+  color: #6f6f78;
+}
 /* "While you were away": one line at the end of the expanded strip's header (cut short, the whole
    line in its tooltip), so it covers neither the counts nor a tent's sign; fixed above the bar,
    collapsed (the bar clips) */
