@@ -123,6 +123,7 @@ new optional field needs no capability: its absence says enough.
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
 | `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
+| `tasks` | Per-project tasks (see [Tasks](#tasks)): `task.save`, `task.setCompleted`, `task.setArchived`, `task.delete`, `task.reorder`, `task.start`, `Project.tasks` and the `tasksEnabled` setting. Without it a client shows no Tasks page |
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
 | `ui` | Clients say what they show (see [What a client shows](#what-a-client-shows)): `ui.report`, the event `ui.focus`, and the MCP tools `get_selected_worktree` and `focus_session` |
 | `mcpTools` | `mcpTools.list`: the MCP tools a session can call, Trek's and the other servers' configured for Claude Code on the server's machine (see [MCP tools a session can call](#mcp-tools-a-session-can-call)) |
@@ -1372,6 +1373,71 @@ For the smokes only: `TREK_SERVER_AUTOMATION_TICK_MS` (a whole number of millise
 number (milliseconds since the epoch) is the scheduler's "now", read at each use (`Date.now` when it
 can't be read).
 
+## Tasks
+
+With the capability `tasks`, a project holds a to-do list, `Project.tasks` (in list order, saved
+with the project and published on the project topic; absent when empty). The setting
+`ProjectSettings.tasksEnabled` (absent = on; set with `project.updateSettings`) switches Tasks off
+for a project: while it is `false`, every `task.*` method and every task MCP tool fails with
+`TOOL_ERROR` "Tasks is turned off in this project's settings". The tasks stay in the project.
+
+```ts
+interface Task {
+  id: string
+  title: string          // 1-200 characters, one line
+  details?: string       // markdown, at most 20000 characters; absent when empty
+  status?: string        // free text, one line, at most 80 characters; absent when empty
+  createdAt: number      // ms since the epoch
+  updatedAt: number      // bumped by every change, and always strictly greater than before
+  completedAt?: number
+  archivedAt?: number
+  starts?: TaskStart[]   // newest last, the last 20
+}
+interface TaskStart {
+  at: number
+  repositoryId: string
+  worktreeId: string
+  branch: string
+  sessionId?: string     // absent when the worktree was made but its session failed to start
+}
+```
+
+Titles are not unique. A project holds at most 500 tasks. `title` and `status` are trimmed and
+may not contain control characters; `details` is trimmed and may hold newlines and tabs.
+
+| Method | Params | Result |
+|---|---|---|
+| `task.save` | `{projectId, task, expectedUpdatedAt?}` | `{id, updatedAt}`. `task` is `{id?, title, details?, status?}`: no `id` creates the task at the end of the list (`CAPACITY` at 500), an `id` updates it (`NOT_FOUND` if unknown). An update replaces the text fields: `details` or `status` left out, `null` or `''` clears it. With `expectedUpdatedAt` (an integer) an update fails with `CONFLICT` when the stored `updatedAt` differs. `BAD_REQUEST` for a missing or empty title, a field that is too long or the wrong type, or control characters |
+| `task.setCompleted` | `{projectId, taskId, completed}` | `null`. Sets `completedAt` (keeping the first time) or clears it; `NOT_FOUND` for an unknown task, `BAD_REQUEST` for a non-boolean. Setting the state it already has is a no-op: nothing is saved or published and `updatedAt` stays |
+| `task.setArchived` | `{projectId, taskId, archived}` | `null`; as `task.setCompleted`, for `archivedAt`. A task can be both completed and archived |
+| `task.delete` | `{projectId, taskId}` | `null`. `BAD_REQUEST` unless the task is archived; `NOT_FOUND` for an unknown task |
+| `task.reorder` | `{projectId, taskIds}` | `null`. `taskIds` is every task id of the project exactly once, in the new order; anything else (a missing, repeated or unknown id, a non-list) is `BAD_REQUEST` |
+| `task.start` | `{projectId, taskId, repositoryId, llm?}` | `{worktreeId, sessionId, branch, linkWarnings?}`: see below |
+
+Every method also answers `NOT_FOUND` for an unknown project.
+
+**`task.start`** makes a new worktree for the task in the repository `repositoryId` (`NOT_FOUND` if
+the project has no such repository) and starts an agent session in it. `BAD_REQUEST` for an
+archived task, or when no free branch name is left; `GIT_ERROR` when git cannot read the repository's branches. An `llm` the session would refuse (`BAD_REQUEST`) and a project at its session limit (`CAPACITY`) are refused before any worktree is made. A completed task can be started. The branch is
+`task/<slug>`, the slug being the title in lower-case ASCII letters, digits and single dashes, at
+most 40 characters (`task` when none are left); when that branch exists locally, or the default
+worktree folder for it exists, `task/<slug>-2` up to `-99` are tried, and `BAD_REQUEST` follows
+if all are taken. The worktree is made as `worktree.create` with `createBranch: true` makes one
+(its errors are `task.start`'s, and its `linkWarnings`, when it has any, are in the result). The session starts in it as `session.start` does, titled with the task's title (cut to the title limit), with `llm`
+(the agent's default when unset), and its first message is the task's title, a blank line,
+its details (when set), a blank line and `This is Trek task <id> ("<title>"). Use the get_task tool
+to reread it and complete_task when it's done.`. The start is recorded in the task's `starts` and
+its `updatedAt` bumped; if the task changed meanwhile it is recorded on what is stored, and if the
+task was deleted meanwhile nothing is recorded.
+
+If the session cannot start, the worktree stays (as after `create_worktree` followed by a failed
+`start_session`), the start is recorded without `sessionId`, and the method fails with the session
+failure's error code (`TOOL_ERROR` when it has none a client may see) and the message `Created the worktree on <branch>, but its session did not
+start: <reason>`.
+
+The task MCP tools (`list_tasks`, `get_task`, `save_task`, `complete_task`, `archive_task`) are in
+the table under [MCP tools](#mcp-trek-dev-on-the-server); they resolve a task by id, then by title.
+
 ## Changes tab review
 
 With the capability `review` (phase 5c-2), a client can pick what the Changes tab compares and
@@ -2199,8 +2265,13 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `save_automation` | `automation?` (omit to create); `name?`, `prompt?`, `cron?` (all three needed to create); `timezone?` (create: the server machine's); `enabled?` (create: true); `llm?` (`null` = the Global agent) | the saved automation entry; an update changes only what is passed; through `automation.save`, with its checks |
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation`; `terminalId?` (the caller's session) | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run, and when `terminalId` is that run tab itself (a run can't start its own automation again; nothing is recorded) |
+| `list_tasks` | `filter?` (`open`, the default; `completed`, which leaves out archived ones; `archived`; `all`) | task entries in list order: `{id, title, status?, createdAt, updatedAt, completedAt?, archivedAt?, startCount}` (times as ISO strings); `BAD_REQUEST` for another filter; `TOOL_ERROR` while Tasks is off in the project (see [Tasks](#tasks)) |
+| `get_task` | `task` (id or title, case-insensitive) | the task with `details?` and `starts: [{at, repositoryId, worktreeId, branch, terminalId?}]` instead of `startCount`; `NOT_FOUND` for an unknown task, `BAD_REQUEST` for a title several tasks share (the message lists their ids) |
+| `save_task` | `task?` (omit to create); `title?` (needed to create), `details?`, `status?`; `""` clears details or status, an argument left out keeps the task's value | the saved task as `get_task` shows it; through `task.save`, with `expectedUpdatedAt` the task's `updatedAt` as the tool read it, so `CONFLICT` if it changed meanwhile; `CAPACITY` past 500 tasks |
+| `complete_task` | `task`; `completed?` (boolean, default true; false reopens) | the task as `list_tasks` shows it; through `task.setCompleted` (a task already in that state is left as it is); `BAD_REQUEST` for a non-boolean |
+| `archive_task` | `task`; `archived?` (boolean, default true; false restores) | the task as `list_tasks` shows it; through `task.setArchived` (same-value is a no-op); `BAD_REQUEST` for a non-boolean |
 
-That is 43 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 48 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
