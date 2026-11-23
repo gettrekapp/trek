@@ -1,15 +1,17 @@
-// What the camp popover says (campsite parts 3a, 3b, 3c and 3d-1): a building's row, whether a hire can be
+// What the camp popover says (campsite parts 3a, 3b, 3c, 3d-1 and 3d-2): a building's row, whether a hire can be
 // made, a member's status line, how far it is through its level, and a building's tooltip on the
 // strip; a member's view: its gear rows, its bonus, and the pin's choices; the trails: a flag's
 // label, a trail's row and its history's lines, the Trails tab's groups, the signpost's and the
-// cairn's words, the summit's line; the header's weather glyph and its reason. Pure.
+// cairn's words, the summit's line; the header's weather glyph and its reason; the field guide's
+// cards (names, counts, hints for unseen species, the new dot) and an animal's button. Pure.
 import type { CampSnapshot, CrewEntry, Pin, PinRef, TrailEntry } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
 import { providerName } from './journal.ts'
 import { shortfall } from './shop.ts'
 import { STAGES, STAGE_HINTS, SUMMIT, type TrailRecord } from './trails.ts'
-import type { Weather } from './world.ts'
+import { SPECIES, isRare, species, type GuideEntry, type SpeciesDef } from './wildlife.ts'
+import type { Phase, Weather } from './world.ts'
 
 export interface ShopRow {
   id: BuildingId
@@ -213,3 +215,85 @@ export function weatherBadge(w: Weather): { glyph: string; text: string } | null
       return null
   }
 }
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** A date in the viewer's time: "Nov 23" */
+export function monthDay(at: number): string {
+  const d = new Date(at)
+  return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`
+}
+
+const cap = (s: string): string => `${s[0].toUpperCase()}${s.slice(1)}`
+const and = (words: readonly string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`)
+const PHASE_ORDER: readonly Phase[] = ['dawn', 'day', 'dusk', 'night']
+
+/** An unseen species' hint (ranger tower II), from its gates: "At night · Near water · Winter only"; "Any time, anywhere" with none */
+export function speciesHint(s: SpeciesDef): string {
+  const parts: string[] = []
+  const p = s.phases
+  if (p) {
+    const missing = PHASE_ORDER.filter((x) => !p.includes(x))
+    if (p.length === 1) parts.push(p[0] === 'day' ? 'By day' : `At ${p[0]}`)
+    else if (missing.length === 1) parts.push(missing[0] === 'day' ? 'Not by day' : `Not at ${missing[0]}`)
+    else parts.push(cap(and(PHASE_ORDER.filter((x) => p.includes(x)))))
+  }
+  if (s.needs === 'lake') parts.push('Near water')
+  const q = s.seasons
+  if (q) {
+    if (q.length === 3 && !q.includes('winter')) parts.push('Not in winter')
+    else if (q.length === 1) parts.push(`${cap(q[0])} only`)
+    else parts.push(cap(and(q)))
+  }
+  const b = s.boosts ?? {}
+  if (b.rain) parts.push('More in the rain')
+  if (b.fog) parts.push('More in fog')
+  if (b.autumn) parts.push('More in autumn')
+  if (b.dawn && b.dusk) parts.push('More at dawn and dusk')
+  return parts.length === 0 ? 'Any time, anywhere' : parts.join(' · ')
+}
+
+/** A rare's card without the ranger tower */
+export const TOWER_HINT = 'Needs the ranger tower'
+
+export interface GuideCard {
+  id: string
+  /** Its name, or "???" while unseen */
+  name: string
+  seen: boolean
+  /** "Seen 12 times" (seen), else '' */
+  count: string
+  /** "first seen Nov 23" (seen); unseen: its hint (ranger tower II), TOWER_HINT (a rare without the tower), else '' */
+  line: string
+  /** The card's label: "Red fox, seen 12 times, first Nov 23" (", new" with the dot); "Unknown animal, not seen yet" (and its line) */
+  label: string
+  /** First seen after the tab was last opened */
+  isNew: boolean
+}
+
+const times = (n: number): string => (n === 1 ? 'once' : `${n} times`)
+
+/** The field guide's cards: the 20 commons, then the 4 rares; `since`: when the tab was last opened (ms), for the new dot */
+export function guideCards(snap: { guide?: Readonly<Record<string, GuideEntry>>; built: { tower?: number } }, since: number): { commons: GuideCard[]; rares: GuideCard[] } {
+  const guide = snap.guide ?? {}
+  const tower = snap.built.tower ?? 0
+  const card = (s: SpeciesDef): GuideCard => {
+    const page = Object.hasOwn(guide, s.id) ? guide[s.id] : undefined
+    if (page) {
+      const first = monthDay(page.first)
+      const isNew = page.first > since
+      return { id: s.id, name: s.name, seen: true, count: `Seen ${times(page.count)}`, line: `first seen ${first}`, label: `${s.name}, seen ${times(page.count)}, first ${first}${isNew ? ', new' : ''}`, isNew }
+    }
+    const line = isRare(s) && tower < 1 ? TOWER_HINT : tower >= 2 ? speciesHint(s) : ''
+    return { id: s.id, name: '???', seen: false, count: '', line, label: line ? `Unknown animal, not seen yet: ${line}` : 'Unknown animal, not seen yet', isNew: false }
+  }
+  return { commons: SPECIES.filter((s) => !isRare(s)).map(card), rares: SPECIES.filter(isRare).map(card) }
+}
+
+/** The Guide tab's name: "Guide 3/24" (species this version knows) */
+export function guideTab(snap: { guide?: Readonly<Record<string, GuideEntry>> }): string {
+  const seen = Object.keys(snap.guide ?? {}).filter((id) => species(id) !== undefined).length
+  return `Guide ${seen}/${SPECIES.length}`
+}
+
+/** An animal's button on the strip: "Red fox — open the field guide" */
+export const animalLabel = (id: string): string => `${species(id)?.name ?? 'An animal'} — open the field guide`
