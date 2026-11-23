@@ -191,7 +191,7 @@ export function mix(a: string, b: string, t: number): string {
 const COLOURS = ['sky', 'stars', 'moon', 'ridge', 'peak', 'ledge', 'path', 'pineLight', 'pineDark', 'ground', 'groundEdge', 'trail'] as const
 
 /** One palette toward another by t, held to 0–1: colours and amounts mixed, the lights switched halfway */
-function between(a: Palette, b: Palette, t: number): Palette {
+function between(a: Readonly<Palette>, b: Readonly<Palette>, t: number): Readonly<Palette> {
   t = unit(t)
   if (t <= 0) return a
   const out: Palette = { ...a, starAlpha: a.starAlpha + (b.starAlpha - a.starAlpha) * t, moreStars: a.moreStars + (b.moreStars - a.moreStars) * t, bite: a.bite + (b.bite - a.bite) * t, glow: a.glow + (b.glow - a.glow) * t, lights: t < 0.5 ? a.lights : b.lights }
@@ -200,7 +200,7 @@ function between(a: Palette, b: Palette, t: number): Palette {
 }
 
 /** A season's touch on a palette: winter frosts the pines, whitens the ground's edge and caps the tops with snow; autumn rusts some pines; spring greens the ground a little; summer none */
-function seasoned(p: Palette, season: Season | null): Palette {
+function seasoned(p: Readonly<Palette>, season: Season | null): Readonly<Palette> {
   switch (season) {
     case 'winter':
       return { ...p, pineLight: mix(p.pineLight, '#c4ccd8', 0.22), pineDark: mix(p.pineDark, '#c4ccd8', 0.14), ground: mix(p.ground, '#cfd6df', 0.06), groundEdge: mix(p.groundEdge, '#d6dde6', 0.4), snow: mix('#d4dbe4', p.sky, 0.45) }
@@ -214,7 +214,7 @@ function seasoned(p: Palette, season: Season | null): Palette {
 }
 
 /** The palette at a phase, toward the next by `blend`, with the season's touch (no season, blend 0 at dusk: the dusk palette itself) */
-export function paletteAt(phase: Phase, next: Phase, blend: number, season: Season | null): Palette {
+export function paletteAt(phase: Phase, next: Phase, blend: number, season: Season | null): Readonly<Palette> {
   return seasoned(between(PALETTES[phase], PALETTES[next], blend), season)
 }
 
@@ -256,7 +256,7 @@ export function weatherOf(trails: readonly WeatherTrail[], lastActive: Readonly<
 }
 
 /** Rain and fog dim the sky a little and hide most stars */
-function weathered(p: Palette, kind: WeatherKind): Palette {
+function weathered(p: Readonly<Palette>, kind: WeatherKind): Readonly<Palette> {
   if (kind === 'rain' || kind === 'snow') return { ...p, sky: mix(p.sky, '#16181e', 0.3), starAlpha: p.starAlpha * 0.25, moreStars: p.moreStars * 0.25, moon: mix(p.moon, p.sky, 0.45) }
   if (kind === 'fog') return { ...p, sky: mix(p.sky, '#2a2c33', 0.25), starAlpha: p.starAlpha * 0.4, moreStars: p.moreStars * 0.4, moon: mix(p.moon, p.sky, 0.3) }
   return p
@@ -280,8 +280,8 @@ export function worldAt(now: number, sky: 'clock' | 'dusk', hemisphere: Hemisphe
 /** The same string while the world looks the same */
 export const worldKey = (w: World): string => `${w.phase}>${w.next}:${w.blend}:${w.season ?? 'none'}:${w.weather}`
 
-/** The backdrop's colours for a world */
-export const worldPalette = (w: World): Palette => weathered(paletteAt(w.phase, w.next, w.blend, w.season), w.weather)
+/** The backdrop's colours for a world (may be one of the frozen PALETTES: read only) */
+export const worldPalette = (w: World): Readonly<Palette> => weathered(paletteAt(w.phase, w.next, w.blend, w.season), w.weather)
 
 /**
  * The parts of a polygon (x, y pairs) above y = `cut`, each its own polygon (the ridge has several

@@ -326,7 +326,7 @@ export interface Backdrop {
 const MOON_CLEAR = 180
 
 /** The backdrop in a palette (part 3d-1; by default dusk: the strip as it always was). Autumn's rust takes every third pine */
-export function backdrop(width: number, p: Palette = PALETTES.dusk): Backdrop {
+export function backdrop(width: number, p: Readonly<Palette> = PALETTES.dusk): Backdrop {
   const moonLeft = Math.min(Math.round(width - 0.09 * width) - 12, width - MOON_CLEAR)
   const ridge: Shape = { points: inBox(RIDGE, 0, GROUND_Y - RIDGE_H, width, RIDGE_H), fill: p.ridge }
   const snow = p.snow

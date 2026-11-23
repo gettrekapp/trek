@@ -74,9 +74,9 @@ export class WorldActor implements Actor {
 
   frame(t: number, still: boolean): void {
     if (!this.fog.visible) return
-    this.bands.forEach((sprite, i) => {
-      sprite.x = fogX(FOG_BANDS[i >> 1], (i & 1) as 0 | 1, this.width, t, still)
-    })
+    for (let i = 0; i < this.bands.length; i++) {
+      this.bands[i].x = fogX(FOG_BANDS[i >> 1], (i & 1) as 0 | 1, this.width, t, still)
+    }
   }
 
   destroy(): void {

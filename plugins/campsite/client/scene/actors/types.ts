@@ -33,7 +33,7 @@ export interface StageSnapshot {
   /** The time of day, the season and the weather (campsite part 3d-1); the same object while they look the same */
   world: World
   /** The backdrop's colours for `world` */
-  palette: Palette
+  palette: Readonly<Palette>
 }
 
 /** The waiting signs' colors: the core's --attention and --decision */

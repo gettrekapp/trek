@@ -27,7 +27,8 @@ export class BuildingsActor implements Actor {
   private lightsKey = ''
   /** Each bulb's colour, lit */
   private fills: string[] = []
-  private lit = true
+  /** The palette's lights: the bulbs lit (dawn, dusk, night) or dark (day) */
+  private lightsOn = true
 
   constructor(textures: TextureCache) {
     this.textures = textures
@@ -68,7 +69,7 @@ export class BuildingsActor implements Actor {
         const white = this.textures.get('bulb', 2, 2, () => WHITE)
         for (const b of lights.bulbs) {
           const bulb = new Sprite(white)
-          bulb.tint = this.lit ? b.fill : UNLIT
+          bulb.tint = this.lightsOn ? b.fill : UNLIT
           bulb.position.set(b.x, b.y)
           bulb.setSize(b.w, b.h)
           this.bulbs.addChild(bulb)
@@ -76,17 +77,17 @@ export class BuildingsActor implements Actor {
         }
       }
     }
-    if (s.palette.lights !== this.lit) {
-      this.lit = s.palette.lights
+    if (s.palette.lights !== this.lightsOn) {
+      this.lightsOn = s.palette.lights
       this.bulbs.children.forEach((bulb, i) => {
-        ;(bulb as Sprite).tint = this.lit ? this.fills[i] : UNLIT
+        ;(bulb as Sprite).tint = this.lightsOn ? this.fills[i] : UNLIT
       })
     }
   }
 
   frame(t: number, still: boolean): void {
     this.bulbs.children.forEach((bulb, i) => {
-      bulb.alpha = still || !this.lit ? 1 : bulbAlpha(i, t)
+      bulb.alpha = still || !this.lightsOn ? 1 : bulbAlpha(i, t)
     })
   }
 
