@@ -11,7 +11,9 @@
 //     the row's dot run and the footer count it; quiet, it is done; with the campsite plugin off
 //     for the project, a click on the core badge marks it complete (and another resumes); back on,
 //     a click on the tab's hiker marks it complete; the strip's header counts the camp's wood, which rises while the
-//     session works (a working minute shortened to 200 ms); with the camp seeded with 400 wood
+//     session works (a working minute shortened to 200 ms); a tool call in the session's Claude
+//     transcript (written where the claude plugin reads it, the temp HOME's .claude, also its CLAUDE_CONFIG_DIR) shows on its working
+//     hiker: "Editing Campsite.tsx" on the terminal bar and in the strip hiker's title; with the camp seeded with 400 wood
 //     (TREK_CAMPSITE_SEED_WOOD), the counts button opens the camp's popover, string lights are built
 //     from it (the row says Built, the wood drops by 25), then the gear shed, and a member's view in the
 //     Crew tab buys a canvas pack ("+2% wood"), reads its journal, and goes Back to the list (its row focused);
@@ -206,6 +208,8 @@ try {
     ...homeEnv(home),
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
+    // Where the claude plugin follows Claude Code's transcripts (part 4): the temp home's, whatever the shell sets
+    CLAUDE_CONFIG_DIR: join(home, '.claude'),
     ...(SMOKE_SHELL ? { SHELL: SMOKE_SHELL } : {}),
     TREK_NO_WINDOW_RESTORE: '1',
     TREK_NO_UPDATE_CHECK: '1',
@@ -382,6 +386,26 @@ try {
   })
   console.log(`     (the camp's wood: ${woodBefore} before the work, ${woodWorked} after)`)
   check("the strip's header counts the camp's wood (🪵 n ≥ 1), and it rises while the session works", [woodBefore !== null, woodWorked !== null], [true, true])
+  // Real chores (campsite 4): the claude plugin follows the session's Claude Code transcript,
+  // ~/.claude/projects/<cwd, every other character a dash>/<its session id>.jsonl, under the run's
+  // temp HOME (the server's too). The fake agent writes none, so the smoke writes one tool call
+  // there (the file appears after the watch started: it is read from its top). Kept working (the
+  // chore shows only then) until the hiker says what it is doing.
+  const apiMain = (await project()).repositories[0].worktrees.find((w) => w.isMain)
+  // Claude names the folder after its physical cwd (symlinks resolved), as the reader does
+  const transcriptDir = join(home, '.claude', 'projects', realPath(apiMain.path).replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(transcriptDir, { recursive: true })
+  const toolLine = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Editing.' }, { type: 'tool_use', id: 'toolu_smoke', name: 'Edit', input: { file_path: join(apiMain.path, 'Campsite.tsx'), old_string: 'a', new_string: 'b' } }] } }
+  writeFileSync(join(transcriptDir, `${(await apiMainSession()).agentSessionId}.jsonl`), `${JSON.stringify(toolLine)}\n`)
+  const barText = () => win.locator('.quick-buttons .cs-bar-hiker .cs-bar-text').first().innerText()
+  const stripTitle = () => win.locator('.campsite .cs-camp-hiker').first().getAttribute('title')
+  const saysEditing = await first(async () => {
+    await sdkPtys.write(apiPty, 'work\r')
+    await sleep(800)
+    const [text, title] = [await barText(), await stripTitle()]
+    return text.endsWith(' · Editing Campsite.tsx') && title?.endsWith(' · working · Editing Campsite.tsx') ? [text.slice(text.indexOf(' · ') + 3), title.slice(title.lastIndexOf(' · ') + 3)] : null
+  }, 20_000)
+  check("a tool call in the session's transcript shows on its working hiker: the terminal bar and the strip hiker's title say Editing Campsite.tsx", saysEditing, ['Editing Campsite.tsx', 'Editing Campsite.tsx'])
   check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
   await detail.locator('.session-tab .cs-indicator.clickable').click()
   check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
