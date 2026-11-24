@@ -29,7 +29,8 @@ export function MiniHiker({ session, now, crew, label, expanded, onClick }: Prop
   const [tip, setTip] = useState<{ left: number; top: number } | null>(null)
   const show = (el: HTMLElement): void => {
     const r = el.getBoundingClientRect()
-    setTip({ left: r.left + r.width / 2, top: r.top })
+    // Over the collapsed bar, not over the hiker inside it
+    setTip({ left: r.left + r.width / 2, top: el.closest('.campsite.collapsed')?.getBoundingClientRect().top ?? r.top })
   }
   return (
     <button

@@ -318,9 +318,11 @@ export function Campsite(): React.JSX.Element | null {
   const pickCamper = (terminalId: string, el: HTMLButtonElement): void => {
     camperOpener.current = el
     const r = el.getBoundingClientRect()
+    // Over the collapsed bar, not over its hiker (which sits inside the bar)
+    const top = el.closest('.campsite.collapsed')?.getBoundingClientRect().top ?? r.top
     setOpenTent(null)
     setCampOpen(null)
-    setOpenCamper((o) => (o !== null && o.terminalId === terminalId ? null : { terminalId, left: r.left, right: r.right, top: r.top }))
+    setOpenCamper((o) => (o !== null && o.terminalId === terminalId ? null : { terminalId, left: r.left, right: r.right, top }))
   }
   /** The card's Open in camp: the camp popover at the member's view, above the camper (or the counts, if the camper's button has gone) */
   const openMember = (crewId: string): void => {
