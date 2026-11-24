@@ -479,8 +479,8 @@ export function Campsite(): React.JSX.Element | null {
   )
 }
 
-/** Where the camp popover opens, as a key: its tab, its building row, trail or species, and what opened it ("camp:", "camp:lights", "trails:@signpost", "trails:w1@flag:w1", "guide:fox@animal") */
-const openKey = (o: OpenCamp): string => `${o.tab ?? 'camp'}:${o.trail ?? o.species ?? o.focus ?? ''}${o.opener === undefined ? '' : `@${o.opener}`}`
+/** Where the camp popover opens, as a key: its tab, its building row, trail or species, and what opened it ("camp:", "camp:lights", "trails:@signpost", "trails:w1@flag:w1", "guide:fox@animal", "crew:c1@camper") */
+const openKey = (o: OpenCamp): string => `${o.tab ?? 'camp'}:${o.trail ?? o.species ?? o.focus ?? o.crew ?? ''}${o.opener === undefined ? '' : `@${o.opener}`}`
 
 /** While `open`: a press outside the camps' badges and the popover, or a window resize, closes; Escape closes and refocuses the badge */
 function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void): void {
