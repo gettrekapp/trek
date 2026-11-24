@@ -371,6 +371,66 @@
 .cs-tent-popover button:hover {
   background: #2a2a30;
 }
+/* A camper's card: its crew member and this trip, Go to terminal and Open in camp */
+.cs-camper-card {
+  position: fixed;
+  transform: translateY(-100%);
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  padding: 8px;
+  background: #1c1d1f;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #ededf0;
+  font-size: 12px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cs-camper-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cs-camper-none,
+.cs-camper-pin {
+  color: #9a9aa2;
+}
+.cs-camper-trip {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+.cs-camper-trip dt {
+  color: #9a9aa2;
+}
+.cs-camper-trip dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-camper-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cs-camper-camp {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.cs-camper-camp:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
 .cs-row-name {
   flex: 1;
   min-width: 0;
@@ -407,6 +467,39 @@
 .cs-camp-hiker:focus-visible {
   outline: 1px solid #ffe680;
   outline-offset: 2px;
+}
+/* A camper's label (crew name · tab), at once on hover or keyboard focus: over a strip hiker in CSS,
+   so it walks with it; over the collapsed bar's hikers a fixed span (the bar clips), MiniHiker's */
+.cs-camper-label,
+.cs-camp-hiker[data-label]:hover::after,
+.cs-camp-hiker[data-label]:focus-visible::after {
+  padding: 2px 6px;
+  background: #1c1d1f;
+  color: #ededf0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.cs-camp-hiker[data-label]:hover::after,
+.cs-camp-hiker[data-label]:focus-visible::after {
+  content: attr(data-label);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 2px);
+  transform: translateX(-50%);
+}
+/* Its label over the other hikers and the camps' signs */
+.cs-camp-hiker:hover,
+.cs-camp-hiker:focus-visible {
+  z-index: 3;
+}
+.cs-camper-label {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 4px));
+  z-index: 40;
 }
 /* Over the dog's sprite (CampStage moves it), before the hikers so a click on a hiker is never the dog's */
 .cs-dog {
