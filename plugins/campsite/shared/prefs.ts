@@ -10,7 +10,6 @@ export const SEASON_PREFS: readonly Hemisphere[] = ['north', 'south', 'off']
 
 export interface CampsitePrefs {
   showCampsite: boolean
-  campsiteCollapsed: boolean
   showTerminalHiker: boolean
   showDog: boolean
   sky: SkyPref
@@ -22,7 +21,7 @@ export interface CampsitePrefs {
 }
 export type CampsitePrefKey = keyof CampsitePrefs
 
-export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, campsiteCollapsed: false, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0, notesSeenAt: 0 }
+export const DEFAULT_PREFS: CampsitePrefs = { showCampsite: true, showTerminalHiker: true, showDog: true, sky: 'clock', seasons: 'north', guideSeenAt: 0, notesSeenAt: 0 }
 
 /** The choices of each pref that isn't a switch */
 const CHOICES: Partial<Record<CampsitePrefKey, readonly string[]>> = { sky: SKY_PREFS, seasons: SEASON_PREFS }

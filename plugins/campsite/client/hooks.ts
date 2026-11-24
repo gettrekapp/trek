@@ -1,8 +1,8 @@
 // The campsite plugin's React hooks: the host's sessions, a shared slow clock for chores, its
-// prefs, the camp's snapshot and the seen heartbeat, a session's hiker look (wearing its member's
+// prefs, whether this window's strip is collapsed, the camp's snapshot and the seen heartbeat, a session's hiker look (wearing its member's
 // gear), the sessions' latest tool calls (part 4), the window's project's notes (part 5), the
 // document's visibility, reduced motion and an element's width.
-import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ClientPluginHost, PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot } from '../shared/camp.ts'
 import { sessionKit } from '../shared/crew.ts'
@@ -59,6 +59,40 @@ export function usePrefs(host: ClientPluginHost): [PrefsSnapshot, <K extends Cam
 }
 
 /** The camp's snapshot (wood, markers, crew), null until it loads */
+/**
+ * Whether this window's strip is collapsed: the window's own, not a shared pref, so collapsing it
+ * in one project's window leaves the others as they are. Kept in the window's storage under its
+ * project, so the window comes back the way it was left (unreadable storage: open, and not kept).
+ */
+export function useCollapsed(projectId: string): [boolean, (collapsed: boolean) => void] {
+  const key = `trek.campsite.collapsed.${projectId}`
+  const [collapsed, setCollapsed] = useState(() => readFlag(key))
+  useEffect(() => {
+    setCollapsed(readFlag(key))
+  }, [key])
+  const set = useCallback(
+    (next: boolean): void => {
+      setCollapsed(next)
+      try {
+        if (next) localStorage.setItem(key, '1')
+        else localStorage.removeItem(key)
+      } catch {
+        // No storage: collapsed for as long as the window stays open
+      }
+    },
+    [key]
+  )
+  return [collapsed, set]
+}
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function useCamp(host: ClientPluginHost): CampSnapshot | null {
   const store = campStore(host)
   return useSyncExternalStore(store.subscribe, store.snapshot)

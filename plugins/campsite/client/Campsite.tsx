@@ -30,7 +30,7 @@ import { seasonAt, weatherOf, worldAt, worldKey } from '../shared/world.ts'
 import { AwayCard } from './AwayCard.tsx'
 import { CampPopover, type CampTab, type OpenCamp } from './CampPopover.tsx'
 import { campStore } from './campStore.ts'
-import { useCamp, useDocumentHidden, useNotes, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useTools, useWidth } from './hooks.ts'
+import { useCamp, useCollapsed, useDocumentHidden, useNotes, useNow, usePrefs, useReducedMotion, useSeen, useSelected, useSessions, useTools, useWidth } from './hooks.ts'
 import { MiniHiker } from './MiniHiker.tsx'
 import { PixiStrip } from './scene/PixiStrip.tsx'
 import { CampLog, Tent, TentPopover, type OpenTent } from './Tent.tsx'
@@ -159,6 +159,8 @@ function useAnimal(host: ReturnType<typeof usePluginHost>, view: StripView): { s
 export function Campsite(): React.JSX.Element | null {
   const host = usePluginHost()
   const [{ loaded, prefs }, setPref] = usePrefs(host)
+  // Collapsed or expanded is this window's own (the other projects' windows keep theirs)
+  const [collapsed, setCollapsed] = useCollapsed(host.projectId)
   const sessions = useSessions(host)
   const camp = useCamp(host)
   // A hidden strip is time away from the camp: no pings
@@ -236,7 +238,7 @@ export function Campsite(): React.JSX.Element | null {
   const animal = useAnimal(host, {
     projectId: host.projectId,
     shown: loaded && prefs.showCampsite,
-    collapsed: prefs.campsiteCollapsed,
+    collapsed,
     hidden,
     width,
     lake: lakeSpot ? { x: lakeSpot.x, w: lakeSpot.w } : null,
@@ -255,7 +257,7 @@ export function Campsite(): React.JSX.Element | null {
   const hasCamp = camp !== null
   useEffect(() => {
     setCampOpen(null)
-  }, [hasCamp, prefs.campsiteCollapsed])
+  }, [hasCamp, collapsed])
   // Out of grouped mode, or its tent gone: nothing to show
   const openGone =
     openTent !== null &&
@@ -270,10 +272,10 @@ export function Campsite(): React.JSX.Element | null {
     if (!pressed.current) return
     pressed.current = false
     toggle.current?.focus()
-  }, [prefs.campsiteCollapsed])
-  const flip = (collapsed: boolean): void => {
+  }, [collapsed])
+  const flip = (next: boolean): void => {
     pressed.current = true
-    setPref('campsiteCollapsed', collapsed)
+    setCollapsed(next)
   }
   if (!loaded || !prefs.showCampsite) return null
 
@@ -346,7 +348,7 @@ export function Campsite(): React.JSX.Element | null {
     />
   )
 
-  if (prefs.campsiteCollapsed) {
+  if (collapsed) {
     const waiting = sessions.filter(isWaiting)
     const row = collapsedRow(sessions, rowWidth)
     return (
