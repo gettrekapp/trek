@@ -4,7 +4,8 @@
 // label, a trail's row and its history's lines, the Trails tab's groups, the signpost's and the
 // cairn's words, the summit's line; the header's weather glyph and its reason; the field guide's
 // cards (names, counts, hints for unseen species, the new dot) and an animal's button; the
-// noticeboard (part 5): its button's name, a note's line, a report's excerpt and when the notes count as seen. Pure.
+// noticeboard (part 5): its button's name, a note's line, a report's excerpt and when the notes count as seen; a camper's hover label and card. Pure.
+import type { PluginSession } from '../../../src/shared/plugins/client.ts'
 import type { CampSnapshot, CrewEntry, Pin, PinRef, TrailEntry } from './camp.ts'
 import { GEAR_COST, GEAR_SLOTS, GEAR_TOP, SLOT_NAMES, building, costLabel, gearGate, gearItem, type BuildingId, type Cost, type GearSlot } from './catalog.ts'
 import { levelXp } from './crew.ts'
@@ -368,3 +369,62 @@ export function reportExcerpt(summary: string): { text: string; cut: boolean } {
 
 /** Who posted a report and when: "Claude · Juniper, 5 m ago" ("An agent" when nobody is known) */
 export const reportBy = (r: Pick<TrailReport, 'by' | 'at'>, now: number): string => `${r.by || 'An agent'}, ${ago(r.at, now)}`
+
+/** What a camper's label and card read of its session */
+type CamperSession = Pick<PluginSession, 'terminalId' | 'label' | 'worktreeId' | 'worktreeName' | 'branch'>
+
+/** The session's crew member (undefined: a day hiker, or an assignment whose member has left the crew) */
+function camperMember(snap: Pick<CampSnapshot, 'crew' | 'assignments'>, terminalId: string): CrewEntry | undefined {
+  const id = Object.hasOwn(snap.assignments, terminalId) ? snap.assignments[terminalId] : undefined
+  return id === undefined ? undefined : snap.crew.find((m) => m.id === id)
+}
+
+/** A camper's hover label: "Aspen · Claude 2", "Day hiker · Claude 2", or the tab's label alone before the camp's state loads */
+export function camperLabel(snap: Pick<CampSnapshot, 'crew' | 'assignments'> | null, session: CamperSession): string {
+  if (!snap) return session.label
+  return `${camperMember(snap, session.terminalId)?.name ?? 'Day hiker'} · ${session.label}`
+}
+
+/** A camper's card: its member (null: a day hiker) and this trip */
+export interface CamperCardModel {
+  member: {
+    id: string
+    name: string
+    /** "Lv 2 Trailblazer" */
+    level: string
+    /** "150 / 300 XP" */
+    xp: string
+    /** Through its level, 0–100 */
+    progress: number
+    /** "+10% wood", or null with no gear bonus */
+    bonus: string | null
+    /** "Goes out on Agent: Codex", or null with no pin */
+    pin: string | null
+  } | null
+  /** The tab's label */
+  tab: string
+  /** The worktree's name, else its branch, else "Global" ('' with nothing to name) */
+  place: string
+  /** What it's up to (pose.ts's hikerDoing) */
+  doing: string
+}
+
+export function camperCard(snap: Pick<CampSnapshot, 'crew' | 'assignments'>, session: CamperSession, doing: string): CamperCardModel {
+  const m = camperMember(snap, session.terminalId)
+  return {
+    member: m
+      ? {
+          id: m.id,
+          name: m.name,
+          level: `Lv ${m.level} ${m.title}`,
+          xp: `${m.xp} / ${m.next} XP`,
+          progress: Math.round(xpProgress(m) * 100),
+          bonus: m.bonus > 0 ? bonusText(m.bonus) : null,
+          pin: m.pin ? `Goes out on ${m.pin.kind === 'type' ? 'Session type' : 'Agent'}: ${m.pin.name}` : null
+        }
+      : null,
+    tab: session.label,
+    place: session.worktreeId === null ? 'Global' : (session.worktreeName ?? session.branch ?? ''),
+    doing
+  }
+}
