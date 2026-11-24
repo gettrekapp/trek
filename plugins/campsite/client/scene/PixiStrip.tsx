@@ -1,20 +1,20 @@
 // The expanded strip's stage: a Pixi canvas (CampStage, loaded on first use so the app and the
 // collapsed strip never pay for Pixi) under a DOM overlay of buttons over the buildings, the
 // mountain's flags (and a ledge's "+n"), the cairn, the hikers, the dog and a sighting's animal (part 3d-2), which carry their names,
-// tooltips, focus and clicks; the signpost's planks say how many trails there are; the noticeboard
+// tooltips (a hiker's: its crew name and tab, in CSS), focus and clicks (a hiker's opens its camper card); the signpost's planks say how many trails there are; the noticeboard
 // (part 5) has a button too. If Pixi can't start (no WebGL), a note and a plain row of tab-size hikers instead.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSession } from '../../../../src/shared/plugins/client.ts'
 import { BUILDING_SCALE, SIGNPOST_PLANK } from '../../shared/buildingPixels.ts'
 import type { CampSnapshot } from '../../shared/camp.ts'
 import type { Edges } from '../../shared/campEdges.ts'
-import { animalLabel, cairnText, flagLabel, placedTitle, signpostText } from '../../shared/campView.ts'
+import { animalLabel, cairnText, camperLabel, flagLabel, placedTitle, signpostText } from '../../shared/campView.ts'
 import type { BuildingId } from '../../shared/catalog.ts'
 import { crewLabel } from '../../shared/crew.ts'
 import type { Crossing } from '../../shared/crossing.ts'
 import type { CampLayout } from '../../shared/layout.ts'
 import { cairnBox, flagSpots, flagTargets, moreBox, mountain, type FlagTrail } from '../../shared/mountain.ts'
-import { choreFor, hikerLabel, hikerTooltip, liveTool, type HikerTool } from '../../shared/pose.ts'
+import { choreFor, hikerTooltip, liveTool, type HikerTool } from '../../shared/pose.ts'
 import { STAGE_H } from '../../shared/stage.ts'
 import { STAGES, cairnSize } from '../../shared/trails.ts'
 import { worldPalette, type World } from '../../shared/world.ts'
@@ -49,7 +49,10 @@ interface Props {
   /** The window is hidden */
   paused: boolean
   showDog: boolean
-  onPick: (terminalId: string) => void
+  /** A camper (its hiker's button) was clicked: open its card, or close it if it's that camper's */
+  onCamper: (terminalId: string, el: HTMLButtonElement) => void
+  /** The camper whose card is open (its button's aria-expanded), else null */
+  openCamper: string | null
   /** A building's button was clicked: open the camp at its row */
   onBuilding: (id: BuildingId, el: HTMLButtonElement) => void
   /** A flag (its worktree), a ledge's "+n" or the cairn was clicked: open the Trails tab (at that trail); `opener` names which ("flag:<worktree>", "more:<stage>", "cairn") */
@@ -84,7 +87,7 @@ function token(style: CSSStyleDeclaration, name: string, fallback: string): stri
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, tools, world, selected, paused, showDog, onPick, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone, board, onBoard, boardOpen }: Props): React.JSX.Element {
+export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, summits, summit, now, tools, world, selected, paused, showDog, onCamper, openCamper, onBuilding, onTrail, openTrail, animal, onAnimal, animalOpen, onAnimalGone, board, onBoard, boardOpen }: Props): React.JSX.Element {
   const reduced = useReducedMotion()
   const host = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
@@ -140,7 +143,15 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
         <span className="cs-fallback-note">The campsite couldn't start its renderer.</span>
         <div className="cs-mini-row">
           {sessions.map((s) => (
-            <MiniHiker key={s.terminalId} session={s} now={now} crew={camp ? crewLabel(camp, s.terminalId) : undefined} onClick={() => onPick(s.terminalId)} />
+            <MiniHiker
+              key={s.terminalId}
+              session={s}
+              now={now}
+              crew={camp ? crewLabel(camp, s.terminalId) : undefined}
+              label={camperLabel(camp, s)}
+              expanded={openCamper === s.terminalId}
+              onClick={(el) => onCamper(s.terminalId, el)}
+            />
           ))}
         </div>
       </div>
@@ -243,9 +254,12 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
               key={h.terminalId}
               ref={(el) => stage.bindTarget(h.terminalId, el)}
               className={`cs-camp-hiker${h.place === 'inside' ? ' inside' : ''}`}
-              title={hikerTooltip(s, choreFor(s.terminalId, now, tool), camp ? crewLabel(camp, s.terminalId) : undefined, tool)}
-              aria-label={hikerLabel(s)}
-              onClick={() => onPick(s.terminalId)}
+              data-terminal={s.terminalId}
+              data-label={camperLabel(camp, s) || undefined}
+              aria-label={hikerTooltip(s, choreFor(s.terminalId, now, tool), camp ? crewLabel(camp, s.terminalId) : undefined, tool)}
+              aria-haspopup="dialog"
+              aria-expanded={openCamper === s.terminalId}
+              onClick={(e) => onCamper(s.terminalId, e.currentTarget)}
             />
           )
         })}

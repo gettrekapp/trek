@@ -414,14 +414,15 @@ try {
     const toolLine = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Editing.' }, { type: 'tool_use', id: 'toolu_smoke', name: 'Edit', input: { file_path: join(apiMain.path, 'Campsite.tsx'), old_string: 'a', new_string: 'b' } }] } }
     writeFileSync(join(transcriptDir, `${(await apiMainSession()).agentSessionId}.jsonl`), `${JSON.stringify(toolLine)}\n`)
     const barText = () => win.locator('.quick-buttons .cs-bar-hiker .cs-bar-text').first().innerText()
-    const stripTitle = () => win.locator('.campsite .cs-camp-hiker').first().getAttribute('title')
+    // The strip hiker's full description is its accessible name (its hover label is shorter: crew name · tab)
+    const stripTitle = () => win.locator('.campsite .cs-camp-hiker').first().getAttribute('aria-label')
     const saysEditing = await first(async () => {
       await sdkPtys.write(apiPty, 'work\r')
       await sleep(800)
       const [text, title] = [await barText(), await stripTitle()]
       return text.endsWith(' · Editing Campsite.tsx') && title?.endsWith(' · working · Editing Campsite.tsx') ? [text.slice(text.indexOf(' · ') + 3), title.slice(title.lastIndexOf(' · ') + 3)] : null
     }, 20_000)
-    check("a tool call in the session's transcript shows on its working hiker: the terminal bar and the strip hiker's title say Editing Campsite.tsx", saysEditing, ['Editing Campsite.tsx', 'Editing Campsite.tsx'])
+    check("a tool call in the session's transcript shows on its working hiker: the terminal bar and the strip hiker's accessible name say Editing Campsite.tsx", saysEditing, ['Editing Campsite.tsx', 'Editing Campsite.tsx'])
     check('its done hiker on the tab is clickable', [await until(status, 'done'), await until(() => detail.locator('.session-tab .cs-indicator.clickable').count(), 1)], ['done', 1])
     await detail.locator('.session-tab .cs-indicator.clickable').click()
     check("a click on the hiker marks it complete, on the server, and the hiker's title says so", [
@@ -554,6 +555,91 @@ try {
     check("the Trails tab shows the report under api's feature-auth row", await until(() => win.locator('.cs-camp-popover .cs-trail-report .cs-report-text').first().innerText().catch(() => null), 'Wired the sign-in form to the auth API; its tests pass.'), 'Wired the sign-in form to the auth API; its tests pass.')
     await win.keyboard.press('Escape')
     check('Escape closes the Trails tab again', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    // A camper (the strip's hikers and the collapsed bar's): hovered, a label says its crew name and
+    // tab; clicked, its card shows its member and this trip, Go to terminal (focused) shows its tab,
+    // and Open in camp opens the camp at the member's view. Hikers walk: their clicks are forced.
+    const shots = process.env.TREK_CAMPER_SHOTS
+    const shot = async (name) => shots && (await win.screenshot({ path: join(shots, `${name}.png`) }))
+    const camper = win.locator('.campsite .cs-camp-hiker').first()
+    const camperId = await camper.getAttribute('data-terminal')
+    const camperLabel = await camper.getAttribute('data-label')
+    await camper.hover({ force: true })
+    const after = () => camper.evaluate((el) => getComputedStyle(el, '::after').content)
+    check("a strip hiker's hover label names its crew member (or Day hiker) and its tab", [/^.+ · .+$/.test(camperLabel ?? ''), await until(after, JSON.stringify(camperLabel))], [true, JSON.stringify(camperLabel)])
+    await shot('1-strip-hover')
+    const card = win.locator('.cs-camper-card')
+    const focusedText = () => win.evaluate(() => document.activeElement?.textContent ?? null)
+    await camper.click({ force: true })
+    check('a click opens its card, Go to terminal focused, the hiker expanded', [await until(() => card.count(), 1), await until(focusedText, 'Go to terminal'), await camper.getAttribute('aria-expanded')], [1, 'Go to terminal', 'true'])
+    const cardTab = await card.locator('.cs-camper-trip dd').first().innerText()
+    const member = (await card.locator('.cs-camper-camp').count()) === 1
+    console.log(`     (the camper card: ${member ? 'a crew member' : 'a day hiker'}, on ${cardTab})`)
+    await shot('2-strip-card')
+    await win.keyboard.press('Escape')
+    check('Escape closes it, the focus back on the hiker', [await until(() => card.count(), 0), await win.evaluate((id) => document.activeElement?.getAttribute('data-terminal') === id, camperId)], [0, true])
+    await camper.click({ force: true })
+    await camper.click({ force: true })
+    check('a second click on the same hiker closes it', await until(() => card.count(), 0), 0)
+    // Another worktree shown, then Go to terminal brings the camper's tab back
+    await sections.nth(1).locator('.wt-row', { hasText: 'main' }).click()
+    const shown = () =>
+      win.evaluate((id) => {
+        const s = window.__store.getState()
+        const meta = s.terminals[id]
+        return !!meta && s.activeWorktreeId === meta.worktreeId && s.activeTerminal[meta.worktreeId] === id
+      }, camperId)
+    const shownBefore = await shown()
+    await camper.click({ force: true })
+    await until(() => card.count(), 1)
+    await card.locator('button', { hasText: 'Go to terminal' }).click()
+    console.log(`     (the camper's tab shown before Go to terminal: ${shownBefore})`)
+    check("Go to terminal closes the card and shows the camper's tab", [await until(() => card.count(), 0), await until(shown, true)], [0, true])
+    if (member) {
+      await camper.click({ force: true })
+      await until(() => card.count(), 1)
+      const name = (await card.locator('.cs-crew-name').innerText()).split(' Lv ')[0].trim()
+      await card.locator('.cs-camper-camp').click()
+      const crewTabSelected = () => win.locator('.cs-camp-popover [role="tab"][aria-selected="true"]').innerText().then((t) => t.split(' ')[0]).catch(() => null)
+      check("Open in camp opens the camp at the member's view, on the Crew tab, Back focused", [
+        await until(() => card.count(), 0),
+        await until(crewTabSelected, 'Crew'),
+        await until(() => win.locator('.cs-camp-popover .cs-member .cs-crew-name').innerText().then((t) => t.split(' Lv ')[0].trim()).catch(() => null), name),
+        await until(() => win.evaluate(() => document.activeElement?.classList.contains('cs-member-back') ?? false), true)
+      ], [0, 'Crew', name, true])
+      await shot('3-open-in-camp')
+      await win.keyboard.press('Escape')
+      await win.keyboard.press('Escape')
+      check('Escape twice: back to the crew list, then closed', await until(() => win.locator('.cs-camp-popover').count(), 0), 0)
+    } else console.log('     SKIP Open in camp: the first hiker is a day hiker')
+    // The tent list and the card close each other
+    const badge = win.locator('.campsite .cs-camp-badge').first()
+    if (await badge.count()) {
+      await badge.click()
+      await camper.click({ force: true })
+      check("a hiker's click closes a tent's list and opens its card", [await until(() => win.locator('.cs-tent-popover').count(), 0), await until(() => card.count(), 1)], [0, 1])
+      await win.keyboard.press('Escape')
+    } else console.log('     SKIP the tent list and the card: no camp badge (not grouped)')
+    // The collapsed bar: a mini hiker's label (fixed: the bar clips) and its card
+    await win.locator('.campsite .cs-toggle').click()
+    const mini = win.locator('.campsite.collapsed .cs-mini').first()
+    await until(() => mini.count(), 1)
+    await mini.hover()
+    console.log(`     (the collapsed bar's hiker hovered: ${await mini.evaluate((el) => el.matches(':hover'))})`)
+    const miniLabel = win.locator('.cs-camper-label')
+    const labelBox = async () => {
+      const [l, bar] = [await miniLabel.boundingBox().catch(() => null), await win.locator('.campsite.collapsed').boundingBox()]
+      return l && bar ? l.y + l.height <= bar.y + 1 && l.width > 20 : null
+    }
+    check("a collapsed bar hiker's hover label shows above the bar, whole", [await until(() => miniLabel.count(), 1), await until(labelBox, true)], [1, true])
+    await shot('4-bar-hover')
+    await mini.click()
+    check('a click opens its card above the bar', await until(async () => {
+      const [c, bar] = [await card.boundingBox().catch(() => null), await win.locator('.campsite.collapsed').boundingBox()]
+      return c && bar ? c.y + c.height <= bar.y + 1 : null
+    }, true), true)
+    await shot('5-bar-card')
+    await win.locator('.campsite .cs-toggle').click()
+    check('expanding the strip closes the card', await until(() => card.count(), 0), 0)
   } else console.log('SKIP the campsite strip checks (chores, shop, crew, trails, wildlife, agents): no WebGL on this runner')
 
   // ---- 4. Branch data per repository: tags, tickets, PRs -------------------------------------------

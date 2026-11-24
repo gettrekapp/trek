@@ -2,7 +2,7 @@
 // plugins/campsite/dev/) in headless Chrome, one PNG per scenario, to look at the Pixi scene
 // without running the app. Not a test: it fails only if the page errors or Pixi can't start.
 // The page carries the app's CSP (no 'unsafe-eval'), so a render also proves Pixi starts under it.
-// Usage: node scripts/campsite-render.mjs [outDir] [--freeze]   (default .campsite-render, not out/:
+// Usage: node scripts/campsite-render.mjs [outDir] [--freeze] [--only=<name prefix>]   (default .campsite-render, not out/:
 // the app packages out/**; CHROME_PATH picks the browser). --freeze stops the page's clocks before
 // any of its scripts runs (FREEZE below; the harness's ?freeze=1 too) and screenshots with CSS
 // animations and transitions finished, so two runs write the same bytes: render before and after a
@@ -16,6 +16,8 @@ import { createServer } from 'vite'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const freeze = args.includes('--freeze')
+/** --only=<prefix>: just the shots whose names start with it */
+const only = args.find((a) => a.startsWith('--only='))?.slice('--only='.length)
 const out = resolve(args.find((a) => !a.startsWith('--')) ?? join(root, '.campsite-render'))
 const CHROME = {
   darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -42,6 +44,12 @@ const SHOTS = [
   { name: 'geared-crew', scenario: 'few', crew: 'geared', built: 'out', width: 1600 },
   // The camp popover's member view: portrait, bonus, pin, gear rows (Buy and a gate) and journal (the whole page, taller)
   { name: 'member-view', scenario: 'few', crew: 'geared', built: 'out', member: true, height: 720 },
+  // A camper's card (a hiker clicked): a crew member's (t1), and a day hiker's (t4, at the Global log); and t1's hover label
+  { name: 'camper', scenario: 'few', crew: 'geared', built: 'out', camper: 't1', height: 400 },
+  { name: 'camper-day', scenario: 'few', camper: 't4', height: 400 },
+  { name: 'camper-hover', scenario: 'few', camper: 't1', hover: true },
+  // The collapsed bar: a mini hiker's label (fixed: the bar clips), then its card, both above the bar
+  { name: 'camper-bar', scenario: 'few', camper: 'bar', height: 400 },
   // Trails (campsite 3c): flags on every ledge ("+2" on the switchbacks), the planted summit, the cairn at 12 summits, the signpost
   { name: 'trails', scenario: 'few', trails: 'all', built: 'out', width: 1600 },
   // A middle narrower than the peak (440 px) scales it sideways (never dropped): only a window this
@@ -157,7 +165,7 @@ const problems = []
 /** Frozen shots finish CSS animations and transitions first (a normal render shoots them as they are) */
 const still = freeze ? { animations: 'disabled' } : {}
 try {
-  for (const shot of SHOTS) {
+  for (const shot of only ? SHOTS.filter((s) => s.name.startsWith(only)) : SHOTS) {
     const page = await browser.newPage({
       viewport: { width: shot.width ?? 1200, height: shot.height ?? 200 },
       deviceScaleFactor: 2,
@@ -189,10 +197,10 @@ try {
       await page.waitForFunction(() => window.__animalAged === true, null, { timeout: 5000 })
       await page.waitForTimeout(300)
     }
-    // A tool call's words: the working hiker's tooltip names it
+    // A tool call's words: the working hiker's (t1's) accessible name says them
     if (shot.words) {
-      const title = await page.getAttribute('.cs-camp-hiker[aria-label="Agent 1, working"]', 'title')
-      if (!title?.endsWith(` · ${shot.words}`)) problems.push(`${shot.name}: the hiker's title is ${JSON.stringify(title)}, not ending in ${JSON.stringify(shot.words)}`)
+      const said = await page.getAttribute('.cs-camp-hiker[data-terminal="t1"]', 'aria-label')
+      if (!said?.endsWith(` · ${shot.words}`)) problems.push(`${shot.name}: the hiker's accessible name is ${JSON.stringify(said)}, not ending in ${JSON.stringify(shot.words)}`)
     }
     // The noticeboard's button names it (and how many notes are new)
     if (shot.board) {
@@ -301,6 +309,31 @@ try {
       await page.locator('.cs-camp-popover .cs-notes-toggle').click()
       const after = await board()
       if (JSON.stringify(after) !== JSON.stringify({ notes: 5, toggle: 'Show fewer', expanded: 'true' })) problems.push(`${shot.name}: after Show all the Noticeboard shows ${JSON.stringify(after)}`)
+    } else if (shot.camper === 'bar') {
+      await page.locator('.campsite .cs-toggle').click()
+      const mini = page.locator('.campsite.collapsed .cs-mini').first()
+      await mini.hover()
+      await page.waitForTimeout(200)
+      if ((await page.locator('.cs-camper-label').count()) !== 1) problems.push(`${shot.name}: no hover label over the collapsed bar's hiker`)
+      await page.screenshot({ path: join(out, `${shot.name}-hover.png`), ...still })
+      await mini.click()
+      await page.waitForSelector('.cs-camper-card', { timeout: 5000 })
+      const [card, bar] = [await page.locator('.cs-camper-card').boundingBox(), await page.locator('.campsite.collapsed').boundingBox()]
+      if (!card || !bar || card.y + card.height > bar.y + 0.5) problems.push(`${shot.name}: the card overlaps the bar (${JSON.stringify({ card, bar })})`)
+      await page.screenshot({ path, ...still })
+    } else if (shot.camper) {
+      const hiker = page.locator(`.cs-camp-hiker[data-terminal="${shot.camper}"]`)
+      if (shot.hover) {
+        // Its label, at once
+        await hiker.hover()
+        await page.locator('.campsite').screenshot({ path, ...still })
+      } else {
+        // Its card, Go to terminal focused
+        await hiker.click()
+        await page.waitForSelector('.cs-camper-card', { timeout: 5000 })
+        if (!(await page.evaluate(() => document.activeElement?.textContent === 'Go to terminal'))) problems.push(`${shot.name}: Go to terminal did not take the focus`)
+        await page.screenshot({ path, ...still })
+      }
     } else if (shot.member) {
       // The counts button, the Crew tab, the second member (mixed tiers: Buy and a gate), its journal read
       await page.locator('.cs-camp-button').click()

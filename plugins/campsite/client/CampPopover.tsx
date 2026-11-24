@@ -1,5 +1,5 @@
 // The camp's popover (campsite parts 3a, 3b, 3c, 3d-2 and 5), opened from the header's counts, a building on
-// the strip, (at the Trails tab) a flag, the cairn or the signpost, (at the Guide tab) an animal, or
+// the strip, (at the Trails tab) a flag, the cairn or the signpost, (at the Guide tab) an animal, (at a member's view in the Crew tab) a camper's card, or
 // (at the Camp tab's Noticeboard, focused) the noticeboard. Camp: the Noticeboard (part 5: the
 // agents' notes; not from an older server), then each building's next
 // tier with its effect and price, and Build when the camp can pay. Crew: the members (level, XP,
@@ -38,6 +38,8 @@ export interface OpenCamp {
   trail?: string
   /** A species to show in the Guide tab (an animal on the strip was clicked) */
   species?: string
+  /** A crew member's id: open on the Crew tab at its view (a camper card's Open in camp) */
+  crew?: string
   /** What opened it, when more than one opener shares a tab ("signpost", "flag:<worktree>", "more:<stage>", "cairn", "animal", "board"): another one moves the popover rather than closing it; "board" focuses the Noticeboard */
   opener?: string
 }
@@ -63,7 +65,7 @@ interface Props {
 
 export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt, onGuideSeen, notes, onNotesSeen, onClose }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  const [tab, setTab] = useState<CampTab>(at.tab ?? 'camp')
+  const [tab, setTab] = useState<CampTab>(at.crew !== undefined ? 'crew' : (at.tab ?? 'camp'))
   const [left, setLeft] = useState(at.left)
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -76,7 +78,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
   const panelId = (t: CampTab): string => `${ids}-panel-${t}`
   const labels = useMemo(() => new Map(sessions.map((s) => [s.terminalId, s.label])), [sessions])
   // The member whose view is open in the Crew tab (null: the list); the row to focus once it closes
-  const [open, setOpen] = useState<string | null>(null)
+  const [open, setOpen] = useState<string | null>(at.crew !== undefined && camp.crew.some((m) => m.id === at.crew) ? at.crew : null)
   const backTo = useRef<string | null>(null)
   /** Back to the crew list, the member's row to take the focus */
   const closeMember = (id: string): void => {
@@ -108,7 +110,8 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
   // Opened from a building: its row; from the noticeboard: the Noticeboard; at a trail or a species: its tab focuses its row or card; else the open tab. (Campsite keys the popover by where it opens.)
   useEffect(() => {
     const el = ref.current
-    if (!el || at.trail !== undefined || at.species !== undefined) return
+    // At a member: its view focuses its Back button
+    if (!el || at.trail !== undefined || at.species !== undefined || (at.crew !== undefined && camp.crew.some((m) => m.id === at.crew))) return
     const row = at.focus ? el.querySelector<HTMLElement>(`[data-building="${at.focus}"]`) : at.opener === 'board' ? el.querySelector<HTMLElement>('[data-noticeboard]') : null
     if (row) {
       row.scrollIntoView({ block: 'nearest' })
