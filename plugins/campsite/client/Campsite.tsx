@@ -275,8 +275,14 @@ export function Campsite(): React.JSX.Element | null {
   const hasCamp = camp !== null
   useEffect(() => {
     setCampOpen(null)
-    setOpenCamper(null)
   }, [hasCamp, collapsed, prefs.showCampsite])
+  // A camper's card stays while the camp's state arrives (it fills in the member); it goes with it, or with the strip collapsing, expanding or turning off
+  useEffect(() => {
+    if (!hasCamp) setOpenCamper(null)
+  }, [hasCamp])
+  useEffect(() => {
+    setOpenCamper(null)
+  }, [collapsed, prefs.showCampsite])
   // Out of grouped mode, or its tent gone: nothing to show
   const openGone =
     openTent !== null &&
@@ -547,7 +553,7 @@ export function Campsite(): React.JSX.Element | null {
 /** Where the camp popover opens, as a key: its tab, its building row, trail or species, and what opened it ("camp:", "camp:lights", "trails:@signpost", "trails:w1@flag:w1", "guide:fox@animal", "crew:c1@camper") */
 const openKey = (o: OpenCamp): string => `${o.tab ?? 'camp'}:${o.trail ?? o.species ?? o.focus ?? o.crew ?? ''}${o.opener === undefined ? '' : `@${o.opener}`}`
 
-/** While `open`: a press outside `keep` (a selector), or a window resize, closes; Escape closes and refocuses the badge */
+/** While `open`: a press outside `keep` (a selector), or a window resize, closes; Escape (with the focus in `keep`, or nowhere) closes and refocuses the opener */
 function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void, keep: string): void {
   useEffect(() => {
     if (!open) return
@@ -555,7 +561,9 @@ function useCloseOnOutside(open: boolean, close: (refocus: boolean) => void, kee
       if (!(e.target instanceof Element) || !e.target.closest(keep)) close(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close(true)
+      // Only while the focus is in it, on its opener, or nowhere: Escape in a terminal the focus moved to is the terminal's
+      const at = document.activeElement
+      if (e.key === 'Escape' && (!at || at === document.body || at.closest(keep))) close(true)
     }
     const onResize = (): void => close(false)
     document.addEventListener('pointerdown', onDown)

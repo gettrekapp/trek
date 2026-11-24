@@ -255,7 +255,7 @@ export function PixiStrip({ layout, edges, built, sessions, camp, kits, trails, 
               ref={(el) => stage.bindTarget(h.terminalId, el)}
               className={`cs-camp-hiker${h.place === 'inside' ? ' inside' : ''}`}
               data-terminal={s.terminalId}
-              data-label={camperLabel(camp, s)}
+              data-label={camperLabel(camp, s) || undefined}
               aria-label={hikerTooltip(s, choreFor(s.terminalId, now, tool), camp ? crewLabel(camp, s.terminalId) : undefined, tool)}
               aria-haspopup="dialog"
               aria-expanded={openCamper === s.terminalId}

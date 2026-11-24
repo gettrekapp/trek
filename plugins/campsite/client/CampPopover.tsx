@@ -78,7 +78,7 @@ export function CampPopover({ camp, at, sessions, projectId, store, guideSeenAt,
   const panelId = (t: CampTab): string => `${ids}-panel-${t}`
   const labels = useMemo(() => new Map(sessions.map((s) => [s.terminalId, s.label])), [sessions])
   // The member whose view is open in the Crew tab (null: the list); the row to focus once it closes
-  const [open, setOpen] = useState<string | null>(at.crew ?? null)
+  const [open, setOpen] = useState<string | null>(at.crew !== undefined && camp.crew.some((m) => m.id === at.crew) ? at.crew : null)
   const backTo = useRef<string | null>(null)
   /** Back to the crew list, the member's row to take the focus */
   const closeMember = (id: string): void => {

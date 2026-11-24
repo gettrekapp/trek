@@ -49,7 +49,7 @@ export function MiniHiker({ session, now, crew, label, expanded, onClick }: Prop
       }}
     >
       <Hiker look={look} pose={stance.pose} gear={stance.gear} grey={stance.grey} scale={1} label={hikerLabel(session)} decorative />
-      {tip && (
+      {tip && label && (
         <span className="cs-camper-label" style={{ left: tip.left, top: tip.top }}>
           {label}
         </span>
